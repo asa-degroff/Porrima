@@ -83,6 +83,7 @@ export function getAppBuildInfo(): AppBuildInfo {
     gitCommit: process.env.PORRIMA_GIT_COMMIT || cachedBuildInfo.gitCommit,
     gitBranch: process.env.PORRIMA_GIT_BRANCH || cachedBuildInfo.gitBranch,
     buildTime: process.env.PORRIMA_BUILD_TIME || cachedBuildInfo.buildTime,
+    // Runtime override wins over the build-time channel baked into dist/build-info.json.
     releaseChannel: process.env.PORRIMA_RELEASE_CHANNEL || cachedBuildInfo.releaseChannel,
   };
 }

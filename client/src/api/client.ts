@@ -141,12 +141,6 @@ export interface AppUpdateStatus {
   error?: string;
 }
 
-export async function fetchAppVersion(): Promise<AppBuildInfo> {
-  const res = await apiFetch(`${BASE}/app/version`);
-  if (!res.ok) throw new Error("Failed to fetch app version");
-  return res.json();
-}
-
 export async function checkAppUpdate(force = false): Promise<AppUpdateStatus> {
   const init = { priority: "low" } as RequestInit & { priority?: "low" };
   const res = await apiFetch(`${BASE}/app/update-check${force ? "?force=1" : ""}`, init);

@@ -23,6 +23,8 @@ const info = {
   gitCommit: process.env.GITHUB_SHA || git(["rev-parse", "--short=12", "HEAD"]) || null,
   gitBranch: process.env.GITHUB_REF_NAME || git(["branch", "--show-current"]) || null,
   buildTime: new Date().toISOString(),
+  // Build-time channel baked into release artifacts. The server can still
+  // override the reported channel at runtime with PORRIMA_RELEASE_CHANNEL.
   releaseChannel: process.env.PORRIMA_RELEASE_CHANNEL || "stable",
 };
 

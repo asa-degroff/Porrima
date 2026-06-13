@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, fetchAppVersion, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppBuildInfo, AppUpdateStatus } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppUpdateStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
@@ -467,10 +467,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [userDocContent, setUserDocContent] = useState("");
   const [userDocSaving, setUserDocSaving] = useState(false);
   const [userDocMessage, setUserDocMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [appVersion, setAppVersion] = useState<AppBuildInfo | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
   const [appUpdateLoading, setAppUpdateLoading] = useState(false);
   const [appUpdateError, setAppUpdateError] = useState<string | null>(null);
+  const appVersion = appUpdate?.current ?? null;
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
@@ -1449,44 +1449,32 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       .catch(() => {});
   }, []);
 
-  const refreshAppUpdate = useCallback(async (force = false) => {
+  const refreshAppUpdate = useCallback(async (
+    force = false,
+    options: { shouldIgnore?: () => boolean } = {}
+  ) => {
     setAppUpdateLoading(true);
     setAppUpdateError(null);
     try {
       const status = await checkAppUpdate(force);
+      if (options.shouldIgnore?.()) return;
       setAppUpdate(status);
-      setAppVersion(status.current);
       setAppUpdateError(status.error || null);
     } catch (err) {
+      if (options.shouldIgnore?.()) return;
       setAppUpdateError(err instanceof Error ? err.message : "Failed to check GitHub releases");
     } finally {
-      setAppUpdateLoading(false);
+      if (!options.shouldIgnore?.()) setAppUpdateLoading(false);
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setAppUpdateLoading(true);
-    checkAppUpdate()
-      .then((status) => {
-        if (!cancelled) {
-          setAppUpdate(status);
-          setAppVersion(status.current);
-          setAppUpdateError(status.error || null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setAppUpdateError(err instanceof Error ? err.message : "Failed to check GitHub releases");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setAppUpdateLoading(false);
-      });
+    void refreshAppUpdate(false, { shouldIgnore: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshAppUpdate]);
 
   const refreshAutomations = useCallback(async () => {
     setAutomationsLoading(true);
