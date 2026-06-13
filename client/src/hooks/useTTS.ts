@@ -964,15 +964,6 @@ export function useTTS() {
     }
   }, [playQueuedChunk]);
 
-  /**
-   * Check whether live audio is actively playing or still draining its queue.
-   * Used by callers to avoid interrupting live playback with a fresh playTts call.
-   */
-  const isLiveAudioDraining = useCallback(() => {
-    return liveAgentAudioActiveRef.current &&
-      (chunkQueueRef.current.length > 0 || chunkAudioActiveRef.current);
-  }, []);
-
   return {
     settings,
     playbackState,
@@ -989,6 +980,5 @@ export function useTTS() {
     handleAgentAudioDone,
     resumeLivePlayback,
     cleanupLiveAudio,
-    isLiveAudioDraining,
   };
 }
