@@ -42,7 +42,7 @@ const SECTIONS = [
   { id: 'ssh', label: 'Remote Hosts' },
   { id: 'persona', label: 'Persona' },
   { id: 'user-doc', label: 'About You' },
-  { id: 'presets', label: 'Presets' },
+  { id: 'presets', label: 'Quick chats' },
   { id: 'api-keys', label: 'API Keys' },
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
@@ -4792,7 +4792,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* System Prompt Presets */}
           <div id="presets" className="space-y-3 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium text-white/60">System Prompt Presets</label>
+              <label className="block text-sm font-medium text-white/60">Quick chat presets</label>
               <button
                 onClick={handleAddPreset}
                 className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all pressable"
@@ -4801,7 +4801,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               </button>
             </div>
             <p className="text-white/30 text-xs -mt-2">
-              Prompts that prepend to the base agent prompt.
+              System prompt presets for quick chats.
             </p>
 
             {presetMessage && (

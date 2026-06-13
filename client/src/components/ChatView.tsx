@@ -826,14 +826,14 @@ export function ChatView({
         </div>
       </div>
 
-      {/* System Prompt — hidden after first message (preset changes would invalidate the entire KV cache) */}
+      {/* System Prompt — only for quick chats (agent/system chats use persona + memory context, so a manually selected preset is superfluous). Also hidden after first message (preset changes would invalidate the entire KV cache). */}
       <SystemPromptEditor
         value={systemPrompt}
         onChange={onSystemPromptChange}
         disabled={streaming}
         presets={systemPromptPresets}
         isAgent={chatType === "agent"}
-        hidden={messages.length > 0}
+        hidden={messages.length > 0 || chatType !== "quick"}
       />
 
       <div className="flex-1 flex flex-row min-h-0 min-w-0 relative">
