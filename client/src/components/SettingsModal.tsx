@@ -1467,11 +1467,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   useEffect(() => {
     let cancelled = false;
     setAppUpdateLoading(true);
-    fetchAppVersion()
-      .then((info) => {
-        if (!cancelled) setAppVersion(info);
-      })
-      .catch(() => {});
     checkAppUpdate()
       .then((status) => {
         if (!cancelled) {
