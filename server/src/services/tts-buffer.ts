@@ -32,9 +32,29 @@ export interface StreamingTokenBufferOptions {
 const CLAUSE_REGEX = /[.!?,;:]$|, (and|but|or|nor|for|yet|so)$/;
 
 /**
+ * Sentence-ending punctuation. Optional closing quotes/parens are accepted.
+ */
+const SENTENCE_REGEX = /[.!?]["')\]]?$/;
+
+/**
  * CJK punctuation (Chinese, Japanese, Korean)
  */
-const CJK_PUNCT = /[.!?,;.!]/;
+const CJK_CLAUSE_PUNCT = /[。！？、，；：.!?,;:]$/;
+const CJK_SENTENCE_PUNCT = /[。！？!?]$/;
+
+function hasSentenceBoundary(text: string): boolean {
+  const trimmed = text.trimEnd();
+  if (!SENTENCE_REGEX.test(trimmed)) return false;
+
+  try {
+    const tokenizer = new Tokenizer();
+    tokenizer.setEntry(trimmed);
+    return tokenizer.getSentences().length > 0;
+  } catch (e) {
+    console.warn('[StreamingTokenBuffer] sentenceTokenizer failed:', e);
+    return true;
+  }
+}
 
 /**
  * Streaming token buffer for TTS generation
@@ -74,6 +94,7 @@ export class StreamingTokenBuffer {
   checkBoundary(): BoundaryResult {
     const text = this.tokens.join('');
     const lastToken = this.tokens[this.tokens.length - 1];
+    const trimmedText = text.trimEnd();
     
     // Tier 1: Word boundary (always required)
     const isWordBoundary = /\s$/.test(lastToken) || /[.!?,;:]$/.test(lastToken);
@@ -89,11 +110,17 @@ export class StreamingTokenBuffer {
     
     // CJK language handling (no spaces) - check BEFORE minTokens
     if (this.isCJK()) {
-      // CJK doesn't use minTokens - use character count instead
-      if (text.length >= 50 || CJK_PUNCT.test(text)) {
+      if (this.options.boundaryTier === 'sentence') {
+        if (CJK_SENTENCE_PUNCT.test(trimmedText)) {
+          return { shouldEmit: true, reason: 'sentence', chunkText: text };
+        }
+        return { shouldEmit: false, reason: 'word', chunkText: '' };
+      }
+
+      // CJK doesn't use minTokens in clause mode - use character count instead
+      if (text.length >= 50 || CJK_CLAUSE_PUNCT.test(trimmedText)) {
         return { shouldEmit: true, reason: 'cjk', chunkText: text };
       }
-      // Don't check minTokens for CJK
       return { shouldEmit: false, reason: 'word', chunkText: '' };
     }
     
@@ -102,25 +129,17 @@ export class StreamingTokenBuffer {
       return { shouldEmit: false, reason: 'word', chunkText: '' };
     }
     
-    // Tier 2: Clause boundary (preferred for streaming)
-    if (CLAUSE_REGEX.test(text)) {
-      return { shouldEmit: true, reason: 'clause', chunkText: text };
-    }
-    
-    // Tier 3: Sentence boundary (best prosody, optional)
+    // Tier 2: Sentence boundary (best prosody, waits for full sentence).
     if (this.options.boundaryTier === 'sentence') {
-      try {
-        const tokenizer = new Tokenizer();
-        tokenizer.setEntry(text);
-        const sentences = tokenizer.getSentences();
-        if (sentences.length > 1) {
-          // We have complete sentence(s)
-          return { shouldEmit: true, reason: 'sentence', chunkText: sentences[0] };
-        }
-      } catch (e) {
-        // Sentence tokenizer failed, fall back to clause detection
-        console.warn('[StreamingTokenBuffer] sentenceTokenizer failed:', e);
+      if (hasSentenceBoundary(trimmedText)) {
+        return { shouldEmit: true, reason: 'sentence', chunkText: text };
       }
+      return { shouldEmit: false, reason: 'word', chunkText: '' };
+    }
+
+    // Tier 3: Clause boundary (preferred for lower-latency streaming).
+    if (CLAUSE_REGEX.test(trimmedText)) {
+      return { shouldEmit: true, reason: 'clause', chunkText: text };
     }
     
     return { shouldEmit: false, reason: 'word', chunkText: '' };

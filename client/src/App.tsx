@@ -62,7 +62,8 @@ const MANUAL_TTS_FOLLOW_RETRY_MS = 300;
 const MANUAL_TTS_MIN_CONTINUATION_CHARS = 40;
 const MANUAL_TTS_MIN_CONTINUATION_WORDS = 6;
 const MANUAL_TTS_MAX_CONTINUATION_CHARS = 220;
-const MANUAL_TTS_SPEECH_BOUNDARY_RE = /[.!?,;:]\s*$|\n\s*$/;
+const MANUAL_TTS_CLAUSE_BOUNDARY_RE = /[.!?,;:]\s*$|\n\s*$/;
+const MANUAL_TTS_SENTENCE_BOUNDARY_RE = /[.!?]["')\]]?\s*$|\n\s*$/;
 const MANUAL_TTS_WORD_BOUNDARY_RE = /[\s.!?,;:]$/;
 
 function getLatestAssistantReadAloudText(messages: ChatMessage[]): string {
@@ -93,13 +94,20 @@ function getLatestAssistantReadAloudText(messages: ChatMessage[]): string {
     .join("\n\n");
 }
 
-function shouldSpeakManualReadAloudContinuation(text: string, streamStillActive: boolean): boolean {
+function shouldSpeakManualReadAloudContinuation(
+  text: string,
+  streamStillActive: boolean,
+  boundaryTier: "clause" | "sentence",
+): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (!streamStillActive) return true;
   if (trimmed.length >= MANUAL_TTS_MAX_CONTINUATION_CHARS) return true;
   if (!MANUAL_TTS_WORD_BOUNDARY_RE.test(text)) return false;
-  if (MANUAL_TTS_SPEECH_BOUNDARY_RE.test(text)) return true;
+  if (boundaryTier === "sentence") {
+    return MANUAL_TTS_SENTENCE_BOUNDARY_RE.test(text);
+  }
+  if (MANUAL_TTS_CLAUSE_BOUNDARY_RE.test(text)) return true;
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
   return wordCount >= MANUAL_TTS_MIN_CONTINUATION_WORDS &&
     trimmed.length >= MANUAL_TTS_MIN_CONTINUATION_CHARS;
@@ -679,7 +687,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     const unreadText = latestText.slice(follow.cursor);
 
     if (unreadText.trim()) {
-      if (!shouldSpeakManualReadAloudContinuation(unreadText, streamStillActive)) {
+      if (!shouldSpeakManualReadAloudContinuation(
+        unreadText,
+        streamStillActive,
+        ttsSettings.streamingBoundaryTier ?? "clause",
+      )) {
         setTtsContinuationWaiting(true);
         follow.timer = window.setTimeout(() => {
           const current = manualReadAloudFollowRef.current;
@@ -712,7 +724,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
 
     clearManualReadAloudFollow();
-  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting]);
+  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting, ttsSettings.streamingBoundaryTier]);
 
   useEffect(() => {
     continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;

@@ -29,6 +29,29 @@ describe("StreamingTokenBuffer", () => {
     expect(result.shouldEmit).toBe(true);
     expect(result.reason).toBe("clause");
   });
+
+  it("should not emit clause fragments in sentence mode", () => {
+    const buffer = new StreamingTokenBuffer({ minTokens: 5, maxTokens: 50, maxChars: 500, boundaryTier: 'sentence' });
+
+    for (const token of ["This ", "is ", "a ", "partial ", "clause, "]) {
+      buffer.push(token);
+    }
+
+    const result = buffer.checkBoundary();
+    expect(result.shouldEmit).toBe(false);
+  });
+
+  it("should emit at sentence boundary in sentence mode", () => {
+    const buffer = new StreamingTokenBuffer({ minTokens: 5, maxTokens: 50, maxChars: 500, boundaryTier: 'sentence' });
+
+    for (const token of ["This ", "is ", "a ", "complete ", "sentence."]) {
+      buffer.push(token);
+    }
+
+    const result = buffer.checkBoundary();
+    expect(result.shouldEmit).toBe(true);
+    expect(result.reason).toBe("sentence");
+  });
   
   it("should force emit at max length", () => {
     const buffer = new StreamingTokenBuffer({ minTokens: 10, maxTokens: 20, maxChars: 500, boundaryTier: 'clause' });
