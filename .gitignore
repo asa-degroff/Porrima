@@ -1,5 +1,6 @@
 node_modules
 dist
+.agents
 .cache
 .chainlink
 /server/data/*
