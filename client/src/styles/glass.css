@@ -38,8 +38,8 @@ html {
   --radius-xl: calc(0.75rem * var(--radius-scale));
   --radius-2xl: calc(1rem * var(--radius-scale));
 }
-html[data-radius="compact"] { --radius-scale: 0.5; }
-html[data-radius="generous"] { --radius-scale: 1.6; }
+html[data-radius="tiny"] { --radius-scale: 0.5; }
+html[data-radius="default"] { --radius-scale: 1.6; }
 
 /* Tailwind's base `.rounded` utility hardcodes 0.25rem, so scale it here too. */
 html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }

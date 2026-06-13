@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState, type FormEvent } from "react";
 import type { AuthState } from "../hooks/useAuth";
-import type { CornerShape } from "../types";
 import { OctahedronLogo } from "./PolyhedronLogo";
 
 const RippleDotsBackground = lazy(() =>
@@ -13,12 +12,11 @@ interface Props {
   onRegister: (setupToken?: string) => void;
   onLogin: () => void;
   agentName?: string;
-  cornerShape?: CornerShape;
 }
 
-export function LoginPage({ authState, error, onRegister, onLogin, agentName, cornerShape = 'round' }: Props) {
+export function LoginPage({ authState, error, onRegister, onLogin, agentName }: Props) {
   const isSetup = authState === "needs-setup";
-  const cornerClass = cornerShape === 'squircle' ? 'corner-squircle' : 'corner-round';
+  const cornerClass = 'corner-squircle';
   const [setupToken, setSetupToken] = useState("");
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {

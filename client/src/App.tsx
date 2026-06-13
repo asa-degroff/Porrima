@@ -43,10 +43,8 @@ import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
 import type { ReadAloudOptions, SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
-import type { Chat, ChatMessage, ChatType, CornerShape, CornerRadius } from "./types";
+import type { Chat, ChatMessage, ChatType, CornerRadius } from "./types";
 
-const CORNER_SHAPE_KEY = "porrima-corner-shape";
-const LEGACY_CORNER_SHAPE_KEY = "quje-corner-shape";
 const CORNER_RADIUS_KEY = "porrima-corner-radius";
 const LEGACY_CORNER_RADIUS_KEY = "quje-corner-radius";
 const ACTIVE_CHAT_KEY = "porrima-active-chat-id";
@@ -117,18 +115,13 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
-function readCachedCornerShape(): CornerShape {
-  try {
-    return readStoredValue(CORNER_SHAPE_KEY, LEGACY_CORNER_SHAPE_KEY) === "squircle" ? "squircle" : "round";
-  } catch {
-    return "round";
-  }
-}
-
 function readCachedCornerRadius(): CornerRadius {
   try {
     const v = readStoredValue(CORNER_RADIUS_KEY, LEGACY_CORNER_RADIUS_KEY);
-    return v === "compact" || v === "generous" ? v : "default";
+    if (v === "tiny" || v === "small" || v === "default") return v;
+    if (v === "compact") return "small";
+    if (v === "generous") return "default";
+    return "default";
   } catch {
     return "default";
   }
@@ -137,7 +130,7 @@ function readCachedCornerRadius(): CornerRadius {
 // Apply cached appearance settings before first render so the login screen
 // reflects the user's choice without waiting for the (auth-gated) /api/settings.
 if (typeof document !== "undefined") {
-  document.documentElement.setAttribute("data-corner", readCachedCornerShape());
+  document.documentElement.setAttribute("data-corner", "squircle");
   document.documentElement.setAttribute("data-radius", readCachedCornerRadius());
 }
 
@@ -514,13 +507,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       document.documentElement.setAttribute('data-mouse-warp', 'off');
     }
   }, [settings.mouseWarp]);
-
-  // Apply corner shape (and mirror to localStorage so the login screen can honor it)
-  useEffect(() => {
-    const shape = settings.cornerShape || 'round';
-    document.documentElement.setAttribute('data-corner', shape);
-    try { writeStoredValue(CORNER_SHAPE_KEY, shape, LEGACY_CORNER_SHAPE_KEY); } catch {}
-  }, [settings.cornerShape]);
 
   // Apply corner radius scale (and mirror to localStorage)
   useEffect(() => {
@@ -1599,16 +1585,15 @@ export default function App() {
   const { authState, error, register, login, logout } = useAuth();
   const { settings: appSettings, loading: settingsLoading } = useSettings();
 
-  // Apply corner shape and radius as soon as settings are available.
+  // Apply corner radius as soon as settings are available.
   // Before settings load (or when the user isn't authenticated yet and /api/settings
   // returns 401), fall back to the cached value from localStorage so the login screen
   // still reflects the saved preference.
   useEffect(() => {
     if (!settingsLoading) {
-      document.documentElement.setAttribute('data-corner', appSettings.cornerShape || readCachedCornerShape());
       document.documentElement.setAttribute('data-radius', appSettings.cornerRadius || readCachedCornerRadius());
     }
-  }, [appSettings.cornerShape, appSettings.cornerRadius, settingsLoading]);
+  }, [appSettings.cornerRadius, settingsLoading]);
 
   if (authState === "loading") {
     return (
@@ -1626,7 +1611,6 @@ export default function App() {
         onRegister={register}
         onLogin={login}
         agentName={appSettings.agentName}
-        cornerShape={appSettings.cornerShape || readCachedCornerShape()}
       />
     );
   }
