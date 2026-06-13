@@ -40,10 +40,10 @@ import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import { useCacheResidency } from "./hooks/useCacheResidency";
 import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
-import type { SystemStatsSample } from "./types";
+import type { ReadAloudOptions, SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
-import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
+import type { Chat, ChatMessage, ChatType, CornerShape, CornerRadius } from "./types";
 
 const CORNER_SHAPE_KEY = "porrima-corner-shape";
 const LEGACY_CORNER_SHAPE_KEY = "quje-corner-shape";
@@ -58,6 +58,52 @@ const LEGACY_TTS_AUTO_READ_MESSAGES_KEY = "quje-tts-auto-read-messages";
 const INITIAL_MESSAGE_LIMIT = 200;
 const ACTIVE_CHAT_HEADER_POLL_INTERVAL_MS = 5_000;
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
+const MANUAL_TTS_FOLLOW_RETRY_MS = 300;
+const MANUAL_TTS_MIN_CONTINUATION_CHARS = 40;
+const MANUAL_TTS_MIN_CONTINUATION_WORDS = 6;
+const MANUAL_TTS_MAX_CONTINUATION_CHARS = 220;
+const MANUAL_TTS_SPEECH_BOUNDARY_RE = /[.!?,;:]\s*$|\n\s*$/;
+const MANUAL_TTS_WORD_BOUNDARY_RE = /[\s.!?,;:]$/;
+
+function getLatestAssistantReadAloudText(messages: ChatMessage[]): string {
+  const last = messages[messages.length - 1];
+  if (last?.role !== "assistant") return "";
+
+  const shouldMergeToolLoop = Boolean(last._toolLoopId);
+  const shouldMergeSynthesis = Boolean(last._isSynthesisMessage);
+  if (!shouldMergeToolLoop && !shouldMergeSynthesis) {
+    return last.content || "";
+  }
+
+  const group: ChatMessage[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "system" || (msg._isSystemMessage && msg._isMidTurnCompaction)) {
+      continue;
+    }
+    if (msg.role !== "assistant") break;
+    if (shouldMergeToolLoop && msg._toolLoopId !== last._toolLoopId) break;
+    if (shouldMergeSynthesis && !msg._isSynthesisMessage) break;
+    group.unshift(msg);
+  }
+
+  return group
+    .map((msg) => msg.content)
+    .filter((content) => content && content.trim())
+    .join("\n\n");
+}
+
+function shouldSpeakManualReadAloudContinuation(text: string, streamStillActive: boolean): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (!streamStillActive) return true;
+  if (trimmed.length >= MANUAL_TTS_MAX_CONTINUATION_CHARS) return true;
+  if (!MANUAL_TTS_WORD_BOUNDARY_RE.test(text)) return false;
+  if (MANUAL_TTS_SPEECH_BOUNDARY_RE.test(text)) return true;
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  return wordCount >= MANUAL_TTS_MIN_CONTINUATION_WORDS &&
+    trimmed.length >= MANUAL_TTS_MIN_CONTINUATION_CHARS;
+}
 
 function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
@@ -98,7 +144,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
   const streamingRef = useRef(false);
   const tts = useTTS();
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio, resumeLivePlayback } = tts;
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -620,8 +666,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
 
     const latestMessages = latestMessagesRef.current;
-    const lastMessage = latestMessages[latestMessages.length - 1];
-    const latestText = lastMessage?.role === "assistant" ? lastMessage.content || "" : "";
+    const latestText = getLatestAssistantReadAloudText(latestMessages);
 
     if (latestText.length < follow.cursor) {
       if (!streamStillActive) {
@@ -632,31 +677,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
 
     const unreadText = latestText.slice(follow.cursor);
-    follow.cursor = latestText.length;
 
     if (unreadText.trim()) {
-      // When the server is generating live TTS audio for the agent's stream,
-      // switch into live mode after the snapshot so the user hears the
-      // already-generated audio chunks for the unread text and any new chunks
-      // as they arrive — instead of discarding the live chunks and
-      // re-generating fresh TTS for the same text. The server emits audio
-      // chunks only when TTS is enabled and auto-read is on for a streaming
-      // backend, mirroring the server-side `ttsEnabled` flag.
-      const liveAudioExpected =
-        ttsSettings.enabled &&
-        ttsSettings.autoReadEnabled &&
-        (ttsSettings.backend === "qwen3-tts" ||
-          ttsSettings.backend === "supertonic-3" ||
-          ttsSettings.backend === "kokoro");
-
-      if (liveAudioExpected) {
-        setTtsContinuationWaiting(false);
-        resumeLivePlayback({
-          onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
-        });
+      if (!shouldSpeakManualReadAloudContinuation(unreadText, streamStillActive)) {
+        setTtsContinuationWaiting(true);
+        follow.timer = window.setTimeout(() => {
+          const current = manualReadAloudFollowRef.current;
+          if (current?.id === id) {
+            current.timer = null;
+          }
+          continueManualReadAloudFollowRef.current(id);
+        }, MANUAL_TTS_FOLLOW_RETRY_MS);
         return;
       }
 
+      follow.cursor = latestText.length;
       setTtsContinuationWaiting(false);
       void playTts(unreadText, {
         onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
@@ -672,12 +707,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           current.timer = null;
         }
         continueManualReadAloudFollowRef.current(id);
-      }, 300);
+      }, MANUAL_TTS_FOLLOW_RETRY_MS);
       return;
     }
 
     clearManualReadAloudFollow();
-  }, [clearManualReadAloudFollow, playTts, resumeLivePlayback, setTtsContinuationWaiting, ttsSettings.autoReadEnabled, ttsSettings.backend, ttsSettings.enabled]);
+  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting]);
 
   useEffect(() => {
     continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;
@@ -691,28 +726,38 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     return () => clearManualReadAloudFollow();
   }, [clearManualReadAloudFollow]);
 
-  const handleReadAloud = useCallback((text: string) => {
+  const handleReadAloud = useCallback((text: string, options?: ReadAloudOptions) => {
     clearManualReadAloudFollow();
 
     const latestMessages = latestMessagesRef.current;
     const lastMessage = latestMessages[latestMessages.length - 1];
+    const latestAssistantText = getLatestAssistantReadAloudText(latestMessages);
     const shouldFollowStreamingMessage =
       streamingRef.current &&
       latestActiveChatIdRef.current != null &&
       lastMessage?.role === "assistant" &&
-      (lastMessage.content || "") === text;
+      Boolean(latestAssistantText) &&
+      (
+        options?.followStreaming === true ||
+        latestAssistantText === text ||
+        (lastMessage.content || "") === text
+      );
 
     if (!shouldFollowStreamingMessage) {
       void playTts(text);
       return;
     }
 
+    const liveFragmentCursor = latestAssistantText.startsWith(text)
+      ? text.length
+      : latestAssistantText.length;
+
     const id = manualReadAloudFollowIdRef.current + 1;
     manualReadAloudFollowIdRef.current = id;
     manualReadAloudFollowRef.current = {
       id,
       chatId: latestActiveChatIdRef.current,
-      cursor: text.length,
+      cursor: liveFragmentCursor,
       timer: null,
     };
 

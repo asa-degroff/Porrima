@@ -4,6 +4,16 @@ export interface MessageUsage {
   totalTokens: number;
 }
 
+export interface ReadAloudOptions {
+  /**
+   * The user clicked the currently streaming assistant bubble, so read-aloud
+   * should keep following appended assistant text after the clicked snapshot.
+   */
+  followStreaming?: boolean;
+}
+
+export type ReadAloudHandler = (text: string, options?: ReadAloudOptions) => void;
+
 export type ModelProgressPhase = "loading" | "prefill" | "generating";
 export type ModelProgressCacheState = "hot" | "partial" | "cold" | "unknown";
 export type ModelProgressConfidence = "matched-slot" | "inferred-active-slot" | "unknown";

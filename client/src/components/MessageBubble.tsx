@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, ReadAloudHandler } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -58,10 +58,12 @@ function ReadAloudButton({
   text,
   onReadAloud,
   isPlaying,
+  followStreaming = false,
 }: {
   text: string;
-  onReadAloud?: (text: string) => void;
+  onReadAloud?: ReadAloudHandler;
   isPlaying?: boolean;
+  followStreaming?: boolean;
 }) {
   if (!text || !onReadAloud) return null;
 
@@ -70,7 +72,7 @@ function ReadAloudButton({
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        onReadAloud(text);
+        onReadAloud(text, followStreaming ? { followStreaming: true } : undefined);
       }}
       disabled={isPlaying}
       className={`flex h-6 w-6 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${
@@ -151,7 +153,7 @@ interface Props {
   messageIndex?: number;
   messageSequence?: number;
   editable?: boolean;
-  onReadAloud?: (text: string) => void;
+  onReadAloud?: ReadAloudHandler;
   isPlayingTts?: boolean;
   availableSkills?: string[];
   streamingSegmentIndex?: number | null;
@@ -273,6 +275,7 @@ export const MessageBubble = memo(function MessageBubble({
   const canReadAloud = Boolean(message.content && onReadAloud && !editing);
   const canEditMessage = Boolean(isUser && editable && !editing);
   const canRetryMessage = Boolean(isUser && onRetryMessage && messageIndex != null && !editing);
+  const shouldFollowReadAloud = showStreaming && message.role === "assistant";
   const openContextMenu = useCallback((pos: { x: number; y: number }) => {
     setContextMenu(pos);
   }, []);
@@ -327,9 +330,9 @@ export const MessageBubble = memo(function MessageBubble({
 
   const handleReadAloud = useCallback(() => {
     if (!message.content || !onReadAloud || isPlayingTts) return;
-    onReadAloud(message.content);
+    onReadAloud(message.content, shouldFollowReadAloud ? { followStreaming: true } : undefined);
     setContextMenu(null);
-  }, [isPlayingTts, message.content, onReadAloud]);
+  }, [isPlayingTts, message.content, onReadAloud, shouldFollowReadAloud]);
 
   const handleCopy = useCallback(() => {
     setContextMenu(null);
@@ -464,6 +467,7 @@ export const MessageBubble = memo(function MessageBubble({
                 text={message.content}
                 onReadAloud={onReadAloud}
                 isPlaying={isPlayingTts}
+                followStreaming={shouldFollowReadAloud}
               />
             )}
           </div>
@@ -665,6 +669,7 @@ export const MessageBubble = memo(function MessageBubble({
                   text={message.content}
                   onReadAloud={onReadAloud}
                   isPlaying={isPlayingTts}
+                  followStreaming={shouldFollowReadAloud}
                 />
               </div>
             )}

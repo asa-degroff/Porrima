@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler, SystemPromptPreset } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -274,7 +274,7 @@ interface Props {
   ttsEnabled?: boolean;
   ttsAutoReadEnabled?: boolean;
   onTtsAutoReadToggle?: (enabled: boolean) => void;
-  onReadAloud?: (text: string) => void;
+  onReadAloud?: ReadAloudHandler;
   playbackState?: import("../hooks/useTTS").PlaybackState;
   ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
