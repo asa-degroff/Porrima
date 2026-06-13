@@ -385,6 +385,7 @@ export function ChatView({
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   const [scrollPaused, setScrollPaused] = useState(false);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const [focusAfterFirstSend, setFocusAfterFirstSend] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [tooltipOffsetX, setTooltipOffsetX] = useState(0);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
@@ -583,6 +584,75 @@ export function ChatView({
     }
   }, []);
 
+  const isFirstMessageMode = messages.length === 0 && !hasMoreMessages && !olderMessagesLoading;
+
+  const handleFirstMessageSend = useCallback<Props["onSend"]>((text, images) => {
+    setFocusAfterFirstSend(true);
+    onSend(text, images);
+  }, [onSend]);
+
+  useEffect(() => {
+    setFocusAfterFirstSend(false);
+  }, [chatId]);
+
+  useEffect(() => {
+    if (!focusAfterFirstSend || isFirstMessageMode) return;
+    const frame = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      setFocusAfterFirstSend(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusAfterFirstSend, isFirstMessageMode]);
+
+  const renderMessageInput = (variant: "docked" | "centered") => (
+    <MessageInput
+      chatId={chatId}
+      onSend={variant === "centered" ? handleFirstMessageSend : onSend}
+      disabled={!chatId || !!compacting || (chatType === "system" && isSynthesizing)}
+      onAbort={onAbort}
+      streaming={streaming}
+      waitingForInput={waitingForInput}
+      isOnline={isOnline}
+      onSlashTyping={handleSlashTyping}
+      onSlashDeleted={closeSkillSelector}
+      inputRef={inputRef}
+      availableSkills={availableSkillNames}
+      autoFocusInput={autoFocusInput}
+      variant={variant}
+    />
+  );
+
+  const hasStatusNotice = !!warning || reconnecting || !!displayError;
+  const statusNotices = (
+    <>
+      {warning && (
+        <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
+          {warning.message}
+        </div>
+      )}
+      {reconnecting && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-400/15 text-blue-300/80 text-xs flex items-center gap-2">
+          <div className="w-3 h-3 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+          <span>Reconnecting…</span>
+        </div>
+      )}
+      {displayError && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-red-500/8 border border-red-400/15 text-red-300/80 text-xs flex items-center justify-between gap-3">
+          <span>{displayError}</span>
+          <button
+            onClick={() => setDismissedError(error!)}
+            className="text-red-300/40 hover:text-red-300/70 shrink-0"
+            aria-label="Dismiss error"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   if (!chatId) {
     return (
       <div className="flex-1 flex flex-col">
@@ -769,137 +839,133 @@ export function ChatView({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0 min-w-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll-container h-full overflow-y-auto overflow-x-hidden px-2.5 md:px-5 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", scrollbarGutter: "stable" }}>
-          <div ref={contentRef}>
-            {messages.length === 0 && (
-              <div className="flex items-center justify-center h-full">
-                <p className="text-white/25 text-sm">
-                  Send a message to start the conversation
-                </p>
-              </div>
-            )}
-            {(hasMoreMessages || olderMessagesLoading) && (
-              <div className="text-center py-2">
-                <span className="text-xs text-white/30">
-                  {olderMessagesLoading
-                    ? "Loading earlier messages..."
-                    : `${messageOffset} earlier message${messageOffset === 1 ? "" : "s"} available${messageTotal ? ` (${messages.length}/${messageTotal} loaded)` : ""}`}
-                </span>
-              </div>
-            )}
-            {(() => {
-              const lastDisplayEndIdx = displayMessages.at(-1)?.localEndIdx ?? -1;
-              return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }, displayIndex) => {
-                const i = messageOffset + localStartIdx;
-                const isLast = localEndIdx === lastDisplayEndIdx;
-                const isOutOfContext = !!msg._outOfContext;
-                const isSystemMessage = !!msg._isSystemMessage;
-                const isMidTurnCompaction = !!msg._isMidTurnCompaction;
-                const stableKey = localStartIdx === localEndIdx
-                  ? `msg-${i}-${msg.timestamp}-${msg.role}`
-                  : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
-
-                // Show "In context" divider at the transition from out-of-context to in-context
-                const prevMsg = displayIndex > 0 ? displayMessages[displayIndex - 1].message : null;
-                const showContextResume = !isOutOfContext && !msg._isCompactionSummary
-                  && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
-                const adjustedStreamingSegmentIndex =
-                  isLast && streamingSegmentIndex !== null
-                    ? streamingSegmentIndex + streamingSegmentOffset
-                    : streamingSegmentIndex;
-                // In a tool loop, msg.thinking is merged from prior fragments while
-                // streamingThinking is the live current fragment. Between fragments
-                // (after onMessageComplete resets bg.thinking, before the next fragment
-                // begins), streamingThinking is empty — fall back to msg.thinking so the
-                // block stays visible instead of blinking out.
-                const bubbleStreamingThinking = isLast
-                  ? (msg.thinking && streamingThinking
-                      ? `${msg.thinking}\n\n${streamingThinking}`
-                      : streamingThinking || msg.thinking || undefined)
-                  : undefined;
-                const bubbleStreamingThinkingAccumulatedMs =
-                  isLast ? (msg.thinkingDurationMs || 0) + streamingThinkingAccumulatedMs : 0;
-
-                return (
-                  <div key={stableKey} className={!isLast ? "message-item" : undefined}>
-                    {showContextResume && (
-                      <div className="flex items-center gap-3 my-3 px-2">
-                        <div className="flex-1 border-t border-green-400/20" />
-                        <span className="text-[10px] text-green-400/50 uppercase tracking-wider font-medium whitespace-nowrap">In context</span>
-                        <div className="flex-1 border-t border-green-400/20" />
-                      </div>
-                    )}
-                    <div className={isOutOfContext ? "opacity-40" : undefined}>
-                      {isMidTurnCompaction ? (
-                        <MidTurnCompactionIndicator
-                          midTurn={{
-                            removedCount: msg._compactionRemovedCount,
-                            cycle: msg._compactionCycle,
-                            timestamp: msg.timestamp,
-                          }}
-                        />
-                      ) : isSystemMessage ? (
-                        <div className="flex items-center gap-3 mx-2 mt-4 mb-1">
-                          <div className="h-px flex-1 bg-amber-400/15"></div>
-                          <span className="text-[10px] text-amber-200/35 font-medium uppercase tracking-wider">system</span>
-                        </div>
-                      ) : undefined}
-                      {!isMidTurnCompaction && (
-                      <MessageBubble
-                        message={msg}
-                        isStreaming={streaming}
-                        isLast={isLast}
-                        streamingThinking={bubbleStreamingThinking}
-                        streamingThinkingActive={isLast ? streamingThinkingActive : false}
-                        streamingThinkingAccumulatedMs={bubbleStreamingThinkingAccumulatedMs}
-                        streamingThinkingLastStartRef={streamingThinkingLastStartRef}
-                        activeTools={isLast ? activeTools : undefined}
-                        artifacts={isLast && streaming ? artifacts : undefined}
-                        generatedImages={isLast && streaming ? generatedImages : undefined}
-                        editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext}
-                        onEditMessage={msg.role === "user" ? onEditMessage : undefined}
-                        onRetryMessage={msg.role === "user" ? onRetryMessage : undefined}
-                        messageIndex={i}
-                        messageSequence={msg._rowSequence}
-                        availableSkills={availableSkillNames}
-                        streamingSegmentIndex={adjustedStreamingSegmentIndex}
-                        showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
-                        inferenceActivityPhase={isLast ? inferenceActivityPhase : null}
-                        onReadAloud={ttsEnabled ? onReadAloud : undefined}
-                        isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
-                        chatId={chatId || undefined}
-                        onArtifactRuntimeError={onArtifactRuntimeError}
-                      />
-                      )}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className={`chat-scroll-container h-full overflow-y-auto overflow-x-hidden ${
+            isFirstMessageMode ? "px-3 md:px-6 py-6 md:py-8" : "px-2.5 md:px-5 py-3 md:py-4"
+          }`}
+          style={{
+            paddingBottom: isFirstMessageMode
+              ? (ttsBarVisible ? "88px" : undefined)
+              : (ttsBarVisible ? "180px" : "140px"),
+            scrollbarGutter: "stable",
+          }}
+        >
+          <div ref={contentRef} className={isFirstMessageMode ? "h-full" : undefined}>
+            {isFirstMessageMode ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="relative z-20 w-full max-w-3xl mx-auto">
+                  {renderMessageInput("centered")}
+                  {hasStatusNotice && (
+                    <div className="mt-3 space-y-2">
+                      {statusNotices}
                     </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
+                {(hasMoreMessages || olderMessagesLoading) && (
+                  <div className="text-center py-2">
+                    <span className="text-xs text-white/30">
+                      {olderMessagesLoading
+                        ? "Loading earlier messages..."
+                        : `${messageOffset} earlier message${messageOffset === 1 ? "" : "s"} available${messageTotal ? ` (${messages.length}/${messageTotal} loaded)` : ""}`}
+                    </span>
                   </div>
-                );
-              });
-            })()}
-            {warning && (
-              <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
-                {warning.message}
-              </div>
-            )}
-            {reconnecting && (
-              <div className="mb-4 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-400/15 text-blue-300/80 text-xs flex items-center gap-2">
-                <div className="w-3 h-3 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
-                <span>Reconnecting…</span>
-              </div>
-            )}
-            {displayError && (
-              <div className="mb-4 px-3 py-2 rounded-lg bg-red-500/8 border border-red-400/15 text-red-300/80 text-xs flex items-center justify-between gap-3">
-                <span>{displayError}</span>
-                <button
-                  onClick={() => setDismissedError(error!)}
-                  className="text-red-300/40 hover:text-red-300/70 shrink-0"
-                  aria-label="Dismiss error"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
+                )}
+                {(() => {
+                  const lastDisplayEndIdx = displayMessages.at(-1)?.localEndIdx ?? -1;
+                  return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }, displayIndex) => {
+                    const i = messageOffset + localStartIdx;
+                    const isLast = localEndIdx === lastDisplayEndIdx;
+                    const isOutOfContext = !!msg._outOfContext;
+                    const isSystemMessage = !!msg._isSystemMessage;
+                    const isMidTurnCompaction = !!msg._isMidTurnCompaction;
+                    const stableKey = localStartIdx === localEndIdx
+                      ? `msg-${i}-${msg.timestamp}-${msg.role}`
+                      : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
+
+                    // Show "In context" divider at the transition from out-of-context to in-context
+                    const prevMsg = displayIndex > 0 ? displayMessages[displayIndex - 1].message : null;
+                    const showContextResume = !isOutOfContext && !msg._isCompactionSummary
+                      && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
+                    const adjustedStreamingSegmentIndex =
+                      isLast && streamingSegmentIndex !== null
+                        ? streamingSegmentIndex + streamingSegmentOffset
+                        : streamingSegmentIndex;
+                    // In a tool loop, msg.thinking is merged from prior fragments while
+                    // streamingThinking is the live current fragment. Between fragments
+                    // (after onMessageComplete resets bg.thinking, before the next fragment
+                    // begins), streamingThinking is empty — fall back to msg.thinking so the
+                    // block stays visible instead of blinking out.
+                    const bubbleStreamingThinking = isLast
+                      ? (msg.thinking && streamingThinking
+                          ? `${msg.thinking}\n\n${streamingThinking}`
+                          : streamingThinking || msg.thinking || undefined)
+                      : undefined;
+                    const bubbleStreamingThinkingAccumulatedMs =
+                      isLast ? (msg.thinkingDurationMs || 0) + streamingThinkingAccumulatedMs : 0;
+
+                    return (
+                      <div key={stableKey} className={!isLast ? "message-item" : undefined}>
+                        {showContextResume && (
+                          <div className="flex items-center gap-3 my-3 px-2">
+                            <div className="flex-1 border-t border-green-400/20" />
+                            <span className="text-[10px] text-green-400/50 uppercase tracking-wider font-medium whitespace-nowrap">In context</span>
+                            <div className="flex-1 border-t border-green-400/20" />
+                          </div>
+                        )}
+                        <div className={isOutOfContext ? "opacity-40" : undefined}>
+                          {isMidTurnCompaction ? (
+                            <MidTurnCompactionIndicator
+                              midTurn={{
+                                removedCount: msg._compactionRemovedCount,
+                                cycle: msg._compactionCycle,
+                                timestamp: msg.timestamp,
+                              }}
+                            />
+                          ) : isSystemMessage ? (
+                            <div className="flex items-center gap-3 mx-2 mt-4 mb-1">
+                              <div className="h-px flex-1 bg-amber-400/15"></div>
+                              <span className="text-[10px] text-amber-200/35 font-medium uppercase tracking-wider">system</span>
+                            </div>
+                          ) : undefined}
+                          {!isMidTurnCompaction && (
+                            <MessageBubble
+                              message={msg}
+                              isStreaming={streaming}
+                              isLast={isLast}
+                              streamingThinking={bubbleStreamingThinking}
+                              streamingThinkingActive={isLast ? streamingThinkingActive : false}
+                              streamingThinkingAccumulatedMs={bubbleStreamingThinkingAccumulatedMs}
+                              streamingThinkingLastStartRef={streamingThinkingLastStartRef}
+                              activeTools={isLast ? activeTools : undefined}
+                              artifacts={isLast && streaming ? artifacts : undefined}
+                              generatedImages={isLast && streaming ? generatedImages : undefined}
+                              editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext}
+                              onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                              onRetryMessage={msg.role === "user" ? onRetryMessage : undefined}
+                              messageIndex={i}
+                              messageSequence={msg._rowSequence}
+                              availableSkills={availableSkillNames}
+                              streamingSegmentIndex={adjustedStreamingSegmentIndex}
+                              showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
+                              inferenceActivityPhase={isLast ? inferenceActivityPhase : null}
+                              onReadAloud={ttsEnabled ? onReadAloud : undefined}
+                              isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
+                              chatId={chatId || undefined}
+                              onArtifactRuntimeError={onArtifactRuntimeError}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+                {statusNotices}
+              </>
             )}
           </div>
         </div>
@@ -929,22 +995,11 @@ export function ChatView({
       </div>
 
       {/* Input */}
-      <div style={ttsBarVisible ? { paddingBottom: "56px" } : undefined}>
-        <MessageInput
-          chatId={chatId}
-          onSend={onSend}
-          disabled={!chatId || !!compacting || (chatType === "system" && isSynthesizing)}
-          onAbort={onAbort}
-          streaming={streaming}
-          waitingForInput={waitingForInput}
-          isOnline={isOnline}
-          onSlashTyping={handleSlashTyping}
-          onSlashDeleted={closeSkillSelector}
-          inputRef={inputRef}
-          availableSkills={availableSkillNames}
-          autoFocusInput={autoFocusInput}
-        />
-      </div>
+      {!isFirstMessageMode && (
+        <div style={ttsBarVisible ? { paddingBottom: "56px" } : undefined}>
+          {renderMessageInput("docked")}
+        </div>
+      )}
 
       {/* Skill Selector Popup */}
       {skillSelectorOpen && (

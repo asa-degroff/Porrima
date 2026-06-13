@@ -16,6 +16,7 @@ interface Props {
   inputRef?: React.RefObject<HTMLDivElement | null>;
   availableSkills?: string[];
   autoFocusInput?: boolean;
+  variant?: "docked" | "centered";
 }
 
 /**
@@ -59,7 +60,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills, autoFocusInput }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills, autoFocusInput, variant = "docked" }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [hasContent, setHasContent] = useState(false);
@@ -415,7 +416,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   };
 
   return (
-    <div className="p-2 md:p-3 bg-white/3">
+    <div className={variant === "centered" ? "bg-transparent" : "p-2 md:p-3 bg-white/3"}>
       <div
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
@@ -427,7 +428,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             : waitingForInput
               ? "border-amber-400/40 ring-1 ring-amber-400/20"
               : "border-white/15"
-        }`}
+        } ${variant === "centered" ? "shadow-2xl shadow-black/20" : ""}`}
       >
         {/* Vignette overlay — soft inset shadow for depth */}
         <div
