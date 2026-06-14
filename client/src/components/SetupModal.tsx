@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Dropdown } from "./ui/Dropdown";
 import { ToggleSwitch } from "./ui/ToggleSwitch";
 import { useDropdown } from "../hooks/useDropdown";
-import type { InferenceModel, Settings, AutomationTask } from "../types";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import type { ActivityShape, BackgroundEffect, InferenceModel, Settings, AutomationTask, Theme } from "../types";
 import type { AvailableLlamaModel, LlamaServerId, LlamaServerStatus, RuntimeModelApplyId } from "../api/client";
 import {
   ModelsDirConflictError,
@@ -17,7 +18,7 @@ import { updatePersona } from "../api/persona";
 import { updateUserDocument } from "../api/user";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
 
-type SetupStep = "welcome" | "identity" | "system" | "models" | "automations" | "review";
+type SetupStep = "welcome" | "identity" | "system" | "models" | "automations" | "appearance" | "review";
 type NoticeType = "ok" | "warn" | "err";
 
 interface Props {
@@ -58,7 +59,37 @@ const STEPS: Array<{ id: SetupStep; label: string; description: string }> = [
   { id: "system", label: "System", description: "Server readiness" },
   { id: "models", label: "Models", description: "Model selection" },
   { id: "automations", label: "Automations", description: "Synthesis & wake" },
+  { id: "appearance", label: "Appearance", description: "Theme & activity" },
   { id: "review", label: "Review", description: "Confirm & finish" },
+];
+
+const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string }> = [
+  { value: "default", label: "Lapis", preview: "from-purple-900" },
+  { value: "ocean", label: "Ocean", preview: "from-sky-900" },
+  { value: "forest", label: "Forest", preview: "from-green-900" },
+  { value: "crimson", label: "Crimson", preview: "from-rose-900" },
+  { value: "mono", label: "Asphalt", preview: "from-gray-900" },
+  { value: "strawberry", label: "Strawberry", preview: "from-pink-700" },
+  { value: "coffee", label: "Coffee", preview: "from-amber-950" },
+  { value: "emerald", label: "Emerald", preview: "from-emerald-900" },
+  { value: "copper", label: "Copper", preview: "from-orange-900" },
+  { value: "oxidized-copper", label: "Verdigris", preview: "from-teal-900" },
+  { value: "iron", label: "Iron", preview: "from-gray-800" },
+  { value: "rust", label: "Rust", preview: "from-orange-950" },
+];
+
+const BACKGROUND_EFFECT_OPTIONS: Array<{ value: BackgroundEffect; label: string; icon: string; description: string }> = [
+  { value: "static", label: "Static", icon: "□", description: "Plain static background with gradient overlay." },
+  { value: "ripple-grid", label: "Ripple Grid", icon: "〃", description: "Animated reactive background pattern." },
+  { value: "scan-lines", label: "Scan Lines", icon: "≡", description: "CRT-style horizontal line texture." },
+  { value: "ripple-dots", label: "Ripple Dots", icon: "∴", description: "Animated field of dots with wave distortion." },
+  { value: "graph-paper", label: "Graph Paper", icon: "▦", description: "Fine static grid overlay." },
+];
+
+const ACTIVITY_SHAPE_OPTIONS: Array<{ value: ActivityShape; label: string }> = [
+  { value: "octahedron", label: "Octahedron" },
+  { value: "cube", label: "Cube" },
+  { value: "tetrahedron", label: "Tetrahedron" },
 ];
 
 const DEFAULT_USER_DOC = `# About Me
@@ -208,6 +239,11 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
   const [wakeEnabled, setWakeEnabled] = useState(settings.wakeCycleEnabled ?? false);
   const [wakeInterval, setWakeInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
   const [sleepThreshold, setSleepThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
+  const [theme, setTheme] = useState<Theme>(settings.theme || "default");
+  const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
+  const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
+  const [activityHue, setActivityHue] = useState(settings.activityHue ?? 38);
+  const [activitySaturation, setActivitySaturation] = useState(settings.activitySaturation ?? 85);
 
   const serverById = useMemo(() => {
     const map = new Map<LlamaServerId, LlamaServerStatus>();
@@ -250,7 +286,9 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
     "title-generation": titleModel || modelOptionsBySlot["title-generation"][0]?.id || "",
   }), [embeddingModel, extractionModelId, modelOptionsBySlot, rerankerModel, selectedModelId, titleModel]);
 
-  const selectedModel = modelOptionsBySlot.inference.find((m) => m.id === effectiveModelIds.inference);
+  const selectedTheme = THEME_OPTIONS.find((opt) => opt.value === theme) || THEME_OPTIONS[0];
+  const selectedBackgroundEffect = BACKGROUND_EFFECT_OPTIONS.find((opt) => opt.value === backgroundEffect) || BACKGROUND_EFFECT_OPTIONS[0];
+  const selectedActivityShape = ACTIVITY_SHAPE_OPTIONS.find((opt) => opt.value === activityShape) || ACTIVITY_SHAPE_OPTIONS[0];
 
   const findSelectedOption = useCallback((slot: RuntimeModelApplyId, modelId: string): ModelOption | undefined => {
     const scanDir = selectedScanDirs[slot];
@@ -528,6 +566,11 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
         wakeCycleEnabled: wakeEnabled,
         wakeCycleIntervalHours: wakeEnabled ? wakeInterval : settings.wakeCycleIntervalHours,
         sleepCycleThresholdMinutes: sleepThreshold,
+        theme,
+        backgroundEffect,
+        activityShape,
+        activityHue,
+        activitySaturation,
       };
 
       const results: Promise<unknown>[] = [
@@ -555,7 +598,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
     } finally {
       setLoading(false);
     }
-  }, [agentName, applyModelSelections, automations, effectiveModelIds, onClose, onSave, personaContent, readiness.errors, settings, sleepThreshold, synthesisSchedule, userDocContent, wakeEnabled, wakeInterval]);
+  }, [activityHue, activitySaturation, activityShape, agentName, applyModelSelections, automations, backgroundEffect, effectiveModelIds, onClose, onSave, personaContent, readiness.errors, settings, sleepThreshold, synthesisSchedule, theme, userDocContent, wakeEnabled, wakeInterval]);
 
   const handleSkip = useCallback(async () => {
     try {
@@ -681,6 +724,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                   { title: "System", desc: "llama.cpp services and models" },
                   { title: "Models", desc: "Apply model choices" },
                   { title: "Automations", desc: "Synthesis and wake schedules" },
+                  { title: "Appearance", desc: "Theme, background, and spinner" },
                   { title: "Review", desc: "Confirm everything" },
                 ].map((item) => (
                   <div key={item.title} className="rounded-lg border border-white/10 bg-white/5 p-3">
@@ -971,6 +1015,155 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
             </div>
           )}
 
+          {currentStep === "appearance" && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold text-white/90">Appearance</h3>
+                <p className="text-xs text-white/40 mt-1">Pick a theme for the application.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-white/60">Color Theme</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {THEME_OPTIONS.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.value}
+                      onClick={() => setTheme(opt.value)}
+                      aria-pressed={theme === opt.value}
+                      className={`relative px-3 py-3 rounded-lg text-sm font-medium border transition-all overflow-hidden min-h-12 ${
+                        theme === opt.value
+                          ? "border-white/30"
+                          : "border-white/10 hover:border-white/20"
+                      } pressable`}
+                    >
+                      <div className={`absolute inset-0 bg-gradient-to-br ${opt.preview} to-transparent opacity-20`} />
+                      <span className="relative z-10">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-white/60">Background Effect</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {BACKGROUND_EFFECT_OPTIONS.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.value}
+                      onClick={() => setBackgroundEffect(opt.value)}
+                      aria-pressed={backgroundEffect === opt.value}
+                      className={`px-3 py-3 rounded-lg text-sm font-medium border transition-all text-left min-h-14 ${
+                        backgroundEffect === opt.value
+                          ? "border-white/30 bg-white/5"
+                          : "border-white/10 hover:border-white/20 hover:bg-white/[0.03]"
+                      } pressable`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-white/40" aria-hidden="true">{opt.icon}</span>
+                        <span>{opt.label}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-white/30 text-xs">{selectedBackgroundEffect.description}</p>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-sm font-medium text-white/60">Activity Spinner Shape</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {ACTIVITY_SHAPE_OPTIONS.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.value}
+                      onClick={() => setActivityShape(opt.value)}
+                      aria-pressed={activityShape === opt.value}
+                      className={`px-3 py-3 rounded-lg text-sm font-medium border transition-all flex flex-col items-center gap-1.5 min-h-20 ${
+                        activityShape === opt.value
+                          ? "border-white/30 bg-white/5"
+                          : "border-white/10 hover:border-white/20 hover:bg-white/[0.03]"
+                      } pressable`}
+                    >
+                      <PolyhedronLogo
+                        isActive={true}
+                        shape={opt.value}
+                        hue={activityHue}
+                        saturation={activitySaturation}
+                        count={1}
+                        size={20}
+                        speed={0.6}
+                      />
+                      <span className="text-xs sm:text-sm">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-sm font-medium text-white/60">Activity Spinner Color</label>
+                <div className="space-y-4 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-white/40 text-xs w-16">Hue</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={360}
+                      step={1}
+                      value={activityHue}
+                      onChange={(e) => setActivityHue(Number(e.target.value))}
+                      aria-label="Activity spinner hue"
+                      className="flex-1 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/80 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white/80 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-track]:transparent"
+                      style={{
+                        background: `linear-gradient(to right, ${Array.from({ length: 13 }, (_, i) => `hsl(${i * 30}, 85%, 55%)`).join(", ")})`,
+                      }}
+                    />
+                    <span className="text-white/30 text-xs w-10 text-right tabular-nums">{activityHue}°</span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <span className="text-white/40 text-xs w-16">Saturation</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={activitySaturation}
+                      onChange={(e) => setActivitySaturation(Number(e.target.value))}
+                      aria-label="Activity spinner saturation"
+                      className="flex-1 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/80 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white/80 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-track]:transparent"
+                      style={{
+                        background: `linear-gradient(to right, hsl(${activityHue}, 0%, 55%), hsl(${activityHue}, 100%, 55%))`,
+                      }}
+                    />
+                    <span className="text-white/30 text-xs w-10 text-right tabular-nums">{activitySaturation}%</span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <div className="flex items-center gap-2">
+                      <PolyhedronLogo
+                        isActive={true}
+                        shape={activityShape}
+                        hue={activityHue}
+                        saturation={activitySaturation}
+                        count={3}
+                        size={16}
+                        gap={2}
+                        speed={0.6}
+                      />
+                      <span className="text-white/30 text-xs">
+                        {selectedActivityShape.label}
+                      </span>
+                    </div>
+                    <div
+                      className="w-6 h-6 rounded-full border border-white/20 shrink-0"
+                      style={{ backgroundColor: `hsl(${activityHue}, ${activitySaturation}%, 55%)` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {currentStep === "review" && (
             <div className="space-y-4">
               <div className="text-center mb-4">
@@ -1037,6 +1230,26 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                 </div>
                 <button onClick={() => setCurrentStep("automations")} className="text-[10px] text-purple-300/60 hover:text-purple-200 transition-colors pressable">
                   Edit automations
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                <div className="flex items-center gap-2 text-purple-300/80">
+                  <span className={`h-3.5 w-3.5 rounded-full bg-gradient-to-br ${selectedTheme.preview} to-white/10 border border-white/20`} aria-hidden="true" />
+                  <span className="text-xs font-medium">Appearance</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                  <span className="text-white/40">Theme</span>
+                  <span className="text-white/70 text-right truncate">{selectedTheme.label}</span>
+                  <span className="text-white/40">Background</span>
+                  <span className="text-white/70 text-right truncate">{selectedBackgroundEffect.label}</span>
+                  <span className="text-white/40">Spinner</span>
+                  <span className="text-white/70 text-right truncate">{selectedActivityShape.label}</span>
+                  <span className="text-white/40">Spinner color</span>
+                  <span className="text-white/70 text-right">{activityHue}° / {activitySaturation}%</span>
+                </div>
+                <button type="button" onClick={() => setCurrentStep("appearance")} className="text-[10px] text-purple-300/60 hover:text-purple-200 transition-colors pressable">
+                  Edit appearance
                 </button>
               </div>
 
