@@ -38,6 +38,7 @@ import systemStatsRouter from "./routes/system-stats.js";
 import systemRouter from "./routes/system.js";
 import { assertNoProductionDevTokenBypass, requireAuth } from "./middleware/auth.js";
 import { ensureSetupTokenForFirstRun, getSessionSecret } from "./services/auth-storage.js";
+import { getSessionCookieConfig } from "./services/session-cookie-config.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
@@ -142,12 +143,7 @@ app.use(
     secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
+    cookie: getSessionCookieConfig(),
   })
 );
 
