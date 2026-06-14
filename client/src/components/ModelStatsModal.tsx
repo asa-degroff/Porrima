@@ -748,47 +748,44 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center flex-wrap gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+        <header className="relative flex items-center flex-wrap gap-2 px-4 py-3 border-b border-white/10 shrink-0">
           <h2 className="text-sm font-medium text-white/90 shrink-0">Model Stats</h2>
-          <div className="flex items-center bg-white/5 rounded-lg p-0.5">
+          <div className="flex items-center bg-white/5 rounded-sm p-0.5">
             <button
               onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
             >
               Chat
             </button>
             <button
               onClick={() => { setActiveTab("extraction"); setDetailModelId(null); }}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
             >
               Extraction
             </button>
             <button
               onClick={() => { setActiveTab("reranker"); setDetailModelId(null); fetchRerankerStats(); }}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
             >
               Reranker
             </button>
             <button
               onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
             >
               Cache
             </button>
           </div>
-          <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
-          <div className="flex items-center gap-2 ml-auto shrink-0">
-            {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
-            <button
-              onClick={onClose}
-              className="p-1 text-white/40 hover:text-white/80 transition-colors"
-              title="Close"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+          {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white/80 transition-colors"
+            title="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4">
@@ -878,6 +875,11 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
               ))}
             </div>
           )}
+          <div className="text-center pt-3">
+            <span className="text-[10px] text-white/20">
+              {activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}
+            </span>
+          </div>
         </div>
       </div>
     </div>
