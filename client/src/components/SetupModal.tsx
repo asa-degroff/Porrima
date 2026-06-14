@@ -288,7 +288,11 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
         if (!ready) errors.push(`${label} server is not ready.`);
       }
 
-      if (modelId && ready && !modelVerified(server, modelId)) {
+      // Only enforce model-name verification for router mode, where multiple models
+      // compete and you need to confirm the right one is loaded. Dedicated servers
+      // (reranker, embedding, etc.) load their model at startup via config — if the
+      // server is healthy, the model is functioning regardless of name matching.
+      if (modelId && ready && server?.http.routerMode && !modelVerified(server, modelId)) {
         warnings.push(`${label} is ready, but ${modelId} is not the active verified model yet. Apply the selection to finish verification.`);
       }
     }
@@ -388,7 +392,8 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
         if (!modelId) return [`${label} has no model selected.`];
         if (!serverReady(server)) return [`${label} server is not ready after applying the model.`];
-        if (!modelVerified(server, modelId)) {
+        // Only enforce model-name verification for router mode.
+        if (server?.http.routerMode && !modelVerified(server, modelId)) {
           const reported = server?.http.loadedModelId || server?.http.modelIds.join(", ") || "none";
           return [`${label} did not verify ${modelId} as active; reported ${reported}.`];
         }
