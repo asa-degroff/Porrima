@@ -239,7 +239,9 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     const el = editorRef.current;
     if (!el) return;
     textRef.current = el.innerText;
-    setHasContent(textRef.current.length > 0);
+    // contentEditable divs report innerText as "" or "\n" when visually empty (browser artifact).
+    // Treat both as empty, but anything else (including spaces) as real content.
+    setHasContent(textRef.current !== "" && textRef.current !== "\n");
     
     // Save draft only if chatId exists
     if (chatId) {
