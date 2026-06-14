@@ -22,7 +22,7 @@ Requirements:
 - Prefer reversible user-local installation.
 - Use systemd user services, not root services, unless OS package installation is required.
 - Install the core llama.cpp-based agent first. TTS and image generation are optional packs; only install the packs listed in the install profile.
-- Do not expose first-run Porrima on a public URL unless the first-run setup token exists and `ORIGIN`/`RP_ID` are configured for that public origin.
+- Do not expose first-run Porrima on a public URL unless the raw first-run setup token has been printed to the `porrima.service` journal, the hash state exists at `~/.porrima/auth/setup-token.txt`, and `ORIGIN`/`RP_ID` are configured for that public origin.
 
 Probe:
 Run and summarize:
@@ -92,12 +92,13 @@ Passkey and Cloudflare setup:
 - If using a Cloudflare Tunnel such as `https://porrima.example.com -> http://localhost:3001`, keep `PORT=3001`, set `ORIGIN=https://porrima.example.com`, and set `RP_ID=porrima.example.com`. Do not set `ORIGIN` to the localhost target for a public passkey registration flow.
 - Preferred safe sequence:
   1. Build and start Porrima locally, bound only to localhost.
-  2. Confirm the first-run setup token exists at `~/.porrima/auth/setup-token.txt` after the server starts.
+  2. Read the raw first-run setup token from `journalctl --user -u porrima.service`; confirm `~/.porrima/auth/setup-token.txt` exists but contains `tokenSha256` metadata, not the plaintext token.
   3. Create the Cloudflare Tunnel and DNS route. Use Cloudflare Access or an equivalent temporary access policy when available as an extra guard.
-  4. Visit the final HTTPS hostname and register the first owner passkey in Porrima using the setup token.
-  5. Confirm `GET /api/auth/status` reports `setupComplete: true`.
+  4. Visit the final HTTPS hostname and register the first owner passkey in Porrima using the raw setup token from the journal.
+  5. Confirm `GET /api/auth/status` reports `setupComplete: true` and the setup-token state file has been removed.
   6. Only then remove the temporary Cloudflare Access policy if I want the Porrima passkey gate to be the only public gate.
-- Do not bypass the setup-token gate or expose a first-run Porrima instance whose setup token is missing or unreadable.
+- Do not paste the hash from `setup-token.txt` into the browser; it is only there so the server can verify the raw token. Setup tokens expire after 30 minutes, lock after 10 failed attempts, and are removed after the first successful owner passkey registration. Restart the setup run to generate a fresh token if the current one expires or locks.
+- Do not bypass the setup-token gate or expose a first-run Porrima instance whose raw setup token is missing, expired, locked, or unreadable from the journal.
 - If I choose local-only setup, register the first passkey from `localhost` and leave Cloudflare Tunnel disabled.
 - Install or verify `cloudflared` only if remote access is requested.
 - For a Cloudflare-managed service, create a user-local tunnel config and systemd user service, keep the tunnel target pointed at the production Porrima server on localhost, and include commands to inspect tunnel health and logs.

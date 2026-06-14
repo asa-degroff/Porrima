@@ -83,6 +83,8 @@ WantedBy=default.target
 
 For remote access, replace `ORIGIN` and `RP_ID` with the final HTTPS browser origin and hostname before registering passkeys, for example `ORIGIN=https://porrima.example.com` and `RP_ID=porrima.example.com`.
 
+On first run, Porrima prints the raw owner setup token to the `porrima.service` journal and stores only hash/state metadata at `~/.porrima/auth/setup-token.txt`. Read the raw token with `journalctl --user -u porrima.service`; do not paste the `tokenSha256` value from the file into the browser. The setup token expires after 30 minutes, locks after 10 failed attempts, and is removed after the first successful owner passkey registration.
+
 ### Binary Symlink (Recommended)
 
 Porrima manages llama.cpp builds through a `llama-current` symlink. Place your llama.cpp build directories under `~/bin/` (e.g. `~/bin/llama-b9500/`) and create the symlink:

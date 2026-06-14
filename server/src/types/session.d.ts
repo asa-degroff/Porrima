@@ -5,6 +5,5 @@ declare module "express-session" {
     authenticated: boolean;
     currentChallenge?: string;
     currentUserVerification?: "preferred" | "required";
-    registrationSetupAuthorized?: boolean;
   }
 }

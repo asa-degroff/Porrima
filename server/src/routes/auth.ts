@@ -24,28 +24,42 @@ const rpName = "Porrima";
 const setupTokenHeader = "x-porrima-setup-token";
 type WebAuthnUserVerification = "preferred" | "required";
 
+interface WebAuthnRequestContext {
+  rpID: string;
+  expectedOrigin: string;
+  configured: boolean;
+  userVerification: WebAuthnUserVerification;
+}
+
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-function requireEnv(name: "ORIGIN" | "RP_ID", errors: string[]): string {
-  const value = (process.env[name] ?? "").trim();
-  if (!value) {
-    errors.push(`${name} is required when NODE_ENV=production`);
-  }
-  return value;
+function getHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function isLocalhost(hostname: string): boolean {
   return hostname === "localhost";
 }
 
-export function assertProductionWebAuthnConfig(): void {
-  if (!isProduction()) return;
-
+function validateWebAuthnEnv(requireConfigured: boolean): {
+  origin?: string;
+  rpID?: string;
+  errors: string[];
+} {
   const errors: string[] = [];
-  const origin = requireEnv("ORIGIN", errors);
-  const rpID = requireEnv("RP_ID", errors);
+  const origin = (process.env.ORIGIN ?? "").trim();
+  const rpID = (process.env.RP_ID ?? "").trim();
+  const hasPartialConfig = Boolean(origin || rpID);
+
+  if (requireConfigured) {
+    if (!origin) errors.push("ORIGIN is required when NODE_ENV=production");
+    if (!rpID) errors.push("RP_ID is required when NODE_ENV=production");
+  } else if (hasPartialConfig) {
+    if (!origin) errors.push("ORIGIN is required when RP_ID is configured");
+    if (!rpID) errors.push("RP_ID is required when ORIGIN is configured");
+  }
 
   let parsedOrigin: URL | null = null;
   if (origin) {
@@ -56,7 +70,7 @@ export function assertProductionWebAuthnConfig(): void {
       }
       const isAllowedLocalOrigin =
         parsedOrigin.protocol === "http:" && isLocalhost(parsedOrigin.hostname);
-      if (parsedOrigin.protocol !== "https:" && !isAllowedLocalOrigin) {
+      if (isProduction() && parsedOrigin.protocol !== "https:" && !isAllowedLocalOrigin) {
         errors.push("ORIGIN must use https except for http://localhost local-only setup");
       }
     } catch {
@@ -73,6 +87,17 @@ export function assertProductionWebAuthnConfig(): void {
     }
   }
 
+  return {
+    origin: origin || undefined,
+    rpID: rpID || undefined,
+    errors,
+  };
+}
+
+export function assertProductionWebAuthnConfig(): void {
+  if (!isProduction()) return;
+
+  const { errors } = validateWebAuthnEnv(true);
   if (errors.length > 0) {
     throw new Error(`Invalid production WebAuthn configuration: ${errors.join("; ")}`);
   }
@@ -87,22 +112,57 @@ export function shouldRequireUserVerification(req: Request): boolean {
   return expected === "required";
 }
 
-function getRpID(req: Request): string {
-  if (process.env.RP_ID) return process.env.RP_ID;
-  // Use hostname from request (strips port) — works for both localhost and production domains
-  const forwarded = req.headers["x-forwarded-host"];
-  const host = (typeof forwarded === "string" ? forwarded : req.hostname);
+function getRequestRpID(req: Request): string {
+  // Use hostname from request (strips port) for local development without explicit env.
+  const forwarded = getHeaderValue(req.headers["x-forwarded-host"]);
+  const host = forwarded ?? req.hostname;
   return host.split(":")[0];
 }
 
-function getExpectedOrigin(req: Request): string {
-  if (process.env.ORIGIN) return process.env.ORIGIN;
+function getRequestExpectedOrigin(req: Request): string {
   // The browser's Origin header reflects the actual page origin (e.g. localhost:5174),
   // not the proxied backend host (localhost:3001).
-  if (req.headers.origin) return req.headers.origin;
-  const proto = req.headers["x-forwarded-proto"] || req.protocol;
-  const host = req.headers["x-forwarded-host"] || req.get("host");
+  const origin = getHeaderValue(req.headers.origin);
+  if (origin) return origin;
+  const proto = getHeaderValue(req.headers["x-forwarded-proto"]) || req.protocol;
+  const host = getHeaderValue(req.headers["x-forwarded-host"]) || req.get("host");
   return `${proto}://${host}`;
+}
+
+export function getWebAuthnRequestContext(req: Request): WebAuthnRequestContext {
+  const { origin, rpID, errors } = validateWebAuthnEnv(isProduction());
+  if (errors.length > 0) {
+    throw new Error(`Invalid WebAuthn configuration: ${errors.join("; ")}`);
+  }
+
+  const userVerification = getWebAuthnUserVerification();
+  if (origin && rpID) {
+    return {
+      rpID,
+      expectedOrigin: origin,
+      configured: true,
+      userVerification,
+    };
+  }
+
+  return {
+    rpID: getRequestRpID(req),
+    expectedOrigin: getRequestExpectedOrigin(req),
+    configured: false,
+    userVerification,
+  };
+}
+
+export function assertRegistrationOriginAllowed(
+  req: Request,
+  context: WebAuthnRequestContext
+): void {
+  const requestOrigin = getHeaderValue(req.headers.origin);
+  if (context.configured && requestOrigin && requestOrigin !== context.expectedOrigin) {
+    throw new Error(
+      `Registration origin ${requestOrigin} does not match configured ORIGIN ${context.expectedOrigin}`
+    );
+  }
 }
 
 function getSetupToken(req: Request): string | undefined {
@@ -117,15 +177,7 @@ export async function authorizeRegistration(req: Request, setupComplete: boolean
     return req.session?.authenticated === true;
   }
 
-  if (req.session?.registrationSetupAuthorized === true) {
-    return true;
-  }
-
-  const authorized = await verifySetupToken(getSetupToken(req));
-  if (authorized) {
-    req.session!.registrationSetupAuthorized = true;
-  }
-  return authorized;
+  return verifySetupToken(getSetupToken(req));
 }
 
 function sendRegistrationDenied(res: Response, setupComplete: boolean) {
@@ -136,11 +188,19 @@ function sendRegistrationDenied(res: Response, setupComplete: boolean) {
   }
 }
 
+function sendWebAuthnConfigError(res: Response, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[auth] ${message}`);
+  res.status(400).json({ error: message });
+}
+
 // GET /api/auth/status
 router.get("/status", async (_req, res) => {
   const setupComplete = await isSetupComplete();
   if (!setupComplete) {
-    await getOrCreateSetupToken();
+    await getOrCreateSetupToken({ rotateExpired: false });
+  } else {
+    await clearSetupToken();
   }
   const authenticated = _req.session?.authenticated === true;
   res.json({ authenticated, setupComplete, setupTokenRequired: !setupComplete });
@@ -155,28 +215,35 @@ router.post("/register/options", async (req, res) => {
     return;
   }
 
+  let context: WebAuthnRequestContext;
+  try {
+    context = getWebAuthnRequestContext(req);
+    assertRegistrationOriginAllowed(req, context);
+  } catch (err) {
+    sendWebAuthnConfigError(res, err);
+    return;
+  }
+
   const store = await loadAuthStore();
   const excludeCredentials = store.credentials.map((c) => ({
     id: c.id,
     transports: c.transports as AuthenticatorTransportFuture[] | undefined,
   }));
 
-  const rpID = getRpID(req);
-  const userVerification = getWebAuthnUserVerification();
   const options = await generateRegistrationOptions({
     rpName,
-    rpID,
+    rpID: context.rpID,
     userName: "owner",
     userDisplayName: "Owner",
     excludeCredentials,
     authenticatorSelection: {
       residentKey: "preferred",
-      userVerification,
+      userVerification: context.userVerification,
     },
   });
 
   req.session!.currentChallenge = options.challenge;
-  req.session!.currentUserVerification = userVerification;
+  req.session!.currentUserVerification = context.userVerification;
   res.json(options);
 });
 
@@ -189,6 +256,15 @@ router.post("/register/verify", async (req, res) => {
     return;
   }
 
+  let context: WebAuthnRequestContext;
+  try {
+    context = getWebAuthnRequestContext(req);
+    assertRegistrationOriginAllowed(req, context);
+  } catch (err) {
+    sendWebAuthnConfigError(res, err);
+    return;
+  }
+
   const expectedChallenge = req.session?.currentChallenge;
   if (!expectedChallenge) {
     res.status(400).json({ error: "No challenge in session" });
@@ -196,12 +272,11 @@ router.post("/register/verify", async (req, res) => {
   }
 
   try {
-    const rpID = getRpID(req);
     const verification = await verifyRegistrationResponse({
       response: req.body,
       expectedChallenge,
-      expectedOrigin: getExpectedOrigin(req),
-      expectedRPID: rpID,
+      expectedOrigin: context.expectedOrigin,
+      expectedRPID: context.rpID,
       requireUserVerification: shouldRequireUserVerification(req),
     });
 
@@ -224,7 +299,6 @@ router.post("/register/verify", async (req, res) => {
     req.session!.authenticated = true;
     delete req.session!.currentChallenge;
     delete req.session!.currentUserVerification;
-    delete req.session!.registrationSetupAuthorized;
     await clearSetupToken();
 
     res.json({ verified: true });
@@ -241,16 +315,22 @@ router.post("/login/options", async (req, res) => {
     transports: c.transports as AuthenticatorTransportFuture[] | undefined,
   }));
 
-  const rpID = getRpID(req);
-  const userVerification = getWebAuthnUserVerification();
+  let context: WebAuthnRequestContext;
+  try {
+    context = getWebAuthnRequestContext(req);
+  } catch (err) {
+    sendWebAuthnConfigError(res, err);
+    return;
+  }
+
   const options = await generateAuthenticationOptions({
-    rpID,
+    rpID: context.rpID,
     allowCredentials,
-    userVerification,
+    userVerification: context.userVerification,
   });
 
   req.session!.currentChallenge = options.challenge;
-  req.session!.currentUserVerification = userVerification;
+  req.session!.currentUserVerification = context.userVerification;
   res.json(options);
 });
 
@@ -270,12 +350,12 @@ router.post("/login/verify", async (req, res) => {
       return;
     }
 
-    const rpID = getRpID(req);
+    const context = getWebAuthnRequestContext(req);
     const verification = await verifyAuthenticationResponse({
       response: req.body,
       expectedChallenge,
-      expectedOrigin: getExpectedOrigin(req),
-      expectedRPID: rpID,
+      expectedOrigin: context.expectedOrigin,
+      expectedRPID: context.rpID,
       requireUserVerification: shouldRequireUserVerification(req),
       credential: {
         id: stored.id,
