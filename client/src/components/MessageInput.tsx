@@ -239,7 +239,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     const el = editorRef.current;
     if (!el) return;
     textRef.current = el.innerText;
-    setHasContent(!!textRef.current.trim());
+    setHasContent(textRef.current.length > 0);
     
     // Save draft only if chatId exists
     if (chatId) {
