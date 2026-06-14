@@ -83,7 +83,7 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 - **RAM:** ≥48 GB dual-channel DDR5
 - **SSD:** NVMe Gen 4 or 5
 
-24 GB VRAM systems may be usable but will need to fit the main model plus two smaller models simultaneously. Unified-memory systems (AMD Strix Halo, Nvidia Grace Blackwell, Apple Silicon) are not recommended unless you have a multi-system cluster; partial CPU offloading is also not recommended due to memory-bandwidth contention.
+16 - 24 GB VRAM systems may be usable. Unified-memory systems (AMD Strix Halo, Nvidia Grace Blackwell, Apple Silicon) are not recommended unless you have a multi-system cluster; partial CPU offloading is also not recommended due to memory-bandwidth contention.
 
 ##### Client
 - **OS:** Linux, macOS, Windows, Android, iOS
@@ -94,6 +94,7 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 | Slot | Pick |
 |---|---|
 | Main chat | Qwen 3.6 27B or Gemma 4 31B |
+| Main chat (lightweight) | Qwen 3.6 35B A3B, Gemma 4 26B A4B, or Gemma 4 12B |
 | Memory extraction | Same family as the main model — Qwen 3.5 9B / 4B or Gemma 4 26B A4B / 12B / E4B |
 | Title generation | Gemma 4 E2B (or E4B) |
 | Reranker | Qwen3-reranker 0.6B |
