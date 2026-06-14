@@ -49,6 +49,7 @@ import {
   recordLlamaCacheResidencyRun,
   type LlamaCacheBindingMode,
 } from "../services/llama-cache-residency.js";
+import { orderToolResultsByToolCalls } from "../services/tool-result-ordering.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1119,6 +1120,7 @@ async function handleChatStream(
     const toolResults = state.allToolResults
       .slice(state.committedToolResultCount)
       .filter((tr) => toolCallIds.size === 0 || toolCallIds.has(tr.toolCallId));
+    const orderedToolResults = orderToolResultsByToolCalls(toolCalls, toolResults);
     const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
     const visuals = state.allVisuals.slice(state.committedVisualCount);
     const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
@@ -1132,7 +1134,7 @@ async function handleChatStream(
         : undefined,
       usage: state.finalUsage,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
       artifacts: artifacts.length > 0 ? artifacts : undefined,
       visuals: visuals.length > 0 ? visuals : undefined,
       segments: segments.length > 0 ? segments : undefined,
@@ -1149,6 +1151,7 @@ async function handleChatStream(
     const toolResults = state.allToolResults
       .slice(state.committedToolResultCount)
       .filter((tr) => toolCallIds.has(tr.toolCallId));
+    const orderedToolResults = orderToolResultsByToolCalls(toolCalls, toolResults);
     const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
     const visuals = state.allVisuals.slice(state.committedVisualCount);
     const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
@@ -1166,7 +1169,7 @@ async function handleChatStream(
         : undefined,
       usage: usageFromAssistantMessage(msg),
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
       artifacts: artifacts.length > 0 ? artifacts : undefined,
       visuals: visuals.length > 0 ? visuals : undefined,
       segments: segments.length > 0 ? segments : undefined,

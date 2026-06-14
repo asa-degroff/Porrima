@@ -9,6 +9,7 @@ import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
+import { orderToolResultsByToolCalls } from "./tool-result-ordering.js";
 
 const PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS = 360;
 
@@ -367,6 +368,7 @@ export async function runHeadlessChatTurn(
     },
   ): ChatMessage => {
     const summary = (options.summarize || defaultSummary)(state);
+    const orderedToolResults = orderToolResultsByToolCalls(state.toolCalls, toolResults);
     const message: ChatMessage = {
       role: "assistant",
       content: summary,
@@ -379,7 +381,7 @@ export async function runHeadlessChatTurn(
           arguments: toolCall.arguments,
         }))
         : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
       artifacts: output.artifacts && output.artifacts.length > 0 ? output.artifacts : undefined,
       visuals: output.visuals && output.visuals.length > 0 ? output.visuals : undefined,
       generatedImages: output.generatedImages && output.generatedImages.length > 0
@@ -411,6 +413,7 @@ export async function runHeadlessChatTurn(
       return chat.messages;
     }
 
+    const orderedToolResults = orderToolResultsByToolCalls(state.toolCalls, toolResults);
     const transientAssistant: ChatMessage = {
       role: "assistant",
       content: clampTransientAssistantText(state.textSummary),
@@ -422,7 +425,7 @@ export async function runHeadlessChatTurn(
           arguments: toolCall.arguments,
         }))
         : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
       timestamp: Date.now(),
     };
     return [...chat.messages, transientAssistant];
