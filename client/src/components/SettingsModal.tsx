@@ -4498,10 +4498,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
           {/* Agent Persona */}
           <div id="persona" className="space-y-3 pt-2 border-t border-white/10">
-            <label className="block text-sm font-medium text-white/60">Agent Persona</label>
-            <p className="text-white/30 text-xs -mt-2">
-              The agent's core identity and voice. Loaded from <code className="text-white/40">~/.porrima/persona.md</code>.
-            </p>
 
             {/* Agent Name */}
             <div className="space-y-2">
