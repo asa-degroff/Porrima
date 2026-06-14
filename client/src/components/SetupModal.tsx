@@ -752,7 +752,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-sm font-medium text-white/60">Persona</label>
-                  {personaLoading && <span className="text-[10px] text-white/30">Loading...</span>}
+                  {personaLoading && <span className="text-[10px] text-white/30">Loading...</span>}xfcp
                 </div>
                 <textarea
                   value={personaContent}
@@ -866,13 +866,13 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
               <div>
                 <label className="block text-sm font-medium text-white/60 mb-1">Main Chat Model</label>
                 {renderModelDropdown("inference", modelDd, effectiveModelIds.inference, "Select a chat model")}
-                <p className="text-[10px] text-white/30 mt-1">The default model used for new agent chats.</p>
+                <p className="text-[10px] text-white/30 mt-1">The main model used for agent chats.</p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-white/60 mb-1">Memory Extraction Model</label>
                 {renderModelDropdown("extraction", extractionDd, effectiveModelIds.extraction, "Select an extraction model")}
-                <p className="text-[10px] text-white/30 mt-1">A CPU-oriented chat model used to extract memories from conversations.</p>
+                <p className="text-[10px] text-white/30 mt-1">A lightweight language model used to extract memories from conversations.</p>
               </div>
 
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-4">
@@ -892,13 +892,13 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                 <div>
                   <label className="block text-xs font-medium text-white/50 mb-1">Embedding model</label>
                   {renderModelDropdown("embedding", embeddingDd, effectiveModelIds.embedding, "Select an embedding model")}
-                  <p className="text-[10px] text-white/25 mt-0.5">Generates memory vectors. This is required for core memory search.</p>
+                  <p className="text-[10px] text-white/25 mt-0.5">Generates vectors for memory database.</p>
                 </div>
 
                 <div>
                   <label className="block text-xs font-medium text-white/50 mb-1">Title generation model</label>
                   {renderModelDropdown("title-generation", titleDd, effectiveModelIds["title-generation"], "Select a title model")}
-                  <p className="text-[10px] text-white/25 mt-0.5">Generates short chat titles and notification summaries.</p>
+                  <p className="text-[10px] text-white/25 mt-0.5">Generates chat titles shown in the header and sidebar, and summaries for long responses.</p>
                 </div>
               </div>
             </div>
