@@ -30,6 +30,13 @@ const GREETINGS = {
   ],
 };
 
+const SLOT_INDEX: Record<keyof typeof GREETINGS, number> = {
+  morning: 0,
+  afternoon: 1,
+  evening: 2,
+  night: 3,
+};
+
 function getTimeSlot(hour: number): keyof typeof GREETINGS {
   if (hour >= 5 && hour < 12) return "morning";
   if (hour >= 12 && hour < 17) return "afternoon";
@@ -38,14 +45,28 @@ function getTimeSlot(hour: number): keyof typeof GREETINGS {
 }
 
 /**
+ * xorshift32 — 2³² cycle, no short loops.
+ * The seed blends day-of-year with slot identity so
+ * each time slot gets its own independent sequence.
+ */
+function seededIndex(dayOfYear: number, slotIdx: number, length: number): number {
+  let x = (dayOfYear * 2654435761 + slotIdx * 2246822519) >>> 0;
+  x = ((x ^ (x >>> 13)) * 0x5bd1e995) >>> 0;
+  x = ((x ^ (x >>> 15)) * 0x5bd1e995) >>> 0;
+  x = x ^ (x >>> 16);
+  return x % length;
+}
+
+/**
  * Returns a greeting string based on the current local time.
- * Uses a day-of-year seed so it stays stable within a day
- * but changes across days — no jittering while you watch it.
+ * Uses a day-of-year + slot seed so it stays stable within
+ * a time window but changes across days — no jittering while
+ * you watch it, no predictable rotation.
  */
 export function getGreeting(date = new Date()): string {
   const slot = getTimeSlot(date.getHours());
   const options = GREETINGS[slot];
   const start = new Date(date.getFullYear(), 0, 0);
   const dayOfYear = Math.floor((date.getTime() - start.getTime()) / 86400000);
-  return options[dayOfYear % options.length];
+  return options[seededIndex(dayOfYear, SLOT_INDEX[slot], options.length)];
 }
