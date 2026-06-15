@@ -954,7 +954,7 @@ function RecentChatItem({
         )}
       </button>
       {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
           {onSendToNotebook && (
             <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">
@@ -1200,7 +1200,7 @@ function ProjectSection({
       </div>
       {/* Project context menu */}
       {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
           <ContextMenuItem onClick={handlePinToggle}>
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="17" x2="12" y2="22" />
@@ -1440,17 +1440,26 @@ export function Sidebar({
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
 
-  // Track open chat-item confirmations (delete confirm, etc.) so the backdrop
-  // doesn't close the sidebar while the user needs to interact with them.
-  const activeConfirmationsRef = useRef(0);
+  // Track blocking interactions (delete confirmations, context menus) so the
+  // mobile sidebar doesn't auto-close while the user is interacting with them.
+  const blockCloseCountRef = useRef(0);
+  const [blockClose, setBlockClose] = useState(false);
   useEffect(() => {
-    const onShow = () => { activeConfirmationsRef.current += 1; };
-    const onHide = () => { activeConfirmationsRef.current = Math.max(0, activeConfirmationsRef.current - 1); };
-    window.addEventListener("sidebar-chat-confirmation:show", onShow);
-    window.addEventListener("sidebar-chat-confirmation:hide", onHide);
+    const onShow = () => {
+      blockCloseCountRef.current += 1;
+      setBlockClose(true);
+    };
+    const onHide = () => {
+      blockCloseCountRef.current = Math.max(0, blockCloseCountRef.current - 1);
+      if (blockCloseCountRef.current === 0) {
+        setBlockClose(false);
+      }
+    };
+    window.addEventListener("sidebar-block-close:show", onShow);
+    window.addEventListener("sidebar-block-close:hide", onHide);
     return () => {
-      window.removeEventListener("sidebar-chat-confirmation:show", onShow);
-      window.removeEventListener("sidebar-chat-confirmation:hide", onHide);
+      window.removeEventListener("sidebar-block-close:show", onShow);
+      window.removeEventListener("sidebar-block-close:hide", onHide);
     };
   }, []);
   const mainSectionRefs = useMemo(
@@ -1601,6 +1610,7 @@ export function Sidebar({
     onOpen,
     direction: "right",
     threshold: 0.4, // 40% of sidebar width to snap
+    disabled: blockClose,
   });
 
   return (
@@ -1622,8 +1632,8 @@ export function Sidebar({
           className={`md:hidden fixed inset-0 bg-black/60 z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
           onClick={() => {
-            // Don't close while a chat-item confirmation (delete, etc.) is visible
-            if (activeConfirmationsRef.current > 0) return;
+            // Don't close while a chat-item confirmation/context menu is visible
+            if (blockCloseCountRef.current > 0) return;
             onClose();
           }}
         />

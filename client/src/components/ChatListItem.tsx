@@ -56,10 +56,10 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
     return () => window.removeEventListener("keydown", handler);
   }, [confirmDelete]);
 
-  // Notify sidebar when confirmation shows/hides so the backdrop can avoid
-  // closing while a confirmation is visible (mobile context menu → delete flow).
+  // Notify sidebar when confirmation shows/hides so the backdrop/gesture
+  // doesn't close the sidebar while the user needs to interact with them.
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent(confirmDelete ? "sidebar-chat-confirmation:show" : "sidebar-chat-confirmation:hide"));
+    window.dispatchEvent(new CustomEvent(confirmDelete ? "sidebar-block-close:show" : "sidebar-block-close:hide"));
   }, [confirmDelete]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
@@ -236,7 +236,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
 
       {/* Context menu */}
       {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
           {onSendToNotebook && (
             <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">

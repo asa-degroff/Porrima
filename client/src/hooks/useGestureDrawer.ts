@@ -8,6 +8,8 @@ interface UseGestureDrawerProps {
   threshold?: number;
   maxOffset?: number;
   onProgressChange?: (progress: number) => void;
+  /** When true, ignore new touches and cancel any active drag (snap back to open). */
+  disabled?: boolean;
 }
 
 interface GestureDrawerReturn {
@@ -46,11 +48,15 @@ export function useGestureDrawer({
   threshold = DEFAULT_THRESHOLD,
   maxOffset,
   onProgressChange,
+  disabled = false,
 }: UseGestureDrawerProps): GestureDrawerReturn {
   const [isDragging, setIsDragging] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [currentOffset, setCurrentOffset] = useState(0);
   const [containerSize, setContainerSize] = useState(0);
+
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
 
   const isDraggingRef = useRef(false);
   const isTrackingTouchRef = useRef(false);
@@ -203,6 +209,7 @@ export function useGestureDrawer({
   }, []);
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (disabledRef.current) return;
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
 
@@ -221,6 +228,7 @@ export function useGestureDrawer({
 
   // Edge swipe: starts drag from closed state (offset 0)
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
+    if (disabledRef.current) return;
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
     if (isOpenRef.current || isDraggingRef.current) return;
@@ -238,6 +246,7 @@ export function useGestureDrawer({
   }, [setOffsetSync, startTrackingTouch]);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
+    if (disabledRef.current) return;
     if (!isTrackingTouchRef.current) return;
     if (e.touches.length !== 1) return;
 
@@ -308,6 +317,7 @@ export function useGestureDrawer({
   }, [getCrossTouchPos, getTouchPos, direction, resetTouchTracking, setOffsetSync]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (disabledRef.current) return;
     if (!isTrackingTouchRef.current) return;
 
     const wasDragging = isDraggingRef.current;
@@ -343,6 +353,7 @@ export function useGestureDrawer({
   }, [threshold, snapToState]);
 
   const onTouchCancel = useCallback((e: React.TouchEvent) => {
+    if (disabledRef.current) return;
     if (!isTrackingTouchRef.current) return;
 
     const wasDragging = isDraggingRef.current;
@@ -352,6 +363,26 @@ export function useGestureDrawer({
     if (e.cancelable) e.preventDefault();
     snapToState(isOpenRef.current);
   }, [resetTouchTracking, snapToState]);
+
+  // Cancel any active drag and snap back to the open state when disabled
+  // becomes true (e.g. a context menu opens mid-long-press).
+  useEffect(() => {
+    if (!disabled) return;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (isTrackingTouchRef.current || isDraggingRef.current) {
+      resetTouchTracking();
+    }
+    if (isAnimatingRef.current) {
+      isAnimatingRef.current = false;
+      setIsAnimating(false);
+    }
+    if (containerSizeRef.current > 0 && isOpenRef.current && currentOffsetRef.current !== containerSizeRef.current) {
+      snapToState(true);
+    }
+  }, [disabled, resetTouchTracking, snapToState]);
 
   // Clean up RAF on unmount
   useEffect(() => {
@@ -375,7 +406,7 @@ export function useGestureDrawer({
   // When idle, return empty style so CSS classes control position (important for
   // desktop where md:translate-x-0 must not be overridden by inline styles).
   const active = isDragging || isAnimating;
-  const style: React.CSSProperties = active ? {
+  const style: React.CSSProperties = active && !disabledRef.current ? {
     transform: getTranslate(currentOffset),
     touchAction: "none",
     willChange: "transform",

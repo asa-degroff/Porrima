@@ -6,9 +6,14 @@ interface ContextMenuProps {
   y: number;
   onClose: () => void;
   children: React.ReactNode;
+  /** If true, opening this menu notifies the mobile sidebar to disable its swipe-to-close gesture. */
+  blocksSidebarClose?: boolean;
 }
 
-export function ContextMenu({ x, y, onClose, children }: ContextMenuProps) {
+const SIDEBAR_BLOCK_CLOSE_SHOW = "sidebar-block-close:show";
+const SIDEBAR_BLOCK_CLOSE_HIDE = "sidebar-block-close:hide";
+
+export function ContextMenu({ x, y, onClose, children, blocksSidebarClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Adjust position to keep menu within viewport
@@ -54,6 +59,15 @@ export function ContextMenu({ x, y, onClose, children }: ContextMenuProps) {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  // Notify the mobile sidebar to disable its swipe-to-close gesture while open.
+  useEffect(() => {
+    if (!blocksSidebarClose) return;
+    window.dispatchEvent(new CustomEvent(SIDEBAR_BLOCK_CLOSE_SHOW));
+    return () => {
+      window.dispatchEvent(new CustomEvent(SIDEBAR_BLOCK_CLOSE_HIDE));
+    };
+  }, [blocksSidebarClose]);
 
   return createPortal(
     <div
