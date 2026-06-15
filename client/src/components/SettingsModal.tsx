@@ -28,6 +28,7 @@ import type { AutomationRun, AutomationTask, InferenceModel, Settings, SystemPro
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
+import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
@@ -4162,25 +4163,29 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* Background Effect */}
           <div id="background" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Background Effect</label>
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide carousel-edge-fade">
               {[
-                { value: "static" as BackgroundEffect, label: "Static", icon: "□" },
-                { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", icon: "〃" },
-                { value: "scan-lines" as BackgroundEffect, label: "Scan Lines", icon: "≡" },
-                { value: "ripple-dots" as BackgroundEffect, label: "Ripple Dots", icon: "∴" },
-                { value: "graph-paper" as BackgroundEffect, label: "Graph Paper", icon: "▦" },
+                { value: "static" as BackgroundEffect, label: "Static", description: "Plain static background with gradient overlay." },
+                { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", description: "Animated reactive background pattern." },
+                { value: "scan-lines" as BackgroundEffect, label: "Scan Lines", description: "CRT-style horizontal line texture." },
+                { value: "ripple-dots" as BackgroundEffect, label: "Ripple Dots", description: "Animated field of dots with wave distortion." },
+                { value: "graph-paper" as BackgroundEffect, label: "Graph Paper", description: "Fine static grid overlay — no animation." },
               ].map((opt) => (
                 <button
                   key={opt.value}
                   onClick={() => setBackgroundEffect(opt.value)}
-                  className={`flex-shrink-0 px-3 py-3 rounded-lg text-sm font-medium border transition-all ${
+                  aria-pressed={backgroundEffect === opt.value}
+                  className={`relative overflow-hidden flex-shrink-0 rounded-lg text-sm font-medium border transition-all text-left w-32 min-h-[4.5rem] p-3 flex items-end ${
                     backgroundEffect === opt.value
-                      ? "border-white/30 bg-white/5"
-                      : "border-white/10 hover:border-white/20"
+                      ? "border-white/40 ring-2 ring-white/10"
+                      : "border-white/10 hover:border-white/25"
                   } pressable`}
                 >
-                  <span className="mr-2 opacity-50">{opt.icon}</span>
-                  {opt.label}
+                  <BackgroundEffectPreview
+                    effect={opt.value}
+                    className="absolute inset-0"
+                  />
+                  <span className="bg-effect-preview-label">{opt.label}</span>
                 </button>
               ))}
             </div>

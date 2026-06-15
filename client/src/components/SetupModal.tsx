@@ -3,6 +3,7 @@ import { Dropdown } from "./ui/Dropdown";
 import { ToggleSwitch } from "./ui/ToggleSwitch";
 import { useDropdown } from "../hooks/useDropdown";
 import { PolyhedronLogo } from "./PolyhedronLogo";
+import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
 import type { ActivityShape, BackgroundEffect, InferenceModel, Settings, AutomationTask, Theme } from "../types";
 import type { AvailableLlamaModel, LlamaServerId, LlamaServerStatus, RuntimeModelApplyId } from "../api/client";
 import {
@@ -78,12 +79,12 @@ const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string }> = [
   { value: "rust", label: "Rust", preview: "from-orange-950" },
 ];
 
-const BACKGROUND_EFFECT_OPTIONS: Array<{ value: BackgroundEffect; label: string; icon: string; description: string }> = [
-  { value: "static", label: "Static", icon: "□", description: "Plain static background with gradient overlay." },
-  { value: "ripple-grid", label: "Ripple Grid", icon: "〃", description: "Animated reactive background pattern." },
-  { value: "scan-lines", label: "Scan Lines", icon: "≡", description: "CRT-style horizontal line texture." },
-  { value: "ripple-dots", label: "Ripple Dots", icon: "∴", description: "Animated field of dots with wave distortion." },
-  { value: "graph-paper", label: "Graph Paper", icon: "▦", description: "Fine static grid overlay." },
+const BACKGROUND_EFFECT_OPTIONS: Array<{ value: BackgroundEffect; label: string; description: string }> = [
+  { value: "static", label: "Static", description: "Plain static background with gradient overlay." },
+  { value: "ripple-grid", label: "Ripple Grid", description: "Animated reactive background pattern." },
+  { value: "scan-lines", label: "Scan Lines", description: "CRT-style horizontal line texture." },
+  { value: "ripple-dots", label: "Ripple Dots", description: "Animated field of dots with wave distortion." },
+  { value: "graph-paper", label: "Graph Paper", description: "Fine static grid overlay." },
 ];
 
 const ACTIVITY_SHAPE_OPTIONS: Array<{ value: ActivityShape; label: string }> = [
@@ -1046,23 +1047,24 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-white/60">Background Effect</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="flex gap-2 overflow-x-auto scrollbar-hide carousel-edge-fade">
                   {BACKGROUND_EFFECT_OPTIONS.map((opt) => (
                     <button
                       type="button"
                       key={opt.value}
                       onClick={() => setBackgroundEffect(opt.value)}
                       aria-pressed={backgroundEffect === opt.value}
-                      className={`px-3 py-3 rounded-lg text-sm font-medium border transition-all text-left min-h-14 ${
+                      className={`relative overflow-hidden flex-shrink-0 rounded-lg text-sm font-medium border transition-all text-left w-32 min-h-[4.5rem] p-3 flex items-end ${
                         backgroundEffect === opt.value
-                          ? "border-white/30 bg-white/5"
-                          : "border-white/10 hover:border-white/20 hover:bg-white/[0.03]"
+                          ? "border-white/40 ring-2 ring-white/10"
+                          : "border-white/10 hover:border-white/25"
                       } pressable`}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="text-white/40" aria-hidden="true">{opt.icon}</span>
-                        <span>{opt.label}</span>
-                      </div>
+                      <BackgroundEffectPreview
+                        effect={opt.value}
+                        className="absolute inset-0"
+                      />
+                      <span className="bg-effect-preview-label">{opt.label}</span>
                     </button>
                   ))}
                 </div>
