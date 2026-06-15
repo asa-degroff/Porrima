@@ -4162,7 +4162,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* Background Effect */}
           <div id="background" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Background Effect</label>
-            <div className="flex gap-2">
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide">
               {[
                 { value: "static" as BackgroundEffect, label: "Static", icon: "□" },
                 { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", icon: "〃" },
@@ -4173,7 +4173,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 <button
                   key={opt.value}
                   onClick={() => setBackgroundEffect(opt.value)}
-                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all ${
+                  className={`flex-shrink-0 px-3 py-3 rounded-lg text-sm font-medium border transition-all ${
                     backgroundEffect === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"

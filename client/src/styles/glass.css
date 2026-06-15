@@ -151,6 +151,16 @@ body::before {
   overflow-anchor: none;
 }
 
+/* Hidden scrollbar — for overflow containers that should scroll but not show a track */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;
