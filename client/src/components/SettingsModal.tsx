@@ -3,6 +3,7 @@ import { ToggleSwitch } from "./ui/ToggleSwitch";
 import { Dropdown } from "./ui/Dropdown";
 import { Chevron } from "./ui/Chevron";
 import { useDropdown, type DropdownState } from "../hooks/useDropdown";
+import { useCarouselMask } from "../hooks/useCarouselMask";
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -2635,6 +2636,8 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
    const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
+  const bgCarouselRef = useRef<HTMLDivElement>(null);
+  const bgCarouselMask = useCarouselMask(bgCarouselRef);
   const isDesktop = useMediaQuery("(min-width: 768px)");
 
   // Sync scrollRoot when the media query changes (ref callbacks don't fire on resize)
@@ -4163,7 +4166,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* Background Effect */}
           <div id="background" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Background Effect</label>
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide carousel-edge-fade">
+            <div ref={bgCarouselRef} style={bgCarouselMask} className="flex gap-2 overflow-x-auto scrollbar-hide">
               {[
                 { value: "static" as BackgroundEffect, label: "Static", description: "Plain static background with gradient overlay." },
                 { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", description: "Animated reactive background pattern." },

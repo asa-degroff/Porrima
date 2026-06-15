@@ -522,24 +522,3 @@ button:hover .trash-icon .trash-lid {
   filter: blur(6px);
 }
 
-/*
- * Horizontal carousel edge fade.
- * Applies a gradient mask so the left/right edges fade to transparent,
- * signaling that the content continues and is scrollable.
- */
-.carousel-edge-fade {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black 12px,
-    black calc(100% - 12px),
-    transparent 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black 12px,
-    black calc(100% - 12px),
-    transparent 100%
-  );
-}

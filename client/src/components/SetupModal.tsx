@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Dropdown } from "./ui/Dropdown";
 import { ToggleSwitch } from "./ui/ToggleSwitch";
 import { useDropdown } from "../hooks/useDropdown";
+import { useCarouselMask } from "../hooks/useCarouselMask";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
 import type { ActivityShape, BackgroundEffect, InferenceModel, Settings, AutomationTask, Theme } from "../types";
@@ -205,6 +206,8 @@ function slotStatus(server: LlamaServerStatus | undefined): { type: NoticeType; 
 
 export function SetupModal({ settings, models, refreshModels, onSave, onClose }: Props) {
   const [currentStep, setCurrentStep] = useState<SetupStep>("welcome");
+  const bgCarouselRef = useRef<HTMLDivElement>(null);
+  const bgCarouselMask = useCarouselMask(bgCarouselRef);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: NoticeType; text: string } | null>(null);
 
@@ -1047,7 +1050,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-white/60">Background Effect</label>
-                <div className="flex gap-2 overflow-x-auto scrollbar-hide carousel-edge-fade">
+                <div ref={bgCarouselRef} style={bgCarouselMask} className="flex gap-2 overflow-x-auto scrollbar-hide">
                   {BACKGROUND_EFFECT_OPTIONS.map((opt) => (
                     <button
                       type="button"
