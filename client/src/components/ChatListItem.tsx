@@ -56,6 +56,12 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
     return () => window.removeEventListener("keydown", handler);
   }, [confirmDelete]);
 
+  // Notify sidebar when confirmation shows/hides so the backdrop can avoid
+  // closing while a confirmation is visible (mobile context menu → delete flow).
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent(confirmDelete ? "sidebar-chat-confirmation:show" : "sidebar-chat-confirmation:hide"));
+  }, [confirmDelete]);
+
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmDelete(true);

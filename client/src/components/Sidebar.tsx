@@ -1439,6 +1439,20 @@ export function Sidebar({
   const [agentShowAll, setAgentShowAll] = useState(false);
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
+
+  // Track open chat-item confirmations (delete confirm, etc.) so the backdrop
+  // doesn't close the sidebar while the user needs to interact with them.
+  const activeConfirmationsRef = useRef(0);
+  useEffect(() => {
+    const onShow = () => { activeConfirmationsRef.current += 1; };
+    const onHide = () => { activeConfirmationsRef.current = Math.max(0, activeConfirmationsRef.current - 1); };
+    window.addEventListener("sidebar-chat-confirmation:show", onShow);
+    window.addEventListener("sidebar-chat-confirmation:hide", onHide);
+    return () => {
+      window.removeEventListener("sidebar-chat-confirmation:show", onShow);
+      window.removeEventListener("sidebar-chat-confirmation:hide", onHide);
+    };
+  }, []);
   const mainSectionRefs = useMemo(
     () => [projectsSectionRef, agentSectionRef, quickSectionRef],
     []
@@ -1607,7 +1621,11 @@ export function Sidebar({
         <div
           className={`md:hidden fixed inset-0 bg-black/60 z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
-          onClick={onClose}
+          onClick={() => {
+            // Don't close while a chat-item confirmation (delete, etc.) is visible
+            if (activeConfirmationsRef.current > 0) return;
+            onClose();
+          }}
         />
       )}
       {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
