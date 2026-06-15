@@ -58,6 +58,7 @@ export function ContextMenu({ x, y, onClose, children }: ContextMenuProps) {
   return createPortal(
     <div
       ref={menuRef}
+      onClick={(e) => e.stopPropagation()}
       className="fixed z-50 min-w-[160px] rounded-lg border border-white/10 bg-black/90 backdrop-blur-xl shadow-xl py-1"
       style={{ left: x, top: y }}
     >
