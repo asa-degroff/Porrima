@@ -394,6 +394,7 @@ export function ChatView({
     () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
     [skills]
   );
+  const greeting = useMemo(() => getGreeting(), []);
 
   // Auto-dismiss network-related errors after a delay, since the
   // OfflineIndicator in the header already communicates connection state.
@@ -858,7 +859,7 @@ export function ChatView({
               <div className="h-full flex items-center justify-center">
                 <div className="relative z-20 w-full max-w-3xl mx-auto">
                   <p className="text-left text-xl md:text-2xl text-white/30 font-bold mb-4">
-                    {getGreeting()}
+                    {greeting}
                   </p>
                   {renderMessageInput("centered")}
                   {hasStatusNotice && (
