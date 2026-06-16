@@ -53,6 +53,12 @@ const ACTION_BUTTON_SIZE = 24;
 const ACTION_BUTTON_GAP = 2;
 const ACTION_RAIL_GAP_TO_BUBBLE = 4;
 const SHORT_USER_BUBBLE_MAX_HEIGHT = 55;
+const DESKTOP_MESSAGE_QUERY = "(min-width: 768px)";
+const MESSAGE_ROW_MAX_WIDTH = {
+  mobile: 0.97,
+  desktop: 0.86,
+  className: "max-w-[97%] md:max-w-[86%]",
+} as const;
 
 function ReadAloudButton({
   text,
@@ -75,7 +81,7 @@ function ReadAloudButton({
         onReadAloud(text, followStreaming ? { followStreaming: true } : undefined);
       }}
       disabled={isPlaying}
-      className={`flex h-6 w-6 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${
+      className={`hidden h-6 w-6 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 md:flex ${
         isPlaying
           ? "cursor-not-allowed bg-white/[0.04] text-white/35"
           : "text-white/35 hover:bg-white/10 hover:text-white/75"
@@ -370,9 +376,9 @@ export const MessageBubble = memo(function MessageBubble({
   // Build output segments - use ordered segments if available, otherwise separate arrays
   const renderSegments = !isUser && message.segments && message.segments.length > 0;
   const showReadAloudButton = canReadAloud;
-  const userActionCount =
-    (canEditMessage ? 2 : 0) +
-    (isUser && showReadAloudButton ? 1 : 0);
+  const baseUserActionCount = canEditMessage ? 2 : 0;
+  const desktopOnlyUserActionCount = isUser && showReadAloudButton ? 1 : 0;
+  const userActionCount = baseUserActionCount + desktopOnlyUserActionCount;
   const hasUserActions = isUser && userActionCount > 0;
 
   useLayoutEffect(() => {
@@ -391,10 +397,18 @@ export const MessageBubble = memo(function MessageBubble({
       frame = requestAnimationFrame(() => {
         const bubbleRect = bubble.getBoundingClientRect();
         const parentWidth = row.parentElement?.getBoundingClientRect().width || window.innerWidth;
-        const rowMaxWidth = parentWidth * (window.matchMedia("(min-width: 768px)").matches ? 0.8 : 0.95);
+        const isDesktopMessageLayout = window.matchMedia(DESKTOP_MESSAGE_QUERY).matches;
+        const rowMaxWidth = parentWidth * (
+          isDesktopMessageLayout
+            ? MESSAGE_ROW_MAX_WIDTH.desktop
+            : MESSAGE_ROW_MAX_WIDTH.mobile
+        );
+        const visibleUserActionCount =
+          baseUserActionCount +
+          (isDesktopMessageLayout ? desktopOnlyUserActionCount : 0);
         const actionWidth =
-          userActionCount * ACTION_BUTTON_SIZE +
-          Math.max(0, userActionCount - 1) * ACTION_BUTTON_GAP;
+          visibleUserActionCount * ACTION_BUTTON_SIZE +
+          Math.max(0, visibleUserActionCount - 1) * ACTION_BUTTON_GAP;
         const horizontalFits = bubbleRect.width + actionWidth + ACTION_RAIL_GAP_TO_BUBBLE <= rowMaxWidth;
         const shortBubble = !message.images?.length && bubbleRect.height <= SHORT_USER_BUBBLE_MAX_HEIGHT;
 
@@ -415,13 +429,13 @@ export const MessageBubble = memo(function MessageBubble({
       cancelAnimationFrame(frame);
       resizeObserver?.disconnect();
     };
-  }, [hasUserActions, message.content, message.images?.length, userActionCount]);
+  }, [baseUserActionCount, desktopOnlyUserActionCount, hasUserActions, message.content, message.images?.length]);
 
   return (
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
-      <div ref={rowRef} className={`flex flex-row items-start max-w-[97%] md:max-w-[86%] min-w-0`}>
+      <div ref={rowRef} className={`flex flex-row items-start ${MESSAGE_ROW_MAX_WIDTH.className} min-w-0`}>
         {hasUserActions && (
-          <div className={`mt-2 mr-1 flex shrink-0 gap-0.5 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
+          <div className={`mt-2 mr-1 ${baseUserActionCount > 0 ? "flex" : "hidden md:flex"} shrink-0 gap-0.5 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
             {canEditMessage && (
               <>
                 <button
@@ -664,7 +678,7 @@ export const MessageBubble = memo(function MessageBubble({
 
           </div>
             {!isUser && showReadAloudButton && (
-              <div className="ml-1.5 mb-1 shrink-0">
+              <div className="mb-1 ml-1.5 hidden shrink-0 md:block">
                 <ReadAloudButton
                   text={message.content}
                   onReadAloud={onReadAloud}
