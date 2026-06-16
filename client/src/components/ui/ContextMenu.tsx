@@ -133,11 +133,50 @@ export function useLongPress(
     (e: React.TouchEvent) => {
       firedRef.current = false;
       const touch = e.touches[0];
+      const sourceElement = e.currentTarget;
       startPos.current = { x: touch.clientX, y: touch.clientY };
+
+      if (clickSuppressor.current) {
+        clickSuppressor.current();
+        clickSuppressor.current = null;
+      }
+
       timerRef.current = setTimeout(() => {
         firedRef.current = true;
         onOpen({ x: touch.clientX, y: touch.clientY });
         timerRef.current = null;
+
+        // Mobile browsers may dispatch a synthetic mousedown + click after a
+        // touch-hold. Suppress that sequence for the long-pressed element so
+        // its normal click action cannot run under the open context menu.
+        let removed = false;
+        let cleanupTimer: number | null = null;
+        const remove = () => {
+          if (removed) return;
+          removed = true;
+          if (cleanupTimer !== null) {
+            window.clearTimeout(cleanupTimer);
+          }
+          document.removeEventListener("mousedown", suppress, true);
+          document.removeEventListener("click", suppress, true);
+          clickSuppressor.current = null;
+        };
+        const suppress = (mouseEvent: MouseEvent) => {
+          const target = mouseEvent.target;
+          if (target instanceof Node && sourceElement.contains(target)) {
+            mouseEvent.preventDefault();
+            mouseEvent.stopPropagation();
+            mouseEvent.stopImmediatePropagation();
+          }
+          if (mouseEvent.type === "click") {
+            firedRef.current = false;
+            remove();
+          }
+        };
+        clickSuppressor.current = remove;
+        document.addEventListener("mousedown", suppress, true);
+        document.addEventListener("click", suppress, true);
+        cleanupTimer = window.setTimeout(remove, 1000);
       }, LONG_PRESS_MS);
     },
     [onOpen],
@@ -167,8 +206,27 @@ export function useLongPress(
     [clear],
   );
 
+  const onClickCapture = useCallback((e: React.MouseEvent) => {
+    if (!firedRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    firedRef.current = false;
+  }, []);
+
+  // Clean up the native suppressor if the long-pressed element unmounts before
+  // the synthetic click sequence arrives.
+  const clickSuppressor = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => {
+      if (clickSuppressor.current) {
+        clickSuppressor.current();
+        clickSuppressor.current = null;
+      }
+    };
+  }, []);
+
   // Clean up on unmount
   useEffect(() => clear, [clear]);
 
-  return { onTouchStart, onTouchMove, onTouchEnd };
+  return { onTouchStart, onTouchMove, onTouchEnd, onClickCapture };
 }

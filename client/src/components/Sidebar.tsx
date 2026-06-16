@@ -908,7 +908,7 @@ function RecentChatItem({
         onClick={onSelect}
         onContextMenu={hasMenu ? handleContextMenu : undefined}
         {...(hasMenu ? longPressProps : {})}
-        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border ${
+        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border select-none ${
           active
             ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
                 ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
@@ -1156,7 +1156,7 @@ function ProjectSection({
         </CollapsedPreviewFrame>
       )}
       <div
-        className="flex items-center gap-1.5 px-2 py-1.5 group"
+        className="flex items-center gap-1.5 px-2 py-1.5 group select-none"
         onContextMenu={handleHeaderContextMenu}
         {...longPressProps}
       >
@@ -1443,17 +1443,18 @@ export function Sidebar({
   // Track blocking interactions (delete confirmations, context menus) so the
   // mobile sidebar doesn't auto-close while the user is interacting with them.
   const blockCloseCountRef = useRef(0);
+  const blockCloseRef = useRef(false);
   const [blockClose, setBlockClose] = useState(false);
   useEffect(() => {
     const onShow = () => {
       blockCloseCountRef.current += 1;
+      blockCloseRef.current = true;
       setBlockClose(true);
     };
     const onHide = () => {
       blockCloseCountRef.current = Math.max(0, blockCloseCountRef.current - 1);
-      if (blockCloseCountRef.current === 0) {
-        setBlockClose(false);
-      }
+      blockCloseRef.current = blockCloseCountRef.current > 0;
+      setBlockClose(blockCloseRef.current);
     };
     window.addEventListener("sidebar-block-close:show", onShow);
     window.addEventListener("sidebar-block-close:hide", onHide);
@@ -1611,6 +1612,7 @@ export function Sidebar({
     direction: "right",
     threshold: 0.4, // 40% of sidebar width to snap
     disabled: blockClose,
+    disabledRef: blockCloseRef,
   });
 
   return (

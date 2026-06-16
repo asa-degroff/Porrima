@@ -10,6 +10,13 @@ interface UseGestureDrawerProps {
   onProgressChange?: (progress: number) => void;
   /** When true, ignore new touches and cancel any active drag (snap back to open). */
   disabled?: boolean;
+  /**
+   * Optional mutable ref read synchronously by touch handlers. Use this when the
+   * disabled state is toggled from an async/timer callback (e.g. a long-press
+   * context menu) so the next touchend/touchmove is ignored without waiting for
+   * a React re-render.
+   */
+  disabledRef?: React.RefObject<boolean>;
 }
 
 interface GestureDrawerReturn {
@@ -49,14 +56,17 @@ export function useGestureDrawer({
   maxOffset,
   onProgressChange,
   disabled = false,
+  disabledRef: externalDisabledRef,
 }: UseGestureDrawerProps): GestureDrawerReturn {
   const [isDragging, setIsDragging] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [currentOffset, setCurrentOffset] = useState(0);
   const [containerSize, setContainerSize] = useState(0);
 
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+  const internalDisabledRef = useRef(disabled);
+  internalDisabledRef.current = disabled;
+  const disabledRef = externalDisabledRef ?? internalDisabledRef;
+  const isDisabled = () => disabledRef.current;
 
   const isDraggingRef = useRef(false);
   const isTrackingTouchRef = useRef(false);
@@ -209,7 +219,7 @@ export function useGestureDrawer({
   }, []);
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
-    if (disabledRef.current) return;
+    if (isDisabled()) return;
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
 
@@ -228,7 +238,7 @@ export function useGestureDrawer({
 
   // Edge swipe: starts drag from closed state (offset 0)
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
-    if (disabledRef.current) return;
+    if (isDisabled()) return;
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
     if (isOpenRef.current || isDraggingRef.current) return;
@@ -246,7 +256,7 @@ export function useGestureDrawer({
   }, [setOffsetSync, startTrackingTouch]);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (disabledRef.current) return;
+    if (isDisabled()) return;
     if (!isTrackingTouchRef.current) return;
     if (e.touches.length !== 1) return;
 
@@ -317,7 +327,7 @@ export function useGestureDrawer({
   }, [getCrossTouchPos, getTouchPos, direction, resetTouchTracking, setOffsetSync]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (disabledRef.current) return;
+    if (isDisabled()) return;
     if (!isTrackingTouchRef.current) return;
 
     const wasDragging = isDraggingRef.current;
@@ -353,7 +363,7 @@ export function useGestureDrawer({
   }, [threshold, snapToState]);
 
   const onTouchCancel = useCallback((e: React.TouchEvent) => {
-    if (disabledRef.current) return;
+    if (isDisabled()) return;
     if (!isTrackingTouchRef.current) return;
 
     const wasDragging = isDraggingRef.current;
@@ -406,7 +416,7 @@ export function useGestureDrawer({
   // When idle, return empty style so CSS classes control position (important for
   // desktop where md:translate-x-0 must not be overridden by inline styles).
   const active = isDragging || isAnimating;
-  const style: React.CSSProperties = active && !disabledRef.current ? {
+  const style: React.CSSProperties = active && !isDisabled() ? {
     transform: getTranslate(currentOffset),
     touchAction: "none",
     willChange: "transform",
