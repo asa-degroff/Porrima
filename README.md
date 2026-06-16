@@ -11,9 +11,11 @@ The client is a PWA built for desktop, tablet, and mobile. Access remotely with 
 
 Color themes, animations, and style options to make it your own.
 
-Chat list, full-text chat search, and project-scoped chats shown in the sidebar. Push notifications are per-device, with foreground presence suppression.
+Chat list, full-text chat search, and project-scoped chats shown in the sidebar.
 
-Streaming output with thinking blocks, tool calls, uploaded images, and generated HTML/JS artifacts. Mobile: gesture drawer, keyboard inset, mobile-Safari-friendly.
+Supports push notifications with per-device settings, notifying when your agent has a new message for you.
+
+Message display with streaming output with thinking blocks, tool calls, uploaded images, and generated HTML/JS artifacts.
 
 Detailed observability: memory blocks, the full memory database, model stats (decode/prefill/cache hitrate), extraction and reranker run history, context size, and the constructed system prompt.
 
@@ -72,15 +74,15 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 - **Software engineering** — excellent at coding, learns your projects over time, very high context density.
 - **Personal agent** — does anything on your computer that's accessible by command line.
 - **Research** — keeps going down rabbit holes and writing about findings while you sleep.
-- **Companion / advisor** — complete privacy, long-term permanence, no topical restrictions.
+- **Therapist / companion / advisor** — complete privacy, long-term permanence, no topical restrictions.
 
 ## System requirements
 
 ##### Server (recommended)
 - **OS:** Linux with systemd
-- **GPU:** ≥32 GB dedicated VRAM, AMD RDNA 3+ or Nvidia Ampere+
+- **GPU:** ≥16 GB dedicated VRAM, AMD RDNA 3+ or Nvidia Ampere+ (≥32GB recommended)
 - **CPU:** Desktop x86_64, ≥8 physical/performance cores, AVX-512, AMD Zen 4+ or Intel Alder Lake+
-- **RAM:** ≥48 GB dual-channel DDR5
+- **RAM:** ≥48 GB DDR5
 - **SSD:** NVMe Gen 4 or 5
 
 16 - 24 GB VRAM systems may be usable. Unified-memory systems (AMD Strix Halo, Nvidia Grace Blackwell, Apple Silicon) are not recommended unless you have a multi-system cluster; partial CPU offloading is also not recommended due to memory-bandwidth contention.
@@ -93,8 +95,8 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 
 | Slot | Pick |
 |---|---|
-| Main chat | Qwen 3.6 27B or Gemma 4 31B |
-| Main chat (lightweight) | Qwen 3.6 35B A3B, Gemma 4 26B A4B, or Gemma 4 12B |
+| Main chat (top picks) | Qwen 3.6 27B or Gemma 4 31B |
+| Main chat (lightweight options) | Qwen 3.6 35B A3B, Gemma 4 26B A4B, or Gemma 4 12B |
 | Memory extraction | Same family as the main model — Qwen 3.5 9B / 4B or Gemma 4 26B A4B / 12B / E4B |
 | Title generation | Gemma 4 E2B (or E4B) |
 | Reranker | Qwen3-reranker 0.6B |
