@@ -516,10 +516,20 @@ export function useChat(chatId: string | null) {
 
         const finalSegments = segments || (bg.segments.length > 0 ? bg.segments.map((s) => ({ ...s })) : undefined);
 
-        // Finalize last message with full metadata
-        const last = bg.messages[bg.messages.length - 1];
+        // Finalize the last non-steering assistant message with full metadata.
+        // When the user steered mid-stream, bg.messages ends with a _steeringPending
+        // placeholder for the follow-up response; the pre-steering generation's final
+        // metadata belongs to the earlier real assistant message, not the placeholder.
+        let finalIdx = bg.messages.length - 1;
+        while (
+          finalIdx >= 0 &&
+          !(bg.messages[finalIdx].role === "assistant" && !bg.messages[finalIdx]._steeringPending)
+        ) {
+          finalIdx--;
+        }
+        const last = finalIdx >= 0 ? bg.messages[finalIdx] : undefined;
         if (last?.role === "assistant") {
-          bg.messages[bg.messages.length - 1] = {
+          bg.messages[finalIdx] = {
             ...last,
             content: finalContent,
             thinking: thinkingPromoted ? undefined : (thinking || undefined),
@@ -552,9 +562,20 @@ export function useChat(chatId: string | null) {
         if (wfi) bg.waitingForInput = true;
 
         // If the server skipped the repair (e.g. superseded/duplicate), the
-        // assistant placeholder will be empty — remove it silently.
+        // assistant placeholder will be empty — remove it silently. Don't remove
+        // steering placeholders; onFollowUpStart will clear their pending flag so
+        // the follow-up response can stream into the existing bubble.
         const skippedLast = bg.messages[bg.messages.length - 1];
-        if (skippedLast?.role === "assistant" && !finalContent && !thinking && !doneArtifacts && !doneImages && !doneVisuals && !toolCalls) {
+        if (
+          skippedLast?.role === "assistant" &&
+          !skippedLast._steeringPending &&
+          !finalContent &&
+          !thinking &&
+          !doneArtifacts &&
+          !doneImages &&
+          !doneVisuals &&
+          !toolCalls
+        ) {
           bg.messages.pop();
         }
 

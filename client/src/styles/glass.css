@@ -151,6 +151,16 @@ body::before {
   overflow-anchor: none;
 }
 
+/* Hidden scrollbar — for overflow containers that should scroll but not show a track */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;
@@ -407,3 +417,108 @@ body::before {
 button:hover .trash-icon .trash-lid {
   transform: rotate(-25deg);
 }
+
+/*
+ * Background effect preview tiles (Settings/Setup modals).
+ * Each class re-uses the current theme gradient plus a CSS-only approximation
+ * of the live effect so users can see what the whole background will look like.
+ */
+.bg-effect-preview-static {
+  background: var(--theme-bg-gradient);
+}
+
+.bg-effect-preview-scan-lines {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.12) 0px,
+      rgba(0, 0, 0, 0.12) 2px,
+      transparent 2px,
+      transparent 4px
+    ),
+    var(--theme-bg-gradient);
+}
+
+.bg-effect-preview-graph-paper {
+  background:
+    linear-gradient(
+      0deg,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.6)) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.6)) 1px,
+      transparent 1px
+    ),
+    var(--theme-bg-gradient);
+  background-size: 20px 20px, 20px 20px, auto;
+}
+
+.bg-effect-preview-ripple-grid {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.7)) 0px,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.7)) 1px,
+      transparent 1px,
+      transparent 28px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.7)) 0px,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 0.7)) 1px,
+      transparent 1px,
+      transparent 28px
+    ),
+    radial-gradient(
+      circle at 30% 30%,
+      rgba(var(--theme-grid), 0.14) 0,
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 70% 70%,
+      rgba(var(--theme-grid), 0.1) 0,
+      transparent 45%
+    ),
+    var(--theme-bg-gradient);
+  background-size: 28px 28px, 28px 28px, auto, auto, auto;
+}
+
+.bg-effect-preview-ripple-dots {
+  background:
+    radial-gradient(
+      circle,
+      rgba(var(--theme-grid), calc(var(--theme-grid-opacity) * 1.5)) 1.5px,
+      transparent 2.5px
+    ),
+    radial-gradient(
+      circle at 30% 30%,
+      rgba(var(--theme-grid), 0.16) 0,
+      transparent 40%
+    ),
+    radial-gradient(
+      circle at 70% 70%,
+      rgba(var(--theme-grid), 0.12) 0,
+      transparent 45%
+    ),
+    var(--theme-bg-gradient);
+  background-size: 16px 16px, auto, auto, auto;
+}
+
+/* Text label overlay for effect preview tiles */
+.bg-effect-preview-label {
+  position: relative;
+  z-index: 10;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.bg-effect-preview-label::before {
+  content: "";
+  position: absolute;
+  inset: -0.25rem -0.5rem;
+  z-index: -1;
+  border-radius: 0.375rem;
+  background: rgba(0, 0, 0, 0.35);
+  filter: blur(6px);
+}
+

@@ -1063,6 +1063,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setActiveChatData(chat);
     loadMessages([]);
     setAutoFocusInput(true);
+    // Close sidebar on mobile after creating a new chat — on desktop the sidebar
+    // is always visible so this has no visual effect.
+    setSidebarOpen(false);
   }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(

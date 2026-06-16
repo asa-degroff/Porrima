@@ -908,7 +908,7 @@ function RecentChatItem({
         onClick={onSelect}
         onContextMenu={hasMenu ? handleContextMenu : undefined}
         {...(hasMenu ? longPressProps : {})}
-        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border ${
+        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border select-none ${
           active
             ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
                 ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
@@ -954,7 +954,7 @@ function RecentChatItem({
         )}
       </button>
       {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
           {onSendToNotebook && (
             <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">
@@ -1156,7 +1156,7 @@ function ProjectSection({
         </CollapsedPreviewFrame>
       )}
       <div
-        className="flex items-center gap-1.5 px-2 py-1.5 group"
+        className="flex items-center gap-1.5 px-2 py-1.5 group select-none"
         onContextMenu={handleHeaderContextMenu}
         {...longPressProps}
       >
@@ -1200,7 +1200,7 @@ function ProjectSection({
       </div>
       {/* Project context menu */}
       {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
           <ContextMenuItem onClick={handlePinToggle}>
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="17" x2="12" y2="22" />
@@ -1439,6 +1439,30 @@ export function Sidebar({
   const [agentShowAll, setAgentShowAll] = useState(false);
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
+
+  // Track blocking interactions (delete confirmations, context menus) so the
+  // mobile sidebar doesn't auto-close while the user is interacting with them.
+  const blockCloseCountRef = useRef(0);
+  const blockCloseRef = useRef(false);
+  const [blockClose, setBlockClose] = useState(false);
+  useEffect(() => {
+    const onShow = () => {
+      blockCloseCountRef.current += 1;
+      blockCloseRef.current = true;
+      setBlockClose(true);
+    };
+    const onHide = () => {
+      blockCloseCountRef.current = Math.max(0, blockCloseCountRef.current - 1);
+      blockCloseRef.current = blockCloseCountRef.current > 0;
+      setBlockClose(blockCloseRef.current);
+    };
+    window.addEventListener("sidebar-block-close:show", onShow);
+    window.addEventListener("sidebar-block-close:hide", onHide);
+    return () => {
+      window.removeEventListener("sidebar-block-close:show", onShow);
+      window.removeEventListener("sidebar-block-close:hide", onHide);
+    };
+  }, []);
   const mainSectionRefs = useMemo(
     () => [projectsSectionRef, agentSectionRef, quickSectionRef],
     []
@@ -1587,6 +1611,8 @@ export function Sidebar({
     onOpen,
     direction: "right",
     threshold: 0.4, // 40% of sidebar width to snap
+    disabled: blockClose,
+    disabledRef: blockCloseRef,
   });
 
   return (
@@ -1607,7 +1633,11 @@ export function Sidebar({
         <div
           className={`md:hidden fixed inset-0 bg-black/60 z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
-          onClick={onClose}
+          onClick={() => {
+            // Don't close while a chat-item confirmation/context menu is visible
+            if (blockCloseCountRef.current > 0) return;
+            onClose();
+          }}
         />
       )}
       {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}

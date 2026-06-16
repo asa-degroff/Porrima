@@ -194,7 +194,11 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     setImages([]);
     if (editorRef.current) {
       editorRef.current.textContent = "";
-      editorRef.current.focus();
+      editorRef.current.blur();
+    }
+    // Ensure the keyboard is dismissed on mobile even when focus moved to the send button
+    if (document.activeElement && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
     }
     // Clear draft for this chat
     if (chatId) clearDraft(chatId);
