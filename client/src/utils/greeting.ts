@@ -53,8 +53,14 @@ function seededIndex(dayOfYear: number, slotIdx: number, length: number): number
   let x = (dayOfYear * 2654435761 + slotIdx * 2246822519) >>> 0;
   x = ((x ^ (x >>> 13)) * 0x5bd1e995) >>> 0;
   x = ((x ^ (x >>> 15)) * 0x5bd1e995) >>> 0;
-  x = x ^ (x >>> 16);
+  x = (x ^ (x >>> 16)) >>> 0;
   return x % length;
+}
+
+function getDayOfYear(date: Date): number {
+  const start = Date.UTC(date.getFullYear(), 0, 0);
+  const current = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.floor((current - start) / 86400000);
 }
 
 /**
@@ -66,7 +72,6 @@ function seededIndex(dayOfYear: number, slotIdx: number, length: number): number
 export function getGreeting(date = new Date()): string {
   const slot = getTimeSlot(date.getHours());
   const options = GREETINGS[slot];
-  const start = new Date(date.getFullYear(), 0, 0);
-  const dayOfYear = Math.floor((date.getTime() - start.getTime()) / 86400000);
+  const dayOfYear = getDayOfYear(date);
   return options[seededIndex(dayOfYear, SLOT_INDEX[slot], options.length)];
 }
