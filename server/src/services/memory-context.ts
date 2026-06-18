@@ -1,5 +1,5 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
-import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, isSystemManagedMemoryBlock, type MemoryBlock } from "./memory-storage.js";
+import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, isSystemManagedMemoryBlock, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
@@ -32,8 +32,15 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
   promptCache.set(chatId, prompt);
 }
 
-// Cache the stable prefix (base prompt + persona + user doc + blocks + project context) per chat.
-const stablePrefixCache = new Map<string, { basePrompt: string; prefix: string; blocksSection: string }>();
+// Cache the stable prefix per chat. The globally shareable portion is kept
+// before project-only context so new-chat baseline warms can match project chats
+// through global blocks and zeitgeist.
+const stablePrefixCache = new Map<string, {
+  basePrompt: string;
+  prefix: string;
+  blocksSection: string;
+  hasIndexedBlocks: boolean;
+}>();
 
 async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ label: string; agentsMd: string | null } | null> {
   if (!projectId) return null;
@@ -510,6 +517,107 @@ function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, b
 
 // ---- Stable prefix builder ----
 
+const GLOBAL_MEMORY_BLOCK_TOKEN_BUDGET = 3000;
+const PROJECT_CHAT_MEMORY_BLOCK_TOKEN_BUDGET = 5000;
+
+interface SplitMemoryBlockParts {
+  loadedParts: string[];
+  indexParts: string[];
+  loadedTokens: number;
+}
+
+interface StableMemoryBlockSections {
+  globalSection: string;
+  projectSection: string;
+  combinedBlocksSection: string;
+  hasIndexedBlocks: boolean;
+}
+
+function formatMemoryBlockIndexLine(block: MemoryBlock, options?: { project?: boolean }): string {
+  return `- [${block.id}] ${block.name}${options?.project ? " (project)" : ""} — ${block.description}`;
+}
+
+function splitMemoryBlocksForPrefix(
+  blocks: MemoryBlock[],
+  tokenBudget: number,
+  options?: { project?: boolean },
+): SplitMemoryBlockParts {
+  const loadedParts: string[] = [];
+  const indexParts: string[] = [];
+  let loadedTokens = 0;
+  let budgetExhausted = tokenBudget <= 0;
+
+  for (const block of blocks) {
+    if (!budgetExhausted && loadedTokens + block.tokenEstimate <= tokenBudget) {
+      loadedParts.push(`### ${block.name}\n${block.content}`);
+      loadedTokens += block.tokenEstimate;
+      continue;
+    }
+    budgetExhausted = true;
+    indexParts.push(formatMemoryBlockIndexLine(block, options));
+  }
+
+  return { loadedParts, indexParts, loadedTokens };
+}
+
+function buildMemoryBlockSection(
+  loadedHeading: string,
+  loadedParts: string[],
+  indexHeading: string,
+  indexParts: string[],
+): string {
+  const parts: string[] = [];
+  if (loadedParts.length > 0) {
+    parts.push(`${loadedHeading}\n${loadedParts.join("\n\n")}`);
+  }
+  if (indexParts.length > 0) {
+    parts.push(`${indexHeading}\n${indexParts.join("\n")}\nTo get the full content of any block, use read_memory_block(id) when relevant.`);
+  }
+  return parts.length > 0 ? `\n\n${parts.join("\n\n")}` : "";
+}
+
+function buildStableMemoryBlockSections(projectId?: string): StableMemoryBlockSections {
+  const globalBlocks = getMemoryBlocksByScope("global")
+    .filter((b) => !isSystemManagedMemoryBlock(b));
+  const globalParts = splitMemoryBlocksForPrefix(
+    globalBlocks,
+    GLOBAL_MEMORY_BLOCK_TOKEN_BUDGET,
+  );
+  const globalSection = buildMemoryBlockSection(
+    "## Memory Blocks",
+    globalParts.loadedParts,
+    "## Available Memory Blocks",
+    globalParts.indexParts,
+  );
+
+  let projectSection = "";
+  let hasProjectIndex = false;
+  if (projectId) {
+    const projectBlocks = getMemoryBlocksByScope("project", projectId)
+      .filter((b) => !isSystemManagedMemoryBlock(b));
+    const projectBudget = Math.max(0, PROJECT_CHAT_MEMORY_BLOCK_TOKEN_BUDGET - globalParts.loadedTokens);
+    const projectParts = splitMemoryBlocksForPrefix(
+      projectBlocks,
+      projectBudget,
+      { project: true },
+    );
+    projectSection = buildMemoryBlockSection(
+      "## Project Memory Blocks",
+      projectParts.loadedParts,
+      "## Available Project Memory Blocks",
+      projectParts.indexParts,
+    );
+    hasProjectIndex = projectParts.indexParts.length > 0;
+  }
+
+  return {
+    globalSection,
+    projectSection,
+    combinedBlocksSection: `${globalSection}${projectSection}`,
+    hasIndexedBlocks: globalParts.indexParts.length > 0 || hasProjectIndex,
+  };
+}
+
 export async function buildStablePrefix(
   baseSystemPrompt: string,
   chatId: string,
@@ -556,55 +664,16 @@ export async function buildStablePrefix(
     }
   }
 
-  let blocksSection = "";
+  let globalBlocksSection = "";
+  let projectBlocksSection = "";
+  let combinedBlocksSection = "";
+  let hasIndexedBlocks = false;
   try {
-    const loadedBlocks: MemoryBlock[] = [];
-    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
-    loadedBlocks.push(...globalBlocks);
-    if (projectId) {
-      const projectBlocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b));
-      loadedBlocks.push(...projectBlocks);
-    }
-
-    const allBlocks = getAllMemoryBlocks();
-    const loadedIds = new Set(loadedBlocks.map((b) => b.id));
-
-    // Filter to only index blocks that are relevant:
-    // - Global blocks that weren't loaded (token budget)
-    // - Project-scoped blocks from the current project that weren't loaded
-    // Exclude project-scoped blocks from other projects
-    // Exclude system-managed blocks (handled separately or via dedicated tools)
-    const indexedBlocks = allBlocks.filter((b) => {
-      if (loadedIds.has(b.id)) return false; // Already loaded
-      if (isSystemManagedMemoryBlock(b)) return false; // Dedicated handling / on-demand discovery
-      if (b.scope === "global") return true; // Global blocks are always indexable
-      if (b.scope === "project" && b.projectId === projectId) return true; // Current project blocks
-      return false; // Other projects' blocks are excluded
-    });
-
-    const tokenBudget = projectId ? 5000 : 3000;
-    let loadedTokens = 0;
-    const loadedParts: string[] = [];
-    for (const block of loadedBlocks) {
-      if (loadedTokens + block.tokenEstimate > tokenBudget) break;
-      loadedParts.push(`### ${block.name}\n${block.content}`);
-      loadedTokens += block.tokenEstimate;
-    }
-
-    const indexParts = indexedBlocks.map(
-      (b) => `- [${b.id}] ${b.name}${b.scope === "project" ? ` (project)` : ""} — ${b.description}`
-    );
-
-    if (loadedParts.length > 0 || indexParts.length > 0) {
-      const parts: string[] = [];
-      if (loadedParts.length > 0) {
-        parts.push(`## Memory Blocks\n${loadedParts.join("\n\n")}`);
-      }
-      if (indexParts.length > 0) {
-        parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nTo get the full content of any block, use read_memory_block(id) when relevant.`);
-      }
-      blocksSection = "\n\n" + parts.join("\n\n");
-    }
+    const sections = buildStableMemoryBlockSections(projectId);
+    globalBlocksSection = sections.globalSection;
+    projectBlocksSection = sections.projectSection;
+    combinedBlocksSection = sections.combinedBlocksSection;
+    hasIndexedBlocks = sections.hasIndexedBlocks;
   } catch (e) {
     console.error("[memory] Failed to load memory blocks:", e);
   }
@@ -621,10 +690,15 @@ export async function buildStablePrefix(
     // Zeitgeist not available yet — this is fine on first run
   }
 
-  const stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${projectSection}${blocksSection}${zeitgeistSection}`;
-  stablePrefixCache.set(cacheKey, { basePrompt: baseSystemPrompt, prefix: stablePrefix, blocksSection });
+  const stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${globalBlocksSection}${zeitgeistSection}${projectSection}${projectBlocksSection}`;
+  stablePrefixCache.set(cacheKey, {
+    basePrompt: baseSystemPrompt,
+    prefix: stablePrefix,
+    blocksSection: combinedBlocksSection,
+    hasIndexedBlocks,
+  });
 
-  return { stablePrefix, blocksSection };
+  return { stablePrefix, blocksSection: combinedBlocksSection };
 }
 
 // ---- Public API ----
@@ -635,7 +709,8 @@ export async function buildStablePrefix(
  */
 export interface MemoryAugmentationOptions {
   /** When true, skip memory retrieval entirely — the stable prefix (persona,
-   * user doc, memory blocks, project context, zeitgeist) is still built, but
+   * user doc, global memory blocks, zeitgeist, project context, and project
+   * memory blocks) is still built, but
    * no memories are searched or injected. Use this for automation starts where
    * the trigger message has no meaningful conversational context to search
    * against; passive recall during the agent run will supply memories as
@@ -680,8 +755,7 @@ export async function buildMemoryAugmentedPrompt(
     updateAccessMetadata(memories);
 
     const cached = stablePrefixCache.get(chatId || "_default");
-    const hasIndexedBlocks = cached?.blocksSection?.includes("Available Memory Blocks");
-    const blockHint = hasIndexedBlocks
+    const blockHint = cached?.hasIndexedBlocks
       ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
       : "";
 
@@ -739,8 +813,7 @@ export async function buildSplitAugmentedPrompt(
   }
 
   const prefixCached = stablePrefixCache.get(cacheKey);
-  const hasIndexedBlocks = prefixCached?.blocksSection?.includes("Available Memory Blocks");
-  const blockHint = hasIndexedBlocks
+  const blockHint = prefixCached?.hasIndexedBlocks
     ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
     : "";
 

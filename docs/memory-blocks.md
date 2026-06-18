@@ -49,24 +49,28 @@ interface MemoryBlock {
 
 ## Context Injection
 
-In `buildMemoryAugmentedPrompt`, blocks are injected in this order:
+In `buildStablePrefix` / `buildMemoryAugmentedPrompt`, blocks and project context are injected in this order:
 
 ```
 1. Base system prompt
 2. ## Your Persona (loaded from persona-store)
 3. ## About the User (loaded from user-store)
-4. ## Knowledge Blocks (global + project blocks, full content, up to ~3000 tokens)
-5. ## Available Memory Blocks (index of remaining blocks — one-line descriptions)
+4. ## Memory Blocks (global blocks, full content, fixed ~3000-token budget)
+5. ## Available Memory Blocks (remaining global blocks — one-line descriptions)
    - [blk:id] Name — description
    Use read_memory_block(id) to load full content when relevant.
-6. ## Relevant Memories (atomic memories from reranker pipeline)
+6. ## Continuity Context (Zeitgeist)
+7. ## Project Context (project chats only: working directory + AGENTS.md)
+8. ## Project Memory Blocks (project blocks, using the remaining project-chat block budget)
+9. ## Available Project Memory Blocks (remaining current-project blocks — one-line descriptions)
+10. ## Relevant Memories (atomic memories from reranker pipeline)
 ```
 
 **Progressive disclosure**: Global and project blocks load full content automatically. Other blocks appear as one-line descriptions (name + description) — the agent loads full content on demand via `read_memory_block`.
 
-**Token budget**: Loaded blocks capped at ~3000 tokens total. The block index (one-liners) is lightweight.
+**Token budget**: Global loaded blocks use a fixed ~3000-token budget so the no-project prefix is byte-identical to the start of project-chat prefixes. Project chats keep a ~5000-token total loaded-block budget by assigning the remaining budget to project blocks. The block index (one-liners) is lightweight.
 
-**Stable prefix caching**: The system prompt prefix (base prompt + persona + user doc + blocks) is cached per-chat in `stablePrefixCache`. This keeps the prefix byte-for-byte identical across turns, maximizing llama.cpp KV cache reuse. Only the dynamic memories section changes between turns.
+**Stable prefix caching**: The system prompt prefix (base prompt + persona + user doc + global blocks + zeitgeist + optional project context/blocks) is cached per-chat in `stablePrefixCache`. This keeps the prefix byte-for-byte identical across turns, maximizing llama.cpp KV cache reuse. Global sections come before project-only sections so a no-project baseline warm can be reused by project chats through the global prefix. Only the dynamic memories section changes between turns.
 
 ## Agent Tools
 
