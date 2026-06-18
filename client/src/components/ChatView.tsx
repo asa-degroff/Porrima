@@ -14,7 +14,7 @@ import { SkillSelector } from "./SkillSelector";
 import { PinnedPanel } from "./PinnedPanel";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
-import { getGreeting } from "../utils/greeting";
+import { useGreeting } from "../hooks/useGreeting";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -394,7 +394,7 @@ export function ChatView({
     () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
     [skills]
   );
-  const greeting = useMemo(() => getGreeting(), []);
+  const greeting = useGreeting();
 
   // Auto-dismiss network-related errors after a delay, since the
   // OfflineIndicator in the header already communicates connection state.
