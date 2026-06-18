@@ -20,6 +20,7 @@ import {
   NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
   type LlamaCacheTargetKind,
 } from "./llama-cache-residency.js";
+import { getDefaultServiceConfig, mergeServiceConfig } from "./llama-service-config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,6 +72,7 @@ export interface CacheWarmResult {
 const queue: CacheWarmJob[] = [];
 let mutex: "idle" | CacheWarmJob = "idle";
 const LLAMA_BUSY_PROBE_TIMEOUT_MS = Number(process.env.LLAMA_BUSY_PROBE_TIMEOUT_MS) || 3_000;
+const POST_SYNTHESIS_RECENT_CHAT_LIMIT = 5;
 
 interface RouterModelEntry {
   id?: string;
@@ -85,6 +87,19 @@ type RouterModelProbe =
   | { state: "transitioning"; entry: RouterModelEntry }
   | { state: "unloaded"; entry?: RouterModelEntry }
   | { state: "unknown"; entry?: RouterModelEntry };
+
+interface WarmCapacity {
+  maxSlots: number;
+  source: "props" | "settings";
+  baseUrl: string;
+}
+
+interface PostSynthesisWarmPlan {
+  capacity: WarmCapacity;
+  baseline: boolean;
+  systemChatId?: string;
+  recentChatIds: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -142,6 +157,47 @@ function getModelArray(payload: any): RouterModelEntry[] {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
   return [];
+}
+
+function readPositiveInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.floor(value);
+}
+
+function configuredInferenceParallel(settings: any): number {
+  try {
+    const patch = settings?.llamaServiceConfigs?.inference;
+    const config = patch && typeof patch === "object"
+      ? mergeServiceConfig("inference", settings, patch)
+      : getDefaultServiceConfig("inference", settings);
+    return Math.max(1, Math.floor(config.parallel ?? 1));
+  } catch {
+    return 1;
+  }
+}
+
+async function discoverPostSynthesisWarmCapacity(): Promise<WarmCapacity> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+  const fallback = configuredInferenceParallel(settings);
+
+  try {
+    const res = await fetch(`${normalizeBaseUrl(baseUrl)}/props`, {
+      signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const payload = await res.json().catch(() => null);
+      const maxInstances = readPositiveInt(payload?.max_instances);
+      if (maxInstances) {
+        return { maxSlots: maxInstances, source: "props", baseUrl };
+      }
+    }
+  } catch {
+    // Fall back to the managed/saved launch config below.
+  }
+
+  return { maxSlots: fallback, source: "settings", baseUrl };
 }
 
 function isTargetModel(entry: RouterModelEntry, modelId: string): boolean {
@@ -296,6 +352,33 @@ function jobMatchesTarget(
   return jobTargetId(job) === targetId && jobTargetKind(job) === targetKind;
 }
 
+function buildPostSynthesisWarmPlan(
+  capacity: WarmCapacity,
+  systemChatId: string | undefined,
+  recentChatIds: string[],
+): PostSynthesisWarmPlan {
+  let remaining = Math.max(1, capacity.maxSlots);
+
+  const baseline = remaining > 0;
+  if (baseline) remaining--;
+
+  let plannedSystemChatId: string | undefined;
+  if (systemChatId && remaining > 0) {
+    plannedSystemChatId = systemChatId;
+    remaining--;
+  }
+
+  const uniqueRecentChatIds = Array.from(new Set(recentChatIds)).filter((chatId) => chatId !== plannedSystemChatId);
+  const recentLimit = Math.max(0, Math.min(uniqueRecentChatIds.length, POST_SYNTHESIS_RECENT_CHAT_LIMIT, remaining));
+
+  return {
+    capacity,
+    baseline,
+    systemChatId: plannedSystemChatId,
+    recentChatIds: uniqueRecentChatIds.slice(0, recentLimit),
+  };
+}
+
 /**
  * Get the queue position for a specific target.
  * Returns 0 if actively warming, 1+ if queued, -1 if not in queue.
@@ -431,9 +514,9 @@ async function drainQueue(): Promise<void> {
 
 /**
  * After synthesis completes, the memory context for all chats has likely
- * changed (new memories, updated blocks). This function enqueues warm
- * operations for the system chat (so it can resume scheduled tasks quickly)
- * and the N most recent agent chats.
+ * changed (new memories, updated blocks). This function builds a capacity-aware
+ * warm plan that reserves slots for the new-chat baseline and system chat, then
+ * fills any remaining capacity with recent agent chats.
  */
 export async function schedulePostSynthesisWarms(
   systemChatId: string | undefined,
@@ -441,34 +524,27 @@ export async function schedulePostSynthesisWarms(
   signal?: AbortSignal,
 ): Promise<CacheWarmResult[]> {
   const results: CacheWarmResult[] = [];
+  const capacity = await discoverPostSynthesisWarmCapacity();
+  const plan = buildPostSynthesisWarmPlan(capacity, systemChatId, recentChatIds);
 
-  // Warm system chat first
-  if (systemChatId) {
-    try {
-      const result = await enqueueWarm(systemChatId, "post-synthesis", signal);
-      results.push(result);
-    } catch (err) {
-      results.push({
-        warmed: false,
-        chatId: systemChatId,
-        modelId: "",
-        reason: "post-synthesis",
-        warmedAt: Date.now(),
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  console.log(
+    `[cache-warm-queue] post-synthesis warm plan: capacity=${plan.capacity.maxSlots} ` +
+    `source=${plan.capacity.source} baseline=${plan.baseline ? "yes" : "no"} ` +
+    `system=${plan.systemChatId ? "yes" : "no"} recent=${plan.recentChatIds.length}`,
+  );
 
-  // Warm recent agent chats in REVERSE order of recency (least recent first,
-  // most recent last). Each warm populates the KV cache and evicts the LRU
-  // slot under memory pressure. By warming the most recently used chat last,
-  // its context is the one that remains resident after all warms complete.
-  const limit = Math.min(recentChatIds.length, 5);
-  if (limit > 0) {
-    console.log(`[cache-warm-queue] post-synthesis: scheduling ${limit} agent chats (least-recent first): ${recentChatIds.slice(0, limit).join(", ")}`);
+  // Warm selected recent agent chats in REVERSE order of recency (least recent
+  // first, most recent last). Higher-priority targets are warmed after recent
+  // chats below, so they are most likely to survive if runtime capacity changes
+  // while the warm sequence is running.
+  if (plan.recentChatIds.length > 0) {
+    console.log(
+      `[cache-warm-queue] post-synthesis: scheduling ${plan.recentChatIds.length} ` +
+      `agent chats (least-recent first): ${plan.recentChatIds.slice().reverse().join(", ")}`,
+    );
   }
-  for (let i = limit - 1; i >= 0; i--) {
-    const chatId = recentChatIds[i];
+  for (let i = plan.recentChatIds.length - 1; i >= 0; i--) {
+    const chatId = plan.recentChatIds[i];
     try {
       const result = await enqueueWarm(chatId, "post-synthesis", signal);
       results.push(result);
@@ -484,20 +560,38 @@ export async function schedulePostSynthesisWarms(
     }
   }
 
-  try {
-    const result = await enqueueNewAgentChatBaselineWarm("post-synthesis", signal);
-    results.push(result);
-  } catch (err) {
-    results.push({
-      warmed: false,
-      chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
-      targetKind: "new-agent-chat",
-      targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
-      modelId: "",
-      reason: "post-synthesis",
-      warmedAt: Date.now(),
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (plan.systemChatId) {
+    try {
+      const result = await enqueueWarm(plan.systemChatId, "post-synthesis", signal);
+      results.push(result);
+    } catch (err) {
+      results.push({
+        warmed: false,
+        chatId: plan.systemChatId,
+        modelId: "",
+        reason: "post-synthesis",
+        warmedAt: Date.now(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (plan.baseline) {
+    try {
+      const result = await enqueueNewAgentChatBaselineWarm("post-synthesis", signal);
+      results.push(result);
+    } catch (err) {
+      results.push({
+        warmed: false,
+        chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+        targetKind: "new-agent-chat",
+        targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+        modelId: "",
+        reason: "post-synthesis",
+        warmedAt: Date.now(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   return results;

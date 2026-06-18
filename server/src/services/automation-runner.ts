@@ -337,8 +337,9 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
       automationRunId: run.id,
     });
 
-    // Post-synthesis: warm caches for system chat + recent agent chats.
-    // After synthesis, memory blocks have changed, invalidating most caches.
+    // Post-synthesis: warm a capacity-aware set of baseline/system/recent
+    // prefixes. After synthesis, memory blocks have changed, invalidating
+    // most caches.
     // Fire-and-forget — doesn't block the return.
     if (result.success) {
       try {

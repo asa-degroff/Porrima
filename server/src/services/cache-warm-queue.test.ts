@@ -1,12 +1,46 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isCacheWarmOrLlamaRuntimeBusy, slotHasActiveTask } from "./cache-warm-queue.js";
+import {
+  isCacheWarmOrLlamaRuntimeBusy,
+  schedulePostSynthesisWarms,
+  slotHasActiveTask,
+} from "./cache-warm-queue.js";
 import { getSettings } from "./chat-storage.js";
+
+const warmMockState = vi.hoisted(() => ({
+  calls: [] as string[],
+}));
 
 vi.mock("./chat-storage.js", () => ({
   getSettings: vi.fn(async () => ({
     defaultModelId: "demo-model",
     llamacppUrl: "http://router.test",
   })),
+}));
+
+vi.mock("./cache-warm.js", () => ({
+  warmChatCache: vi.fn(async (chatId: string, options?: { reason?: string }) => {
+    warmMockState.calls.push(`chat:${chatId}`);
+    return {
+      warmed: true,
+      chatId,
+      targetKind: "chat",
+      modelId: "demo-model",
+      reason: options?.reason ?? "post-synthesis",
+      warmedAt: Date.now(),
+    };
+  }),
+  warmNewAgentChatBaselineCache: vi.fn(async (options?: { reason?: string }) => {
+    warmMockState.calls.push("baseline");
+    return {
+      warmed: true,
+      chatId: "__porrima_new_agent_chat_baseline__",
+      targetKind: "new-agent-chat",
+      targetLabel: "New Chat",
+      modelId: "demo-model",
+      reason: options?.reason ?? "post-synthesis",
+      warmedAt: Date.now(),
+    };
+  }),
 }));
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -19,6 +53,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  warmMockState.calls = [];
 });
 
 describe("llama slot busy detection", () => {
@@ -106,5 +141,75 @@ describe("llama slot busy detection", () => {
       expect.stringContaining("/slots?model="),
       expect.anything(),
     );
+  });
+});
+
+describe("post-synthesis warm planning", () => {
+  it("reserves limited capacity for baseline and system before recent chats", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "http://router.test/props") {
+        return jsonResponse({ max_instances: 2 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2", "recent-3"]);
+
+    expect(results.map((r) => r.chatId)).toEqual(["system", "__porrima_new_agent_chat_baseline__"]);
+    expect(warmMockState.calls).toEqual(["chat:system", "baseline"]);
+  });
+
+  it("fills remaining capacity with recent chats and warms highest priority targets last", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "http://router.test/props") {
+        return jsonResponse({ max_instances: 4 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2", "recent-3"]);
+
+    expect(results.map((r) => r.chatId)).toEqual([
+      "recent-2",
+      "recent-1",
+      "system",
+      "__porrima_new_agent_chat_baseline__",
+    ]);
+    expect(warmMockState.calls).toEqual([
+      "chat:recent-2",
+      "chat:recent-1",
+      "chat:system",
+      "baseline",
+    ]);
+  });
+
+  it("falls back to configured inference parallel when props capacity is unavailable", async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce({
+      defaultModelId: "demo-model",
+      llamacppUrl: "http://router.test",
+      llamaServiceConfigs: {
+        inference: { parallel: 3 },
+      },
+    } as any);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "http://router.test/props") {
+        return jsonResponse({}, 500);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2"]);
+
+    expect(results.map((r) => r.chatId)).toEqual([
+      "recent-1",
+      "system",
+      "__porrima_new_agent_chat_baseline__",
+    ]);
   });
 });

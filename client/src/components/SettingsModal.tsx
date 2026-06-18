@@ -5925,7 +5925,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  />
 	                  <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'recent off' : `${postSynthesisWarmCount} chats`}</span>
 	                </div>
-	                <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. System chat and the new-chat baseline are warmed separately.</p>
+	                <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. New-chat baseline and system chat are prioritized within available slots.</p>
 	              </div>
 	            </div>
 

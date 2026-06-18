@@ -393,8 +393,9 @@ export interface Settings {
   // Wake cycle — periodic autonomous exploration during sleep cycle.
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
-  // Post-synthesis cache warm — number of recent agent chats to warm after
-  // each synthesis cycle. System chat and new-chat baseline warms are separate.
+  // Post-synthesis cache warm — maximum number of recent agent chats eligible
+  // after each synthesis cycle. The capacity-aware warm plan prioritizes the
+  // new-chat baseline and system chat before recent chats.
   postSynthesisWarmCount?: number;
   // System stats bar — show/hide resource usage in sidebar
   systemStatsEnabled?: boolean;
