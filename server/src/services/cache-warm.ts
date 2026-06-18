@@ -9,6 +9,7 @@
  * Two flows:
  *  1. User-initiated: sidebar context menu "Warm Cache" per chat
  *  2. Sleep pre-warm: system chat warms before entering sleep mode
+ *  3. New-chat baseline: global agent prefix warms an auto-selected slot
  */
 
 import { randomUUID } from "crypto";
@@ -27,11 +28,15 @@ import {
 import {
   markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+  NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
   recordLlamaCacheResidencyRun,
   type LlamaCacheBindingMode,
+  type LlamaCacheTargetKind,
 } from "./llama-cache-residency.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "./models.js";
 import {
+  buildStablePrefix,
   buildSplitAugmentedPrompt,
   invalidateMemoriesCache,
   resetMemoryContext,
@@ -50,8 +55,12 @@ import type { InferenceModel } from "../types.js";
 export interface CacheWarmResult {
   /** True if prefill completed successfully */
   warmed: boolean;
-  /** Chat that was warmed */
+  /** Chat or synthetic target that was warmed */
   chatId: string;
+  /** What kind of target this record describes. Omitted by older callers; defaults to chat. */
+  targetKind?: LlamaCacheTargetKind;
+  /** Human-readable label for synthetic warm targets. */
+  targetLabel?: string;
   /** Model used */
   modelId: string;
   /** Time spent on prefill (ms) */
@@ -95,6 +104,8 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 interface CacheResidencyContext {
   chatId: string;
+  targetKind?: LlamaCacheTargetKind;
+  targetLabel?: string;
   baseUrl: string;
   modelId: string;
   contextWindow?: number;
@@ -341,10 +352,13 @@ interface TemplateRenderPlan {
   sentinel?: string;
 }
 
-function buildTemplateRenderPlan(body: any): TemplateRenderPlan {
+function buildTemplateRenderPlan(
+  body: any,
+  options?: { forceNextUserPrefix?: boolean },
+): TemplateRenderPlan {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const lastRole = messages[messages.length - 1]?.role;
-  if (lastRole !== "assistant") {
+  if (!options?.forceNextUserPrefix && lastRole !== "assistant") {
     return { body, mode: "exact" };
   }
 
@@ -376,6 +390,126 @@ function extractWarmPromptFromRenderedTemplate(renderedPrompt: string, plan: Tem
   return renderedPrompt.slice(0, sentinelIndex);
 }
 
+interface WarmOpenAICompatBodyInput {
+  targetId: string;
+  targetKind?: LlamaCacheTargetKind;
+  targetLabel?: string;
+  logLabel: string;
+  baseUrl: string;
+  modelId: string;
+  contextWindow: number;
+  body: any;
+  forceNextUserPrefix?: boolean;
+  signal?: AbortSignal;
+}
+
+interface WarmOpenAICompatBodyResult {
+  promptMs: number;
+  tokensCached: number;
+  tokensEvaluated: number;
+  totalPromptTokens: number;
+  cacheHitRatio: number;
+}
+
+async function warmOpenAICompatBody(input: WarmOpenAICompatBodyInput): Promise<WarmOpenAICompatBodyResult> {
+  const promptPayloadDigest = digestPromptPayload(input.body);
+  const requestCharCount = estimateRequestChars(input.body);
+
+  const renderPlan = buildTemplateRenderPlan(input.body, {
+    forceNextUserPrefix: input.forceNextUserPrefix,
+  });
+  console.log(
+    `[cache-warm] applying template for ${input.modelId}, target=${input.logLabel}, mode=${renderPlan.mode}, kwargs:`,
+    input.body.chat_template_kwargs ?? {},
+  );
+  console.log(
+    `[cache-warm] target=${input.logLabel} last message role: ` +
+    `${input.body.messages?.[input.body.messages.length - 1]?.role}, ` +
+    `content length: ${String(input.body.messages?.[input.body.messages.length - 1]?.content).length}, ` +
+    `tools=${input.body.tools?.length ?? 0} payload=${promptPayloadDigest}`,
+  );
+  const renderedPrompt = await applyChatTemplate(input.baseUrl, renderPlan.body, {
+    signal: input.signal,
+  });
+  const formattedPrompt = extractWarmPromptFromRenderedTemplate(renderedPrompt, renderPlan);
+  const promptDigest = digestPromptText(formattedPrompt);
+  if (renderPlan.mode === "next-user-prefix") {
+    console.log(
+      `[cache-warm] rendered next-user prefix for ${input.logLabel}: ` +
+      `rendered_chars=${renderedPrompt.length} warm_chars=${formattedPrompt.length}`,
+    );
+  }
+  recordWarmPromptSnapshot({
+    chatId: input.targetId,
+    modelId: input.modelId,
+    payloadDigest: promptPayloadDigest,
+    promptDigest,
+    promptChars: formattedPrompt.length,
+    prompt: formattedPrompt,
+    messageCount: Array.isArray(input.body.messages) ? input.body.messages.length : 0,
+    requestChars: requestCharCount,
+  });
+  const shortPrompt = await makeOneTokenShortPrompt(
+    input.baseUrl,
+    input.modelId,
+    formattedPrompt,
+    input.signal,
+  );
+  console.log(
+    `[cache-warm] one-token-short prefill for ${input.logLabel}: ` +
+    `full_tokens=${shortPrompt.fullTokenCount ?? "?"} ` +
+    `warm_tokens=${shortPrompt.warmTokenCount ?? "?"} removed_token=${shortPrompt.removedToken ?? "?"} ` +
+    `full_chars=${formattedPrompt.length} warm_chars=${shortPrompt.prompt.length}`,
+  );
+
+  const residencyContext: CacheResidencyContext = {
+    chatId: input.targetId,
+    targetKind: input.targetKind,
+    targetLabel: input.targetLabel,
+    baseUrl: input.baseUrl,
+    modelId: input.modelId,
+    contextWindow: input.contextWindow,
+    bindingMode: "auto",
+  };
+  markLlamaCacheResidencyStarted(residencyContext);
+
+  try {
+    const stats = await prefillOnly(input.baseUrl, input.modelId, shortPrompt.prompt, {
+      signal: input.signal,
+    });
+    const totalTokens = stats.tokensCached + stats.tokensEvaluated;
+    const hitRatio = totalTokens > 0 ? stats.tokensCached / totalTokens : 0;
+
+    recordLlamaCacheResidencyRun({
+      ...residencyContext,
+      timings: { prompt_n: totalTokens, prompt_ms: stats.promptMs },
+      cache: {
+        cachePrompt: true,
+        cacheMode: "cache_prompt",
+        requestDigest: promptPayloadDigest,
+        requestMessageCount: Array.isArray(input.body.messages) ? input.body.messages.length : 0,
+        requestCharCount,
+        containsImages: false,
+        reportedPromptTokens: totalTokens,
+        promptEvalTokens: stats.tokensEvaluated,
+        inferredCachedTokens: stats.tokensCached,
+        inferredCacheHitRatio: hitRatio,
+      },
+    });
+
+    return {
+      promptMs: stats.promptMs,
+      tokensCached: stats.tokensCached,
+      tokensEvaluated: stats.tokensEvaluated,
+      totalPromptTokens: totalTokens,
+      cacheHitRatio: hitRatio,
+    };
+  } catch (err) {
+    markLlamaCacheResidencyFinished(input.targetId, input.targetKind);
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main warm function
 // ---------------------------------------------------------------------------
@@ -391,11 +525,11 @@ export async function warmChatCache(
   const result: CacheWarmResult = {
     warmed: false,
     chatId,
+    targetKind: "chat",
     modelId: "",
     reason: options.reason ?? "user-requested",
     warmedAt: Date.now(),
   };
-  let residencyContext: CacheResidencyContext | null = null;
 
   try {
     // 1. Load the chat
@@ -448,106 +582,130 @@ export async function warmChatCache(
       tools,
     };
     const { body } = await buildOpenAICompatChatBody(piModel as any, context as any);
-    const promptPayloadDigest = digestPromptPayload(body);
-    const requestCharCount = estimateRequestChars(body);
-
-    // 5. Apply chat template with the exact same provider-converted body that
-    // the real llama.cpp OpenAI-compatible request uses.
-    const renderPlan = buildTemplateRenderPlan(body);
-    console.log(
-      `[cache-warm] applying template for ${normalizedModelId}, mode=${renderPlan.mode}, kwargs:`,
-      body.chat_template_kwargs ?? {},
-    );
-    console.log(
-      `[cache-warm] last message role: ${body.messages?.[body.messages.length - 1]?.role}, ` +
-      `content length: ${String(body.messages?.[body.messages.length - 1]?.content).length}, ` +
-      `tools=${body.tools?.length ?? 0} payload=${promptPayloadDigest}`,
-    );
-    const renderedPrompt = await applyChatTemplate(baseUrl, renderPlan.body, {
-      signal: options.signal,
-    });
-    const formattedPrompt = extractWarmPromptFromRenderedTemplate(renderedPrompt, renderPlan);
-    const promptDigest = digestPromptText(formattedPrompt);
-    if (renderPlan.mode === "next-user-prefix") {
-      console.log(
-        `[cache-warm] rendered next-user prefix: rendered_chars=${renderedPrompt.length} ` +
-        `warm_chars=${formattedPrompt.length}`,
-      );
-    }
-    recordWarmPromptSnapshot({
-      chatId,
-      modelId: normalizedModelId,
-      payloadDigest: promptPayloadDigest,
-      promptDigest,
-      promptChars: formattedPrompt.length,
-      prompt: formattedPrompt,
-      messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
-      requestChars: requestCharCount,
-    });
-    const shortPrompt = await makeOneTokenShortPrompt(baseUrl, normalizedModelId, formattedPrompt, options.signal);
-    console.log(
-      `[cache-warm] one-token-short prefill: full_tokens=${shortPrompt.fullTokenCount ?? "?"} ` +
-      `warm_tokens=${shortPrompt.warmTokenCount ?? "?"} removed_token=${shortPrompt.removedToken ?? "?"} ` +
-      `full_chars=${formattedPrompt.length} warm_chars=${shortPrompt.prompt.length}`,
-    );
-
-    // 6. Mark residency as warming
-    residencyContext = {
-      chatId,
+    const stats = await warmOpenAICompatBody({
+      targetId: chatId,
+      targetKind: "chat",
+      logLabel: `chat:${chatId}`,
       baseUrl,
       modelId: normalizedModelId,
       contextWindow: effectiveContextWindow,
-      bindingMode: "auto",
-    };
-    markLlamaCacheResidencyStarted(residencyContext);
-
-    // 7. Prefill only — populates KV cache without generating
-    const stats = await prefillOnly(baseUrl, normalizedModelId, shortPrompt.prompt, {
+      body,
       signal: options.signal,
     });
 
-    // 8. Calculate hit ratio
-    const totalTokens = stats.tokensCached + stats.tokensEvaluated;
-    const hitRatio = totalTokens > 0 ? stats.tokensCached / totalTokens : 0;
-
-    // 9. Record residency
-    recordLlamaCacheResidencyRun({
-      chatId,
-      baseUrl,
-      modelId: normalizedModelId,
-      contextWindow: effectiveContextWindow,
-      bindingMode: "auto",
-      timings: { prompt_n: totalTokens, prompt_ms: stats.promptMs },
-      cache: {
-        cachePrompt: true,
-        cacheMode: "cache_prompt",
-        requestDigest: promptPayloadDigest,
-        requestMessageCount: Array.isArray(body.messages) ? body.messages.length : 0,
-        requestCharCount,
-        containsImages: false,
-        reportedPromptTokens: totalTokens,
-        promptEvalTokens: stats.tokensEvaluated,
-        inferredCachedTokens: stats.tokensCached,
-        inferredCacheHitRatio: hitRatio,
-      },
-    });
-
-    // 10. Return success
     return {
       ...result,
       warmed: true,
       promptMs: stats.promptMs,
       tokensCached: stats.tokensCached,
       tokensEvaluated: stats.tokensEvaluated,
-      totalPromptTokens: totalTokens,
-      cacheHitRatio: hitRatio,
+      totalPromptTokens: stats.totalPromptTokens,
+      cacheHitRatio: stats.cacheHitRatio,
     };
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
-    if (residencyContext) {
-      markLlamaCacheResidencyFinished(chatId);
-    }
     console.warn(`[cache-warm] Failed to warm cache for chat ${chatId}:`, err);
+    return result;
+  }
+}
+
+/**
+ * Warm the global new-agent-chat prefix. This prepares the default agent
+ * system prompt, persona/user doc, global memory blocks, zeitgeist, and tool
+ * schema, then stops at the first user-message boundary. Real project chats
+ * can still reuse this prefix until their project context diverges.
+ */
+export async function warmNewAgentChatBaselineCache(
+  options: CacheWarmOptions = {},
+): Promise<CacheWarmResult> {
+  const result: CacheWarmResult = {
+    warmed: false,
+    chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+    targetKind: "new-agent-chat",
+    targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+    modelId: "",
+    reason: options.reason ?? "post-synthesis",
+    warmedAt: Date.now(),
+  };
+
+  try {
+    const settings = await getSettings();
+    const allModels = await discoverAllModels();
+    const requestedModelId = settings.defaultModelId || allModels[0]?.id;
+    if (!requestedModelId) {
+      result.error = "No default model is configured";
+      return result;
+    }
+
+    const normalizedModelId = normalizeRouterModelId(requestedModelId);
+    const model = allModels.find((m) => m.id === requestedModelId) ||
+      (normalizedModelId !== requestedModelId ? allModels.find((m) => m.id === normalizedModelId) : undefined);
+    if (!model) {
+      result.modelId = normalizedModelId;
+      result.error = `Model not found: ${requestedModelId}`;
+      return result;
+    }
+
+    result.modelId = normalizedModelId;
+    const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+    const effectiveContextWindow = getEffectiveContextWindow({ modelId: normalizedModelId }, model);
+
+    const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
+      contextWindow: effectiveContextWindow,
+    });
+    if (loadResult === "error") {
+      result.error = `Failed to load model: ${normalizedModelId}`;
+      return result;
+    }
+
+    const basePrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
+    const { stablePrefix } = await buildStablePrefix(
+      basePrompt,
+      NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+    );
+
+    const piModel = await createPiModelFromProvider(model);
+    piModel.contextWindow = effectiveContextWindow;
+    piModel.id = normalizedModelId;
+    piModel.reasoning = modelSupportsReasoning(model);
+    const tools = getAgentTools(
+      NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+      NOOP_TOOL_EFFECTS,
+      effectiveContextWindow,
+      undefined,
+      "agent",
+    );
+    const context = {
+      systemPrompt: stablePrefix,
+      messages: [],
+      tools: tools.length > 0 ? tools : undefined,
+    };
+    const { body } = await buildOpenAICompatChatBody(piModel as any, context as any);
+    const stats = await warmOpenAICompatBody({
+      targetId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+      targetKind: "new-agent-chat",
+      targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+      logLabel: "new-agent-chat",
+      baseUrl,
+      modelId: normalizedModelId,
+      contextWindow: effectiveContextWindow,
+      body,
+      forceNextUserPrefix: true,
+      signal: options.signal,
+    });
+
+    return {
+      ...result,
+      warmed: true,
+      promptMs: stats.promptMs,
+      tokensCached: stats.tokensCached,
+      tokensEvaluated: stats.tokensEvaluated,
+      totalPromptTokens: stats.totalPromptTokens,
+      cacheHitRatio: stats.cacheHitRatio,
+    };
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err);
+    console.warn("[cache-warm] Failed to warm new-agent-chat baseline:", err);
     return result;
   }
 }

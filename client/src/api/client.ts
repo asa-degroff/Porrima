@@ -1857,9 +1857,12 @@ export async function getSlotAssignments(): Promise<SlotAssignment[]> {
 
 export type CacheResidencyStatus = "warming" | "warm" | "stale";
 export type CacheResidencyConfidence = "confirmed-hit" | "partial-hit" | "filled-after-miss" | "unknown";
+export type CacheResidencyTargetKind = "chat" | "new-agent-chat";
 
 export interface CacheResidency {
   chatId: string;
+  targetKind?: CacheResidencyTargetKind;
+  targetLabel?: string;
   baseUrl: string;
   modelId: string;
   contextWindow?: number;
@@ -2424,18 +2427,20 @@ export async function restoreAgentSnapshot(id: string): Promise<{ preRestoreSnap
 export interface CacheWarmResult {
   warmed: boolean;
   chatId: string;
+  targetKind?: CacheResidencyTargetKind;
+  targetLabel?: string;
   modelId: string;
   promptMs?: number;
   tokensCached?: number;
   tokensEvaluated?: number;
   cacheHitRatio?: number;
   totalPromptTokens?: number;
-  reason: "user-requested" | "sleep-prewarm";
+  reason: "user-requested" | "sleep-prewarm" | "post-synthesis";
   warmedAt: number;
   error?: string;
 }
 
-export async function warmCache(chatId: string, reason: "user-requested" | "sleep-prewarm" = "user-requested"): Promise<CacheWarmResult> {
+export async function warmCache(chatId: string, reason: "user-requested" | "sleep-prewarm" | "post-synthesis" = "user-requested"): Promise<CacheWarmResult> {
   const res = await apiFetch(`${BASE}/memory/cache-warm/${encodeURIComponent(chatId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

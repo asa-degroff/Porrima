@@ -159,7 +159,8 @@ Synthesis runs the main model inside a persistent **system chat** (`chat.type ==
 4. **Composes the system prompt** from the stable prefix only: `chat.systemPrompt` → `buildStablePrefix(...)` (persona + user doc + global memory blocks + zeitgeist + optional project context/blocks). Phase instructions live in user-role trigger/follow-up messages, so editing automation prompts does not invalidate the system chat's longest-common-prefix KV cache.
 5. **Runs the shared headless tool loop** via `runHeadlessChatTurn()` / `runAgentLoop()` with the full system tool suite except `ask_user`. Later synthesis phases are injected through `getFollowUp` after turn boundaries.
 6. **Persists output** — writes the assistant response to the system chat (with `_isSystemMessage`, `_isSynthesisMessage`, and automation metadata when present). Notebook persistence is the agent's responsibility through the `create_notebook_entry` tool; the server warns if synthesis text is produced without a notebook tool call.
-7. **Marks the cycle** — calls `setLastSynthesis(now)` only after a successful run so failed/no-output runs can retry on a later automation tick.
+7. **Warms prompt caches** — after a successful cycle, the cache-warm queue warms the system chat, recent agent chats, and a synthetic new-agent-chat baseline containing the default agent stable prefix (global memory blocks and zeitgeist, but no project context or retrieved memories). llama.cpp's `--kv-unified` longest-prefix selection can then reuse that baseline for new global chats and the global portion of new project chats.
+8. **Marks the cycle** — calls `setLastSynthesis(now)` only after a successful run so failed/no-output runs can retry on a later automation tick.
 
 Synthesis owns both the daily narrative (notebook entry) and zeitgeist maintenance (the agent calls `update_memory_block` on `blk-zeitgeist-continuity` when the continuity narrative has shifted). See [zeitgeist.md](zeitgeist.md).
 

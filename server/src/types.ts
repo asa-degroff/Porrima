@@ -394,7 +394,7 @@ export interface Settings {
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
   // Post-synthesis cache warm — number of recent agent chats to warm after
-  // each synthesis cycle. Default 3. Set to 0 to disable.
+  // each synthesis cycle. System chat and new-chat baseline warms are separate.
   postSynthesisWarmCount?: number;
   // System stats bar — show/hide resource usage in sidebar
   systemStatsEnabled?: boolean;

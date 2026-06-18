@@ -68,6 +68,7 @@ interface Props {
   isImageSandboxOpen?: boolean;
   imageSandboxEnabled?: boolean;
   cacheResidency?: Map<string, CacheResidency>;
+  newChatBaselineResidency?: CacheResidency | null;
   systemStatsHistory?: SystemStatsSample[];
   systemStatsCurrent?: SystemStatsSample | null;
   systemStatsHiddenGpus?: string[];
@@ -527,6 +528,29 @@ function formatCacheResidencyTitle(residency?: CacheResidency | null): string | 
     parts.push(`${residency.bindingMode} slot selection`);
   }
   return parts.join(" - ");
+}
+
+function formatNewChatBaselineTitle(residency?: CacheResidency | null): string | undefined {
+  if (!residency) return undefined;
+  const parts = [residency.active ? "New chat baseline cache active" : "New chat baseline cache warm"];
+  if (typeof residency.inferredCacheHitRatio === "number") {
+    parts.push(`last hit ${(residency.inferredCacheHitRatio * 100).toFixed(1)}%`);
+  }
+  if (typeof residency.slotId === "number") {
+    parts.push(`slot ${residency.slotId}`);
+  } else {
+    parts.push(`${residency.bindingMode} slot selection`);
+  }
+  parts.push("project context may still prefill");
+  return parts.join(" - ");
+}
+
+function newChatBaselineClass(residency?: CacheResidency | null): string {
+  return residency ? "border-amber-400/30 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "";
+}
+
+function isResidencyQueued(residency?: CacheResidency | null): boolean {
+  return residency?.queuePosition !== undefined && residency.queuePosition > 0;
 }
 
 function ChangeProjectDirectoryModal({
@@ -1014,6 +1038,7 @@ function ProjectSection({
   cacheWarmErrors,
   lastActiveChatId,
   cacheResidency,
+  newChatBaselineResidency,
 }: {
   project: Project;
   chats: ChatListItemType[];
@@ -1031,6 +1056,7 @@ function ProjectSection({
   cacheWarmErrors?: Map<string, string>;
   lastActiveChatId?: string | null;
   cacheResidency?: Map<string, CacheResidency>;
+  newChatBaselineResidency?: CacheResidency | null;
 }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1041,6 +1067,9 @@ function ProjectSection({
   const [showAllChats, setShowAllChats] = useState(false);
 
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
+  const newChatBaselineTitle = formatNewChatBaselineTitle(newChatBaselineResidency);
+  const newChatBaselineQueued = isResidencyQueued(newChatBaselineResidency);
+  const newChatBaselineWarming = newChatBaselineResidency?.status === "warming";
 
   useEffect(() => {
     if (!expanded) {
@@ -1288,13 +1317,19 @@ function ProjectSection({
         <div className="px-1 pb-1.5">
           <button
             onClick={() => onNewChat("agent", project.id)}
-            className={`w-full px-2 py-1.5 rounded-xl text-sm font-medium border ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} transition-all flex items-center justify-center gap-2 mb-2 pressable`}
+            title={newChatBaselineTitle}
+            className={`w-full px-2 py-1.5 rounded-xl text-sm font-medium border ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg>
             New Chat
+            {(newChatBaselineWarming || newChatBaselineQueued) && (
+              <span className="absolute right-2 top-1/2 -translate-y-1/2" title={newChatBaselineQueued ? "New chat baseline warm queued" : "Warming new chat baseline"}>
+                <PrefillActivityIcon paused={newChatBaselineQueued} />
+              </span>
+            )}
           </button>
           {chats.length > 0 ? (
             <>
@@ -1394,6 +1429,7 @@ export function Sidebar({
   isImageSandboxOpen = false,
   imageSandboxEnabled = true,
   cacheResidency = new Map(),
+  newChatBaselineResidency = null,
   systemStatsHistory = [],
   systemStatsCurrent,
   systemStatsHiddenGpus,
@@ -1415,6 +1451,9 @@ export function Sidebar({
   const systemPauseActive = systemPause?.active ?? false;
   const systemPausePending = systemPause?.pending ?? false;
   const sidebarActivityActive = hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning;
+  const newChatBaselineTitle = formatNewChatBaselineTitle(newChatBaselineResidency);
+  const newChatBaselineQueued = isResidencyQueued(newChatBaselineResidency);
+  const newChatBaselineWarming = newChatBaselineResidency?.status === "warming";
 
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -2009,6 +2048,7 @@ export function Sidebar({
                       cacheWarmErrors={cacheWarmErrors}
                       lastActiveChatId={lastActiveChatId}
                       cacheResidency={cacheResidency}
+                      newChatBaselineResidency={newChatBaselineResidency}
                     />
                   ))}
                 </AnimatedListReveal>
@@ -2074,15 +2114,19 @@ export function Sidebar({
             <button
               onClick={() => { onNewChat("agent"); onClose(); }}
               aria-label="New agent chat"
-              title="New agent chat"
+              title={newChatBaselineTitle || "New agent chat"}
               aria-hidden={!(agentExpanded && agentScrolled)}
               tabIndex={agentExpanded && agentScrolled ? 0 : -1}
-              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer pressable ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer pressable border ${newChatBaselineResidency ? "border-amber-400/35 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "border-transparent"} ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
-              </svg>
+              {(newChatBaselineWarming || newChatBaselineQueued) ? (
+                <PrefillActivityIcon paused={newChatBaselineQueued} />
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              )}
             </button>
           </div>
            {/* Scrollable chat list */}
@@ -2096,13 +2140,19 @@ export function Sidebar({
               >
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
-                  className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable"
+                  title={newChatBaselineTitle}
+                  className={`w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 5v14" />
                     <path d="M5 12h14" />
                   </svg>
                   New Chat
+                  {(newChatBaselineWarming || newChatBaselineQueued) && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2" title={newChatBaselineQueued ? "New chat baseline warm queued" : "Warming new chat baseline"}>
+                      <PrefillActivityIcon paused={newChatBaselineQueued} />
+                    </span>
+                  )}
                 </button>
                 {(agentShowAll ? agentChats : agentChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
                   <ChatListItem

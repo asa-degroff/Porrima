@@ -163,7 +163,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     searchNotebookEntries,
     clearSearch: clearNotebookSearch,
   } = useNotebooks();
-  const { residency: cacheResidency, refresh: refreshCacheResidency } = useCacheResidency();
+  const {
+    residency: cacheResidency,
+    newChatBaselineResidency,
+    refresh: refreshCacheResidency,
+  } = useCacheResidency();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [autoFocusInput, setAutoFocusInput] = useState(false);
@@ -1419,6 +1423,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         hasBackgroundActivity={hasBackgroundActivity}
         lastActiveChatId={lastActiveChatId}
         cacheResidency={cacheResidency}
+        newChatBaselineResidency={newChatBaselineResidency}
         isSynthesizing={isSynthesizing}
         isAutomationRunning={isAutomationRunning}
         synthesisComplete={synthesisComplete}

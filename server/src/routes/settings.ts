@@ -14,7 +14,11 @@ import {
 } from "../services/chat-storage.js";
 import { getDefaultLlamaScanDir, getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
 import { getSlotAssignments } from "../services/llama-slot-leases.js";
-import { listLlamaCacheResidency } from "../services/llama-cache-residency.js";
+import {
+  clearLlamaCacheResidencyTarget,
+  listLlamaCacheResidency,
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+} from "../services/llama-cache-residency.js";
 import { testSshConnection } from "../services/workspace.js";
 import {
   saveHeaderImage,
@@ -48,6 +52,16 @@ function stripServerOwnedActivityFields(settings: Settings): Settings {
   return sanitized;
 }
 
+function baselineSensitiveSettingsChanged(before: Settings, after: Settings): boolean {
+  return (
+    before.defaultModelId !== after.defaultModelId ||
+    before.defaultSystemPrompt !== after.defaultSystemPrompt ||
+    before.llamacppUrl !== after.llamacppUrl ||
+    before.preserveThinking !== after.preserveThinking ||
+    JSON.stringify(before.modelPreserveThinking ?? {}) !== JSON.stringify(after.modelPreserveThinking ?? {})
+  );
+}
+
 router.get("/", async (_req, res) => {
   const settings = await getSettings();
   try {
@@ -66,7 +80,11 @@ router.get("/storage-diagnostics", async (_req, res) => {
 });
 
 router.put("/", async (req, res) => {
+  const before = await getSettings();
   const settings = await saveSettings(stripServerOwnedActivityFields(req.body ?? {}));
+  if (baselineSensitiveSettingsChanged(before, settings)) {
+    clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
+  }
   res.json(settings);
 });
 
@@ -219,7 +237,7 @@ router.get("/cache-residency", async (_req, res) => {
     const records = listLlamaCacheResidency();
     const enriched = records.map((r) => ({
       ...r,
-      queuePosition: getQueuePosition(r.chatId),
+      queuePosition: getQueuePosition(r.chatId, r.targetKind),
     }));
     res.json(enriched);
   } catch (e: any) {

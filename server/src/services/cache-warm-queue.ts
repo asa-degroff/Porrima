@@ -15,28 +15,46 @@ import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 import { isAutomationActive } from "./automation-lock.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
+import {
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+  NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+  type LlamaCacheTargetKind,
+} from "./llama-cache-residency.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface CacheWarmJob {
-  /** Chat ID to warm */
-  chatId: string;
-  /** Why this warm was enqueued */
-  reason: "user-requested" | "sleep-prewarm" | "post-synthesis";
-  /** Abort signal for timeout */
-  signal?: AbortSignal;
-  /** Resolve/reject the caller's promise when the job completes */
-  resolve: (result: CacheWarmResult) => void;
-  reject: (err: Error) => void;
-}
+export type CacheWarmReason = "user-requested" | "sleep-prewarm" | "post-synthesis";
+
+export type CacheWarmJob =
+  | {
+      kind: "chat";
+      /** Chat ID to warm */
+      chatId: string;
+      /** Why this warm was enqueued */
+      reason: CacheWarmReason;
+      /** Abort signal for timeout */
+      signal?: AbortSignal;
+      /** Resolve/reject the caller's promise when the job completes */
+      resolve: (result: CacheWarmResult) => void;
+      reject: (err: Error) => void;
+    }
+  | {
+      kind: "new-agent-chat-baseline";
+      reason: CacheWarmReason;
+      signal?: AbortSignal;
+      resolve: (result: CacheWarmResult) => void;
+      reject: (err: Error) => void;
+    };
 
 export interface CacheWarmResult {
   warmed: boolean;
   chatId: string;
+  targetKind?: LlamaCacheTargetKind;
+  targetLabel?: string;
   modelId: string;
-  reason: CacheWarmJob["reason"];
+  reason: CacheWarmReason;
   promptMs?: number;
   tokensCached?: number;
   tokensEvaluated?: number;
@@ -81,11 +99,21 @@ type RouterModelProbe =
  */
 export function enqueueWarm(
   chatId: string,
-  reason: CacheWarmJob["reason"],
+  reason: CacheWarmReason,
   signal?: AbortSignal,
 ): Promise<CacheWarmResult> {
   return new Promise((resolve, reject) => {
-    queue.push({ chatId, reason, signal, resolve, reject });
+    queue.push({ kind: "chat", chatId, reason, signal, resolve, reject });
+    drainQueue();
+  });
+}
+
+export function enqueueNewAgentChatBaselineWarm(
+  reason: CacheWarmReason = "post-synthesis",
+  signal?: AbortSignal,
+): Promise<CacheWarmResult> {
+  return new Promise((resolve, reject) => {
+    queue.push({ kind: "new-agent-chat-baseline", reason, signal, resolve, reject });
     drainQueue();
   });
 }
@@ -244,13 +272,40 @@ export async function isCacheWarmOrLlamaRuntimeBusy(modelId?: string): Promise<b
   }
 }
 
+function jobTargetId(job: CacheWarmJob): string {
+  return job.kind === "new-agent-chat-baseline"
+    ? NEW_AGENT_CHAT_BASELINE_CACHE_ID
+    : job.chatId;
+}
+
+function jobTargetKind(job: CacheWarmJob): LlamaCacheTargetKind {
+  return job.kind === "new-agent-chat-baseline" ? "new-agent-chat" : "chat";
+}
+
+function jobTargetLabel(job: CacheWarmJob): string {
+  return job.kind === "new-agent-chat-baseline"
+    ? NEW_AGENT_CHAT_BASELINE_CACHE_LABEL
+    : job.chatId;
+}
+
+function jobMatchesTarget(
+  job: CacheWarmJob,
+  targetId: string,
+  targetKind: LlamaCacheTargetKind = "chat",
+): boolean {
+  return jobTargetId(job) === targetId && jobTargetKind(job) === targetKind;
+}
+
 /**
- * Get the queue position for a specific chat.
+ * Get the queue position for a specific target.
  * Returns 0 if actively warming, 1+ if queued, -1 if not in queue.
  */
-export function getQueuePosition(chatId: string): number {
-  if (mutex !== "idle" && mutex.chatId === chatId) return 0;
-  const idx = queue.findIndex((job) => job.chatId === chatId);
+export function getQueuePosition(
+  chatId: string,
+  targetKind: LlamaCacheTargetKind = "chat",
+): number {
+  if (mutex !== "idle" && jobMatchesTarget(mutex, chatId, targetKind)) return 0;
+  const idx = queue.findIndex((job) => jobMatchesTarget(job, chatId, targetKind));
   return idx >= 0 ? idx + 1 : -1;
 }
 
@@ -268,7 +323,7 @@ export function isChatWarming(chatId: string): boolean {
  */
 export function cancelQueuedWarms(chatId: string): void {
   for (let i = queue.length - 1; i >= 0; i--) {
-    if (queue[i].chatId !== chatId) continue;
+    if (!jobMatchesTarget(queue[i], chatId, "chat")) continue;
     const [removed] = queue.splice(i, 1);
     removed.reject(new Error("Cancelled"));
   }
@@ -293,7 +348,7 @@ async function drainQueue(): Promise<void> {
   try {
     // If LLM is actively generating, wait for it to finish
     if (isActive()) {
-      console.log(`[cache-warm-queue] waiting for LLM idle before warming ${job.chatId}`);
+      console.log(`[cache-warm-queue] waiting for LLM idle before warming ${jobTargetLabel(job)}`);
       try {
         await waitForIdle(job.signal);
       } catch (err) {
@@ -311,7 +366,7 @@ async function drainQueue(): Promise<void> {
     // (and be invalidated by) the automation's own inference.
     if (isSynthesisActive() || isWakeCycleActive() || isAutomationActive()) {
       console.log(
-        `[cache-warm-queue] deferring warm for ${job.chatId} — automation/synthesis/wake in progress`,
+        `[cache-warm-queue] deferring warm for ${jobTargetLabel(job)} — automation/synthesis/wake in progress`,
       );
       // Re-enqueue at the front and back off for a bit
       queue.unshift(job);
@@ -330,18 +385,25 @@ async function drainQueue(): Promise<void> {
     }
 
     // Execute the warm — import lazily to avoid circular deps
-    console.log(`[cache-warm-queue] warming ${job.chatId} (reason: ${job.reason})`);
-    const { warmChatCache } = await import("./cache-warm.js");
-    const result = await warmChatCache(job.chatId, {
-      reason: job.reason,
-      signal: job.signal,
-    });
+    console.log(`[cache-warm-queue] warming ${jobTargetLabel(job)} (reason: ${job.reason})`);
+    const { warmChatCache, warmNewAgentChatBaselineCache } = await import("./cache-warm.js");
+    const result = job.kind === "new-agent-chat-baseline"
+      ? await warmNewAgentChatBaselineCache({
+        reason: job.reason,
+        signal: job.signal,
+      })
+      : await warmChatCache(job.chatId, {
+        reason: job.reason,
+        signal: job.signal,
+      });
 
     // If the result was a queued warm but the actual warm function detected
     // that the chat doesn't need warming, we still count it as completed
     job.resolve({
       warmed: result.warmed,
       chatId: result.chatId,
+      targetKind: result.targetKind,
+      targetLabel: result.targetLabel,
       modelId: result.modelId,
       reason: job.reason,
       promptMs: result.promptMs,
@@ -420,6 +482,22 @@ export async function schedulePostSynthesisWarms(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  try {
+    const result = await enqueueNewAgentChatBaselineWarm("post-synthesis", signal);
+    results.push(result);
+  } catch (err) {
+    results.push({
+      warmed: false,
+      chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+      targetKind: "new-agent-chat",
+      targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+      modelId: "",
+      reason: "post-synthesis",
+      warmedAt: Date.now(),
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return results;

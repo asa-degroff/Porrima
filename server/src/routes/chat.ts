@@ -46,6 +46,8 @@ import {
   markLlamaCachePrefillComplete,
   markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
+  hasLlamaCacheTargetWarmRecord,
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
   recordLlamaCacheResidencyRun,
   type LlamaCacheBindingMode,
 } from "../services/llama-cache-residency.js";
@@ -1549,10 +1551,21 @@ async function handleChatStream(
     };
 
     // Gate the prefill indicator:
-    //   - First turns, first iteration: always show (expected slow)
+    //   - First turns, first iteration: show unless the new-chat baseline is warm
     //   - Non-first turns, first iteration: auto-show only if the slot probe sees a cold prefill
     //   - Tool iterations (iteration > 1): always hide
     const isFirstTurn = chat.messages.length === 1;
+    const firstTurnBaselineWarm =
+      isFirstTurn &&
+      chat.type === "agent" &&
+      !!llamaCacheContext &&
+      hasLlamaCacheTargetWarmRecord({
+        chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+        targetKind: "new-agent-chat",
+        baseUrl: llamaCacheContext.baseUrl,
+        modelId: llamaCacheContext.modelId,
+        contextWindow: llamaCacheContext.contextWindow,
+      });
 
     // Pass llamacpp slot lease and hooks to the stream function
     const safeStreamFn = createSafeStreamFn(llamaSlotLease, {
@@ -1560,7 +1573,7 @@ async function handleChatStream(
       onModelProgress: emitModelProgress,
       modelProgressShowIndicator: (iteration) => {
         if (iteration > 1) return false;
-        if (isFirstTurn) return true;
+        if (isFirstTurn) return firstTurnBaselineWarm ? undefined : true;
         return undefined;
       },
     });

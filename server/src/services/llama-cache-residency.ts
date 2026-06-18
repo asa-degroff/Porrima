@@ -1,6 +1,7 @@
 import type { LlamaCacheMetadata } from "./openai-compat-provider.js";
 
 export type LlamaCacheBindingMode = "auto" | "enforced";
+export type LlamaCacheTargetKind = "chat" | "new-agent-chat";
 export type LlamaCacheResidencyStatus = "warming" | "warm" | "stale";
 export type LlamaCacheResidencyConfidence =
   | "confirmed-hit"
@@ -8,8 +9,13 @@ export type LlamaCacheResidencyConfidence =
   | "filled-after-miss"
   | "unknown";
 
+export const NEW_AGENT_CHAT_BASELINE_CACHE_ID = "__porrima_new_agent_chat_baseline__";
+export const NEW_AGENT_CHAT_BASELINE_CACHE_LABEL = "New Chat";
+
 export interface LlamaCacheResidencyRecord {
   chatId: string;
+  targetKind: LlamaCacheTargetKind;
+  targetLabel?: string;
   baseUrl: string;
   modelId: string;
   contextWindow?: number;
@@ -39,6 +45,8 @@ interface LlamaTimingsLike {
 
 interface CacheContext {
   chatId: string;
+  targetKind?: LlamaCacheTargetKind;
+  targetLabel?: string;
   baseUrl: string;
   modelId: string;
   contextWindow?: number;
@@ -126,8 +134,12 @@ function poolKey(baseUrl: string, modelId: string, contextWindow?: number): stri
   return JSON.stringify([normalizeBaseUrl(baseUrl), modelId, contextWindow ?? null]);
 }
 
-function recordKey(input: Pick<CacheContext, "baseUrl" | "modelId" | "contextWindow" | "chatId">): string {
-  return `${poolKey(input.baseUrl, input.modelId, input.contextWindow)}:${input.chatId}`;
+function normalizeTargetKind(targetKind?: LlamaCacheTargetKind): LlamaCacheTargetKind {
+  return targetKind ?? "chat";
+}
+
+function recordKey(input: Pick<CacheContext, "baseUrl" | "modelId" | "contextWindow" | "chatId" | "targetKind">): string {
+  return `${poolKey(input.baseUrl, input.modelId, input.contextWindow)}:${normalizeTargetKind(input.targetKind)}:${input.chatId}`;
 }
 
 function maxWarmPerPool(): number {
@@ -231,6 +243,8 @@ export function markLlamaCacheResidencyStarted(input: CacheContext): void {
   const existing = records.get(key);
   records.set(key, {
     chatId: input.chatId,
+    targetKind: normalizeTargetKind(input.targetKind),
+    targetLabel: input.targetLabel ?? existing?.targetLabel,
     baseUrl: normalizeBaseUrl(input.baseUrl),
     modelId: input.modelId,
     contextWindow: input.contextWindow,
@@ -271,6 +285,8 @@ export function recordLlamaCacheResidencyRun(input: CacheContext & {
 
   records.set(key, {
     chatId: input.chatId,
+    targetKind: normalizeTargetKind(input.targetKind),
+    targetLabel: input.targetLabel ?? records.get(key)?.targetLabel,
     baseUrl: normalizeBaseUrl(input.baseUrl),
     modelId: input.modelId,
     contextWindow: input.contextWindow,
@@ -295,9 +311,9 @@ export function recordLlamaCacheResidencyRun(input: CacheContext & {
   prunePool(input);
 }
 
-export function markLlamaCacheResidencyFinished(chatId: string): void {
+export function markLlamaCacheResidencyFinished(chatId: string, targetKind: LlamaCacheTargetKind = "chat"): void {
   for (const [key, record] of records) {
-    if (record.chatId !== chatId || !record.active) continue;
+    if (record.chatId !== chatId || record.targetKind !== targetKind || !record.active) continue;
     records.set(key, {
       ...record,
       active: false,
@@ -313,7 +329,7 @@ export function markLlamaCacheResidencyFinished(chatId: string): void {
  *  This prevents the sidebar indicator from lingering during generation. */
 export function markLlamaCachePrefillComplete(chatId: string): void {
   for (const [key, record] of records) {
-    if (record.chatId !== chatId || !record.active || record.status !== "warming") continue;
+    if (record.chatId !== chatId || record.targetKind !== "chat" || !record.active || record.status !== "warming") continue;
     records.set(key, {
       ...record,
       status: "warm",
@@ -329,10 +345,38 @@ export function listLlamaCacheResidency(): LlamaCacheResidencyRecord[] {
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
+export function clearLlamaCacheResidencyTarget(
+  chatId: string,
+  targetKind: LlamaCacheTargetKind = "chat",
+): void {
+  let cleared = 0;
+  for (const [key, record] of records) {
+    if (record.chatId === chatId && record.targetKind === targetKind) {
+      records.delete(key);
+      cleared++;
+    }
+  }
+  if (cleared > 0) {
+    console.log(`[llama-cache-residency] cleared ${cleared} records for ${targetKind}:${chatId}`);
+  }
+}
+
 /** Check if a cache record (any status) exists for this chat+model combination. */
 export function hasLlamaCacheRecord(chatId: string, baseUrl: string, modelId: string, contextWindow?: number): boolean {
-  const key = `${JSON.stringify([baseUrl.replace(/\/+$/, ""), modelId, contextWindow ?? null])}:${chatId}`;
+  const key = `${JSON.stringify([baseUrl.replace(/\/+$/, ""), modelId, contextWindow ?? null])}:chat:${chatId}`;
   return records.has(key);
+}
+
+export function hasLlamaCacheTargetWarmRecord(input: {
+  chatId: string;
+  targetKind?: LlamaCacheTargetKind;
+  baseUrl: string;
+  modelId: string;
+  contextWindow?: number;
+}): boolean {
+  const key = recordKey(input);
+  const record = records.get(key);
+  return !!record?.active && record.warm;
 }
 
 /** Check if any warm cache record exists for this model+contextWindow across all chats.

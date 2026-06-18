@@ -824,9 +824,13 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
                     </thead>
                     <tbody>
                       {cacheResidency.map((a) => (
-                        <tr key={a.chatId} className="border-t border-white/5">
+                        <tr key={`${a.targetKind ?? "chat"}:${a.chatId}`} className="border-t border-white/5">
                           <td className="py-1.5 pr-4">
-                            <span className="text-white/70 font-mono">{a.chatId.slice(0, 8)}…</span>
+                            <span className="text-white/70 font-mono">
+                              {a.targetKind === "new-agent-chat"
+                                ? (a.targetLabel || "New Chat")
+                                : `${a.chatId.slice(0, 8)}...`}
+                            </span>
                           </td>
                           <td className="py-1.5 pr-4">
                             <span className="text-amber-300/90 font-mono">
