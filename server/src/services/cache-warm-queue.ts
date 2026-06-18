@@ -54,6 +54,20 @@ const queue: CacheWarmJob[] = [];
 let mutex: "idle" | CacheWarmJob = "idle";
 const LLAMA_BUSY_PROBE_TIMEOUT_MS = Number(process.env.LLAMA_BUSY_PROBE_TIMEOUT_MS) || 3_000;
 
+interface RouterModelEntry {
+  id?: string;
+  status?: {
+    value?: string;
+    args?: unknown;
+  };
+}
+
+type RouterModelProbe =
+  | { state: "loaded"; entry: RouterModelEntry }
+  | { state: "transitioning"; entry: RouterModelEntry }
+  | { state: "unloaded"; entry?: RouterModelEntry }
+  | { state: "unknown"; entry?: RouterModelEntry };
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -94,6 +108,70 @@ function getSlotArray(payload: any): any[] {
   if (Array.isArray(payload?.slots)) return payload.slots;
   if (Array.isArray(payload?.data)) return payload.data;
   return [];
+}
+
+function getModelArray(payload: any): RouterModelEntry[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function isTargetModel(entry: RouterModelEntry, modelId: string): boolean {
+  if (typeof entry.id !== "string") return false;
+  return entry.id === modelId || normalizeRouterModelId(entry.id) === modelId;
+}
+
+async function probeRouterModelState(baseUrl: string, modelId: string): Promise<RouterModelProbe> {
+  const url = `${normalizeBaseUrl(baseUrl)}/v1/models`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`/v1/models returned ${res.status}`);
+
+  const payload = await res.json().catch(() => null);
+  const entry = getModelArray(payload).find((model) => isTargetModel(model, modelId));
+  if (!entry) return { state: "unloaded" };
+
+  const status = String(entry.status?.value ?? "").toLowerCase();
+  if (status === "loaded") return { state: "loaded", entry };
+  if (status === "unloaded") return { state: "unloaded", entry };
+  if (
+    status.includes("load") ||
+    status.includes("start") ||
+    status.includes("stop") ||
+    status.includes("unload")
+  ) {
+    return { state: "transitioning", entry };
+  }
+  return { state: "unknown", entry };
+}
+
+function readArg(args: unknown, name: string): string | undefined {
+  if (!Array.isArray(args)) return undefined;
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === name && typeof args[i + 1] === "string") return args[i + 1];
+  }
+  return undefined;
+}
+
+function loadedModelSlotsUrl(entry: RouterModelEntry): string | null {
+  const args = entry.status?.args;
+  const portRaw = readArg(args, "--port") ?? readArg(args, "-p");
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0) return null;
+
+  const host = readArg(args, "--host") ?? readArg(args, "-h") ?? "127.0.0.1";
+  const normalizedHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const hostname = normalizedHost.includes(":") && !normalizedHost.startsWith("[")
+    ? `[${normalizedHost}]`
+    : normalizedHost;
+  return `http://${hostname}:${port}/slots`;
+}
+
+async function probeSlotsUrl(url: string): Promise<boolean> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
+  if (!res.ok) return false;
+
+  const payload = await res.json().catch(() => null);
+  return getSlotArray(payload).some(slotHasActiveTask);
 }
 
 export function slotHasActiveTask(slot: any): boolean {
@@ -144,12 +222,23 @@ export async function isCacheWarmOrLlamaRuntimeBusy(modelId?: string): Promise<b
 
     const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
     const normalizedModelId = normalizeRouterModelId(effectiveModelId);
-    const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(normalizedModelId)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
-    if (!res.ok) return false;
+    const modelProbe = await probeRouterModelState(baseUrl, normalizedModelId);
 
-    const payload = await res.json().catch(() => null);
-    return getSlotArray(payload).some(slotHasActiveTask);
+    if (modelProbe.state === "unloaded") return false;
+    if (modelProbe.state === "transitioning") return true;
+
+    if (modelProbe.state === "loaded") {
+      const childSlotsUrl = loadedModelSlotsUrl(modelProbe.entry);
+      if (childSlotsUrl) return probeSlotsUrl(childSlotsUrl);
+
+      const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(normalizedModelId)}`;
+      return probeSlotsUrl(url);
+    }
+
+    // Single-model llama.cpp servers do not expose router model status. Probe
+    // their model-less slots endpoint, which is side-effect-free on routers too
+    // (current router builds return 400 instead of loading a model).
+    return probeSlotsUrl(`${normalizeBaseUrl(baseUrl)}/slots`);
   } catch {
     return true;
   }
