@@ -10,6 +10,10 @@ import { getWorkspaceForProject } from "./workspace.js";
 import { log } from "./logger.js";
 import { getRetrievalBudget } from "./retrieval-settings.js";
 import {
+  clearLlamaCacheResidencyTarget,
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+} from "./llama-cache-residency.js";
+import {
   applyCrossProjectScoreMultiplier,
   applyGlobalProjectScoreMultiplier,
   CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT,
@@ -158,11 +162,13 @@ export function invalidateAllCaches(chatId: string): void {
  */
 export function invalidateAllStablePrefixCaches(): void {
   stablePrefixCache.clear();
+  clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
 }
 
 export function resetAllMemoryContextCaches(): void {
   contextState.clear();
   stablePrefixCache.clear();
+  clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
 }
 
 export interface AugmentedPromptResult {

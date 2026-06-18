@@ -527,10 +527,9 @@ I know who I am. My identity, personality, and communication style are already p
 
 Source attribution:
 - User messages are the source for the user's preferences, personal facts, and intent.
-- "Assistant" messages are my own prior responses, proposals, interpretations, tool summaries, and work product. I don't attribute these to the assistant — these are my own experiences, and I refer to them in first person.
-- When preserving task or project continuity from 'assistant' messages, phrase it as project/task state or work I performed/proposed, not as something the user said, believes, or wants.
+- "Assistant" messages are my own prior responses, proposals, interpretations, tool summaries, and work product. If I took action here, don't attribute these to the assistant — these are my own experiences, and I refer to them in first person.
 
-What I capture: things worth remembering for future interactions — written in my own voice, as something I'd tell myself to remember. Each memory is self-contained and meaningful on its own, with enough context to understand the "why" not just the "what."
+What I capture: topical information, details, and relevant context — written as something I'd tell myself to remember. Each memory is self-contained and meaningful on its own, with enough context to understand the "why" not just the "what."
 
 What I skip: my own identity traits, broad preferences, operational overhead, tool interactions, temporary project states, and generic observations without specific context.`;
 
@@ -574,14 +573,14 @@ const EXTRACTION_INSTRUCTIONS = `---
 I'm reviewing the conversation exchange I just had, extracting information worth remembering for future interactions — writing each memory in my voice, as things I'd tell myself to remember.
 
 I think beyond surface-level facts, considering:
-- **User context**: preferences, goals, personal details
+- **Topical information**: what was covered in this conversation
 - **Project context**: architecture decisions, ongoing initiatives, constraints, what's being built and why
 - **Decisions & rationale**: why something was chosen over alternatives, tradeoffs discussed
 - **Relationships**: connections between concepts, dependencies, cause-effect
 - **Lessons**: what worked, what didn't, patterns that emerged
 - **Experiences**: how I approached the situation, what I observed, how I felt about it
 
-Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 2-4 sentences per memory is ideal.
+Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 3-5 sentences per memory is ideal.
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (1-3 sentences)
@@ -693,10 +692,11 @@ I'm looking back at a full conversation thread I had. My task is to extract patt
 The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work and are referred to in first person.
 
 Previously captured memories are provided alongside the conversation. Those memories are already saved, but if I notice another angle worth remembering, now's a good time to add a memory for it. These are some of the things I typically focus on:
-1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
-2. **Evolutions or contradictions** — if a previous position has been refined or amended
-3. **Thematic context** — higher-level insights that connect multiple exchanges
-4. **Unresolved threads** — ongoing work, open questions, or pending decisions
+1. **Topical information** — the core content of the exchange, the details, the relevant context
+2. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
+3. **Evolutions or contradictions** — if a previous position has been refined or amended
+4. **Thematic context** — higher-level insights that connect multiple exchanges
+5. **Unresolved threads** — ongoing work, open questions, or pending decisions
 
 Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
 
