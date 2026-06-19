@@ -86,6 +86,7 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
       "--ctx-checkpoints", "128",
       "--sleep-idle-seconds", "172800",
       "--timeout", "86400",
+      "--jinja",
     ],
   },
   extraction: {
@@ -98,7 +99,7 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
     parallel: 1,
     reasoningFormat: "deepseek",
     chatTemplateKwargs: JSON.stringify({ enable_thinking: true }),
-    extraArgs: [],
+    extraArgs: ["--jinja"],
   },
   reranker: {
     mode: "single",
@@ -137,7 +138,7 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
     parallel: 1,
     reasoningFormat: "deepseek",
     chatTemplateKwargs: JSON.stringify({ enable_thinking: false }),
-    extraArgs: [],
+    extraArgs: ["--jinja"],
   },
 };
 
@@ -331,7 +332,7 @@ export function parseManagedServiceConfig(id: LlamaServerId, contents: string, f
     "--reasoning-format",
     "--chat-template-kwargs",
   ]);
-  const knownFlags = new Set(["--embedding", "--reranking"]);
+  const knownFlags = new Set(["--embedding", "--reranking", "--jinja"]);
 
   for (let i = 1; i < tokens.length; i += 1) {
     const token = tokens[i];

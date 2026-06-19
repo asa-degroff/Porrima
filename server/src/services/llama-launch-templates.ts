@@ -73,6 +73,7 @@ function buildTitleGenerationExecStart(input: TemplateInput): string {
     "--parallel", "1",
     "--reasoning-format", "deepseek",
     "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+    "--jinja",
   ];
   return joinArgs(args);
 }
@@ -90,6 +91,7 @@ function buildExtractionExecStart(input: TemplateInput): string {
     "--parallel", "1",
     "--reasoning-format", "deepseek",
     "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+    "--jinja",
   ];
   return joinArgs(args);
 }
@@ -174,6 +176,7 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
       "--parallel", "1",
       "--reasoning-format", "deepseek",
       "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+      "--jinja",
     ];
     return joinArgs(args);
   }
@@ -189,6 +192,7 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
     "--parallel", "1",
     "--reasoning-format", "deepseek",
     "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+    "--jinja",
   ];
   return joinArgs(args);
 }
