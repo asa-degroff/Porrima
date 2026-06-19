@@ -149,6 +149,7 @@ body::before {
   overscroll-behavior-y: contain;
   touch-action: pan-y;
   overflow-anchor: none;
+  overflow-x: clip;
 }
 
 /* Hidden scrollbar — for overflow containers that should scroll but not show a track */

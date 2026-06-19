@@ -1226,7 +1226,7 @@ function ProjectSection({
         </CollapsedPreviewFrame>
       )}
       <div
-        className="flex items-center gap-1.5 px-2 py-1.5 group select-none"
+        className="flex items-center gap-1.5 px-2 py-1 group select-none"
         onContextMenu={handleHeaderContextMenu}
         {...longPressProps}
       >
@@ -1376,7 +1376,7 @@ function ProjectSection({
       )}
       
       <AnimatedCollapse open={expanded} id={expandedContentId} closeFromHeight={expandedCloseHeight}>
-        <div className="px-1 pb-1.5">
+        <div className="px-1 pt-1 pb-1.5">
           <button
             onClick={() => onNewChat("agent", project.id)}
             onContextMenu={handleNewChatContextMenu}
@@ -2058,12 +2058,12 @@ export function Sidebar({
         {/* Projects Section */}
         {projects.length > 0 && (
           <div ref={projectsSectionRef} className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
-            <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center justify-between">
+            <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center justify-between">
               <button
                 onClick={handleToggleProjectsExpanded}
                 aria-expanded={projectsExpanded}
                 aria-controls={projectsContentId}
-                className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
+                className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
               >
                 <span className="text-white/30 group-hover:text-white/50 transition-colors">
                   <ChevronIcon expanded={projectsExpanded} />
@@ -2186,12 +2186,12 @@ export function Sidebar({
             </CollapsedPreviewFrame>
           )}
           {/* Section header — always visible */}
-          <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
+          <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center">
             <button
               onClick={handleToggleAgentExpanded}
               aria-expanded={agentExpanded}
               aria-controls={agentContentId}
-              className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
+              className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
                 <ChevronIcon expanded={agentExpanded} />
@@ -2225,12 +2225,12 @@ export function Sidebar({
           </div>
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
+            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-1">
               <AnimatedListReveal
                 open={agentExpanded}
                 animate={openingSectionMotion.index === 1}
                 origin={openingSectionMotion.index === 1 ? openingSectionMotion.revealOrigin : "top"}
-                className="space-y-0.5 px-3"
+                className="space-y-0.5 px-3 pt-1"
               >
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
@@ -2320,12 +2320,12 @@ export function Sidebar({
             </CollapsedPreviewFrame>
           )}
           {/* Section header — always visible */}
-          <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
+          <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center">
             <button
               onClick={handleToggleQuickExpanded}
               aria-expanded={quickExpanded}
               aria-controls={quickContentId}
-              className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
+              className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
                 <ChevronIcon expanded={quickExpanded} />
@@ -2353,7 +2353,7 @@ export function Sidebar({
           </div>
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
+            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-2">
               <AnimatedListReveal
                 open={quickExpanded}
                 animate={openingSectionMotion.index === 2}
