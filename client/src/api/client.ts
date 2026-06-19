@@ -2457,6 +2457,23 @@ export async function warmCache(chatId: string, reason: "user-requested" | "slee
   return result;
 }
 
+export async function warmNewChatBaseline(reason: "user-requested" | "sleep-prewarm" | "post-synthesis" = "user-requested"): Promise<CacheWarmResult> {
+  const res = await apiFetch(`${BASE}/memory/cache-warm/new-agent-chat-baseline`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `New chat cache warm failed (${res.status})`);
+  }
+  const result = await res.json();
+  if (!result.warmed) {
+    throw new Error(result.error || "New chat cache warm failed");
+  }
+  return result;
+}
+
 export interface CacheResidencyRecord {
   chatId: string;
   modelId: string;

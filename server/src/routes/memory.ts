@@ -30,6 +30,10 @@ import { runAutomationTask } from "../services/automation-runner.js";
 import { getAutomationTask, SYNTHESIS_AUTOMATION_ID, WAKE_AUTOMATION_ID } from "../services/automation-storage.js";
 import { clearExpiredSystemPause, getSystemPauseState } from "../services/system-pause.js";
 import { getMemoryGraph, type MemoryGraphScope } from "../services/memory-graph.js";
+import {
+  NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+  NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+} from "../services/llama-cache-residency.js";
 import type { Memory, MemoryCategory, MemorySummary } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
 
@@ -247,6 +251,50 @@ router.post("/synthesis/sleep", async (_req, res) => {
 // Warm the KV cache for a chat without generating output.
 // Uses /apply-template + /completion with n_predict=0 to prefill the cache.
 // Queued — only one warm runs at a time; others wait behind it.
+router.post("/cache-warm/new-agent-chat-baseline", async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const validReasons = ["user-requested", "sleep-prewarm", "post-synthesis"];
+    const warmReason = validReasons.includes(reason) ? reason : "user-requested";
+
+    const {
+      enqueueNewAgentChatBaselineWarm,
+      isNewAgentChatBaselineWarming,
+      cancelQueuedNewAgentChatBaselineWarms,
+    } = await import("../services/cache-warm-queue.js");
+
+    if (isNewAgentChatBaselineWarming()) {
+      cancelQueuedNewAgentChatBaselineWarms();
+    }
+
+    const result = await enqueueNewAgentChatBaselineWarm(warmReason);
+
+    if (result.warmed) {
+      console.log(
+        `[cache-warm] new-agent-chat baseline: warmed in ${result.promptMs}ms, ` +
+        `${result.tokensCached} cached / ${result.totalPromptTokens} total ` +
+        `(${(result.cacheHitRatio! * 100).toFixed(0)}% hit) — ${warmReason}`
+      );
+    } else {
+      console.warn(`[cache-warm] new-agent-chat baseline: failed — ${result.error}`);
+    }
+
+    res.json(result);
+  } catch (e: any) {
+    console.error("[cache-warm] new-agent-chat baseline unexpected error:", e);
+    res.status(500).json({
+      warmed: false,
+      chatId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
+      targetKind: "new-agent-chat",
+      targetLabel: NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
+      modelId: "",
+      reason: "user-requested",
+      warmedAt: Date.now(),
+      error: e.message,
+    });
+  }
+});
+
 router.post("/cache-warm/:chatId", async (req, res) => {
   try {
     const { chatId } = req.params;

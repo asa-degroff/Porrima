@@ -193,6 +193,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [systemPause, setSystemPause] = useState<import("./types").SystemPauseStatus | null>(null);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
   const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
+  const [newChatBaselineWarming, setNewChatBaselineWarming] = useState(false);
+  const [newChatBaselineWarmError, setNewChatBaselineWarmError] = useState<string | null>(null);
 
   useEffect(() => {
     activeChatIdStateRef.current = activeChatId;
@@ -1363,6 +1365,34 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [refreshCacheResidency]);
 
+  const handleWarmNewChatBaseline = useCallback(async () => {
+    if (newChatBaselineWarming) return;
+    setNewChatBaselineWarmError(null);
+    setNewChatBaselineWarming(true);
+    try {
+      const { warmNewChatBaseline } = await import("./api/client");
+      const result = await warmNewChatBaseline("user-requested");
+      if (result.warmed) {
+        const tokens = result.tokensEvaluated || 0;
+        const ms = result.promptMs || 0;
+        const speed = ms > 0 ? (tokens / (ms / 1000)).toFixed(0) : "—";
+        console.log(`[cache-warm] new chat baseline: warmed ${tokens} tokens in ${ms}ms (~${speed} t/s)`);
+      } else {
+        throw new Error(result.error || "New chat cache warm failed");
+      }
+    } catch (e: any) {
+      const message = e?.message || "New chat cache warm failed";
+      console.error("[cache-warm] new chat baseline failed:", e);
+      setNewChatBaselineWarmError(message);
+      window.setTimeout(() => {
+        setNewChatBaselineWarmError((current) => current === message ? null : current);
+      }, 15_000);
+    } finally {
+      setNewChatBaselineWarming(false);
+      await refreshCacheResidency?.();
+    }
+  }, [newChatBaselineWarming, refreshCacheResidency]);
+
   // Keyboard inset only - TTS bar is handled within ChatView
   const totalBottomInset = keyboardInset || 0;
 
@@ -1408,8 +1438,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onDeleteProject={handleDeleteProject}
         onSendToNotebook={handleSendToNotebook}
         onWarmCache={handleWarmCache}
+        onWarmNewChatBaseline={handleWarmNewChatBaseline}
         cacheWarmingChatIds={cacheWarmingChatIds}
         cacheWarmErrors={cacheWarmErrors}
+        newChatBaselineCacheWarming={newChatBaselineWarming}
+        newChatBaselineCacheWarmError={newChatBaselineWarmError}
         onOpenSettings={handleOpenSettings}
         onOpenMemoryDebug={() => setMemoryDebugOpen(true)}
         onOpenModelStats={() => setModelStatsOpen(true)}

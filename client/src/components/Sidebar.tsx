@@ -40,8 +40,11 @@ interface Props {
   onDeleteProject: (id: string) => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
+  onWarmNewChatBaseline?: () => void;
   cacheWarmingChatIds?: Set<string>;
   cacheWarmErrors?: Map<string, string>;
+  newChatBaselineCacheWarming?: boolean;
+  newChatBaselineCacheWarmError?: string | null;
   onOpenSettings: () => void;
   onOpenMemoryDebug?: () => void;
   onOpenModelStats?: () => void;
@@ -546,11 +549,21 @@ function formatNewChatBaselineTitle(residency?: CacheResidency | null): string |
 }
 
 function newChatBaselineClass(residency?: CacheResidency | null): string {
-  return residency ? "border-amber-400/30 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "";
+  return residency ? "ring-1 ring-amber-400/35 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "";
 }
 
 function isResidencyQueued(residency?: CacheResidency | null): boolean {
   return residency?.queuePosition !== undefined && residency.queuePosition > 0;
+}
+
+function newChatBaselineActionLabel(
+  residency: CacheResidency | null | undefined,
+  warming: boolean,
+  queued: boolean,
+): string {
+  if (queued) return "Warm queued";
+  if (warming) return "Warming...";
+  return residency ? "Refresh Baseline Cache" : "Warm Baseline Cache";
 }
 
 function ChangeProjectDirectoryModal({
@@ -1034,8 +1047,11 @@ function ProjectSection({
   onEditProject,
   onSendToNotebook,
   onWarmCache,
+  onWarmNewChatBaseline,
   cacheWarmingChatIds,
   cacheWarmErrors,
+  newChatBaselineCacheWarming = false,
+  newChatBaselineCacheWarmError = null,
   lastActiveChatId,
   cacheResidency,
   newChatBaselineResidency,
@@ -1052,13 +1068,17 @@ function ProjectSection({
   onEditProject: (project: Project) => Promise<void>;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
+  onWarmNewChatBaseline?: () => void;
   cacheWarmingChatIds?: Set<string>;
   cacheWarmErrors?: Map<string, string>;
+  newChatBaselineCacheWarming?: boolean;
+  newChatBaselineCacheWarmError?: string | null;
   lastActiveChatId?: string | null;
   cacheResidency?: Map<string, CacheResidency>;
   newChatBaselineResidency?: CacheResidency | null;
 }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [newChatContextMenu, setNewChatContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [changingDirectory, setChangingDirectory] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -1067,9 +1087,17 @@ function ProjectSection({
   const [showAllChats, setShowAllChats] = useState(false);
 
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
-  const newChatBaselineTitle = formatNewChatBaselineTitle(newChatBaselineResidency);
+  const newChatBaselineTitle = newChatBaselineCacheWarmError
+    ? `New chat cache warm failed: ${newChatBaselineCacheWarmError}`
+    : formatNewChatBaselineTitle(newChatBaselineResidency);
   const newChatBaselineQueued = isResidencyQueued(newChatBaselineResidency);
-  const newChatBaselineWarming = newChatBaselineResidency?.status === "warming";
+  const newChatBaselineWarming = newChatBaselineCacheWarming || newChatBaselineResidency?.status === "warming";
+  const newChatBaselineBusy = newChatBaselineQueued || newChatBaselineWarming;
+  const newChatBaselineMenuLabel = newChatBaselineActionLabel(
+    newChatBaselineResidency,
+    newChatBaselineWarming,
+    newChatBaselineQueued,
+  );
 
   useEffect(() => {
     if (!expanded) {
@@ -1090,6 +1118,19 @@ function ProjectSection({
     setContextMenu(pos);
   }, []);
   const longPressProps = useLongPress(openHeaderContextMenu);
+
+  const handleNewChatContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!onWarmNewChatBaseline) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setNewChatContextMenu({ x: e.clientX, y: e.clientY });
+  }, [onWarmNewChatBaseline]);
+
+  const openNewChatContextMenu = useCallback((pos: { x: number; y: number }) => {
+    if (!onWarmNewChatBaseline) return;
+    setNewChatContextMenu(pos);
+  }, [onWarmNewChatBaseline]);
+  const newChatLongPressProps = useLongPress(openNewChatContextMenu);
 
   const handleToggleExpanded = useCallback(() => {
     if (expanded) {
@@ -1283,6 +1324,27 @@ function ProjectSection({
           </ContextMenuItem>
         </ContextMenu>
       )}
+      {newChatContextMenu && (
+        <ContextMenu x={newChatContextMenu.x} y={newChatContextMenu.y} onClose={() => setNewChatContextMenu(null)} blocksSidebarClose>
+          <ContextMenuItem
+            onClick={() => {
+              setNewChatContextMenu(null);
+              onWarmNewChatBaseline?.();
+            }}
+            disabled={newChatBaselineBusy}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={newChatBaselineBusy ? "animate-pulse" : "opacity-70"} style={{ color: `rgba(var(--theme-accent), ${newChatBaselineBusy ? 0.9 : 0.7})` }}>
+              <path d="M8 18c-2.2 0-4 1.8-4 4" />
+              <path d="M16 18c2.2 0 4 1.8 4 4" />
+              <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M5 18h14" />
+            </svg>
+            {newChatBaselineMenuLabel}
+          </ContextMenuItem>
+        </ContextMenu>
+      )}
       {/* Delete confirmation overlay */}
       {confirmDelete && (
         <div className="px-2 pb-2">
@@ -1317,6 +1379,8 @@ function ProjectSection({
         <div className="px-1 pb-1.5">
           <button
             onClick={() => onNewChat("agent", project.id)}
+            onContextMenu={handleNewChatContextMenu}
+            {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
             title={newChatBaselineTitle}
             className={`w-full px-2 py-1.5 rounded-xl text-sm font-medium border ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
           >
@@ -1401,8 +1465,11 @@ export function Sidebar({
   onDeleteProject,
   onSendToNotebook,
   onWarmCache,
+  onWarmNewChatBaseline,
   cacheWarmingChatIds = new Set(),
   cacheWarmErrors = new Map(),
+  newChatBaselineCacheWarming = false,
+  newChatBaselineCacheWarmError = null,
   onOpenSettings,
   onOpenMemoryDebug,
   onOpenModelStats,
@@ -1451,14 +1518,23 @@ export function Sidebar({
   const systemPauseActive = systemPause?.active ?? false;
   const systemPausePending = systemPause?.pending ?? false;
   const sidebarActivityActive = hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning;
-  const newChatBaselineTitle = formatNewChatBaselineTitle(newChatBaselineResidency);
+  const newChatBaselineTitle = newChatBaselineCacheWarmError
+    ? `New chat cache warm failed: ${newChatBaselineCacheWarmError}`
+    : formatNewChatBaselineTitle(newChatBaselineResidency);
   const newChatBaselineQueued = isResidencyQueued(newChatBaselineResidency);
-  const newChatBaselineWarming = newChatBaselineResidency?.status === "warming";
+  const newChatBaselineWarming = newChatBaselineCacheWarming || newChatBaselineResidency?.status === "warming";
+  const newChatBaselineBusy = newChatBaselineQueued || newChatBaselineWarming;
+  const newChatBaselineMenuLabel = newChatBaselineActionLabel(
+    newChatBaselineResidency,
+    newChatBaselineWarming,
+    newChatBaselineQueued,
+  );
 
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [newChatContextMenu, setNewChatContextMenu] = useState<{ x: number; y: number } | null>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const projectsSectionRef = useRef<HTMLDivElement>(null);
   const agentSectionRef = useRef<HTMLDivElement>(null);
@@ -1590,6 +1666,19 @@ export function Sidebar({
     e.stopPropagation();
     setSearchActive(true);
   }
+
+  const handleNewChatContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!onWarmNewChatBaseline) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setNewChatContextMenu({ x: e.clientX, y: e.clientY });
+  }, [onWarmNewChatBaseline]);
+
+  const openNewChatContextMenu = useCallback((pos: { x: number; y: number }) => {
+    if (!onWarmNewChatBaseline) return;
+    setNewChatContextMenu(pos);
+  }, [onWarmNewChatBaseline]);
+  const newChatLongPressProps = useLongPress(openNewChatContextMenu);
 
   const handleToggleProjectsExpanded = useCallback(() => {
     captureMainSectionSnapshot();
@@ -2044,8 +2133,11 @@ export function Sidebar({
                       }}
                       onSendToNotebook={onSendToNotebook}
                       onWarmCache={onWarmCache}
+                      onWarmNewChatBaseline={onWarmNewChatBaseline}
                       cacheWarmingChatIds={cacheWarmingChatIds}
                       cacheWarmErrors={cacheWarmErrors}
+                      newChatBaselineCacheWarming={newChatBaselineCacheWarming}
+                      newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
                       lastActiveChatId={lastActiveChatId}
                       cacheResidency={cacheResidency}
                       newChatBaselineResidency={newChatBaselineResidency}
@@ -2113,6 +2205,8 @@ export function Sidebar({
             </button>
             <button
               onClick={() => { onNewChat("agent"); onClose(); }}
+              onContextMenu={handleNewChatContextMenu}
+              {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
               aria-label="New agent chat"
               title={newChatBaselineTitle || "New agent chat"}
               aria-hidden={!(agentExpanded && agentScrolled)}
@@ -2140,6 +2234,8 @@ export function Sidebar({
               >
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
+                  onContextMenu={handleNewChatContextMenu}
+                  {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
                   title={newChatBaselineTitle}
                   className={`w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
                 >
@@ -2373,6 +2469,27 @@ export function Sidebar({
       {/* Spacer for TTS bar */}
       {ttsBarVisible && <div className="h-[56px] shrink-0" />}
       </div>
+      {newChatContextMenu && (
+        <ContextMenu x={newChatContextMenu.x} y={newChatContextMenu.y} onClose={() => setNewChatContextMenu(null)} blocksSidebarClose>
+          <ContextMenuItem
+            onClick={() => {
+              setNewChatContextMenu(null);
+              onWarmNewChatBaseline?.();
+            }}
+            disabled={newChatBaselineBusy}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={newChatBaselineBusy ? "animate-pulse" : "opacity-70"} style={{ color: `rgba(var(--theme-accent), ${newChatBaselineBusy ? 0.9 : 0.7})` }}>
+              <path d="M8 18c-2.2 0-4 1.8-4 4" />
+              <path d="M16 18c2.2 0 4 1.8 4 4" />
+              <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
+              <path d="M5 18h14" />
+            </svg>
+            {newChatBaselineMenuLabel}
+          </ContextMenuItem>
+        </ContextMenu>
+      )}
     </>
   );
 }

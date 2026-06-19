@@ -399,14 +399,29 @@ export function isChatWarming(chatId: string): boolean {
   return getQueuePosition(chatId) >= 0;
 }
 
+export function isNewAgentChatBaselineWarming(): boolean {
+  return getQueuePosition(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat") >= 0;
+}
+
 /**
  * Remove all queued jobs for a specific chat (e.g. when user cancels or
  * a newer warm replaces an older one). The currently running job is not
  * affected.
  */
 export function cancelQueuedWarms(chatId: string): void {
+  cancelQueuedWarmTarget(chatId, "chat");
+}
+
+export function cancelQueuedNewAgentChatBaselineWarms(): void {
+  cancelQueuedWarmTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
+}
+
+function cancelQueuedWarmTarget(
+  targetId: string,
+  targetKind: LlamaCacheTargetKind,
+): void {
   for (let i = queue.length - 1; i >= 0; i--) {
-    if (!jobMatchesTarget(queue[i], chatId, "chat")) continue;
+    if (!jobMatchesTarget(queue[i], targetId, targetKind)) continue;
     const [removed] = queue.splice(i, 1);
     removed.reject(new Error("Cancelled"));
   }
