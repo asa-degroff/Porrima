@@ -27,6 +27,7 @@ import {
   getHeaderImagePath,
   headerImageExists,
 } from "../services/header-image-storage.js";
+import { invalidateModelCache } from "../services/models.js";
 import { getStorageMigrationDiagnostics } from "../services/storage-diagnostics.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
@@ -184,6 +185,7 @@ router.put("/llama-path", async (req, res) => {
 
   try {
     const result = await updateLlamaPath(newPath.trim());
+    invalidateModelCache();
     if (result.rolledBack) {
       res.status(503).json({ ...result, error: "Services failed to start with new path. Rolled back to previous version." });
     } else {

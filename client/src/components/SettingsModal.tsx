@@ -987,12 +987,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       setLlamaServers((prev) => prev.map((server) => server.id === id ? result.server : server));
       setLlamaServerMessage({ type: "ok", text: `${result.server.label} ${action === "restart" ? "restarted" : action === "start" ? "started" : "stopped"}.` });
       await refreshLlamaServers();
+      if (id === "inference") refreshModels();
     } catch (e: any) {
       setLlamaServerMessage({ type: "err", text: e?.message || `Failed to ${action} server` });
     } finally {
       setLlamaServerActionInFlight(null);
     }
-  }, [refreshLlamaServers]);
+  }, [refreshLlamaServers, refreshModels]);
 
   const handleLlamaServerLogs = useCallback(async (id: LlamaServerId) => {
     const server = llamaServers.find((item) => item.id === id);
@@ -1162,11 +1163,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       }
       setLlamaServerMessage({ type: "ok", text: `${result.server.label} service config applied and restarted.` });
       await refreshLlamaServers();
+      if (id === "inference") refreshModels();
     } catch (e: any) {
       setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to apply service config" } }));
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply service config" });
     }
-  }, [llamaServiceState, refreshLlamaServers]);
+  }, [llamaServiceState, refreshLlamaServers, refreshModels]);
 
   const handleResetLlamaService = useCallback(async (id: LlamaServerId) => {
     setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
@@ -1177,10 +1179,11 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       setLlamaServerMessage({ type: "ok", text: result.removed ? `${result.server.label} reset to base unit.` : `${result.server.label} had no managed override.` });
       await loadLlamaServiceConfig(id);
       await refreshLlamaServers();
+      if (id === "inference") refreshModels();
     } catch (e: any) {
       setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to reset service config" } }));
     }
-  }, [loadLlamaServiceConfig, refreshLlamaServers]);
+  }, [loadLlamaServiceConfig, refreshLlamaServers, refreshModels]);
 
   const handleSetLlamaServiceEnabled = useCallback(async (id: LlamaServerId, enabled: boolean) => {
     setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
@@ -1317,12 +1320,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         type: "ok",
         text: `Reconfigured ${s.label} to serve from ${modelsDirConflict.modelScanDir.replace(osHomePrefix, "~")} and loaded ${modelId}. Restart required — server is coming back up.`,
       });
+      if (slot === "inference") refreshModels();
     } catch (e: any) {
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to reconfigure server" });
     } finally {
       setApplyingSlot(null);
     }
-  }, [modelsDirConflict, osHomePrefix]);
+  }, [modelsDirConflict, osHomePrefix, refreshModels]);
 
   // Inline setting update for a specific server — saves immediately via PATCH
   const handleLlamaServerSettings = useCallback(async (id: LlamaServerId, updates: Record<string, unknown>) => {
@@ -1353,10 +1357,11 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       }
       // Refresh the server statuses to pick up new health
       await refreshLlamaServers();
+      if (s.id === "inference") refreshModels();
     } catch (e: any) {
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to update settings" });
     }
-  }, [refreshLlamaServers]);
+  }, [refreshLlamaServers, refreshModels]);
 
   const applyExtractionCtxSizeDraft = useCallback(() => {
     const next = clampIntegerDraft(
@@ -1882,6 +1887,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       setDefaultModelId(appliedModelId);
       setLlamaServers((prev) => prev.map((srv) => srv.id === "inference" ? result.server : srv));
       await onApply({ ...handleSave(), defaultModelId: appliedModelId });
+      refreshModels();
       setLlamaServerMessage({
         type: "ok",
         text: result.reconfiguredModelsDir
@@ -1902,7 +1908,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     } finally {
       setApplyingSlot(null);
     }
-  }, [defaultModelId, defaultModelScanDir, onApply, handleSave, osHomePrefix]);
+  }, [defaultModelId, defaultModelScanDir, onApply, handleSave, osHomePrefix, refreshModels]);
 
   const replaceAutomation = (task: AutomationTask) => {
     setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
@@ -2508,11 +2514,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       // Refresh the path info and binaries list
       getLlamaPath().then(setLlamaPathInfo).catch(() => {});
       refreshLlamaBinaries();
+      refreshModels();
     } catch (err: any) {
       setLlamaPathMessage({ type: "err", text: err.message || "Failed to update binary path" });
     }
     setLlamaPathUpdating(false);
-  }, [refreshLlamaBinaries]);
+  }, [refreshLlamaBinaries, refreshModels]);
 
   const getBinaryDirForServer = (server: LlamaServerStatus): string => {
     if (!server.resolvedBinary || server.resolvedBinary === server.defaultBinary) return "";

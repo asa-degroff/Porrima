@@ -8,6 +8,7 @@ import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
 const JOURNALCTL = "journalctl";
+let lastObservedInferencePid: number | null = null;
 
 export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding" | "title-generation";
 export type LlamaServerAction = "start" | "stop" | "restart";
@@ -321,6 +322,30 @@ function resolveStatusBinary(
   );
 }
 
+async function handleDetectedServerRestart(
+  def: LlamaServerDefinition,
+  url: string,
+  mainPid: number | null,
+  httpStatus: HttpHealthStatus
+): Promise<void> {
+  if (mainPid == null || httpStatus !== "ok") return;
+
+  try {
+    const firstInferencePidObservation = def.id === "inference" && lastObservedInferencePid == null;
+    const inferencePidChanged = def.id === "inference" && lastObservedInferencePid != null && lastObservedInferencePid !== mainPid;
+    if (def.id === "inference") lastObservedInferencePid = mainPid;
+
+    const { checkLlamaServerRestart } = await import("./llama-cache-residency.js");
+    const restarted = checkLlamaServerRestart(url, mainPid);
+    if (def.id === "inference" && (firstInferencePidObservation || inferencePidChanged || restarted)) {
+      const { invalidateModelCache } = await import("./models.js");
+      invalidateModelCache();
+    }
+  } catch {
+    // Non-fatal — residency/model metadata will self-correct on manual refresh.
+  }
+}
+
 export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaServerStatus[]> {
   const defaultBin = getDefaultLlamaBin();
   return Promise.all(
@@ -331,15 +356,8 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         getHttpStatus(url),
       ]);
       // Detect llama.cpp server restarts — when the PID changes, the KV cache
-      // is wiped and any in-memory residency tracking becomes stale.
-      if (unit.systemd.mainPid != null && http.status === "ok") {
-        try {
-          const { checkLlamaServerRestart } = await import("./llama-cache-residency.js");
-          checkLlamaServerRestart(url, unit.systemd.mainPid);
-        } catch {
-          // Non-fatal — residency tracking will self-correct over time
-        }
-      }
+      // is wiped and any in-memory residency/model metadata becomes stale.
+      await handleDetectedServerRestart(def, url, unit.systemd.mainPid, http.status);
       const overrideInfo = await readOverride(unit.unitName);
       const override = formatOverrideInfo(overrideInfo);
       return {
@@ -369,6 +387,7 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     resolveSystemdUnit(def),
     getHttpStatus(url),
   ]);
+  await handleDetectedServerRestart(def, url, unit.systemd.mainPid, http.status);
   const overrideInfo = await readOverride(unit.unitName);
   const override = formatOverrideInfo(overrideInfo);
   return {
@@ -450,6 +469,10 @@ export async function runLlamaServerAction(id: string, action: LlamaServerAction
     timeout: action === "stop" ? 10000 : 20000,
     maxBuffer: 1024 * 256,
   });
+  if (def.id === "inference") {
+    const { invalidateModelCache } = await import("./models.js");
+    invalidateModelCache();
+  }
 
   // Give systemd and the HTTP listener a short moment to reflect the new state.
   await new Promise((resolve) => setTimeout(resolve, 750));

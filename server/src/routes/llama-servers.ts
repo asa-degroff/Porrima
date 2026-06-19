@@ -477,6 +477,7 @@ router.put("/:id/config", async (req, res) => {
     persistServiceConfigToSettings(id as LlamaServerId, settings, config);
     await saveSettings(settings);
     invalidateRouterCache();
+    if (id === "inference") invalidateModelCache();
     const server = await getLlamaServerStatus(id, settings);
     const preview = renderManagedDropIn({ id: id as LlamaServerId, unitName, config });
     res.json({ server, config, preview, overridePath: result.overridePath });
@@ -508,6 +509,7 @@ router.delete("/:id/config", async (req, res) => {
     if (changed) {
       await saveSettings(settings);
     }
+    if (id === "inference") invalidateModelCache();
     const server = await getLlamaServerStatus(id, settings);
     res.json({ server, removed: result.removed });
   } catch (e: any) {
@@ -780,6 +782,7 @@ router.patch("/:id", async (req, res) => {
     }
 
     await saveSettings(settings);
+    if (def.id === "inference") invalidateModelCache();
 
     // Return the updated server status so the UI can refresh the card
     const server = await getLlamaServerStatus(id, settings);
