@@ -42,6 +42,8 @@ Synthesis automations always use `sequence` because their prompt steps are phase
 - loads enabled tasks ordered by `orderIndex`
 - starts at most one due task per tick
 - skips while another automation, synthesis, wake cycle, or user chat is active
+- requires a short idle grace after the latest chat activity, assistant completion, or foreground user interaction
+- skips while cache-warm work or llama.cpp slot processing is active
 - honors `manual_only` and `sleep_only` activation policies
 - skips synthesis if there are no memories or the sleep-mode cooldown is active
 

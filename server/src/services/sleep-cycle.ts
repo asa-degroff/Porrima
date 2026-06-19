@@ -4,6 +4,7 @@ type SleepCycleSettings = Pick<
   Settings,
   | "sleepModeTriggeredAt"
   | "lastUserActivityAt"
+  | "lastUserInteractionAt"
   | "lastAgentCompletedAt"
   | "sleepCycleThresholdMinutes"
 >;
@@ -30,16 +31,19 @@ export function isManualSleepReleaseActive(settings: SleepCycleSettings): boolea
   if (sleepTriggeredMs === null) return false;
 
   const lastUserActivityMs = parseTimestamp(settings.lastUserActivityAt);
+  const lastUserInteractionMs = parseTimestamp(settings.lastUserInteractionAt);
   const lastAgentCompletedMs = parseTimestamp(settings.lastAgentCompletedAt);
   if (lastAgentCompletedMs !== null && lastAgentCompletedMs > sleepTriggeredMs) {
     return false;
   }
 
-  return lastUserActivityMs === null || lastUserActivityMs <= sleepTriggeredMs;
+  const lastUserInitiatedMs = Math.max(lastUserActivityMs ?? 0, lastUserInteractionMs ?? 0);
+  return lastUserInitiatedMs === 0 || lastUserInitiatedMs <= sleepTriggeredMs;
 }
 
 export function getSleepCycleInactivityAnchor(settings: SleepCycleSettings): string | null {
   const lastUserActivityMs = parseTimestamp(settings.lastUserActivityAt);
+  const lastUserInteractionMs = parseTimestamp(settings.lastUserInteractionAt);
   const lastAgentCompletedMs = parseTimestamp(settings.lastAgentCompletedAt);
 
   if (lastAgentCompletedMs === null) return null;
@@ -48,6 +52,10 @@ export function getSleepCycleInactivityAnchor(settings: SleepCycleSettings): str
   // It starts only when the assistant response to that user activity completes.
   if (lastUserActivityMs !== null && lastUserActivityMs > lastAgentCompletedMs) {
     return null;
+  }
+
+  if (lastUserInteractionMs !== null && lastUserInteractionMs > lastAgentCompletedMs) {
+    return settings.lastUserInteractionAt!;
   }
 
   return settings.lastAgentCompletedAt!;

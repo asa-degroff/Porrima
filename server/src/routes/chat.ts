@@ -5,7 +5,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
@@ -72,6 +72,7 @@ import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
 import { recordContextEstimateObservation } from "../services/token-estimate-observability.js";
+import { stampAssistantCompletionActivity, stampUserTurnActivity } from "../services/user-activity.js";
 
 const DEFAULT_LLAMACPP_URL = getDefaultLlamaServerUrl("inference");
 const ARTIFACTS_DIR = appDataPath("artifacts");
@@ -799,26 +800,13 @@ const router = Router();
 async function stampUserActivity(chat: Chat): Promise<void> {
   if (chat.type === "system") return;
 
-  try {
-    const settings = await getSettings();
-    settings.lastUserActivityAt = new Date().toISOString();
-    settings.sleepModeTriggeredAt = undefined;
-    await saveSettings(settings);
-  } catch (e) {
-    console.warn("[chat] Failed to stamp user activity:", e);
-  }
+  await stampUserTurnActivity();
 }
 
 async function stampAssistantCompletion(chat: Chat): Promise<void> {
   if (chat.type === "system") return;
 
-  try {
-    const settings = await getSettings();
-    settings.lastAgentCompletedAt = new Date().toISOString();
-    await saveSettings(settings);
-  } catch (e) {
-    console.warn("[chat] Failed to stamp assistant completion:", e);
-  }
+  await stampAssistantCompletionActivity();
 }
 
 async function waitForBackgroundAutomation(chatId: string): Promise<void> {

@@ -1283,6 +1283,7 @@ export interface SynthesisStatus {
   sleepCycleActive: boolean;
   sleepCycleThresholdMinutes: number;
   lastUserActivityAt: string | null;
+  lastUserInteractionAt: string | null;
   lastAgentCompletedAt: string | null;
   sleepModeTriggeredAt: string | null;
   // Wake cycle

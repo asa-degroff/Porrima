@@ -34,6 +34,7 @@ import {
   NEW_AGENT_CHAT_BASELINE_CACHE_ID,
   NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
 } from "../services/llama-cache-residency.js";
+import { stampUserInteractionActivity } from "../services/user-activity.js";
 import type { Memory, MemoryCategory, MemorySummary } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
 
@@ -166,6 +167,7 @@ router.get("/synthesis/status", async (_req, res) => {
     sleepCycleActive,
     sleepCycleThresholdMinutes,
     lastUserActivityAt: settings.lastUserActivityAt ?? null,
+    lastUserInteractionAt: settings.lastUserInteractionAt ?? null,
     lastAgentCompletedAt: settings.lastAgentCompletedAt ?? null,
     sleepModeTriggeredAt: settings.sleepModeTriggeredAt ?? null,
     // Wake cycle
@@ -256,6 +258,8 @@ router.post("/cache-warm/new-agent-chat-baseline", async (req, res) => {
     const { reason } = req.body || {};
     const validReasons = ["user-requested", "sleep-prewarm", "post-synthesis"];
     const warmReason = validReasons.includes(reason) ? reason : "user-requested";
+    const userRequested = warmReason === "user-requested";
+    if (userRequested) await stampUserInteractionActivity();
 
     const {
       enqueueNewAgentChatBaselineWarm,
@@ -267,7 +271,13 @@ router.post("/cache-warm/new-agent-chat-baseline", async (req, res) => {
       cancelQueuedNewAgentChatBaselineWarms();
     }
 
-    const result = await enqueueNewAgentChatBaselineWarm(warmReason);
+    const result = await (async () => {
+      try {
+        return await enqueueNewAgentChatBaselineWarm(warmReason);
+      } finally {
+        if (userRequested) await stampUserInteractionActivity();
+      }
+    })();
 
     if (result.warmed) {
       console.log(
@@ -301,6 +311,8 @@ router.post("/cache-warm/:chatId", async (req, res) => {
     const { reason } = req.body || {};
     const validReasons = ["user-requested", "sleep-prewarm", "post-synthesis"];
     const warmReason = validReasons.includes(reason) ? reason : "user-requested";
+    const userRequested = warmReason === "user-requested";
+    if (userRequested) await stampUserInteractionActivity();
 
     const { enqueueWarm, isChatWarming, cancelQueuedWarms } = await import("../services/cache-warm-queue.js");
 
@@ -310,7 +322,13 @@ router.post("/cache-warm/:chatId", async (req, res) => {
       cancelQueuedWarms(chatId);
     }
 
-    const result = await enqueueWarm(chatId, warmReason);
+    const result = await (async () => {
+      try {
+        return await enqueueWarm(chatId, warmReason);
+      } finally {
+        if (userRequested) await stampUserInteractionActivity();
+      }
+    })();
 
     if (result.warmed) {
       console.log(

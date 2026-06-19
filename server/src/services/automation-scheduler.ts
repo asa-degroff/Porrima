@@ -98,8 +98,9 @@ export async function checkAndRunDueAutomations(): Promise<void> {
     }
 
     const lastUserMs = parseTimestamp(settings.lastUserActivityAt);
+    const lastInteractionMs = parseTimestamp(settings.lastUserInteractionAt);
     const lastAgentMs = parseTimestamp(settings.lastAgentCompletedAt);
-    const recentActivityMs = Math.max(lastUserMs ?? 0, lastAgentMs ?? 0);
+    const recentActivityMs = Math.max(lastUserMs ?? 0, lastInteractionMs ?? 0, lastAgentMs ?? 0);
     if (recentActivityMs > 0) {
       const elapsedMs = Date.now() - recentActivityMs;
       if (elapsedMs < AUTOMATION_MIN_IDLE_MS) {

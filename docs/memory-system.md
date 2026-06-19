@@ -165,7 +165,7 @@ Synthesis runs the main model inside a persistent **system chat** (`chat.type ==
 Synthesis owns both the daily narrative (notebook entry) and zeitgeist maintenance (the agent calls `update_memory_block` on `blk-zeitgeist-continuity` when the continuity narrative has shifted). See [zeitgeist.md](zeitgeist.md).
 
 **Triggers:**
-- Scheduler: the built-in automation `builtin:synthesis` is checked by `automation-scheduler.ts` every 5 minutes and defaults to a 24-hour interval. It is ordered with other automations, skipped while user chat/automation work is active, and respects the sleep-mode cooldown.
+- Scheduler: the built-in automation `builtin:synthesis` is checked by `automation-scheduler.ts` every 5 minutes and defaults to a 24-hour interval. It is ordered with other automations, skipped while user chat/automation/cache-warm work is active, requires a short idle grace after foreground user interaction, and respects the sleep-mode cooldown.
 - Manual automation: `POST /api/automations/builtin%3Asynthesis/run` dispatches the built-in task and records an `automation_runs` row.
 - Legacy/manual memory endpoints: `POST /api/memory/synthesis/run` and `POST /api/memory/synthesis/sleep` still dispatch synthesis asynchronously (202 Accepted) and return immediately. Clients poll `/api/memory/synthesis/status` (which exposes `isSynthesizing`) to observe progress. `/sleep` stamps `settings.sleepModeTriggeredAt` so periodic synthesis is suppressed for 2 hours.
 

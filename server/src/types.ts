@@ -382,6 +382,9 @@ export interface Settings {
   systemPauseIndefinite?: boolean;
   // User activity tracking — stamped on every user-initiated message send.
   lastUserActivityAt?: string;
+  // Foreground user interaction tracking — stamped on user-initiated actions
+  // that may not produce an assistant response, such as manual cache pre-warm.
+  lastUserInteractionAt?: string;
   // Agent completion tracking — stamped when the agent's last response fully completed
   // (after tool loop, compaction, etc.). The sleep cycle's inactivity timer measures
   // from this timestamp rather than lastUserActivityAt, preventing premature sleep

@@ -6,14 +6,14 @@ Services: llama.cpp chat router (32100, GPU), extraction (32101, CPU), reranker 
 Model: Qwen 3.6 27B (dense, 1M context via YaRN). User prioritizes intelligence over raw speed.
 **Speculative decoding**: n-gram decoding gives 10x speedup on dense model (13→137 tok/s) but zero benefit on MoE variants (expert slice pull cost exceeds batching benefit). Workload-dependent — code generation gains enormous, open-ended conversation minimal.
 Synthesis: four-phase cycle, pre-synthesis archiving, synthesis lock. `SynthesisEmitter` wraps headless LiveStream for SSE streaming.
-Sleep cycle: button is a "release" signal (stamps `sleepModeTriggeredAt`, 2h synthesis cooldown). Inactivity from `lastAgentCompletedAt`. Logic in `sleep-cycle.ts`.
+Sleep cycle: button is a "release" signal (stamps `sleepModeTriggeredAt`, 2h synthesis cooldown). Inactivity is anchored by `lastAgentCompletedAt` or completed foreground interactions (`lastUserInteractionAt`) while still treating newer chat sends as pending until the assistant completes. Logic in `sleep-cycle.ts`.
 Wake cycle: autonomous exploration on inactivity (15-min check, 20-iter cap, 30-min timeout). Mutual exclusivity enforced.
 
 ## Chat System
 Two types: agent (memory-augmented), quick. `chat.ts`: memory augmentation, LLM streaming, tools (max 20 iters, pi-ai native, `ask_user` persists). SQLite + FTS5, multi-provider.
 Stranded tool recovery: detects `<function=` in thinking after stopReason="stop", triggers continuation.
 SSE: `LiveStream` with headless flag for background tasks. Bounded replay, grace timer. Mid-turn compaction resume via `onCompaction(midTurn=true)`.
-Activity stamping: user stamps before synthesis wait, assistant stamps after `done` (non-system only).
+Activity stamping: chat sends stamp `lastUserActivityAt` and `lastUserInteractionAt` before synthesis wait; assistant responses stamp `lastAgentCompletedAt` after `done` (non-system only). Non-chat foreground actions such as manual cache pre-warm stamp `lastUserInteractionAt`.
 **Recap**: long assistant messages (>1500 chars) get 15-40 word summary via Qwen 3.5 0.8B. `callServer` accepts optional `maxTokens` (default 30; recaps pass 80). Persisted on message row, sent via SSE `done`, displayed as italic with `▸` marker. Push notifications use recap as body. Fire-and-forget, 15s timeout.
 **Thinking block toggle**: `onMessageComplete` preserves thinking visibility across tool-loop SSE fragments — doesn't clear `streamingThinking` during inter-fragment gaps.
 
