@@ -43,6 +43,7 @@ import { PassiveMemoryRecallController } from "../services/passive-memory-recall
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
 import type { ModelProgressEvent } from "../services/model-progress.js";
 import {
+  clearLlamaCacheResidencyTarget,
   markLlamaCachePrefillComplete,
   markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
@@ -1381,6 +1382,15 @@ async function handleChatStream(
   let titleGenerationPromise: Promise<void> | null = null;
   let currentTurnIsHidden = options.hiddenUserMessage === true;
   let activeAssistantIdentity: ReplayModelIdentity | undefined;
+  let firstTurnBaselineWarm = false;
+  let newChatBaselineConsumed = false;
+
+  function consumeNewChatBaselineCache(reason: string): void {
+    if (!firstTurnBaselineWarm || newChatBaselineConsumed) return;
+    clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
+    newChatBaselineConsumed = true;
+    console.log(`[llama-cache] chat=${chat.id} consumed new-chat baseline cache (${reason})`);
+  }
 
   function assistantProviderFields(msg?: AssistantMessage): Pick<ChatMessage, "_api" | "_provider" | "_model"> {
     const identity = msg
@@ -1402,6 +1412,9 @@ async function handleChatStream(
     state.lastLlamaTimings = timings;
     state.lastLlamaCache = cache;
     state.llamaRuns.push({ timings, cache });
+    if (iterationLabel === 1) {
+      consumeNewChatBaselineCache(`timings:${phase}`);
+    }
 
     const reported = cache?.reportedPromptTokens;
     const hitRatio = typeof cache?.inferredCacheHitRatio === "number"
@@ -1528,6 +1541,9 @@ async function handleChatStream(
     let prevProgressPhase: string | undefined;
     const emitModelProgress = (progress: ModelProgressEvent) => {
       if (connectionClosed) return;
+      if (progress.phase === "prefill" || progress.phase === "generating") {
+        consumeNewChatBaselineCache(`progress:${progress.phase}`);
+      }
       if (prevProgressPhase === "prefill" && progress.phase === "generating" && llamaCacheContext) {
         markLlamaCachePrefillComplete(chat.id);
       }
@@ -1543,7 +1559,7 @@ async function handleChatStream(
     //   - Non-first turns, first iteration: auto-show only if the slot probe sees a cold prefill
     //   - Tool iterations (iteration > 1): always hide
     const isFirstTurn = chat.messages.length === 1;
-    const firstTurnBaselineWarm =
+    firstTurnBaselineWarm =
       isFirstTurn &&
       chat.type === "agent" &&
       !!llamaCacheContext &&
