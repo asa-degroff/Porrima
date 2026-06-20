@@ -256,11 +256,11 @@ export function AutomationRunnerDropdown({
 
             {loading ? (
               <div className="px-3 py-2 text-xs text-white/40">Loading...</div>
-            ) : tasks.length === 0 ? (
+            ) : tasks.filter(t => t.enabled && !t.archived).length === 0 ? (
               <div className="px-3 py-2 text-xs text-white/40">No automations</div>
             ) : (
               <div>
-                {tasks.map((task) => {
+                {tasks.filter(t => t.enabled && !t.archived).map((task) => {
                   const disabled = isTaskDisabled(task);
                   const statusText = getTaskStatusText(task);
                   const isRunning = runningId === task.id;

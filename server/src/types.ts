@@ -216,6 +216,7 @@ export interface AutomationTask {
   consecutiveFailures?: number;
   /** Tracks who created this task: "agent" (via schedule_reminder tool) or "user" (via UI/API). */
   createdBy?: "agent" | "user";
+  archived?: boolean;
   createdAt: string;
   updatedAt: string;
 }

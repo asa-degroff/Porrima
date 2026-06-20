@@ -1301,8 +1301,9 @@ export interface AutomationsResponse {
   activeTaskId: string | null;
 }
 
-export async function fetchAutomations(): Promise<AutomationsResponse> {
-  const res = await apiFetch(`${BASE}/automations`);
+export async function fetchAutomations(archived?: boolean): Promise<AutomationsResponse> {
+  const url = archived ? `${BASE}/automations?archived=true` : `${BASE}/automations`;
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error("Failed to fetch automations");
   return res.json();
 }

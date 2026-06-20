@@ -257,9 +257,9 @@ const SCHEDULE_REMINDER_TOOL: Tool = {
 
 const LIST_AUTOMATIONS_TOOL: Tool = {
   name: "list_automations",
-  description: "List all automation tasks. Shows schedules, prompt steps, next run times, and status. Use to see what's scheduled and when. Built-in automations (synthesis, wake) and agent-created reminders are included.",
+  description: "List all automation tasks. Shows schedules, prompt steps, next run times, and status. Use to see what's scheduled and when. Built-in automations (synthesis, wake) and agent-created reminders are included. Archived (completed) reminders are excluded by default — use filter='history' to see them.",
   parameters: Type.Object({
-    filter: Type.Optional(Type.Enum(["all", "enabled", "agent-created", "built-in"] as const, { description: "Filter: 'all' (default), 'enabled', 'agent-created', 'built-in'" })),
+    filter: Type.Optional(Type.Enum(["all", "enabled", "agent-created", "built-in", "history"] as const, { description: "Filter: 'all' (default, excludes archived), 'enabled', 'agent-created', 'built-in', 'history' (archived/completed tasks)" })),
     includeRuns: Type.Optional(Type.Boolean({ description: "Include last run status per task (default false)" })),
   }),
 };
@@ -364,13 +364,18 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     ...LIST_AUTOMATIONS_TOOL,
     label: "list_automations",
     execute: async (_id, params) => {
-      const { listAutomationTasks, listEnabledAutomationTasks } = await import("./automation-storage.js");
+      const { listAutomationTasks, listEnabledAutomationTasks, listArchivedAutomationTasks } = await import("./automation-storage.js");
       const args = params as Record<string, any>;
       const filter = args.filter || "all";
 
-      let tasks = filter === "enabled"
-        ? listEnabledAutomationTasks()
-        : listAutomationTasks();
+      let tasks: ReturnType<typeof listAutomationTasks>;
+      if (filter === "history") {
+        tasks = listArchivedAutomationTasks();
+      } else if (filter === "enabled") {
+        tasks = listEnabledAutomationTasks();
+      } else {
+        tasks = listAutomationTasks();
+      }
 
       if (filter === "agent-created") {
         tasks = tasks.filter(t => t.createdBy === "agent");
@@ -389,14 +394,16 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         if (includeRuns && t.lastRunAt) {
           line += `\n  Last: ${t.lastRunAt} (${t.lastStatus || 'unknown'})`;
         }
-        if (t.createdBy === "agent") {
+        if (t.archived) {
+          line += "\n  _Archived (completed)_";
+        } else if (t.createdBy === "agent") {
           line += " [your reminder]";
         }
         return line;
       });
 
       return wrapResult({
-        content: `Automations (${tasks.length} total):\n\n${lines.join("\n\n")}`,
+        content: `${filter === "history" ? "Archived automations" : "Automations"} (${tasks.length} total):\n\n${lines.join("\n\n")}`,
         isError: false,
       });
     },

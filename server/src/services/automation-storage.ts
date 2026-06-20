@@ -53,6 +53,7 @@ interface AutomationTaskRow {
   lastStatus: string | null;
   consecutiveFailures: number | null;
   createdBy: string | null;
+  archived: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -151,6 +152,11 @@ function ensureSchema(): void {
   }
   if (!taskCols.some((c) => c.name === "createdBy")) {
     db.exec("ALTER TABLE automation_tasks ADD COLUMN createdBy TEXT NOT NULL DEFAULT 'user'");
+    console.log("[automation] Added createdBy column to automation_tasks");
+  }
+  if (!taskCols.some((c) => c.name === "archived")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+    console.log("[automation] Added archived column to automation_tasks");
     console.log("[automation] Added createdBy column to automation_tasks");
   }
 
@@ -343,6 +349,7 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
     ...(row.lastStatus ? { lastStatus: row.lastStatus as AutomationRunStatus } : {}),
     consecutiveFailures: row.consecutiveFailures ?? 0,
     ...(row.createdBy && (row.createdBy === "agent" || row.createdBy === "user") ? { createdBy: row.createdBy as "agent" | "user" } : {}),
+    ...(row.archived !== null && row.archived === 1 ? { archived: true } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -385,12 +392,12 @@ function insertTask(task: AutomationTask): void {
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
         activationPolicy, promptStepsJson, promptDispatchMode, nextPromptStepId,
         notificationsJson, maxIterations,
-        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, createdAt, updatedAt
+        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, archived, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
         @activationPolicy, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
         @notificationsJson, @maxIterations,
-        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @createdAt, @updatedAt
+        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @archived, @createdAt, @updatedAt
       )`,
     )
     .run({
@@ -414,6 +421,7 @@ function insertTask(task: AutomationTask): void {
       lastStatus: task.lastStatus ?? null,
       consecutiveFailures: task.consecutiveFailures ?? 0,
       createdBy: task.createdBy ?? "user",
+      archived: task.archived ? 1 : 0,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -565,10 +573,19 @@ export function getAutomationTask(id: string): AutomationTask | null {
   return row ? taskFromRow(row) : null;
 }
 
-export function listAutomationTasks(): AutomationTask[] {
+export function listAutomationTasks(includeArchived = false): AutomationTask[] {
+  ensureSchema();
+  const where = includeArchived ? "" : "WHERE (archived IS NULL OR archived = 0)";
+  const rows = getDb()
+    .prepare(`SELECT * FROM automation_tasks ${where} ORDER BY orderIndex ASC, createdAt ASC`)
+    .all() as AutomationTaskRow[];
+  return rows.map(taskFromRow);
+}
+
+export function listArchivedAutomationTasks(): AutomationTask[] {
   ensureSchema();
   const rows = getDb()
-    .prepare("SELECT * FROM automation_tasks ORDER BY orderIndex ASC, createdAt ASC")
+    .prepare("SELECT * FROM automation_tasks WHERE archived = 1 ORDER BY updatedAt DESC, createdAt DESC")
     .all() as AutomationTaskRow[];
   return rows.map(taskFromRow);
 }
@@ -870,12 +887,13 @@ export function finishAutomationRun(
           : task.consecutiveFailures ?? 0;
       const shouldDisable =
         isFailure && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
-      // Once-schedule tasks self-disable after running (success or failure)
+      // Once-schedule tasks self-disable and self-archive after success
       const isOnce = task.schedule.type === "once";
       const onceDisable = isOnce && isSuccess;
       insertTask({
         ...task,
         enabled: (shouldDisable || onceDisable) ? false : task.enabled,
+        archived: onceDisable ? true : task.archived,
         lastRunAt: isSuccess ? finishedAt : task.lastRunAt,
         nextRunAt: (shouldDisable || onceDisable)
           ? undefined
@@ -894,7 +912,7 @@ export function finishAutomationRun(
         );
       }
       if (onceDisable) {
-        console.log(`[automation] One-time task ${task.id} completed, self-disabled`);
+        console.log(`[automation] One-time task ${task.id} completed, archived`);
       }
     }
   }

@@ -3,6 +3,7 @@ import {
   createCustomAutomationTask,
   deleteAutomationTask,
   getAutomationTask,
+  listArchivedAutomationTasks,
   listAutomationRuns,
   listAutomationTasks,
   resetBuiltinAutomationPrompts,
@@ -13,10 +14,11 @@ import { runAutomationTask } from "../services/automation-runner.js";
 
 const router = Router();
 
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
   try {
+    const archived = req.query.archived === "true";
     res.json({
-      tasks: listAutomationTasks(),
+      tasks: archived ? listArchivedAutomationTasks() : listAutomationTasks(),
       activeTaskId: getActiveAutomationTaskId(),
       isRunning: isAutomationActive(),
     });

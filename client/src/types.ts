@@ -206,6 +206,7 @@ export interface AutomationTask {
   lastStatus?: AutomationRunStatus;
   consecutiveFailures?: number;
   createdBy?: "agent" | "user";
+  archived?: boolean;
   createdAt: string;
   updatedAt: string;
 }

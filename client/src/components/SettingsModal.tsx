@@ -678,6 +678,9 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
+  const [archivedAutomations, setArchivedAutomations] = useState<AutomationTask[]>([]);
+  const [archivedAutomationsLoading, setArchivedAutomationsLoading] = useState(false);
+  const [archivedSectionOpen, setArchivedSectionOpen] = useState(false);
   const [automationMessage, setAutomationMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [automationHistoryOpenTaskId, setAutomationHistoryOpenTaskId] = useState<string | null>(null);
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
@@ -1499,6 +1502,18 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       setAutomationMessage({ type: "err", text: err?.message || "Failed to load automations" });
     } finally {
       setAutomationsLoading(false);
+    }
+  }, []);
+
+  const loadArchivedAutomations = useCallback(async () => {
+    setArchivedAutomationsLoading(true);
+    try {
+      const data = await fetchAutomations(true);
+      setArchivedAutomations(data.tasks);
+    } catch (err: any) {
+      console.error("[Settings] Failed to load archived automations:", err);
+    } finally {
+      setArchivedAutomationsLoading(false);
     }
   }, []);
 
@@ -6492,6 +6507,61 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    </div>
 	                  );
 	                })}
+	              </div>
+	            )}
+	          </div>
+
+	          {/* Completed Reminders Section */}
+	          <div className="border-t border-white/10 pt-4">
+	            <button
+	              onClick={() => {
+	                setArchivedSectionOpen(!archivedSectionOpen);
+	                if (!archivedSectionOpen && archivedAutomations.length === 0 && !archivedAutomationsLoading) {
+	                  loadArchivedAutomations();
+	                }
+	              }}
+	              className="flex items-center justify-between w-full mb-3 pressable"
+	            >
+	              <div className="text-left">
+	                <h3 className="text-sm font-semibold text-white/60">Completed Reminders</h3>
+	                <p className="text-[11px] text-white/30">Archived one-shot reminders that finished successfully</p>
+	              </div>
+	              <span className="text-white/30 text-xs transition-transform" style={{ transform: archivedSectionOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+	                ▼
+	              </span>
+	            </button>
+
+	            {archivedSectionOpen && (
+	              <div className="space-y-2">
+	                {archivedAutomationsLoading ? (
+	                  <p className="text-xs text-white/40">Loading...</p>
+	                ) : archivedAutomations.length === 0 ? (
+	                  <p className="text-xs text-white/30">No completed reminders yet.</p>
+	                ) : (
+	                  archivedAutomations.map((task) => (
+	                    <div key={task.id} className="rounded-lg border border-white/5 bg-white/[0.01] p-3">
+	                      <div className="flex items-start justify-between gap-3">
+	                        <div className="min-w-0 flex-1">
+	                          <div className="flex items-center gap-2">
+	                            <h4 className="text-sm font-medium text-white/50 truncate">{task.title}</h4>
+	                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/30">Completed</span>
+	                          </div>
+	                          <p className="text-[11px] text-white/25 mt-1">
+	                            {formatAutomationSchedule(task)}
+	                            {task.lastRunAt ? ` · Finished ${formatAutomationDate(task.lastRunAt)}` : ""}
+	                            {task.lastStatus ? ` · ${task.lastStatus}` : ""}
+	                          </p>
+	                        </div>
+	                        <button
+	                          onClick={() => handleDeleteAutomationClick(task.id)}
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/30 hover:text-white/60 transition-all pressable"
+	                        >
+	                          Clear
+	                        </button>
+	                      </div>
+	                    </div>
+	                  ))
+	                )}
 	              </div>
 	            )}
 	          </div>
