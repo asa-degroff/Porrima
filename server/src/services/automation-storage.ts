@@ -23,6 +23,7 @@ const DEFAULT_SYNTHESIS_INTERVAL_MINUTES = 24 * 60;
 const DEFAULT_WAKE_INTERVAL_MINUTES = 6 * 60;
 const DEFAULT_CUSTOM_INTERVAL_MINUTES = 24 * 60;
 const MAX_CUSTOM_FAILURES_BEFORE_DISABLE = 5;
+const DEFAULT_MAX_PENDING_AGENT_REMINDERS = 10;
 let schemaReady = false;
 
 interface AutomationTaskRow {
@@ -45,6 +46,7 @@ interface AutomationTaskRow {
   nextRunAt: string | null;
   lastStatus: string | null;
   consecutiveFailures: number | null;
+  createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,6 +129,10 @@ function ensureSchema(): void {
     db.exec("ALTER TABLE automation_tasks ADD COLUMN nextPromptStepId TEXT");
     console.log("[automation] Added nextPromptStepId column to automation_tasks");
   }
+  if (!taskCols.some((c) => c.name === "createdBy")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN createdBy TEXT NOT NULL DEFAULT 'user'");
+    console.log("[automation] Added createdBy column to automation_tasks");
+  }
 
   const runCols = db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{ name: string }>;
   if (!runCols.some((c) => c.name === "selectedPromptStepIdsJson")) {
@@ -158,6 +164,18 @@ function normalizeSchedule(
   schedule: Partial<AutomationSchedule> | undefined,
   fallbackMinutes: number,
 ): AutomationSchedule {
+  if (schedule?.type === "once") {
+    const runAt = typeof schedule.runAt === "string" && schedule.runAt.trim()
+      ? schedule.runAt.trim()
+      : null;
+    if (runAt) {
+      const parsed = new Date(runAt).getTime();
+      if (Number.isFinite(parsed)) {
+        return { type: "once", runAt: new Date(parsed).toISOString() };
+      }
+    }
+    // Invalid once schedule falls through to interval
+  }
   if (schedule?.type === "daily") {
     const timeOfDay = typeof schedule.timeOfDay === "string" && /^\d{2}:\d{2}$/.test(schedule.timeOfDay)
       ? schedule.timeOfDay
@@ -171,7 +189,9 @@ function normalizeSchedule(
 }
 
 function normalizeActivationPolicy(value: unknown, fallback: AutomationActivationPolicy): AutomationActivationPolicy {
-  return value === "sleep_only" || value === "manual_only" || value === "idle" ? value : fallback;
+  // Migrate: "sleep_only" → "absent" (backward compat)
+  if (value === "sleep_only") return "absent";
+  return value === "absent" || value === "manual_only" || value === "idle" ? value as AutomationActivationPolicy : fallback;
 }
 
 function normalizePromptDispatchMode(
@@ -228,6 +248,9 @@ function nextDailyRun(timeOfDay: string, fromMs: number): string {
 }
 
 export function computeNextRunAt(task: Pick<AutomationTask, "schedule">, fromMs = Date.now()): string {
+  if (task.schedule.type === "once") {
+    return task.schedule.runAt!;
+  }
   if (task.schedule.type === "daily") {
     return nextDailyRun(task.schedule.timeOfDay || "09:00", fromMs);
   }
@@ -271,6 +294,7 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
     ...(row.nextRunAt ? { nextRunAt: row.nextRunAt } : {}),
     ...(row.lastStatus ? { lastStatus: row.lastStatus as AutomationRunStatus } : {}),
     consecutiveFailures: row.consecutiveFailures ?? 0,
+    ...(row.createdBy && (row.createdBy === "agent" || row.createdBy === "user") ? { createdBy: row.createdBy as "agent" | "user" } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -306,12 +330,12 @@ function insertTask(task: AutomationTask): void {
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
         activationPolicy, promptStepsJson, promptDispatchMode, nextPromptStepId,
         notificationsJson, maxIterations,
-        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdAt, updatedAt
+        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
         @activationPolicy, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
         @notificationsJson, @maxIterations,
-        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdAt, @updatedAt
+        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @createdAt, @updatedAt
       )`,
     )
     .run({
@@ -334,6 +358,7 @@ function insertTask(task: AutomationTask): void {
       nextRunAt: task.nextRunAt ?? null,
       lastStatus: task.lastStatus ?? null,
       consecutiveFailures: task.consecutiveFailures ?? 0,
+      createdBy: task.createdBy ?? "user",
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -399,6 +424,11 @@ export async function ensureAutomationDefaults(): Promise<void> {
     DEFAULT_WAKE_INTERVAL_MINUTES,
   );
 
+  // Synthesis schedule: user-configurable via settings
+  const synthesisSchedule: AutomationSchedule = settings.synthesisScheduleType === "daily"
+    ? normalizeSchedule({ type: "daily", timeOfDay: settings.synthesisScheduleTimeOfDay || "03:00" }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES)
+    : normalizeSchedule({ type: "interval", everyMinutes: settings.synthesisScheduleEveryMinutes ?? DEFAULT_SYNTHESIS_INTERVAL_MINUTES }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES);
+
   const defaults = [
     makeBuiltinTask({
       id: SYNTHESIS_AUTOMATION_ID,
@@ -407,8 +437,8 @@ export async function ensureAutomationDefaults(): Promise<void> {
       enabled: true,
       orderIndex: 0,
       chatId: "system",
-      schedule: normalizeSchedule({ type: "interval", everyMinutes: DEFAULT_SYNTHESIS_INTERVAL_MINUTES }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES),
-      activationPolicy: "sleep_only",
+      schedule: synthesisSchedule,
+      activationPolicy: "absent",
       promptSteps: getDefaultSynthesisPromptSteps(),
       maxIterations: 30,
       timeoutMs: 90 * 60 * 1000,
@@ -422,7 +452,7 @@ export async function ensureAutomationDefaults(): Promise<void> {
       orderIndex: 10,
       chatId: "system",
       schedule: normalizeSchedule({ type: "interval", everyMinutes: wakeMinutes }, DEFAULT_WAKE_INTERVAL_MINUTES),
-      activationPolicy: "sleep_only",
+      activationPolicy: "absent",
       promptSteps: getDefaultWakePromptSteps(),
       maxIterations: 20,
       timeoutMs: 60 * 60 * 1000,
@@ -437,6 +467,11 @@ export async function ensureAutomationDefaults(): Promise<void> {
       continue;
     }
 
+    // Migrate activation policy: "sleep_only" → "absent" (backward compat for old data)
+    const migratedPolicy = (existing.activationPolicy as string) === "sleep_only"
+      ? "absent"
+      : existing.activationPolicy;
+
     const patched: AutomationTask = {
       ...existing,
       builtIn: true,
@@ -449,14 +484,9 @@ export async function ensureAutomationDefaults(): Promise<void> {
         existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
         normalizePromptDispatchMode(existing.promptDispatchMode, fallback.kind, fallback.promptDispatchMode),
       ),
-      schedule: existing.schedule ?? fallback.schedule,
-      // Migrate: built-in synthesis task changed from "idle" to "sleep_only"
-      // so it respects the sleep cycle (requires inactivity before starting).
-      // The ?? operator won't override an existing truthy value, so we
-      // force-migrate the synthesis task specifically.
-      activationPolicy: fallback.id === SYNTHESIS_AUTOMATION_ID && existing.activationPolicy === "idle"
-        ? "sleep_only"
-        : (existing.activationPolicy ?? fallback.activationPolicy),
+      schedule: synthesisSchedule,
+      // Migrate: "idle" → "absent" (synthesis) and "sleep_only" → "absent" (all built-ins)
+      activationPolicy: normalizeActivationPolicy(migratedPolicy, fallback.activationPolicy),
       maxIterations: existing.maxIterations || fallback.maxIterations,
       // Migrate: wake cycle timeout bumped from 30m → 60m for deep research
       timeoutMs: fallback.id === WAKE_AUTOMATION_ID && existing.timeoutMs <= 30 * 60 * 1000
@@ -522,6 +552,70 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
     timeoutMs: input.timeoutMs ?? 30 * 60 * 1000,
     consecutiveFailures: 0,
     nextRunAt: computeNextRunAt({ schedule }),
+    createdAt: now,
+    updatedAt: now,
+  };
+  insertTask(task);
+  return task;
+}
+
+export function createReminderTask(input: {
+  message: string;
+  title: string;
+  scheduledAt: string;  // ISO 8601
+  activationPolicy?: AutomationActivationPolicy;
+  maxIterations?: number;
+  timeoutMs?: number;
+  maxPending?: number;
+}): AutomationTask {
+  ensureSchema();
+
+  const maxPending = input.maxPending ?? DEFAULT_MAX_PENDING_AGENT_REMINDERS;
+
+  // Check pending cap: count enabled agent-created tasks with future nextRunAt
+  const pendingRow = getDb()
+    .prepare(`SELECT COUNT(*) as cnt FROM automation_tasks
+      WHERE createdBy = 'agent' AND enabled = 1 AND nextRunAt > datetime('now')`)
+    .get() as { cnt: number };
+  if (pendingRow.cnt >= maxPending) {
+    throw new Error(`Agent reminder cap reached (${maxPending} pending). Complete or delete existing reminders first.`);
+  }
+
+  // Validate scheduledAt is in the future (min 2 minutes ahead, respecting grace period)
+  const runMs = new Date(input.scheduledAt).getTime();
+  if (!Number.isFinite(runMs) || runMs <= Date.now() + 2 * 60 * 1000) {
+    throw new Error("scheduledAt must be a valid future timestamp at least 2 minutes from now");
+  }
+
+  const now = new Date().toISOString();
+  const id = `reminder-${uuidv4()}`;
+  const orderRow = getDb()
+    .prepare("SELECT COALESCE(MAX(orderIndex), 0) as maxOrder FROM automation_tasks")
+    .get() as { maxOrder: number };
+  const schedule: AutomationSchedule = { type: "once", runAt: new Date(runMs).toISOString() };
+  const promptSteps: AutomationPromptStep[] = [
+    { id: "step-1", title: input.title.trim(), prompt: input.message.trim() },
+  ];
+  const activationPolicy = normalizeActivationPolicy(input.activationPolicy, "idle");
+
+  const task: AutomationTask = {
+    id,
+    kind: "custom",
+    title: input.title.trim() || "Reminder",
+    enabled: true,
+    builtIn: false,
+    orderIndex: orderRow.maxOrder + 100,  // high order so reminders sort after everything else
+    chatId: "system",
+    schedule,
+    activationPolicy,
+    promptSteps,
+    promptDispatchMode: "sequence",
+    notifications: { enabled: false },
+    maxIterations: input.maxIterations ?? 5,
+    timeoutMs: input.timeoutMs ?? 5 * 60 * 1000,
+    consecutiveFailures: 0,
+    createdBy: "agent",
+    nextRunAt: schedule.runAt,
     createdAt: now,
     updatedAt: now,
   };
@@ -701,11 +795,14 @@ export function finishAutomationRun(
           : task.consecutiveFailures ?? 0;
       const shouldDisable =
         isFailure && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
+      // Once-schedule tasks self-disable after running (success or failure)
+      const isOnce = task.schedule.type === "once";
+      const onceDisable = isOnce && isSuccess;
       insertTask({
         ...task,
-        enabled: shouldDisable ? false : task.enabled,
+        enabled: (shouldDisable || onceDisable) ? false : task.enabled,
         lastRunAt: isSuccess ? finishedAt : task.lastRunAt,
-        nextRunAt: shouldDisable
+        nextRunAt: (shouldDisable || onceDisable)
           ? undefined
           : isSuccess
             ? computeNextRunAt(task, Date.now())
@@ -720,6 +817,9 @@ export function finishAutomationRun(
         console.warn(
           `[automation] Disabled ${task.id} after ${consecutiveFailures} consecutive failures`,
         );
+      }
+      if (onceDisable) {
+        console.log(`[automation] One-time task ${task.id} completed, self-disabled`);
       }
     }
   }

@@ -428,6 +428,9 @@ export interface Settings {
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
   postSynthesisWarmCount?: number;
+  synthesisScheduleType?: "interval" | "daily";
+  synthesisScheduleTimeOfDay?: string;
+  synthesisScheduleEveryMinutes?: number;
   systemStatsEnabled?: boolean;
   systemStatsBufferSeconds?: number;
   systemStatsHiddenGpus?: string[];

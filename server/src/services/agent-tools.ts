@@ -240,6 +240,45 @@ function makeToolCall(id: string, name: string, args: Record<string, any>): Tool
   return { type: "toolCall", id, name, arguments: args };
 }
 
+// --- Automation tool definitions ---
+
+const SCHEDULE_REMINDER_TOOL: Tool = {
+  name: "schedule_reminder",
+  description: "Schedule a one-time reminder for yourself. Creates a message in the system chat that fires at the specified time, respecting inactivity gates. Use this to follow up on open threads, check on tasks, or revisit ideas later. Reminders run as full automation turns with tool access.",
+  parameters: Type.Object({
+    message: Type.String({ description: "The prompt content to deliver to your future self — what you want to be reminded to do or think about" }),
+    title: Type.String({ description: "Short label for the reminder (e.g. 'Check PR #22616 status')" }),
+    scheduledAt: Type.String({ description: "ISO 8601 timestamp for when to fire (must be at least 2 minutes in the future)" }),
+    activationPolicy: Type.Optional(Type.Enum(["idle", "absent", "manual_only"] as const, { description: "When to fire: 'idle' (default, fires when system is idle), 'absent' (waits for user absence threshold), 'manual_only' (never auto-fires)" })),
+    maxIterations: Type.Optional(Type.Number({ description: "Max tool-loop iterations (default 5)" })),
+    timeoutMs: Type.Optional(Type.Number({ description: "Max execution time in ms (default 300000 = 5 min)" })),
+  }),
+};
+
+const LIST_AUTOMATIONS_TOOL: Tool = {
+  name: "list_automations",
+  description: "List all automation tasks. Shows schedules, prompt steps, next run times, and status. Use to see what's scheduled and when. Built-in automations (synthesis, wake) and agent-created reminders are included.",
+  parameters: Type.Object({
+    filter: Type.Optional(Type.Enum(["all", "enabled", "agent-created", "built-in"] as const, { description: "Filter: 'all' (default), 'enabled', 'agent-created', 'built-in'" })),
+    includeRuns: Type.Optional(Type.Boolean({ description: "Include last run status per task (default false)" })),
+  }),
+};
+
+const UPDATE_AUTOMATION_TOOL: Tool = {
+  name: "update_automation",
+  description: "Modify an automation task. You can edit your own reminders freely. For built-in automations (synthesis, wake), you can edit prompt steps but not schedule or structural fields. User-created automations are read-only.",
+  parameters: Type.Object({
+    automationId: Type.String({ description: "Task ID to modify" }),
+    title: Type.Optional(Type.String({ description: "Updated title (agent reminders only)" })),
+    promptSteps: Type.Optional(Type.Array(Type.Object({
+      id: Type.String({ description: "Step ID" }),
+      title: Type.String({ description: "Step title" }),
+      prompt: Type.String({ description: "Step prompt content" }),
+    }), { description: "Updated prompt steps" })),
+    enabled: Type.Optional(Type.Boolean({ description: "Toggle on/off (agent reminders only)" })),
+  }),
+};
+
 const FILESYSTEM_TOOLS: Tool[] = [
   READ_FILE_TOOL,
   WRITE_FILE_TOOL,
@@ -298,6 +337,123 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       },
     });
   }
+
+  // Automation tools
+  tools.push({
+    ...SCHEDULE_REMINDER_TOOL,
+    label: "schedule_reminder",
+    execute: async (_id, params) => {
+      const { createReminderTask } = await import("./automation-storage.js");
+      const args = params as Record<string, any>;
+      const task = createReminderTask({
+        message: args.message,
+        title: args.title,
+        scheduledAt: args.scheduledAt,
+        activationPolicy: args.activationPolicy,
+        maxIterations: args.maxIterations,
+        timeoutMs: args.timeoutMs,
+      });
+      return wrapResult({
+        content: `Reminder scheduled.\n\n- **ID**: ${task.id}\n- **Title**: ${task.title}\n- **Scheduled**: ${task.nextRunAt}\n- **Policy**: ${task.activationPolicy}\n- **Chat**: system`,
+        isError: false,
+      });
+    },
+  });
+
+  tools.push({
+    ...LIST_AUTOMATIONS_TOOL,
+    label: "list_automations",
+    execute: async (_id, params) => {
+      const { listAutomationTasks, listEnabledAutomationTasks } = await import("./automation-storage.js");
+      const args = params as Record<string, any>;
+      const filter = args.filter || "all";
+
+      let tasks = filter === "enabled"
+        ? listEnabledAutomationTasks()
+        : listAutomationTasks();
+
+      if (filter === "agent-created") {
+        tasks = tasks.filter(t => t.createdBy === "agent");
+      } else if (filter === "built-in") {
+        tasks = tasks.filter(t => t.builtIn);
+      }
+
+      const includeRuns = args.includeRuns === true;
+      const lines = tasks.map(t => {
+        const schedule = t.schedule.type === "once"
+          ? `once @ ${t.schedule.runAt}`
+          : t.schedule.type === "daily"
+            ? `daily @ ${t.schedule.timeOfDay}`
+            : `every ${t.schedule.everyMinutes}m`;
+        let line = `- **${t.title}** (${t.id})\n  Schedule: ${schedule} | Policy: ${t.activationPolicy} | ${t.enabled ? 'Enabled' : 'Disabled'}\n  Next: ${t.nextRunAt || 'N/A'} | Steps: ${t.promptSteps.length}`;
+        if (includeRuns && t.lastRunAt) {
+          line += `\n  Last: ${t.lastRunAt} (${t.lastStatus || 'unknown'})`;
+        }
+        if (t.createdBy === "agent") {
+          line += " [your reminder]";
+        }
+        return line;
+      });
+
+      return wrapResult({
+        content: `Automations (${tasks.length} total):\n\n${lines.join("\n\n")}`,
+        isError: false,
+      });
+    },
+  });
+
+  tools.push({
+    ...UPDATE_AUTOMATION_TOOL,
+    label: "update_automation",
+    execute: async (_id, params) => {
+      const { getAutomationTask, updateAutomationTask } = await import("./automation-storage.js");
+      const args = params as Record<string, any>;
+      const existing = getAutomationTask(args.automationId);
+      if (!existing) {
+        return wrapResult({ content: `Automation "${args.automationId}" not found.`, isError: true });
+      }
+
+      // Permission checks
+      const isAgentTask = existing.createdBy === "agent";
+      const isBuiltIn = existing.builtIn;
+
+      if (!isAgentTask && !isBuiltIn) {
+        return wrapResult({
+          content: `Cannot modify "${existing.title}" — this automation was created by the user and is read-only for the agent. You can suggest changes in your response.`,
+          isError: true,
+        });
+      }
+
+      const patch: Record<string, any> = { id: args.automationId };
+
+      if (args.promptSteps !== undefined) {
+        patch.promptSteps = args.promptSteps;
+      }
+
+      if (isAgentTask) {
+        if (args.title !== undefined) patch.title = args.title;
+        if (args.enabled !== undefined) patch.enabled = args.enabled;
+      } else if (isBuiltIn) {
+        // Built-in: only promptSteps allowed
+        if (args.title !== undefined || args.enabled !== undefined) {
+          return wrapResult({
+            content: `Cannot modify structural fields (title, enabled) on built-in automation "${existing.title}". Only prompt steps can be edited.`,
+            isError: true,
+          });
+        }
+      }
+
+      const updated = updateAutomationTask(args.automationId, patch);
+      if (!updated) {
+        return wrapResult({ content: `Failed to update automation "${args.automationId}".`, isError: true });
+      }
+
+      return wrapResult({
+        content: `Updated "${updated.title}" (${updated.id}).`,
+        isError: false,
+      });
+    },
+  });
 
   // Filesystem tools
   tools.push({

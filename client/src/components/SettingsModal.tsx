@@ -654,6 +654,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [wakeCycleEnabled, setWakeCycleEnabled] = useState(settings.wakeCycleEnabled ?? false);
   const [wakeCycleInterval, setWakeCycleInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
   const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
+  // Synthesis schedule settings
+  const [synthesisScheduleType, setSynthesisScheduleType] = useState<"interval" | "daily">(settings.synthesisScheduleType ?? "interval");
+  const [synthesisScheduleTimeOfDay, setSynthesisScheduleTimeOfDay] = useState(settings.synthesisScheduleTimeOfDay ?? "03:00");
+  const [synthesisScheduleEveryMinutes, setSynthesisScheduleEveryMinutes] = useState(settings.synthesisScheduleEveryMinutes ?? 1440);
   const [systemStatsEnabled, setSystemStatsEnabled] = useState(settings.systemStatsEnabled ?? false);
   const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
   const systemStatsBufferDd = useDropdown();
@@ -1835,6 +1839,9 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       wakeCycleEnabled,
       wakeCycleIntervalHours: wakeCycleInterval,
       postSynthesisWarmCount,
+      synthesisScheduleType,
+      synthesisScheduleTimeOfDay,
+      synthesisScheduleEveryMinutes,
       systemStatsEnabled,
       systemStatsBufferSeconds,
       systemStatsHiddenGpus: normalizeSystemStatsHiddenGpus(Array.from(hiddenGpus)),
@@ -5898,6 +5905,56 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                {automationMessage.text}
 	              </div>
 	            )}
+
+	            {/* Synthesis Schedule */}
+	            <div className="pt-4 border-t border-white/10 space-y-4 mb-4">
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Synthesis schedule</label>
+	                <div className="flex gap-2 mt-2">
+	                  {(['interval', 'daily'] as const).map((type) => (
+	                    <button
+	                      key={type}
+	                      onClick={() => setSynthesisScheduleType(type)}
+	                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all pressable ${synthesisScheduleType === type
+	                        ? 'bg-purple-500/20 border border-purple-400/30 text-purple-200'
+	                        : 'bg-white/5 border border-white/10 text-white/50 hover:text-white/70'
+	                      }`}
+	                    >
+	                      {type === 'interval' ? 'Interval' : 'Daily'}
+	                    </button>
+	                  ))}
+	                </div>
+	                {synthesisScheduleType === 'daily' ? (
+	                  <div className="mt-3 flex items-center gap-3">
+	                    <input
+	                      type="time"
+	                      value={synthesisScheduleTimeOfDay}
+	                      onChange={(e) => setSynthesisScheduleTimeOfDay(e.target.value)}
+	                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/70 focus:border-purple-400/50 focus:outline-none"
+	                    />
+	                    <span className="text-xs text-white/30">Synthesis runs daily at this time (during sleep cycle)</span>
+	                  </div>
+	                ) : (
+	                  <div className="mt-3">
+	                    <div className="flex items-center gap-3">
+	                      <input
+	                        type="range"
+	                        min={30}
+	                        max={1440}
+	                        step={30}
+	                        value={synthesisScheduleEveryMinutes}
+	                        onChange={(e) => setSynthesisScheduleEveryMinutes(Number(e.target.value))}
+	                        className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	                      />
+	                      <span className="text-xs text-white/40 w-20 text-right">
+	                        {synthesisScheduleEveryMinutes >= 1440 ? `${Math.round(synthesisScheduleEveryMinutes / 1440)}d` : `${synthesisScheduleEveryMinutes}m`}
+	                      </span>
+	                    </div>
+	                    <p className="text-xs text-white/30 mt-1">Synthesis runs every {synthesisScheduleEveryMinutes >= 1440 ? `${Math.round(synthesisScheduleEveryMinutes / 1440)} day(s)` : `${synthesisScheduleEveryMinutes} minutes`} (during sleep cycle)</p>
+	                  </div>
+	                )}
+	              </div>
+	            </div>
 
 	            {/* Sleep Cycle & Post-synthesis warm */}
 	            <div className="pt-4 border-t border-white/10 space-y-4 mb-4">

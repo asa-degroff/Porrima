@@ -168,8 +168,8 @@ export interface ChatListItem {
 }
 
 export type AutomationKind = "synthesis" | "wake" | "custom";
-export type AutomationScheduleType = "interval" | "daily";
-export type AutomationActivationPolicy = "idle" | "sleep_only" | "manual_only";
+export type AutomationScheduleType = "interval" | "daily" | "once";
+export type AutomationActivationPolicy = "idle" | "absent" | "manual_only";
 export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";
 export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
 
@@ -179,6 +179,8 @@ export interface AutomationSchedule {
   everyMinutes?: number;
   /** Daily schedule, "HH:mm" in local server time. */
   timeOfDay?: string;
+  /** Once schedule, ISO 8601 timestamp. Task self-disables after successful run. */
+  runAt?: string;
 }
 
 export interface AutomationPromptStep {
@@ -212,6 +214,8 @@ export interface AutomationTask {
   nextRunAt?: string;
   lastStatus?: AutomationRunStatus;
   consecutiveFailures?: number;
+  /** Tracks who created this task: "agent" (via schedule_reminder tool) or "user" (via UI/API). */
+  createdBy?: "agent" | "user";
   createdAt: string;
   updatedAt: string;
 }
@@ -396,6 +400,11 @@ export interface Settings {
   // Wake cycle — periodic autonomous exploration during sleep cycle.
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
+  // Synthesis schedule — controls when daily synthesis runs.
+  // "interval": runs every N minutes since last completion. "daily": runs at a fixed time each day.
+  synthesisScheduleType?: "interval" | "daily";
+  synthesisScheduleTimeOfDay?: string;  // "HH:mm", default "03:00", used when type==="daily"
+  synthesisScheduleEveryMinutes?: number;  // default 1440, used when type==="interval"
   // Post-synthesis cache warm — maximum number of recent agent chats eligible
   // after each synthesis cycle. The capacity-aware warm plan prioritizes the
   // new-chat baseline and system chat before recent chats.

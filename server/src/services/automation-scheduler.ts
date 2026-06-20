@@ -42,7 +42,7 @@ async function shouldRunTask(task: AutomationTask, settings: Settings, nowMs: nu
   if (task.activationPolicy === "manual_only") return false;
   if (!taskIsDue(task, nowMs)) return false;
 
-  if (task.activationPolicy === "sleep_only" && !sleepCycleActive(settings)) {
+  if (task.activationPolicy === "absent" && !sleepCycleActive(settings)) {
     return false;
   }
 
