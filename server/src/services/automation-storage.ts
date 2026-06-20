@@ -65,6 +65,13 @@ interface AutomationRunRow {
   selectedPromptStepTitlesJson: string | null;
   chatId: string | null;
   assistantMessageIndex: number | null;
+  triggerMessageInserted: number | null;
+  triggerMessageIndex: number | null;
+  promptTokenEstimate: number | null;
+  timeoutMs: number | null;
+  stopReason: string | null;
+  timedOut: number | null;
+  timeoutReason: string | null;
 }
 
 function ensureSchema(): void {
@@ -109,7 +116,14 @@ function ensureSchema(): void {
       selectedPromptStepIdsJson TEXT,
       selectedPromptStepTitlesJson TEXT,
       chatId TEXT,
-      assistantMessageIndex INTEGER
+      assistantMessageIndex INTEGER,
+      triggerMessageInserted INTEGER,
+      triggerMessageIndex INTEGER,
+      promptTokenEstimate INTEGER,
+      timeoutMs INTEGER,
+      stopReason TEXT,
+      timedOut INTEGER NOT NULL DEFAULT 0,
+      timeoutReason TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_automation_tasks_order ON automation_tasks(enabled, orderIndex, nextRunAt);
@@ -142,6 +156,34 @@ function ensureSchema(): void {
   if (!runCols.some((c) => c.name === "selectedPromptStepTitlesJson")) {
     db.exec("ALTER TABLE automation_runs ADD COLUMN selectedPromptStepTitlesJson TEXT");
     console.log("[automation] Added selectedPromptStepTitlesJson column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "triggerMessageInserted")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN triggerMessageInserted INTEGER");
+    console.log("[automation] Added triggerMessageInserted column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "triggerMessageIndex")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN triggerMessageIndex INTEGER");
+    console.log("[automation] Added triggerMessageIndex column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "promptTokenEstimate")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN promptTokenEstimate INTEGER");
+    console.log("[automation] Added promptTokenEstimate column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "timeoutMs")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN timeoutMs INTEGER");
+    console.log("[automation] Added timeoutMs column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "stopReason")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN stopReason TEXT");
+    console.log("[automation] Added stopReason column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "timedOut")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN timedOut INTEGER NOT NULL DEFAULT 0");
+    console.log("[automation] Added timedOut column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "timeoutReason")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN timeoutReason TEXT");
+    console.log("[automation] Added timeoutReason column to automation_runs");
   }
   schemaReady = true;
 }
@@ -319,6 +361,13 @@ function runFromRow(row: AutomationRunRow): AutomationRun {
       : {}),
     ...(row.chatId ? { chatId: row.chatId } : {}),
     ...(row.assistantMessageIndex !== null ? { assistantMessageIndex: row.assistantMessageIndex } : {}),
+    ...(row.triggerMessageInserted !== null ? { triggerMessageInserted: row.triggerMessageInserted === 1 } : {}),
+    ...(row.triggerMessageIndex !== null ? { triggerMessageIndex: row.triggerMessageIndex } : {}),
+    ...(row.promptTokenEstimate !== null ? { promptTokenEstimate: row.promptTokenEstimate } : {}),
+    ...(row.timeoutMs !== null ? { timeoutMs: row.timeoutMs } : {}),
+    ...(row.stopReason ? { stopReason: row.stopReason } : {}),
+    ...(row.timedOut !== null ? { timedOut: row.timedOut === 1 } : {}),
+    ...(row.timeoutReason ? { timeoutReason: row.timeoutReason } : {}),
   };
 }
 
@@ -484,7 +533,7 @@ export async function ensureAutomationDefaults(): Promise<void> {
         existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
         normalizePromptDispatchMode(existing.promptDispatchMode, fallback.kind, fallback.promptDispatchMode),
       ),
-      schedule: synthesisSchedule,
+      schedule: fallback.schedule,
       // Migrate: "idle" → "absent" (synthesis) and "sleep_only" → "absent" (all built-ins)
       activationPolicy: normalizeActivationPolicy(migratedPolicy, fallback.activationPolicy),
       maxIterations: existing.maxIterations || fallback.maxIterations,
@@ -575,7 +624,7 @@ export function createReminderTask(input: {
   // Check pending cap: count enabled agent-created tasks with future nextRunAt
   const pendingRow = getDb()
     .prepare(`SELECT COUNT(*) as cnt FROM automation_tasks
-      WHERE createdBy = 'agent' AND enabled = 1 AND nextRunAt > datetime('now')`)
+      WHERE createdBy = 'agent' AND enabled = 1 AND julianday(nextRunAt) > julianday('now')`)
     .get() as { cnt: number };
   if (pendingRow.cnt >= maxPending) {
     throw new Error(`Agent reminder cap reached (${maxPending} pending). Complete or delete existing reminders first.`);
@@ -762,7 +811,14 @@ export function finishAutomationRun(
 	           selectedPromptStepIdsJson = COALESCE(@selectedPromptStepIdsJson, selectedPromptStepIdsJson),
 	           selectedPromptStepTitlesJson = COALESCE(@selectedPromptStepTitlesJson, selectedPromptStepTitlesJson),
 	           chatId = @chatId,
-	           assistantMessageIndex = @assistantMessageIndex
+	           assistantMessageIndex = @assistantMessageIndex,
+	           triggerMessageInserted = @triggerMessageInserted,
+	           triggerMessageIndex = @triggerMessageIndex,
+	           promptTokenEstimate = @promptTokenEstimate,
+	           timeoutMs = @timeoutMs,
+	           stopReason = @stopReason,
+	           timedOut = @timedOut,
+	           timeoutReason = @timeoutReason
        WHERE id = @id`,
     )
     .run({
@@ -780,6 +836,15 @@ export function finishAutomationRun(
         : null,
       chatId: details.chatId ?? null,
       assistantMessageIndex: details.assistantMessageIndex ?? null,
+      triggerMessageInserted: details.triggerMessageInserted === undefined
+        ? null
+        : details.triggerMessageInserted ? 1 : 0,
+      triggerMessageIndex: details.triggerMessageIndex ?? null,
+      promptTokenEstimate: details.promptTokenEstimate ?? null,
+      timeoutMs: details.timeoutMs ?? null,
+      stopReason: details.stopReason ?? null,
+      timedOut: details.timedOut ? 1 : 0,
+      timeoutReason: details.timeoutReason ?? null,
     });
 
   const run = getAutomationRun(runId);

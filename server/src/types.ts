@@ -234,6 +234,13 @@ export interface AutomationRun {
   selectedPromptStepTitles?: string[];
   chatId?: string;
   assistantMessageIndex?: number;
+  triggerMessageInserted?: boolean;
+  triggerMessageIndex?: number;
+  promptTokenEstimate?: number;
+  timeoutMs?: number;
+  stopReason?: string;
+  timedOut?: boolean;
+  timeoutReason?: string;
 }
 
 export interface ChatMessageWindow {

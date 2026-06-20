@@ -65,6 +65,9 @@ export interface HeadlessChatTurnResult extends HeadlessTurnState {
   assistantMessageIndex: number;
   success: boolean;
   error?: string;
+  timedOut?: boolean;
+  timeoutReason?: string;
+  timeoutMs?: number;
 }
 
 function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -273,8 +276,12 @@ export async function runHeadlessChatTurn(
     tools,
   };
   const controller = new AbortController();
+  let timedOut = false;
+  let timeoutReason: string | undefined;
   const timeout = setTimeout(() => {
-    console.error(`[${logPrefix}] turn timeout after ${timeoutMs}ms`);
+    timeoutReason = `Turn timeout after ${timeoutMs}ms`;
+    timedOut = true;
+    console.error(`[${logPrefix}] ${timeoutReason}`);
     controller.abort();
   }, timeoutMs);
 
@@ -762,5 +769,6 @@ export async function runHeadlessChatTurn(
     ...(producedNothing
       ? { error: `Model returned ${stopReasonText} before producing any output` }
       : {}),
+    ...(timedOut ? { timedOut, timeoutReason, timeoutMs } : {}),
   };
 }

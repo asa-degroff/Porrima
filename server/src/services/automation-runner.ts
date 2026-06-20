@@ -18,6 +18,13 @@ import { SYSTEM_CHAT_ID } from "./system-chat.js";
 interface AutomationExecutionResult extends SynthesisResult {
   chatId?: string;
   assistantMessageIndex?: number;
+  triggerMessageInserted?: boolean;
+  triggerMessageIndex?: number;
+  promptTokenEstimate?: number;
+  timeoutMs?: number;
+  stopReason?: string;
+  timedOut?: boolean;
+  timeoutReason?: string;
 }
 
 function makeErrorResult(message: string): AutomationExecutionResult {
@@ -148,11 +155,14 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
   const { getChat, saveChat } = await import("./chat-storage.js");
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
-  const { truncateBeforeSend } = await import("./compaction.js");
+  const { estimateContextTokens, truncateBeforeSend } = await import("./compaction.js");
   const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   const emitter = new SynthesisEmitter(task.chatId);
+  let triggerMessageInserted = false;
+  let triggerMessageIndex: number | undefined;
+  let promptTokenEstimate: number | undefined;
 
   try {
     const chat = await ensureAutomationChat(task);
@@ -189,8 +199,10 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
 
     const firstTrigger = formatAutomationTrigger(task, steps[0]);
     chat.messages.push(makeTriggerMessage(task, run, firstTrigger));
+    triggerMessageIndex = chat.messages.length - 1;
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
+    triggerMessageInserted = true;
 
     resetMemoryContext(task.chatId);
     const splitPrompt = await buildSplitAugmentedPrompt(
@@ -230,6 +242,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       );
       await saveChat(chat);
     }
+    promptTokenEstimate = estimateContextTokens(chat.messages, systemPrompt, tools);
 
     let stepIndex = 0;
     const turn = await runHeadlessChatTurn({
@@ -299,6 +312,13 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
         ...makeErrorResult(`Automation failed: ${turn.error || "model returned error before producing any output"}`),
         chatId: task.chatId,
         assistantMessageIndex: turn.assistantMessageIndex,
+        triggerMessageInserted,
+        triggerMessageIndex,
+        promptTokenEstimate,
+        timeoutMs: task.timeoutMs,
+        stopReason: turn.stopReason,
+        timedOut: turn.timedOut,
+        timeoutReason: turn.timeoutReason,
       };
     }
 
@@ -313,12 +333,26 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       success: true,
       chatId: task.chatId,
       assistantMessageIndex: turn.assistantMessageIndex,
+      triggerMessageInserted,
+      triggerMessageIndex,
+      promptTokenEstimate,
+      timeoutMs: task.timeoutMs,
+      stopReason: turn.stopReason,
+      timedOut: turn.timedOut,
+      timeoutReason: turn.timeoutReason,
     };
   } catch (e: any) {
     console.error(`[automation] ${task.id} failed:`, e);
     emitter.emitError(e.message || "Automation failed");
     emitter.end();
-    return makeErrorResult(e.message || "Automation failed");
+    return {
+      ...makeErrorResult(e.message || "Automation failed"),
+      chatId: task.chatId,
+      triggerMessageInserted,
+      triggerMessageIndex,
+      promptTokenEstimate,
+      timeoutMs: task.timeoutMs,
+    };
   } finally {
     // Refresh the chat row after possible title updates so any later caller sees
     // the final title/message state. Failure is non-fatal here.
@@ -413,12 +447,19 @@ export async function runAutomationTask(
       selectedPromptStepTitles: promptSelection.selectedSteps.map((step) => step.title),
       chatId: result.chatId,
       assistantMessageIndex: result.assistantMessageIndex,
+      triggerMessageInserted: result.triggerMessageInserted,
+      triggerMessageIndex: result.triggerMessageIndex,
+      promptTokenEstimate: result.promptTokenEstimate,
+      timeoutMs: result.timeoutMs ?? task.timeoutMs,
+      stopReason: result.stopReason,
+      timedOut: result.timedOut,
+      timeoutReason: result.timeoutReason,
     });
     return result;
   } catch (e: any) {
     const result = makeErrorResult(e?.message || "Automation failed");
     if (run) {
-      finishAutomationRun(run.id, "failed", { error: result.error });
+      finishAutomationRun(run.id, "failed", { error: result.error, timeoutMs: task.timeoutMs });
     }
     return result;
   } finally {

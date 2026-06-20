@@ -401,7 +401,11 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
       setAutomations(tasks);
       const synth = tasks.find((a: AutomationTask) => a.id === "builtin:synthesis");
       const wake = tasks.find((a: AutomationTask) => a.id === "builtin:wake");
-      if (synth) setSynthesisSchedule(synth.schedule);
+      if (synth?.schedule.type === "daily") {
+        setSynthesisSchedule({ type: "daily", timeOfDay: synth.schedule.timeOfDay });
+      } else if (synth?.schedule.type === "interval") {
+        setSynthesisSchedule({ type: "interval", everyMinutes: synth.schedule.everyMinutes });
+      }
       if (wake) {
         setWakeEnabled(wake.enabled);
         if (wake.schedule.type === "interval") setWakeInterval((wake.schedule.everyMinutes || 6 * 60) / 60);

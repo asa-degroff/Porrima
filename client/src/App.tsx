@@ -54,6 +54,8 @@ const LEGACY_ACTIVE_VIEW_KEY = "quje-active-view";
 const TTS_AUTO_READ_MESSAGES_KEY = "porrima-tts-auto-read-messages";
 const LEGACY_TTS_AUTO_READ_MESSAGES_KEY = "quje-tts-auto-read-messages";
 const INITIAL_MESSAGE_LIMIT = 200;
+const SYSTEM_CHAT_ID = "system";
+const BUILT_IN_AUTOMATION_IDS = new Set(["builtin:synthesis", "builtin:wake"]);
 const ACTIVE_CHAT_HEADER_POLL_INTERVAL_MS = 5_000;
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
 const MANUAL_TTS_FOLLOW_RETRY_MS = 300;
@@ -143,6 +145,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
+  const refreshActiveChatFromServerRef = useRef<((id: string, options?: { force?: boolean; priority?: "high" | "low" | "auto" }) => Promise<boolean>) | null>(null);
+  const genericAutomationRunningRef = useRef(false);
+  const lastGenericAutomationTaskIdRef = useRef<string | null>(null);
   const streamingRef = useRef(false);
   const tts = useTTS();
   const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
@@ -347,6 +352,30 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setSystemPause(status.systemPause);
         setSleepCycleActive(status.sleepCycleActive);
         setIsWakeCycleRunning(status.isWakeCycleRunning);
+        const activeAutomationTaskId = status.activeAutomationTaskId ?? null;
+        const genericAutomationTaskId =
+          status.isAutomationRunning &&
+          !status.isSynthesizing &&
+          !status.isWakeCycleRunning &&
+          activeAutomationTaskId &&
+          !BUILT_IN_AUTOMATION_IDS.has(activeAutomationTaskId)
+            ? activeAutomationTaskId
+            : null;
+        const wasGenericAutomationRunning = genericAutomationRunningRef.current;
+        genericAutomationRunningRef.current = Boolean(genericAutomationTaskId);
+        if (genericAutomationTaskId) {
+          lastGenericAutomationTaskIdRef.current = genericAutomationTaskId;
+        } else if (wasGenericAutomationRunning) {
+          const completedTaskId = lastGenericAutomationTaskIdRef.current;
+          lastGenericAutomationTaskIdRef.current = null;
+          console.log(`[automation] ${completedTaskId || "task"} finished, refreshing system chat`);
+          refresh();
+          if (activeChatIdStateRef.current === SYSTEM_CHAT_ID) {
+            refreshActiveChatFromServerRef.current?.(SYSTEM_CHAT_ID, { force: true, priority: "low" }).catch(() => {});
+          } else {
+            clearCachedChat(SYSTEM_CHAT_ID).catch(() => {});
+          }
+        }
         if (status.isSynthesizing) {
           setSynthesisComplete(false);
         } else if (prev) {
@@ -361,7 +390,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     poll();
     const interval = setInterval(poll, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refresh]);
 
   // Persist lastActiveChatId to settings (debounced, so we don't churn writes)
   useEffect(() => {
@@ -458,6 +487,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     if (applied) refresh();
     return applied;
   }, [applyLoadedChat, refresh]);
+  refreshActiveChatFromServerRef.current = refreshActiveChatFromServer;
 
   // Apply theme to document
   useEffect(() => {

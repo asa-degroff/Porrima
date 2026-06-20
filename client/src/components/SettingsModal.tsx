@@ -368,6 +368,9 @@ function formatAutomationDate(value?: string): string {
 }
 
 function formatAutomationSchedule(task: AutomationTask): string {
+  if (task.schedule.type === "once") {
+    return `Once at ${formatAutomationDate(task.schedule.runAt) || "unscheduled"}`;
+  }
   if (task.schedule.type === "daily") {
     return `Daily at ${normalizeAutomationTimeOfDay(task.schedule.timeOfDay)}`;
   }
@@ -375,6 +378,12 @@ function formatAutomationSchedule(task: AutomationTask): string {
   if (minutes % (24 * 60) === 0) return `Every ${minutes / (24 * 60)}d`;
   if (minutes % 60 === 0) return `Every ${minutes / 60}h`;
   return `Every ${minutes}m`;
+}
+
+function formatAutomationActivationPolicy(policy: AutomationTask["activationPolicy"]): string {
+  if (policy === "idle") return "Idle";
+  if (policy === "absent") return "Absent";
+  return "Manual only";
 }
 
 const AUTOMATION_PROMPT_DISPATCH_OPTIONS: Array<{
@@ -1962,7 +1971,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
   const handleAutomationScheduleTypeChange = async (
     task: AutomationTask,
-    type: AutomationTask["schedule"]["type"],
+    type: "interval" | "daily",
   ) => {
     const schedule =
       type === "daily"
@@ -6004,6 +6013,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  const dailyTime = task.schedule.type === "daily"
 	                    ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
 	                    : DEFAULT_AUTOMATION_DAILY_TIME;
+	                  const runAt = task.schedule.type === "once" ? task.schedule.runAt : undefined;
 	                  const isRunning = automationsRunningTaskId === task.id;
 		                  const historyOpen = automationHistoryOpenTaskId === task.id;
 		                  const historyLoading = automationRunsLoadingTaskId === task.id;
@@ -6042,6 +6052,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              />
 	                            )}
 	                            {task.builtIn && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/35">Built-in</span>}
+	                            {task.createdBy === "agent" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 border border-purple-400/20 text-purple-200/55">Reminder</span>}
 	                          </div>
 	                          <p className="text-[11px] text-white/30 mt-1">
 	                            {formatAutomationSchedule(task)}
@@ -6068,7 +6079,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            state={scheduleState}
 	                            trigger={
 	                              <span className="truncate flex-1 text-left">
-	                                {task.schedule.type === "interval" ? "Interval" : "Daily"}
+	                                {task.schedule.type === "interval" ? "Interval" : task.schedule.type === "daily" ? "Daily" : "Once"}
 	                              </span>
 	                            }
 	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
@@ -6096,10 +6107,25 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            >
 	                              Daily
 	                            </button>
+	                            {task.schedule.type === "once" && (
+	                              <button
+	                                disabled
+	                                className="w-full text-left px-2 py-1.5 text-xs text-white cursor-default"
+	                              >
+	                                Once
+	                              </button>
+	                            )}
 	                          </Dropdown>
 	                        </label>
 
-	                        {task.schedule.type === "daily" ? (
+	                        {task.schedule.type === "once" ? (
+	                          <label className="space-y-1">
+	                            <span className="block text-[11px] text-white/45">Run at</span>
+	                            <div className="w-full bg-white/[0.03] border border-white/10 rounded-md px-2 py-1 text-xs text-white/50 truncate">
+	                              {formatAutomationDate(runAt) || "Unscheduled"}
+	                            </div>
+	                          </label>
+	                        ) : task.schedule.type === "daily" ? (
 	                          <label className="space-y-1">
 	                            <span className="block text-[11px] text-white/45">Time</span>
 	                            <input
@@ -6136,7 +6162,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            state={activationState}
 	                            trigger={
 	                              <span className="truncate flex-1 text-left">
-	                                {task.activationPolicy === "idle" ? "Idle" : task.activationPolicy === "sleep_only" ? "Sleep only" : "Manual only"}
+	                                {formatAutomationActivationPolicy(task.activationPolicy)}
 	                              </span>
 	                            }
 	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
@@ -6156,15 +6182,15 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            </button>
 	                            <button
 	                              onClick={() => {
-	                                updateAutomationDraft(task.id, { activationPolicy: "sleep_only" as const });
-	                                saveAutomationPatch(task.id, { activationPolicy: "sleep_only" });
+	                                updateAutomationDraft(task.id, { activationPolicy: "absent" });
+	                                saveAutomationPatch(task.id, { activationPolicy: "absent" });
 	                                activationState.close();
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
-	                                task.activationPolicy === "sleep_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                                task.activationPolicy === "absent" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
-	                              Sleep only
+	                              Absent
 	                            </button>
 	                            <button
 	                              onClick={() => {
@@ -6496,6 +6522,18 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 		                                      )}
 		                                      {typeof run.assistantMessageIndex === "number" && (
 		                                        <span className="text-white/25">message {run.assistantMessageIndex + 1}</span>
+		                                      )}
+		                                      {typeof run.triggerMessageIndex === "number" && (
+		                                        <span className="text-white/25">trigger {run.triggerMessageIndex + 1}</span>
+		                                      )}
+		                                      {typeof run.promptTokenEstimate === "number" && (
+		                                        <span className="text-white/25">~{run.promptTokenEstimate.toLocaleString()} tokens</span>
+		                                      )}
+		                                      {run.stopReason && (
+		                                        <span className="text-white/25">stop {run.stopReason}</span>
+		                                      )}
+		                                      {run.timedOut && (
+		                                        <span className="text-amber-200/60">{run.timeoutReason || "timed out"}</span>
 		                                      )}
 	                                    </div>
 	                                    {run.error ? (

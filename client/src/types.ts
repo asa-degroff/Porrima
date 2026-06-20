@@ -159,8 +159,8 @@ export interface Chat {
 }
 
 export type AutomationKind = "synthesis" | "wake" | "custom";
-export type AutomationScheduleType = "interval" | "daily";
-export type AutomationActivationPolicy = "idle" | "sleep_only" | "manual_only";
+export type AutomationScheduleType = "interval" | "daily" | "once";
+export type AutomationActivationPolicy = "idle" | "absent" | "manual_only";
 export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";
 export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
 
@@ -170,6 +170,8 @@ export interface AutomationSchedule {
   everyMinutes?: number;
   /** Daily schedule, "HH:mm" in local server time. */
   timeOfDay?: string;
+  /** Once schedule, ISO 8601 timestamp. */
+  runAt?: string;
 }
 
 export interface AutomationPromptStep {
@@ -203,6 +205,7 @@ export interface AutomationTask {
   nextRunAt?: string;
   lastStatus?: AutomationRunStatus;
   consecutiveFailures?: number;
+  createdBy?: "agent" | "user";
   createdAt: string;
   updatedAt: string;
 }
@@ -221,6 +224,13 @@ export interface AutomationRun {
   selectedPromptStepTitles?: string[];
   chatId?: string;
   assistantMessageIndex?: number;
+  triggerMessageInserted?: boolean;
+  triggerMessageIndex?: number;
+  promptTokenEstimate?: number;
+  timeoutMs?: number;
+  stopReason?: string;
+  timedOut?: boolean;
+  timeoutReason?: string;
 }
 
 export interface ChatListItem {
