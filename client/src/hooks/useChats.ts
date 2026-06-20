@@ -24,6 +24,14 @@ export function useChats() {
   const [isFromCache, setIsFromCache] = useState(false);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const locallyDeletedChatIdsRef = useRef<Set<string>>(new Set());
+  const pendingCreateChatsRef = useRef<Map<string, Promise<Chat | null>>>(new Map());
+
+  const filterDeletedChats = useCallback((items: ChatListItem[]) => {
+    const deletedIds = locallyDeletedChatIdsRef.current;
+    if (deletedIds.size === 0) return items;
+    return items.filter((chat) => !deletedIds.has(chat.id));
+  }, []);
 
   const refreshNow = useCallback(async (forceFresh: boolean = false) => {
     if (forceFresh) {
@@ -31,7 +39,7 @@ export function useChats() {
     }
 
     try {
-      const list = await fetchChats();
+      const list = filterDeletedChats(await fetchChats());
       setChats(list);
       setIsFromCache(false);
       setCachedChatList(list).catch(() => {});
@@ -39,13 +47,13 @@ export function useChats() {
       if (e instanceof OfflineError) {
         const cached = await getCachedChatList();
         if (cached) {
-          setChats(cached);
+          setChats(filterDeletedChats(cached));
           setIsFromCache(true);
         }
       }
     }
     setLoading(false);
-  }, []);
+  }, [filterDeletedChats]);
 
   // Debounced refresh: collapses multiple rapid calls into one
   const refresh = useCallback((forceFresh: boolean = false) => {
@@ -110,6 +118,7 @@ export function useChats() {
         preview: "",
         ...(projectId ? { projectId } : {}),
       };
+      locallyDeletedChatIdsRef.current.delete(id);
       setChats((prev) => [newItem, ...prev]);
 
       // Fire server creation in background. Do NOT call refresh() on success —
@@ -117,11 +126,19 @@ export function useChats() {
       // state naturally. Calling refresh() here caused a race condition where
       // the debounced 300ms fetchChats() replaced the local state before the
       // server had indexed the new chat, briefly removing it from the sidebar.
-      apiCreateChat(id, modelId, type, projectId)
+      const pendingCreate = apiCreateChat(id, modelId, type, projectId)
+        .then((created) => created)
         .catch(() => {
           // Roll back optimistic entry on failure
-          setChats((prev) => prev.filter((c) => c.id !== id));
+          if (!locallyDeletedChatIdsRef.current.has(id)) {
+            setChats((prev) => prev.filter((c) => c.id !== id));
+          }
+          return null;
+        })
+        .finally(() => {
+          pendingCreateChatsRef.current.delete(id);
         });
+      pendingCreateChatsRef.current.set(id, pendingCreate);
 
       // Return a minimal Chat object so the caller can set it active immediately
       const chat: Chat = {
@@ -142,12 +159,18 @@ export function useChats() {
 
   const removeChat = useCallback(
     async (id: string) => {
+      locallyDeletedChatIdsRef.current.add(id);
       // Optimistic update: remove from list immediately
       setChats((prev) => prev.filter((c) => c.id !== id));
+      const pendingCreate = pendingCreateChatsRef.current.get(id);
+      if (pendingCreate) {
+        await pendingCreate;
+      }
       await apiDeleteChat(id);
       clearCachedChat(id).catch(() => {});
+      clearCachedChatList().catch(() => {});
       // Background refresh to sync with server (debounced)
-      refresh();
+      refresh(true);
     },
     [refresh]
   );

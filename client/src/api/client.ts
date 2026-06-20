@@ -100,6 +100,7 @@ export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: s
 
 export async function deleteChat(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/chats/${id}`, { method: "DELETE" });
+  if (res.status === 404) return;
   if (!res.ok) throw new Error("Failed to delete chat");
 }
 

@@ -1106,7 +1106,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
-      await removeChat(id);
       clearCachedChat(id).catch(() => {});
       if (lastActiveChatId === id) {
         setLastActiveChatId(null);
@@ -1117,6 +1116,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setActiveChat(null);
         activeChatStateRef.current = null;
         loadMessages([]);
+      }
+      try {
+        await removeChat(id);
+      } catch (e) {
+        console.error("[chats] delete failed:", e);
       }
     },
     [activeChatId, lastActiveChatId, removeChat, loadMessages]
