@@ -6520,15 +6520,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  loadArchivedAutomations();
 	                }
 	              }}
-	              className="flex items-center justify-between w-full mb-3 pressable"
+	              className="flex items-center justify-between w-full mb-3"
 	            >
 	              <div className="text-left">
 	                <h3 className="text-sm font-semibold text-white/60">Completed Reminders</h3>
 	                <p className="text-[11px] text-white/30">Archived one-shot reminders that finished successfully</p>
 	              </div>
-	              <span className="text-white/30 text-xs transition-transform" style={{ transform: archivedSectionOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-	                ▼
-	              </span>
+	              <Chevron open={archivedSectionOpen} size={10} />
 	            </button>
 
 	            {archivedSectionOpen && (
