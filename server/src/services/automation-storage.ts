@@ -26,6 +26,12 @@ const MAX_CUSTOM_FAILURES_BEFORE_DISABLE = 5;
 const DEFAULT_MAX_PENDING_AGENT_REMINDERS = 10;
 let schemaReady = false;
 
+function fallbackMinutesForKind(kind: AutomationKind): number {
+  if (kind === "wake") return DEFAULT_WAKE_INTERVAL_MINUTES;
+  if (kind === "synthesis") return DEFAULT_SYNTHESIS_INTERVAL_MINUTES;
+  return DEFAULT_CUSTOM_INTERVAL_MINUTES;
+}
+
 interface AutomationTaskRow {
   id: string;
   kind: string;
@@ -473,7 +479,8 @@ export async function ensureAutomationDefaults(): Promise<void> {
     DEFAULT_WAKE_INTERVAL_MINUTES,
   );
 
-  // Synthesis schedule: user-configurable via settings
+  // Legacy settings only seed first-run built-ins. Existing automation rows keep
+  // their stored schedules so the automation table remains the runtime source.
   const synthesisSchedule: AutomationSchedule = settings.synthesisScheduleType === "daily"
     ? normalizeSchedule({ type: "daily", timeOfDay: settings.synthesisScheduleTimeOfDay || "03:00" }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES)
     : normalizeSchedule({ type: "interval", everyMinutes: settings.synthesisScheduleEveryMinutes ?? DEFAULT_SYNTHESIS_INTERVAL_MINUTES }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES);
@@ -533,7 +540,10 @@ export async function ensureAutomationDefaults(): Promise<void> {
         existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
         normalizePromptDispatchMode(existing.promptDispatchMode, fallback.kind, fallback.promptDispatchMode),
       ),
-      schedule: fallback.schedule,
+      // Preserve the in-DB schedule. If stored fields are missing or invalid,
+      // normalize against this built-in kind's interval default rather than
+      // overwriting from legacy settings on startup.
+      schedule: normalizeSchedule(existing.schedule, fallbackMinutesForKind(fallback.kind)),
       // Migrate: "idle" → "absent" (synthesis) and "sleep_only" → "absent" (all built-ins)
       activationPolicy: normalizeActivationPolicy(migratedPolicy, fallback.activationPolicy),
       maxIterations: existing.maxIterations || fallback.maxIterations,

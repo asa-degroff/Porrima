@@ -189,4 +189,30 @@ describe("automation storage prompt dispatch", () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("preserves customized synthesis schedule across ensureAutomationDefaults runs", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
+    try {
+      const storage = await loadAutomationStorage(homeDir);
+
+      // First run seeds the built-in synthesis task with the default schedule.
+      await storage.ensureAutomationDefaults();
+      const seeded = storage.getAutomationTask(storage.SYNTHESIS_AUTOMATION_ID);
+      expect(seeded).toBeDefined();
+      expect(seeded?.schedule.type).toBe("interval");
+
+      // User customizes the schedule to daily at 05:00 via the automation block.
+      storage.updateAutomationTask(storage.SYNTHESIS_AUTOMATION_ID, {
+        schedule: { type: "daily", timeOfDay: "05:00" },
+      });
+
+      // Re-running ensureAutomationDefaults must NOT clobber the custom schedule.
+      await storage.ensureAutomationDefaults();
+      const after = storage.getAutomationTask(storage.SYNTHESIS_AUTOMATION_ID);
+      expect(after?.schedule).toEqual({ type: "daily", timeOfDay: "05:00" });
+    } finally {
+      await closeStorage().catch(() => {});
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });
