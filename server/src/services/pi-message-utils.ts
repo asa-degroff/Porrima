@@ -203,3 +203,9 @@ export function transformMessagesForProvider<TApi extends Api>(
 export function sanitizeSurrogates(text: string): string {
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
+
+const PROVIDER_UNSAFE_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
+export function sanitizeProviderText(text: string): string {
+  return sanitizeSurrogates(text).replace(PROVIDER_UNSAFE_CONTROL_CHARS, "");
+}

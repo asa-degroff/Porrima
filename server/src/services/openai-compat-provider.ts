@@ -20,7 +20,7 @@ import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
-import { sanitizeSurrogates, transformMessagesForProvider } from "./pi-message-utils.js";
+import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -836,7 +836,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
     const systemContent = needsThinkDirective
       ? `/think\n${context.systemPrompt}`
       : context.systemPrompt;
-    params.push({ role: "system", content: sanitizeSurrogates(systemContent) });
+    params.push({ role: "system", content: sanitizeProviderText(systemContent) });
   }
 
   for (let i = 0; i < transformed.length; i++) {
@@ -846,20 +846,20 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
       const content = typeof (msg as any).content === "string" ? (msg as any).content : "";
       if (content) {
         const role = params.length === 0 ? "system" : "user";
-        params.push({ role, content: sanitizeSurrogates(content) });
+        params.push({ role, content: sanitizeProviderText(content) });
       }
       continue;
     }
 
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
-        params.push({ role: "user", content: sanitizeSurrogates(msg.content) });
+        params.push({ role: "user", content: sanitizeProviderText(msg.content) });
       } else {
         // Multipart content: OpenAI format with content parts
         const parts: any[] = [];
         for (const item of msg.content) {
           if (item.type === "text") {
-            parts.push({ type: "text", text: sanitizeSurrogates(item.text) });
+            parts.push({ type: "text", text: sanitizeProviderText(item.text) });
           } else if (item.type === "image") {
             if (model.input.includes("image")) {
               const rawMime = (item as any).mimeType || "image/jpeg";
@@ -888,7 +888,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
         .filter((b: any) => b.type === "text" && b.text && b.text.trim().length > 0 && !isPlaceholderEllipsis(b.text))
         .map((b: any) => b.text)
         .join("");
-      const content = nonEmptyText ? sanitizeSurrogates(nonEmptyText) : null;
+      const content = nonEmptyText ? sanitizeProviderText(nonEmptyText) : null;
 
       // Include reasoning_content for proper context replay (DeepSeek API convention)
       const thinkingText = thinkingBlocks
@@ -898,7 +898,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
 
       const openaiMsg: any = { role: "assistant" };
       if (content) openaiMsg.content = content;
-      if (thinkingText) openaiMsg.reasoning_content = sanitizeSurrogates(thinkingText);
+      if (thinkingText) openaiMsg.reasoning_content = sanitizeProviderText(thinkingText);
 
       if (toolCalls.length > 0) {
         openaiMsg.tool_calls = toolCalls.map((tc: any) => ({
@@ -928,7 +928,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
         params.push({
           role: "tool",
           tool_call_id: tr.toolCallId || tr.toolName,
-          content: sanitizeSurrogates(textResult || "(see attached image)"),
+          content: sanitizeProviderText(textResult || "(see attached image)"),
         });
 
         if (hasImages && model.input.includes("image")) {
