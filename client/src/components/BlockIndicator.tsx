@@ -206,7 +206,7 @@ export function BlockIndicator({ projectId }: Props) {
 
       {open && (
         <div
-          className="absolute right-0 top-full mt-1 z-30 min-w-[280px] max-w-[400px] backdrop-blur-xl border rounded-xl shadow-2xl py-2 px-1 animate-dropdown-enter"
+          className="absolute right-0 top-full mt-1 z-30 min-w-[280px] max-w-[400px] app-solid-popover border rounded-xl shadow-2xl py-2 px-1 animate-dropdown-enter"
           style={{
             backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
             borderColor: `rgba(var(--theme-primary-border))`,

@@ -10,7 +10,7 @@ export function DropdownPanel({ open, className = "", children }: {
 
   return (
     <div
-      className={`absolute z-30 backdrop-blur-xl border rounded-xl shadow-2xl py-1 animate-dropdown-enter ${className}`}
+      className={`absolute z-30 app-solid-popover border rounded-xl shadow-2xl py-1 animate-dropdown-enter ${className}`}
       style={{
         backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
         borderColor: `rgba(var(--theme-primary-border))`,

@@ -669,7 +669,7 @@ function ChangeProjectDirectoryModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -1770,7 +1770,7 @@ export function Sidebar({
       )}
       {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
       <div
-        className={`w-72 h-full flex flex-col backdrop-blur-xs bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
+        className={`w-72 h-full flex flex-col app-glass-surface border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
         ref={gestureRef}
         onTouchStart={gestureHandlers.onTouchStart}
         onTouchMove={gestureHandlers.onTouchMove}

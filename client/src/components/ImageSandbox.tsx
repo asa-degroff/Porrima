@@ -230,7 +230,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between backdrop-blur-xl bg-white/[0.03] h-[57px]">
+      <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between app-glass-surface h-[57px]">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
 
@@ -403,7 +403,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
         {mode === "generate" ? (
           <>
             {/* Generation Controls - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
-            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
+            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 app-glass-surface">
               <ImageControls
                 models={models}
                 generating={generating}
@@ -559,7 +559,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
 
             {/* Details panel - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
             {selectedImage && desktopDetailsOpen && (
-              <div className="hidden lg:flex w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex-col">
+              <div className="hidden lg:flex w-80 shrink-0 border-l border-white/10 p-4 app-glass-surface flex-col">
                 <div className="shrink-0 flex items-center justify-between pb-3 mb-3 border-b border-white/10">
                   <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
                   <button
@@ -586,7 +586,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
             {controlsOpen && (
               <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
-                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  className="absolute inset-0 app-modal-backdrop transition-opacity"
                   style={{ opacity: controlsOpen ? 0.6 : 0 }}
                   onClick={() => setControlsOpen(false)}
                 />
@@ -661,7 +661,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
             {detailsOpen && selectedImage && (
               <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
-                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  className="absolute inset-0 app-modal-backdrop transition-opacity"
                   style={{ opacity: detailsOpen ? 0.6 : 0 }}
                   onClick={() => setDetailsOpen(false)}
                 />
@@ -730,7 +730,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
             {/* Lightbox */}
             {lightboxImage && (
               <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+                className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop app-modal-backdrop-strong"
                 onClick={closeLightbox}
               >
                 <button
@@ -787,7 +787,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
         ) : (
           <>
             {/* Vision Controls - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
-            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
+            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 app-glass-surface">
               <VisionControls
                 presets={presets}
                 analyzing={analyzing}
@@ -868,7 +868,7 @@ export function ImageSandbox({ defaultModelId }: Props) {
             {controlsOpen && mode === "analyze" && (
               <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
-                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  className="absolute inset-0 app-modal-backdrop transition-opacity"
                   style={{ opacity: controlsOpen ? 0.6 : 0 }}
                   onClick={() => setControlsOpen(false)}
                 />

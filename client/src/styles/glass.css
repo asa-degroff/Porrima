@@ -108,6 +108,77 @@ body::before {
   background: var(--theme-bg-flat);
 }
 
+.app-glass-surface {
+  background: rgba(255, 255, 255, 0.03);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.app-input-surface {
+  background: rgba(255, 255, 255, 0.05);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.app-modal-surface {
+  background: rgba(255, 255, 255, 0.08);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.app-solid-popover {
+  background-color: color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.app-modal-backdrop {
+  --app-modal-backdrop-alpha: 0.6;
+  --app-modal-solid-alpha: 0.72;
+  background: rgba(0, 0, 0, var(--app-modal-backdrop-alpha));
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.app-modal-backdrop-medium {
+  --app-modal-backdrop-alpha: 0.7;
+  --app-modal-solid-alpha: 0.82;
+}
+
+.app-modal-backdrop-strong {
+  --app-modal-backdrop-alpha: 0.8;
+  --app-modal-solid-alpha: 0.9;
+}
+
+[data-high-efficiency] .app-glass-surface {
+  background: color-mix(in srgb, var(--theme-bg-flat) 84%, rgb(5, 5, 10) 16%);
+}
+
+[data-high-efficiency] .app-input-surface {
+  background: color-mix(in srgb, var(--theme-bg-flat) 86%, rgb(5, 5, 10) 14%);
+}
+
+[data-high-efficiency] .app-modal-surface {
+  background: color-mix(in srgb, var(--theme-bg-flat) 78%, rgb(5, 5, 10) 22%);
+}
+
+[data-high-efficiency] .app-solid-popover {
+  background-color: color-mix(in srgb, rgb(var(--theme-primary)) 10%, rgb(8, 8, 12) 90%) !important;
+}
+
+[data-high-efficiency] .app-modal-backdrop {
+  background:
+    linear-gradient(rgba(var(--theme-primary), 0.1), rgba(var(--theme-primary), 0.1)),
+    rgba(0, 0, 0, var(--app-modal-solid-alpha));
+}
+
+[data-high-efficiency] *,
+[data-high-efficiency] *::before,
+[data-high-efficiency] *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
 #root {
   height: 100%;
   overflow: hidden;
@@ -522,4 +593,3 @@ button:hover .trash-icon .trash-lid {
   background: rgba(0, 0, 0, 0.35);
   filter: blur(6px);
 }
-

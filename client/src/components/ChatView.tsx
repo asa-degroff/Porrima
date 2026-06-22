@@ -696,7 +696,7 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* Chat Header — fixed min-height so it doesn't shift between chat types or when the prefill indicator appears */}
-      <div className="px-3 md:px-6 min-h-[3rem] border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-xs bg-white/[0.03] relative z-20">
+      <div className="px-3 md:px-6 min-h-[3rem] border-b border-white/10 flex items-center justify-between gap-3 app-glass-surface relative z-20">
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpenSidebar}
@@ -1096,7 +1096,7 @@ export function ChatView({
       {/* Rendered Prompt Viewer Modal */}
       {(promptModal || promptLoading) && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop"
           onClick={() => { setPromptModal(null); setPromptLoading(false); }}
         >
           <div

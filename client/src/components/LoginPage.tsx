@@ -39,7 +39,7 @@ export function LoginPage({ authState, error, onRegister, onLogin, agentName }: 
       <div className="flex justify-center">
         <OctahedronLogo isActive count={8} size={64} gap={8} cols={4} speed={0.5} />
       </div>
-      <div className={`relative z-10 backdrop-blur-xl bg-white/[0.08] border border-white/10 rounded-2xl ${cornerClass} px-6 py-5 max-w-sm w-full mx-4`}>
+      <div className={`relative z-10 app-modal-surface border border-white/10 rounded-2xl ${cornerClass} px-6 py-5 max-w-sm w-full mx-4`}>
 
         {error && (
           <div className={`mb-4 px-3 py-2 rounded-xl ${cornerClass} bg-red-500/10 border border-red-400/20 text-red-300 text-sm`}>
