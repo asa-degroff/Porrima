@@ -47,6 +47,7 @@ import type { Chat, ChatMessage, ChatType, CornerRadius } from "./types";
 
 const CORNER_RADIUS_KEY = "porrima-corner-radius";
 const LEGACY_CORNER_RADIUS_KEY = "quje-corner-radius";
+const HIGH_EFFICIENCY_MODE_KEY = "porrima-high-efficiency-mode";
 const ACTIVE_CHAT_KEY = "porrima-active-chat-id";
 const LEGACY_ACTIVE_CHAT_KEY = "quje-active-chat-id";
 const ACTIVE_VIEW_KEY = "porrima-active-view";
@@ -129,14 +130,38 @@ function readCachedCornerRadius(): CornerRadius {
   }
 }
 
+function readCachedHighEfficiencyMode(): boolean {
+  try {
+    return readStoredValue(HIGH_EFFICIENCY_MODE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function applyHighEfficiencyMode(enabled: boolean): void {
+  if (typeof document === "undefined") return;
+  if (enabled) {
+    document.documentElement.setAttribute("data-high-efficiency", "");
+  } else {
+    document.documentElement.removeAttribute("data-high-efficiency");
+  }
+}
+
 // Apply cached appearance settings before first render so the login screen
 // reflects the user's choice without waiting for the (auth-gated) /api/settings.
 if (typeof document !== "undefined") {
   document.documentElement.setAttribute("data-corner", "squircle");
   document.documentElement.setAttribute("data-radius", readCachedCornerRadius());
+  applyHighEfficiencyMode(readCachedHighEfficiencyMode());
 }
 
-function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
+interface AuthenticatedAppProps {
+  onLogout: () => void;
+  highEfficiencyMode: boolean;
+  onHighEfficiencyModeChange: (enabled: boolean) => void;
+}
+
+function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeChange }: AuthenticatedAppProps) {
   const { models, refresh: refreshModels } = useModels();
   const { chats, createChat, removeChat, updateChatTitle, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
@@ -1615,6 +1640,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           settings={settings}
           models={models}
           refreshModels={refreshModels}
+          highEfficiencyMode={highEfficiencyMode}
+          onHighEfficiencyModeChange={onHighEfficiencyModeChange}
           onApply={handleApplySettings}
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}
@@ -1659,6 +1686,23 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 export default function App() {
   const { authState, error, register, login, logout } = useAuth();
   const { settings: appSettings, loading: settingsLoading } = useSettings();
+  const [highEfficiencyMode, setHighEfficiencyModeState] = useState(readCachedHighEfficiencyMode);
+
+  const setHighEfficiencyMode = useCallback((enabled: boolean) => {
+    setHighEfficiencyModeState(enabled);
+    applyHighEfficiencyMode(enabled);
+    try {
+      if (enabled) {
+        writeStoredValue(HIGH_EFFICIENCY_MODE_KEY, "true");
+      } else {
+        removeStoredValue(HIGH_EFFICIENCY_MODE_KEY);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    applyHighEfficiencyMode(highEfficiencyMode);
+  }, [highEfficiencyMode]);
 
   // Apply corner radius as soon as settings are available.
   // Before settings load (or when the user isn't authenticated yet and /api/settings
@@ -1692,7 +1736,11 @@ export default function App() {
 
   return (
     <PinnedItemProvider>
-      <AuthenticatedApp onLogout={logout} />
+      <AuthenticatedApp
+        onLogout={logout}
+        highEfficiencyMode={highEfficiencyMode}
+        onHighEfficiencyModeChange={setHighEfficiencyMode}
+      />
     </PinnedItemProvider>
   );
 }

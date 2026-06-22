@@ -657,12 +657,12 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop"
       onClick={(e) => {
         if (e.target === e.currentTarget && currentStep === "welcome") handleSkip();
       }}
     >
-      <div className="w-full max-w-3xl mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[90vh] flex flex-col">
+      <div className="w-full max-w-3xl mx-4 app-modal-surface border border-white/15 rounded-2xl shadow-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <div>
             <h2 className="text-lg font-semibold text-white/90">Setup</h2>

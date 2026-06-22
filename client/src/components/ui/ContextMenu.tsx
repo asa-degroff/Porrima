@@ -73,7 +73,7 @@ export function ContextMenu({ x, y, onClose, children, blocksSidebarClose }: Con
     <div
       ref={menuRef}
       onClick={(e) => e.stopPropagation()}
-      className="fixed z-50 min-w-[160px] rounded-lg border border-white/10 bg-black/90 backdrop-blur-xl shadow-xl py-1"
+      className="fixed z-50 min-w-[160px] rounded-lg border border-white/10 app-solid-popover shadow-xl py-1"
       style={{ left: x, top: y }}
     >
       {children}

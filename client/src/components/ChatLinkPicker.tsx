@@ -26,7 +26,7 @@ export function ChatLinkPicker({ chats, filterText, onSelect, onClose, anchorRec
 
   return (
     <div
-      className="link-picker-popup fixed z-50 w-80 max-h-96 overflow-auto rounded-lg border border-white/10 bg-black/90 backdrop-blur-xl shadow-xl"
+      className="link-picker-popup fixed z-50 w-80 max-h-96 overflow-auto rounded-lg border border-white/10 app-solid-popover shadow-xl"
       style={position}
     >
       <div className="px-3 py-2 border-b border-white/10">

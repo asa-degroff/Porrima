@@ -170,7 +170,7 @@ export function VisionChat({ image, analyzing, streamingDescription, streamingTh
                 Re-analyze
               </button>
               {presetSelectOpen && (
-                <div className="absolute left-0 top-full mt-1 z-30 min-w-[160px] backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                <div className="absolute left-0 top-full mt-1 z-30 min-w-[160px] app-solid-popover border rounded-xl shadow-2xl py-1"
                   style={{
                     backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                     borderColor: `rgba(var(--theme-primary-border))`,

@@ -187,7 +187,7 @@ export function AutomationRunnerDropdown({
         {trigger}
         {dropdown.open && (
           <div
-            className="absolute z-30 top-full mt-1 -translate-x-1/2 left-1/2 animate-dropdown-enter backdrop-blur-xl border rounded-xl shadow-2xl py-1 overflow-hidden min-w-[180px]"
+            className="absolute z-30 top-full mt-1 -translate-x-1/2 left-1/2 animate-dropdown-enter app-solid-popover border rounded-xl shadow-2xl py-1 overflow-hidden min-w-[180px]"
             style={{
               backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
               borderColor: `rgba(var(--theme-primary-border))`,

@@ -1231,7 +1231,7 @@ function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: ()
   if (!objectUrl) {
     return (
       <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+        className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop app-modal-backdrop-strong"
         onClick={onClose}
       >
         <div className="w-8 h-8 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
@@ -1241,7 +1241,7 @@ function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: ()
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop app-modal-backdrop-strong"
       onClick={onClose}
     >
       <button

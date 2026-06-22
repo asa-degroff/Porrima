@@ -444,6 +444,8 @@ interface Props {
   settings: Settings;
   models: InferenceModel[];
   refreshModels: () => void;
+  highEfficiencyMode: boolean;
+  onHighEfficiencyModeChange: (enabled: boolean) => void;
   onApply: (settings: Settings) => void | Promise<void>;
   onSave: (settings: Settings) => void | Promise<void>;
   onClose: () => void;
@@ -457,7 +459,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
-export function SettingsModal({ settings, models, refreshModels, onApply, onSave, onClose, onLogout, onOpenSetup }: Props) {
+export function SettingsModal({ settings, models, refreshModels, highEfficiencyMode, onHighEfficiencyModeChange, onApply, onSave, onClose, onLogout, onOpenSetup }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
@@ -621,6 +623,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
+  const [deviceHighEfficiencyMode, setDeviceHighEfficiencyMode] = useState(highEfficiencyMode);
   const [chromaticAberration, setChromaticAberration] = useState(settings.chromaticAberration ?? true);
   const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
@@ -651,6 +654,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     allowFileWrite: true,
     allowAbsolutePaths: false,
   });
+
+  useEffect(() => {
+    setDeviceHighEfficiencyMode(highEfficiencyMode);
+  }, [highEfficiencyMode]);
 
   const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
   // Delayed extraction settings
@@ -2702,12 +2709,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="w-full max-w-3xl mx-4 app-modal-surface border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
@@ -4062,6 +4069,25 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <ToggleSwitch
                 checked={flatBackground}
                 onChange={() => setFlatBackground(!flatBackground)}
+                accentColor="blue"
+              />
+            </div>
+          </div>
+
+          {/* High Efficiency */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 pr-3">
+                <label className="block text-sm font-medium text-white/60">High Efficiency</label>
+                <p className="text-white/30 text-xs mt-0.5">
+                  {deviceHighEfficiencyMode
+                    ? "Blur is disabled on this device."
+                    : "Blurred surfaces are enabled on this device."}
+                </p>
+              </div>
+              <ToggleSwitch
+                checked={deviceHighEfficiencyMode}
+                onChange={() => setDeviceHighEfficiencyMode(!deviceHighEfficiencyMode)}
                 accentColor="blue"
               />
             </div>
@@ -7401,6 +7427,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           </button>
           <button
             onClick={async () => {
+              onHighEfficiencyModeChange(deviceHighEfficiencyMode);
               await onApply(handleSave());
               setAppliedFeedback(true);
               setTimeout(() => setAppliedFeedback(false), 2000);
@@ -7410,7 +7437,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             {appliedFeedback ? "Applied" : "Apply"}
           </button>
           <button
-            onClick={() => onSave(handleSave())}
+            onClick={async () => {
+              onHighEfficiencyModeChange(deviceHighEfficiencyMode);
+              await onSave(handleSave());
+            }}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
             Save and Close

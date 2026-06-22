@@ -428,7 +428,7 @@ export function NotebookView({
   return (
     <div className="flex-1 flex flex-col min-h-0 min-w-0">
       {/* Header */}
-      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center gap-2 md:gap-3 backdrop-blur-sm bg-white/[0.03]">
+      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center gap-2 md:gap-3 app-glass-surface">
         {/* Left: hamburger + title */}
         <div className="flex items-center gap-2 min-w-0">
           {/* Hamburger menu - mobile only */}
