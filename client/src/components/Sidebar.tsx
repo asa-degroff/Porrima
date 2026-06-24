@@ -918,20 +918,20 @@ function RecentChatItem({
   }, []);
   const longPressProps = useLongPress(openContextMenu);
 
-  const colorClasses: Record<string, string> = {
-    purple: "text-purple-300/60 border-purple-400/20",
-    blue: "text-blue-300/60 border-blue-400/20",
-    emerald: "text-emerald-300/60 border-emerald-400/20",
-    amber: "text-amber-300/60 border-amber-400/20",
-    rose: "text-rose-300/60 border-rose-400/20",
-    cyan: "text-cyan-300/60 border-cyan-400/20",
-    violet: "text-violet-300/60 border-violet-400/20",
-    orange: "text-orange-300/60 border-orange-400/20",
-    pink: "text-pink-300/60 border-pink-400/20",
-    teal: "text-teal-300/60 border-teal-400/20",
+  const borderColors: Record<string, string> = {
+    purple: "border-purple-400/20",
+    blue: "border-blue-400/20",
+    emerald: "border-emerald-400/20",
+    amber: "border-amber-400/20",
+    rose: "border-rose-400/20",
+    cyan: "border-cyan-400/20",
+    violet: "border-violet-400/20",
+    orange: "border-orange-400/20",
+    pink: "border-pink-400/20",
+    teal: "border-teal-400/20",
   };
-  
-  const colorClass = colorClasses[color] || colorClasses.purple;
+
+  const borderColor = borderColors[color] || borderColors.purple;
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
   const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
@@ -956,7 +956,7 @@ function RecentChatItem({
               ? "hover:bg-white/8 border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
               : cacheResidency
                 ? "hover:bg-white/8 border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-                : `hover:bg-white/8 ${colorClass.split(" ")[1]}`
+                : `hover:bg-white/8 ${borderColor}`
         }`}
         title={effectiveTitle}
       >
@@ -967,8 +967,7 @@ function RecentChatItem({
             aria-hidden="true"
           />
         )}
-        <div className="flex items-start gap-2 min-w-0">
-          <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
+        <div className="flex items-start min-w-0">
           <div className="flex-1 min-w-0 pr-5">
             <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
               {chat.title}
