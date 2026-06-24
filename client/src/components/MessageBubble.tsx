@@ -60,6 +60,31 @@ const MESSAGE_ROW_MAX_WIDTH = {
   className: "max-w-[97%] md:max-w-[86%]",
 } as const;
 
+interface MessageEditDraft {
+  text: string;
+  images: ImageAttachment[];
+  minWidth?: number;
+}
+
+const messageEditDrafts = new Map<string, MessageEditDraft>();
+
+function getMessageEditDraftKey(
+  chatId: string | undefined,
+  message: ChatMessage,
+  messageIndex: number | null | undefined,
+  messageSequence: number | undefined
+): string | null {
+  if (!chatId) return null;
+  const sequence = messageSequence ?? message._rowSequence;
+  if (sequence != null) return `${chatId}:seq:${sequence}`;
+  if (messageIndex != null) return `${chatId}:idx:${messageIndex}:${message.timestamp}:${message.role}`;
+  return `${chatId}:ts:${message.timestamp}:${message.role}`;
+}
+
+function cloneImageAttachments(images: ImageAttachment[] | undefined): ImageAttachment[] {
+  return images ? images.map((image) => ({ ...image })) : [];
+}
+
 function ReadAloudButton({
   text,
   onReadAloud,
@@ -267,10 +292,14 @@ export const MessageBubble = memo(function MessageBubble({
 
   const { isPinned: isItemPinned, unpin: unpinItem } = usePinnedItem();
   const isDesktopView = useIsDesktop();
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState("");
-  const [editImages, setEditImages] = useState<ImageAttachment[]>([]);
-  const [editMinWidth, setEditMinWidth] = useState<number | undefined>(undefined);
+  const editDraftKey = isUser
+    ? getMessageEditDraftKey(chatId, message, messageIndex, messageSequence)
+    : null;
+  const initialEditDraft = editDraftKey ? messageEditDrafts.get(editDraftKey) : undefined;
+  const [editing, setEditing] = useState(() => !!initialEditDraft);
+  const [editText, setEditText] = useState(() => initialEditDraft?.text ?? "");
+  const [editImages, setEditImages] = useState<ImageAttachment[]>(() => initialEditDraft?.images ?? []);
+  const [editMinWidth, setEditMinWidth] = useState<number | undefined>(() => initialEditDraft?.minWidth);
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [useHorizontalUserActions, setUseHorizontalUserActions] = useState(false);
@@ -286,6 +315,27 @@ export const MessageBubble = memo(function MessageBubble({
     setContextMenu(pos);
   }, []);
   const longPressProps = useLongPress(openContextMenu);
+
+  const updateEditDraft = useCallback((patch: Partial<MessageEditDraft>) => {
+    if (!editDraftKey) return;
+    const current = messageEditDrafts.get(editDraftKey) ?? {
+      text: editText,
+      images: editImages,
+      minWidth: editMinWidth,
+    };
+    messageEditDrafts.set(editDraftKey, { ...current, ...patch });
+  }, [editDraftKey, editImages, editMinWidth, editText]);
+
+  useEffect(() => {
+    if (!editDraftKey) return;
+    const draft = messageEditDrafts.get(editDraftKey);
+    if (!draft) return;
+
+    setEditing(true);
+    setEditText(draft.text);
+    setEditImages(draft.images);
+    setEditMinWidth(draft.minWidth);
+  }, [editDraftKey]);
 
   const handleRetry = () => {
     if (messageIndex != null) {
@@ -305,11 +355,18 @@ export const MessageBubble = memo(function MessageBubble({
   }, [editing]);
 
   const handleStartEdit = () => {
-    if (bubbleRef.current) {
-      setEditMinWidth(bubbleRef.current.offsetWidth);
-    }
+    const minWidth = bubbleRef.current?.offsetWidth;
+    const images = cloneImageAttachments(message.images);
+    setEditMinWidth(minWidth);
     setEditText(message.content);
-    setEditImages(message.images || []);
+    setEditImages(images);
+    if (editDraftKey) {
+      messageEditDrafts.set(editDraftKey, {
+        text: message.content,
+        images,
+        minWidth,
+      });
+    }
     setEditing(true);
   };
 
@@ -323,15 +380,25 @@ export const MessageBubble = memo(function MessageBubble({
     if (textChanged || imagesChanged) {
       onEditMessage?.(messageIndex, trimmed, editImages, messageSequence);
     }
+    if (editDraftKey) {
+      messageEditDrafts.delete(editDraftKey);
+    }
     setEditing(false);
   };
 
   const handleCancel = () => {
+    if (editDraftKey) {
+      messageEditDrafts.delete(editDraftKey);
+    }
     setEditing(false);
   };
 
   const removeEditImage = (index: number) => {
-    setEditImages((prev) => prev.filter((_, i) => i !== index));
+    setEditImages((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      updateEditDraft({ images: next });
+      return next;
+    });
   };
 
   const handleReadAloud = useCallback(() => {
@@ -544,7 +611,9 @@ export const MessageBubble = memo(function MessageBubble({
                   }}
                   value={editText}
                   onChange={(e) => {
-                    setEditText(e.target.value);
+                    const nextText = e.target.value;
+                    setEditText(nextText);
+                    updateEditDraft({ text: nextText });
                     e.target.style.height = "auto";
                     e.target.style.height = e.target.scrollHeight + "px";
                   }}

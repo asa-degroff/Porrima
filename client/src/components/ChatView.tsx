@@ -888,8 +888,12 @@ export function ChatView({
                     const isOutOfContext = !!msg._outOfContext;
                     const isSystemMessage = !!msg._isSystemMessage;
                     const isMidTurnCompaction = !!msg._isMidTurnCompaction;
+                    const singleMessageKey =
+                      msg._rowSequence != null
+                        ? `seq-${msg._rowSequence}`
+                        : `${i}-${msg.timestamp}-${msg.role}`;
                     const stableKey = localStartIdx === localEndIdx
-                      ? `msg-${i}-${msg.timestamp}-${msg.role}`
+                      ? `msg-${singleMessageKey}`
                       : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
 
                     // Show "In context" divider at the transition from out-of-context to in-context
