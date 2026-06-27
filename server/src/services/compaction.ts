@@ -469,7 +469,7 @@ export async function estimateContextTokensWithExactToolResults(
  *   - even the last single pair + content exceeds the budget (split won't help)
  *   - every pair would be kept (no archiving would happen)
  */
-type AssistantRetentionSplitMode = "tool-pair-tail" | "tool-payload-stripped";
+type AssistantRetentionSplitMode = "tool-pair-tail" | "tool-payload-stripped" | "tool-payload-placeholder";
 
 interface AssistantRetentionSplit {
   head: ChatMessage;
@@ -539,6 +539,8 @@ function trySplitAssistantMessage(
   msg.toolCalls = toolCalls.slice(firstKeptIdx);
   msg.toolResults = toolResults.filter((tr) => !archivedIds.has(tr.toolCallId));
   msg.thinking = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
 
   const archivedTokens = archivedCalls.reduce((sum, tc) => {
     const tr = archivedResults.find((r) => r.toolCallId === tc.id);
@@ -589,6 +591,8 @@ function tryStripAssistantToolPayloadForTextRetention(
   msg.toolCalls = undefined;
   msg.toolResults = undefined;
   msg.thinking = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
 
   return {
     head,
@@ -597,6 +601,89 @@ function tryStripAssistantToolPayloadForTextRetention(
     keptPairs: 0,
     archivedTokens: estimateMessageContentTokens(head),
     mode: "tool-payload-stripped",
+  };
+}
+
+function buildArchivedToolPayloadPlaceholder(msg: ChatMessage): string {
+  const toolCalls = msg.toolCalls ?? [];
+  const toolResults = msg.toolResults ?? [];
+  const toolCallIds = new Set(toolCalls.map((tc) => tc.id));
+  const lines: string[] = [
+    "[Archived tool activity - full tool calls and results are available in the preceding compacted context archive.]",
+  ];
+  const matchedResultIds = new Set<string>();
+  const maxEntries = 6;
+  let emitted = 0;
+
+  for (const tc of toolCalls) {
+    if (emitted >= maxEntries) break;
+    const result = toolResults.find((tr) => tr.toolCallId === tc.id);
+    if (result) matchedResultIds.add(result.toolCallId);
+    const args = summarizeArgs(tc.arguments ?? {}, 120);
+    const resultLabel = result
+      ? `${result.isError ? "error" : "ok"}: ${truncateMiddle(result.content || "(empty result)", 300)}`
+      : "no result";
+    lines.push(`- ${tc.name}${args ? `(${args})` : ""} -> ${resultLabel}`);
+    emitted++;
+  }
+
+  for (const tr of toolResults) {
+    if (emitted >= maxEntries) break;
+    if (matchedResultIds.has(tr.toolCallId)) continue;
+    lines.push(`- ${tr.toolName} result -> ${tr.isError ? "error" : "ok"}: ${truncateMiddle(tr.content || "(empty result)", 300)}`);
+    emitted++;
+  }
+
+  const totalEntries = toolCalls.length + toolResults.filter((tr) => !toolCallIds.has(tr.toolCallId)).length;
+  const remaining = totalEntries - emitted;
+  if (remaining > 0) {
+    lines.push(`- ${remaining} more tool item(s) archived.`);
+  }
+
+  return lines.join("\n");
+}
+
+function tryReplaceToolPayloadWithPlaceholder(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): AssistantRetentionSplit | null {
+  if (msg.role !== "assistant") return null;
+  if (msg.content.trim()) return null;
+  if (!msg.toolResults?.length) return null;
+
+  const placeholder = buildArchivedToolPayloadPlaceholder(msg);
+  const keptTokens = Math.ceil(estimateTokens(placeholder) * scaleFactor)
+    + Math.ceil(MESSAGE_FRAMING_TOKENS * scaleFactor);
+  if (keptTokens > budgetTokens) return null;
+
+  const archivedCalls = msg.toolCalls ? structuredClone(msg.toolCalls) : undefined;
+  const archivedResults = structuredClone(msg.toolResults);
+  const archivedPairCount = Math.max(archivedCalls?.length ?? 0, archivedResults.length);
+  const head: ChatMessage = {
+    role: "assistant",
+    content: "",
+    thinking: msg.thinking,
+    toolCalls: archivedCalls,
+    toolResults: archivedResults,
+    timestamp: msg.timestamp,
+    _outOfContext: true,
+  };
+
+  msg.content = placeholder;
+  msg.thinking = undefined;
+  msg.toolCalls = undefined;
+  msg.toolResults = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
+
+  return {
+    head,
+    originalPairs: archivedPairCount,
+    archivedPairs: archivedPairCount,
+    keptPairs: 0,
+    archivedTokens: estimateMessageContentTokens(head),
+    mode: "tool-payload-placeholder",
   };
 }
 
@@ -610,7 +697,8 @@ function tryCompactAssistantMessageForRetention(
   // prose before trying to preserve any tool pairs.
   return (
     tryStripAssistantToolPayloadForTextRetention(msg, budgetTokens, scaleFactor) ??
-    trySplitAssistantMessage(msg, budgetTokens, scaleFactor)
+    trySplitAssistantMessage(msg, budgetTokens, scaleFactor) ??
+    tryReplaceToolPayloadWithPlaceholder(msg, budgetTokens, scaleFactor)
   );
 }
 

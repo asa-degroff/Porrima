@@ -140,4 +140,62 @@ describe("compaction retention planning", () => {
     expect(chat.messages.some((m) => !m._outOfContext && m.role === "user" && m.content === currentUser)).toBe(true);
     expect(JSON.stringify(mockState.savedArchives)).toContain("large inspection payload");
   });
+
+  it("backfills across a single completed tool-only row by keeping an archived placeholder", async () => {
+    const { truncateBeforeSend } = await import("../services/compaction.js");
+    const hugeResult = "route handler line with chat compaction and tool loop state\n".repeat(2200);
+    const recentOutput = "Recent conclusion: the resume path owns the handoff and prompt rebuild.";
+    const currentUser = "Please continue by patching the retention planner.";
+    const chat = makeChat([
+      { role: "user", content: "Earlier setup request.", timestamp: 1 },
+      { role: "assistant", content: recentOutput, timestamp: 2 },
+      { role: "user", content: currentUser, timestamp: 3 },
+      {
+        role: "assistant",
+        content: "",
+        thinking: "I should inspect the chat route before editing compaction.",
+        timestamp: 4,
+        toolCalls: [
+          { id: "read-route", name: "read_file", arguments: { path: "server/src/routes/chat.ts" } },
+        ],
+        toolResults: [
+          { toolCallId: "read-route", toolName: "read_file", content: hugeResult, isError: false },
+        ],
+        segments: [
+          {
+            seq: 1,
+            type: "tool_call",
+            toolCall: { id: "read-route", name: "read_file", arguments: { path: "server/src/routes/chat.ts" } },
+          },
+          {
+            seq: 2,
+            type: "tool_result",
+            toolResult: { toolCallId: "read-route", toolName: "read_file", content: hugeResult, isError: false },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: "I also checked the shared agent loop and can continue from the route seam.",
+        timestamp: 5,
+      },
+    ]);
+
+    const result = await truncateBeforeSend(chat, 10000, "You are helpful.", undefined, undefined, []);
+
+    expect(result?.truncated).toBe(true);
+    const active = chat.messages.filter((m) => !m._outOfContext);
+    expect(active.some((m) => m.role === "user" && m.content === currentUser)).toBe(true);
+    expect(active.some((m) => m.role === "assistant" && m.content === recentOutput)).toBe(true);
+
+    const placeholder = active.find((m) => m.content.includes("Archived tool activity"));
+    expect(placeholder).toBeTruthy();
+    expect(placeholder?.content).toContain("read_file");
+    expect(placeholder?.content).toContain("server/src/routes/chat.ts");
+    expect(placeholder?.toolCalls).toBeUndefined();
+    expect(placeholder?.toolResults).toBeUndefined();
+    expect(placeholder?.segments).toBeUndefined();
+    expect(JSON.stringify(active).length).toBeLessThan(5000);
+    expect(JSON.stringify(mockState.savedArchives)).toContain("route handler line with chat compaction");
+  });
 });
