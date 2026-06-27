@@ -9,7 +9,8 @@ import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingSta
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
-import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
+import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, estimateExtractionSignalTokens, triggerMidTurnExtractionPulse } from "../services/memory-extraction.js";
+import { DEFAULT_MID_TURN_EXTRACTION_THRESHOLD } from "../services/extraction-settings.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import {
   COMPACTION_HARD_CAP_RATIO,
@@ -924,6 +925,11 @@ async function handleChatStream(
     thinkingDurationMs: 0,
     // Mid-turn compaction: set when usage > 85% during tool loop
     needsMidTurnCompaction: false,
+    // Mid-turn extraction: accumulate post-formatting signal tokens.
+    // When threshold is crossed, trigger a pulse extraction so memories
+    // don't get buried under compaction during long tool loops.
+    midTurnSignalTokens: 0,
+    midTurnLastPulseIndex: -1 as number,
     // Track last llama.cpp timings for model-stats recording (per-message)
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
@@ -990,6 +996,8 @@ async function handleChatStream(
     state.thinkingStartTime = null;
     state.thinkingDurationMs = 0;
     state.needsMidTurnCompaction = false;
+    state.midTurnSignalTokens = 0;
+    state.midTurnLastPulseIndex = -1;
     state.lastLlamaTimings = null;
     state.lastLlamaCache = null;
     state.llamaRuns = [];
@@ -1269,6 +1277,8 @@ async function handleChatStream(
     flushThinkingTimer();
     state.fullText += delta;
     state.pendingText += delta;
+    // Mid-turn extraction: text content is full signal value
+    state.midTurnSignalTokens += Math.ceil(delta.length / 2);
     if (ttsEnabled) {
       ttsTextQueue.push(delta);
     }
@@ -1282,6 +1292,8 @@ async function handleChatStream(
       state.thinkingStartTime = Date.now();
     }
     state.thinkingText += delta;
+    // Mid-turn extraction: thinking content is full signal value
+    state.midTurnSignalTokens += Math.ceil(delta.length / 2);
     res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
     return true;
   }
@@ -1906,6 +1918,50 @@ async function handleChatStream(
             state.allToolResults.push(toolResult);
             console.log(`[chat] Tool result accumulated: ${state.allToolResults.length} total`);
 
+            // Mid-turn extraction: estimate signal tokens for this tool call + result
+            // and accumulate toward the mid-turn pulse threshold.
+            const toolCall = state.allToolCalls.find(tc => tc.id === event.toolCallId);
+            const signalDelta = estimateExtractionSignalTokens(
+              0, // thinking/text counted in their delta handlers
+              0,
+              toolCall ? 1 : 0, // one tool call
+              [{ toolName: event.toolName, contentLength: resultText.length }]
+            );
+            state.midTurnSignalTokens += signalDelta;
+            console.log(`[extraction] midTurnSignalTokens: ${state.midTurnSignalTokens} (delta: ${signalDelta}, tool: ${event.toolName})`);
+
+            // Check threshold and trigger a mid-turn extraction pulse if crossed
+            const midTurnThreshold = settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD;
+            if (state.midTurnSignalTokens >= midTurnThreshold) {
+              const pulseIndex = state.midTurnLastPulseIndex + 1;
+              console.log(`[extraction] Triggering mid-turn pulse #${pulseIndex} at ${state.midTurnSignalTokens} signal tokens (threshold: ${midTurnThreshold})`);
+
+              // Build pulse content from all accumulated state since turn start
+              // (simpler than delta tracking; KV cache session handles efficiency)
+              const pulseContent = {
+                userMessage: lastUserMessage || "",
+                thinkingText: state.thinkingText,
+                toolCalls: state.allToolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments || {} })),
+                toolResults: state.allToolResults.map(tr => ({
+                  toolName: tr.toolName,
+                  content: tr.content,
+                  isError: tr.isError,
+                })),
+              };
+
+              await triggerMidTurnExtractionPulse({
+                modelId: chat.modelId,
+                chatId: chat.id,
+                projectId: chat.projectId || undefined,
+                content: pulseContent,
+                pulseIndex,
+                turnId: state.toolLoopId,
+              });
+
+              state.midTurnSignalTokens = 0;
+              state.midTurnLastPulseIndex = pulseIndex;
+            }
+
             // Insert tool_result immediately after its tool_call segment (not at the end),
             // so that visual/artifact segments emitted during tool execution stay after the pair.
             const callIdx = state.segments.findIndex(
@@ -2345,6 +2401,7 @@ async function handleChatStream(
                 chatMessages: chat.messages,
                 chatType: chat.type,
                 projectId: chat.projectId,
+                turnId: state.toolLoopId,
               });
             }
           } catch (saveErr) {
@@ -2414,7 +2471,10 @@ async function handleChatStream(
               if (compaction.truncated) {
                 // Extract memories from removed messages before rebuilding the memory prompt.
                 if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
-                  await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+                  await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, {
+                    projectId: chat.projectId,
+                    lastPulseIndex: state.midTurnLastPulseIndex,
+                  });
                 }
                 await saveChat(chat, { allowTruncation: true });
 
@@ -2804,7 +2864,10 @@ async function handleChatStream(
             // rebuilt prompt would miss the freshly extracted memories from removed context.
             if (isAgent && compaction.removedMessages?.length) {
               try {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, {
+                  projectId: chat.projectId,
+                  lastPulseIndex: state.midTurnLastPulseIndex,
+                });
               } catch (err) {
                 console.error("[compaction] pre-flush failed:", err);
               }
@@ -3040,6 +3103,7 @@ async function handleChatStream(
                 chatMessages: chat.messages,
                 chatType: chat.type,
                 projectId: chat.projectId,
+                turnId: state.toolLoopId,
               });
             }
           }
@@ -3228,6 +3292,7 @@ async function handleChatStream(
           chatMessages: chat.messages,
           chatType: chat.type,
           projectId: chat.projectId,
+          turnId: state.toolLoopId,
         });
       }
 
@@ -3540,7 +3605,7 @@ router.post("/", async (req, res) => {
         // handler's follow-up path or in the main handler).
         if (isMemoryAugmentedChatType(chat.type) && result.removedMessages?.length) {
           try {
-            await preCompactionFlush(chat.modelId, chat.id, result.removedMessages, chat.projectId);
+            await preCompactionFlush(chat.modelId, chat.id, result.removedMessages, { projectId: chat.projectId });
           } catch (err) {
             console.error("[compaction] /compact flush failed:", err);
           }
@@ -3816,7 +3881,7 @@ router.post("/", async (req, res) => {
             // rebuilt prompt would miss freshly extracted memories from removed context.
             if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
               try {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, { projectId: chat.projectId });
               } catch (err) {
                 console.error("[compaction] pre-send flush failed (resume):", err);
               }
@@ -4007,7 +4072,7 @@ router.post("/", async (req, res) => {
             // rebuilt prompt would miss freshly extracted memories from removed context.
             if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
               try {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, { projectId: chat.projectId });
               } catch (err) {
                 console.error("[compaction] pre-send flush failed:", err);
               }
@@ -4644,7 +4709,7 @@ router.post("/edit", async (req, res) => {
           // available for the system prompt rebuild below.
           if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
             try {
-              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, { projectId: chat.projectId });
             } catch (err) {
               console.error("[compaction] pre-send flush failed (edit):", err);
             }

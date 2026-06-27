@@ -343,6 +343,7 @@ export interface Settings {
   extractionCtxSize?: number;       // default 16384 — context window for extraction server
   extractionMaxTokens?: number;     // default 4000 — max output tokens for extraction calls
   extractionTimeoutMs?: number;     // default 600000 — abort extraction requests after this many ms
+  midTurnExtractionThreshold?: number; // default 6000 — signal token threshold for mid-turn extraction pulse
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:32102"
@@ -500,6 +501,7 @@ export interface Memory {
   sourceMessageEndTimestamp?: number;
   sourceMessageStartIndex?: number;
   sourceMessageEndIndex?: number;
+  turnId?: string;  // UUID of the agent turn that extracted this memory (for same-turn retrieval guard)
   supersededBy?: string;  // ID of newer memory that supersedes this one
   supersedes?: string;  // ID of older memory that this one supersedes
 }

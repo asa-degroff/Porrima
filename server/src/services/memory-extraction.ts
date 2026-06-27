@@ -1067,6 +1067,52 @@ function formatMessageForExtraction(message: ChatMessage, messageIndex: number):
   return `${segment.label}:\n${segment.text}`;
 }
 
+// ---------------------------------------------------------------------------
+// Mid-turn extraction: signal token estimator
+// ---------------------------------------------------------------------------
+// Lightweight estimate of how many "extraction tokens" a turn's content
+// will actually produce after truncation. Mirrors the rules in
+// formatMessageContentForExtraction so the trigger fires at meaningful
+// intervals (every ~3000 extraction tokens ≈ ~1500 actual tokens), not
+// on data movement.
+
+/**
+ * Estimate the number of extraction-signal tokens that will be processed
+ * for a given set of content. Mirrors the truncation rules applied by
+ * formatMessageContentForExtraction.
+ *
+ * - Text/thinking content: full count (~2 chars/token)
+ * - Tool calls: fixed ~150 chars each (name + truncated args)
+ * - Tool results: bulk tools capped at EXTRACT_TOOL_RESULT_MAX (500),
+ *   non-bulk tools full length
+ */
+export function estimateExtractionSignalTokens(
+  thinkingChars: number,
+  textChars: number,
+  toolCallCount: number,
+  toolResults: Array<{ toolName: string; contentLength: number }>
+): number {
+  let chars = 0;
+
+  // Text and thinking — full signal value
+  chars += thinkingChars + textChars;
+
+  // Tool calls — fixed cost (name + truncated args, typically ~150 chars each)
+  chars += toolCallCount * 150;
+
+  // Tool results — bulk tools are truncated to EXTRACT_TOOL_RESULT_MAX
+  for (const tr of toolResults) {
+    if (BULK_TOOL_NAMES.has(tr.toolName)) {
+      chars += Math.min(tr.contentLength, EXTRACT_TOOL_RESULT_MAX);
+    } else {
+      chars += tr.contentLength;
+    }
+  }
+
+  // ~2 chars per token average
+  return Math.ceil(chars / 2);
+}
+
 interface ExtractChunkedOptions {
   modelId: string;
   systemPrompt: string;
@@ -1832,8 +1878,10 @@ async function saveExtractedMemory(
   projectId: string | undefined,
   sourceType: MemorySourceType,
   sourceId: string | undefined,
-  sourceSpan?: MemorySourceSpan,
+  opts?: { sourceSpan?: MemorySourceSpan; turnId?: string },
 ): Promise<string> {
+  const sourceSpan = opts?.sourceSpan;
+  const turnId = opts?.turnId;
   const now = new Date().toISOString();
   const newMemoryId = uuid();
   await addMemory({
@@ -1853,6 +1901,7 @@ async function saveExtractedMemory(
     sourceMessageEndTimestamp: sourceSpan?.endTimestamp,
     sourceMessageStartIndex: sourceSpan?.startIndex,
     sourceMessageEndIndex: sourceSpan?.endIndex,
+    ...(turnId ? { turnId } : {}),
   });
   return newMemoryId;
 }
@@ -1861,11 +1910,19 @@ export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
   chatId: string,
-  projectId?: string,
-  sourceType: MemorySourceType = 'chat',
-  sourceId?: string,
-  sourceSpan?: MemorySourceSpan,
+  opts?: {
+    projectId?: string;
+    sourceType?: MemorySourceType;
+    sourceId?: string;
+    sourceSpan?: MemorySourceSpan;
+    turnId?: string;
+  },
 ): Promise<DedupAndSaveOutcome> {
+  const projectId = opts?.projectId;
+  const sourceType = opts?.sourceType ?? 'chat';
+  const sourceId = opts?.sourceId;
+  const sourceSpan = opts?.sourceSpan;
+  const turnId = opts?.turnId;
   // Guard: if tied to a chat, verify it still exists. Catch races where
   // the chat was deleted during extraction (immediate queue, pre-compaction,
   // delayed, or save_memory tool mid-conversation).
@@ -1902,7 +1959,7 @@ export async function dedupAndSave(
     }
 
     console.log(`[memory] New memory: "${fact.text}"`);
-    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, sourceSpan);
+    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, { sourceSpan, turnId });
     added++;
   }
 
@@ -2042,9 +2099,12 @@ function renderImmediateExchange(exchange: ImmediateExchange): string {
   ].join("\n\n");
 }
 
-function buildImmediateBatchHeader(exchanges: ImmediateExchange[]): string {
+function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
   const ids = exchanges.map((exchange) => exchange.exchangeId).join(", ");
-  return `Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
+  const turnMarker = isTurnComplete
+    ? "[TURN COMPLETE] The agent turn has finished. Extract memories focusing on higher-level patterns, decisions, and insights — not just concrete facts. What emerged from the full trajectory of this turn?\n\n"
+    : "";
+  return `${turnMarker}Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
 
 For every extracted memory, include "sourceExchangeId" with exactly one of these exchange ids: ${ids}.
 Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
@@ -2052,8 +2112,8 @@ If a memory depends on multiple exchanges, use the exchange that best supports i
 If nothing is significant, output: []`;
 }
 
-function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[]): string {
-  return `${buildImmediateBatchHeader(exchanges)}\n\nEXCHANGES:\n\n${exchanges.map(renderImmediateExchange).join("\n\n---\n\n")}`;
+function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
+  return `${buildImmediateBatchHeader(exchanges, isTurnComplete)}\n\nEXCHANGES:\n\n${exchanges.map(renderImmediateExchange).join("\n\n---\n\n")}`;
 }
 
 function immediateExchangeToSegment(exchange: ImmediateExchange): ExtractSegment {
@@ -2070,13 +2130,14 @@ function immediateExchangeToSegment(exchange: ImmediateExchange): ExtractSegment
 function splitImmediateExchangesIntoBatches(
   exchanges: ImmediateExchange[],
   maxInputChars: number,
+  isTurnComplete: boolean = false,
 ): ImmediateExchange[][] {
   const batches: ImmediateExchange[][] = [];
   let current: ImmediateExchange[] = [];
 
   for (const exchange of exchanges) {
     const candidate = [...current, exchange];
-    const candidatePrompt = buildImmediateBatchUserPrompt(candidate);
+    const candidatePrompt = buildImmediateBatchUserPrompt(candidate, isTurnComplete);
     if (candidatePrompt.length <= maxInputChars || current.length === 0) {
       current = candidate;
       continue;
@@ -2206,10 +2267,7 @@ async function saveImmediateFacts(
       group.facts,
       group.embeddings,
       chatId,
-      projectId,
-      "chat_immediate",
-      chatId,
-      group.sourceSpan,
+      { projectId, sourceType: "chat_immediate", sourceId: chatId, sourceSpan: group.sourceSpan },
     );
     added += outcome.added;
     superseded += outcome.superseded;
@@ -2236,8 +2294,9 @@ async function runImmediateBatch(input: {
   maxInputChars: number;
   assumeMutexHeld: boolean;
   freshSessionReason?: string;
+  isTurnComplete?: boolean;
 }): Promise<void> {
-  const userPrompt = buildImmediateBatchUserPrompt(input.batch);
+  const userPrompt = buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false);
   const newUserOnly: ExtractionDialogueMessage[] = [{ role: "user", content: userPrompt }];
   const nextUserTooLarge = estimateDialogueChars(newUserOnly) > input.maxInputChars;
   let session = input.session;
@@ -2286,7 +2345,7 @@ async function runImmediateBatch(input: {
       ? await extractInChunks({
           modelId: input.modelId,
           systemPrompt: input.systemPrompt,
-          userPromptHeader: `${buildImmediateBatchHeader(input.batch)}\n\nEXCHANGES:`,
+          userPromptHeader: `${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
           segments: input.batch.map(immediateExchangeToSegment),
           contextLabel: `immediateExtraction chat=${input.chatId}`,
           assumeMutexHeld: input.assumeMutexHeld,
@@ -2427,7 +2486,9 @@ async function processImmediateExtractionJobs(
     opts.extractionSettings.ctxSize,
     { maxTokens: opts.extractionSettings.maxTokens },
   );
-  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars);
+  // Immediate extraction fires at turn end — signal this so the extraction
+  // model synthesizes higher-level patterns rather than just concrete facts.
+  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars, true);
 
   for (const batch of batches) {
     await runImmediateBatch({
@@ -2447,6 +2508,7 @@ async function processImmediateExtractionJobs(
       maxInputChars,
       assumeMutexHeld: opts.assumeMutexHeld,
       freshSessionReason,
+      isTurnComplete: true,
     });
     session = state.session ?? session;
     freshSessionReason = undefined;
@@ -2551,6 +2613,231 @@ export async function extractMemories(
   return enqueueImmediateExtraction(modelId, chatId, userMsg, assistantMsg, projectId);
 }
 
+// ---------------------------------------------------------------------------
+// Mid-turn extraction pulse
+// ---------------------------------------------------------------------------
+// Triggered mid-turn when the signal token counter crosses the threshold.
+// Reuses the immediate extraction session for KV cache continuity but feeds
+// a structurally different context: thinking blocks, tool calls, and tool
+// results rather than a clean user/assistant exchange pair.
+
+interface MidTurnPulseContent {
+  /** The original user message that triggered this turn */
+  userMessage: string;
+  /** Thinking/reasoning text since the last pulse (or turn start) */
+  thinkingText: string;
+  /** Tool calls since the last pulse */
+  toolCalls: Array<{ name: string; arguments: Record<string, any> }>;
+  /** Tool results since the last pulse */
+  toolResults: Array<{ toolName: string; content: string; isError: boolean }>;
+}
+
+interface MidTurnPulseResult {
+  added: number;
+  superseded: number;
+  skippedDuplicates: number;
+}
+
+function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
+  const parts: string[] = [];
+
+  if (content.thinkingText?.trim()) {
+    parts.push(`Thinking:\n${content.thinkingText.trim()}`);
+  }
+
+  if (content.toolCalls?.length) {
+    const calls = content.toolCalls
+      .map(tc => `- ${tc.name}: ${formatToolArgumentsForExtraction(tc.arguments)}`)
+      .join("\n");
+    parts.push(`Tool calls:\n${calls}`);
+  }
+
+  if (content.toolResults?.length) {
+    const results = content.toolResults
+      .map(tr => formatToolResultForExtraction(tr))
+      .join("\n");
+    parts.push(`Tool results:\n${results}`);
+  }
+
+  return parts.join("\n\n") || "(no text content yet)";
+}
+
+function buildMidTurnBatchHeader(pulseIndex: number): string {
+  return `[MID-TURN PULSE #${pulseIndex}] Review the agent's partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
+
+For every extracted memory, include "sourceExchangeId" as "midturn-${pulseIndex}".
+Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
+If nothing significant has emerged yet, output: []`;
+}
+
+function buildMidTurnUserPrompt(pulseIndex: number, content: MidTurnPulseContent): string {
+  const header = buildMidTurnBatchHeader(pulseIndex);
+  const assistantContent = buildMidTurnAssistantContent(content);
+  return `${header}\n\nUSER MESSAGE:\n${content.userMessage}\n\nAGENT PARTIAL PROGRESS:\n${assistantContent}`;
+}
+
+export async function triggerMidTurnExtractionPulse(opts: {
+  modelId: string;
+  chatId: string;
+  projectId?: string;
+  content: MidTurnPulseContent;
+  pulseIndex: number;
+  /** UUID of the current agent turn — used to tag memories for same-turn retrieval guard */
+  turnId?: string;
+}): Promise<MidTurnPulseResult> {
+  const { modelId, chatId, projectId, content, pulseIndex, turnId } = opts;
+
+  try {
+    const settings = await getSettings();
+    const extractionSettings = await resolveExtractionRequestSettings(settings);
+    const systemPrompt = await buildExtractionSystemPrompt(projectId);
+    const effectiveModelId = resolveEffectiveExtractionModelId(modelId, settings);
+    const userPrompt = buildMidTurnUserPrompt(pulseIndex, content);
+
+    // Reuse the immediate extraction session for KV cache continuity
+    const state = getImmediateQueueState(chatId);
+    const identityKey = buildImmediateSessionIdentityKey({
+      projectId,
+      effectiveModelId,
+      extractionUrl: settings.extractionModelUrl,
+      ctxSize: extractionSettings.ctxSize,
+      maxTokens: extractionSettings.maxTokens,
+      systemPrompt,
+    });
+    const { session, freshSessionReason } = ensureImmediateSession(state, chatId, identityKey, systemPrompt);
+
+    const { maxInputChars } = computeExtractionInputBudget(
+      systemPrompt,
+      extractionSettings.ctxSize,
+      { maxTokens: extractionSettings.maxTokens },
+    );
+
+    // Check if the prompt alone exceeds the budget — if so, skip this pulse
+    if (estimateDialogueChars([{ role: "user", content: userPrompt }]) > maxInputChars) {
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: prompt alone exceeds budget`);
+      return { added: 0, superseded: 0, skippedDuplicates: 0 };
+    }
+
+    // Prune session history for budget
+    let pruned = pruneImmediateSessionForBudget(session, userPrompt, maxInputChars);
+    const messages: ExtractionDialogueMessage[] = [...session.history, { role: "user", content: userPrompt }];
+
+    const chat = await getChat(chatId).catch(() => null);
+    if (!chat) {
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: chat deleted`);
+      return { added: 0, superseded: 0, skippedDuplicates: 0 };
+    }
+
+    const pulseMessages: ExtractionDialogueMessage[] = [
+      { role: "user", content: content.userMessage },
+      { role: "assistant", content: buildMidTurnAssistantContent(content) },
+    ];
+    const runHandle = startExtractionRun({
+      trigger: "mid-turn-pulse",
+      chatId,
+      chatTitle: chat.title,
+      model: effectiveModelId,
+      priorMemoryCount: 0,
+      messages: pulseMessages,
+      systemPrompt,
+      userPrompt,
+      metadata: {
+        sessionId: session.id,
+        queuedExchangeCount: 0,
+        batchedExchangeCount: 1,
+        sessionMessageCount: messages.length,
+        promptChars: systemPrompt.length + estimateDialogueChars(messages),
+        estimatedPromptTokens: estimateTokensConservative(systemPrompt) + estimateTokensConservative(messages.map(m => m.content).join("\n\n")),
+        prunedPriorMessages: pruned,
+        freshSessionReason,
+      },
+    });
+
+    try {
+      let rawOutput: string;
+      try {
+        rawOutput = await callImmediateSessionLLMWithRetry({
+          modelId,
+          messages,
+          systemPrompt,
+          retryContext: `midTurnPulse #${pulseIndex} chat=${chatId}`,
+          settings,
+          extractionSettings,
+          assumeMutexHeld: false,
+        });
+      } catch (e) {
+        runHandle.fail(e);
+        throw e;
+      }
+
+      runHandle.attachOutput(rawOutput);
+      const facts = parseExtractionResponse(rawOutput);
+
+      if (facts.length === 0) {
+        console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: no facts extracted`);
+        // Still append to session history for KV cache continuity
+        session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || "[]" });
+        runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
+        extractionMetrics.successfulExtractions++;
+        extractionMetrics.lastExtractionAt = new Date().toISOString();
+        return { added: 0, superseded: 0, skippedDuplicates: 0 };
+      }
+
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: extracted ${facts.length} fact(s), embedding...`);
+
+      // Embed and save
+      let embeddings: number[][];
+      try {
+        embeddings = await withRetry(
+          () => embedBatch(facts.map(f => f.text)),
+          `embedBatch for ${facts.length} mid-turn pulse facts (chat ${chatId})`,
+        );
+      } catch (e) {
+        console.error("[extraction:mid-turn] Embedding failed:", e);
+        runHandle.fail(e);
+        throw e;
+      }
+
+      // Tag facts with the mid-turn source exchange ID
+      for (const fact of facts) {
+        fact.sourceExchangeId = `midturn-${pulseIndex}`;
+      }
+
+      const outcome = await dedupAndSave(
+        facts,
+        embeddings,
+        chatId,
+        { projectId, sourceType: "chat_immediate", sourceId: chatId, turnId },
+      );
+
+      // Append to session history for KV cache continuity
+      session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || JSON.stringify(facts) });
+
+      runHandle.complete({
+        facts,
+        saved: outcome.added,
+        superseded: outcome.superseded,
+        skippedDuplicates: outcome.skippedDuplicates,
+        errors: 0,
+        chunks: { count: 1, failures: 0, timingsMs: [0] },
+      });
+
+      extractionMetrics.successfulExtractions++;
+      extractionMetrics.lastExtractionAt = new Date().toISOString();
+
+      return outcome;
+    } catch (e) {
+      extractionMetrics.failedExtractions++;
+      extractionMetrics.lastFailureAt = new Date().toISOString();
+      throw e;
+    }
+  } catch (e) {
+    console.error(`[extraction:mid-turn] Pulse #${pulseIndex} failed:`, e);
+    // Don't throw — mid-turn extraction should not block the agent loop
+    return { added: 0, superseded: 0, skippedDuplicates: 0 };
+  }
+}
+
 const PRE_COMPACTION_INSTRUCTIONS = `---
 
 ## Memory Preservation Task
@@ -2595,10 +2882,33 @@ export async function preCompactionFlush(
   modelId: string,
   chatId: string,
   removedMessages: ChatMessage[],
-  projectId?: string
+  opts?: {
+    projectId?: string;
+    /**
+     * Index of the last mid-turn extraction pulse (0-based).
+     * If >= 0, mid-turn pulses already extracted the current turn's
+     * substantive content — skip pre-compaction extraction to avoid
+     * redundant work.
+     */
+    lastPulseIndex?: number;
+  }
 ): Promise<void> {
+  const projectId = opts?.projectId;
+  const lastPulseIndex = opts?.lastPulseIndex ?? -1;
+
   if (removedMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: no messages to process");
+    return;
+  }
+
+  // Bypass: if mid-turn pulses ran, they already extracted the current
+  // turn's substantive content (thinking + tool calls + results).
+  // Pre-compaction would just re-extract the same facts.
+  if (lastPulseIndex >= 0) {
+    console.log(
+      `[memory] Pre-compaction flush: skipping — ${lastPulseIndex + 1} mid-turn pulse(s) already extracted turn content ` +
+      `(${removedMessages.length} removed messages bypassed)`
+    );
     return;
   }
 
@@ -2705,7 +3015,7 @@ export async function preCompactionFlush(
     const sourceSpan = sourceSpanFromIndexedMessages(
       substantiveMessages.map((message) => ({ message })),
     );
-    const outcome = await dedupAndSave(facts, embeddings, chatId, projectId, "chat", chatId, sourceSpan);
+    const outcome = await dedupAndSave(facts, embeddings, chatId, { projectId, sourceType: "chat", sourceId: chatId, sourceSpan });
 
     // Invalidate memories cache so next turn picks up new memories.
     // Block updates are not performed here — they're handled by the main
@@ -3017,7 +3327,7 @@ export async function extractDelayedMemories(
         chat.projectId,
         "chat_delayed",
         chatId,
-        sourceSpan,
+        { sourceSpan },
       );
       runSaved++;
 

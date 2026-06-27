@@ -45,6 +45,8 @@ export interface PassiveMemoryRecallScheduleOptions {
   chatMessages: ChatMessage[];
   chatType?: string;
   projectId?: string;
+  /** UUID of the current agent turn — memories from this turn are filtered out to prevent same-turn feedback */
+  turnId?: string;
 }
 
 function clampText(text: string | undefined, maxChars: number): string {
@@ -482,7 +484,10 @@ export class PassiveMemoryRecallController {
     const excludedIds = new Set([...inContextIds, ...this.injectedIds, ...this.queuedIds]);
 
     const freshResults = searchResults.filter(
-      (result) => !result.memory.supersededBy && !excludedIds.has(result.memory.id),
+      (result) =>
+        !result.memory.supersededBy &&
+        !excludedIds.has(result.memory.id) &&
+        (result.memory.turnId == null || result.memory.turnId !== options.turnId),
     );
     if (freshResults.length === 0) return;
 

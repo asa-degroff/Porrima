@@ -173,7 +173,7 @@ export async function executeMemoryTool(
         importance: Math.min(10, Math.max(1, importance || 5)),
       };
 
-      await dedupAndSave([fact], [embedding], chatId, undefined, 'explicit');
+      await dedupAndSave([fact], [embedding], chatId, { sourceType: 'explicit' });
       return { content: `Saved memory: "${text}"`, isError: false };
     }
 

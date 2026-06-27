@@ -9,7 +9,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 
-export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "other";
+export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "mid-turn-pulse" | "other";
 
 export type ExtractionStatus = "running" | "success" | "error";
 
