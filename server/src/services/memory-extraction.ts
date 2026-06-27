@@ -26,7 +26,11 @@ import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
 import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY } from "../types.js";
 import { appDataPath } from "./paths.js";
-import { DEFAULT_EXTRACTION_MAX_TOKENS, resolveExtractionRequestSettings } from "./extraction-settings.js";
+import {
+  DEFAULT_EXTRACTION_MAX_TOKENS,
+  DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
+  resolveExtractionRequestSettings,
+} from "./extraction-settings.js";
 
 const LOG_DIR = appDataPath("logs");
 
@@ -2205,9 +2209,11 @@ async function callImmediateSessionLLMWithRetry(input: {
   settings: Settings;
   extractionSettings: ResolvedExtractionSettings;
   assumeMutexHeld: boolean;
+  signal?: AbortSignal;
 }): Promise<string> {
   let result = "";
   await withRetry(async () => {
+    input.signal?.throwIfAborted();
     result = await callExtractionLLMWithMessages(
       input.modelId,
       input.messages,
@@ -2216,6 +2222,7 @@ async function callImmediateSessionLLMWithRetry(input: {
         settings: input.settings,
         extractionSettings: input.extractionSettings,
         assumeMutexHeld: input.assumeMutexHeld,
+        signal: input.signal,
       },
     );
   }, input.retryContext, 2, (err) => !isExtractionContextOverflowError(err));
@@ -2624,18 +2631,23 @@ export async function extractMemories(
 interface MidTurnPulseContent {
   /** The original user message that triggered this turn */
   userMessage: string;
+  /** Assistant text emitted since the last successful pulse */
+  textContent?: string;
   /** Thinking/reasoning text since the last pulse (or turn start) */
   thinkingText: string;
   /** Tool calls since the last pulse */
   toolCalls: Array<{ name: string; arguments: Record<string, any> }>;
   /** Tool results since the last pulse */
   toolResults: Array<{ toolName: string; content: string; isError: boolean }>;
+  /** Source span for persisted memories covered by this pulse */
+  sourceSpan?: MemorySourceSpan;
 }
 
 interface MidTurnPulseResult {
   added: number;
   superseded: number;
   skippedDuplicates: number;
+  completed: boolean;
 }
 
 function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
@@ -2643,6 +2655,10 @@ function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
 
   if (content.thinkingText?.trim()) {
     parts.push(`Thinking:\n${content.thinkingText.trim()}`);
+  }
+
+  if (content.textContent?.trim()) {
+    parts.push(`Assistant text:\n${content.textContent.trim()}`);
   }
 
   if (content.toolCalls?.length) {
@@ -2684,10 +2700,24 @@ export async function triggerMidTurnExtractionPulse(opts: {
   pulseIndex: number;
   /** UUID of the current agent turn — used to tag memories for same-turn retrieval guard */
   turnId?: string;
+  timeoutMs?: number;
 }): Promise<MidTurnPulseResult> {
   const { modelId, chatId, projectId, content, pulseIndex, turnId } = opts;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS;
 
-  try {
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<MidTurnPulseResult>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort(new Error(`mid-turn extraction pulse timed out after ${timeoutMs}ms`));
+      console.warn(`[extraction:mid-turn] Pulse #${pulseIndex} skipped after ${timeoutMs}ms timeout`);
+      resolve({ added: 0, superseded: 0, skippedDuplicates: 0, completed: false });
+    }, timeoutMs);
+  });
+
+  const operation = (async (): Promise<MidTurnPulseResult> => {
     const settings = await getSettings();
     const extractionSettings = await resolveExtractionRequestSettings(settings);
     const systemPrompt = await buildExtractionSystemPrompt(projectId);
@@ -2715,7 +2745,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
     // Check if the prompt alone exceeds the budget — if so, skip this pulse
     if (estimateDialogueChars([{ role: "user", content: userPrompt }]) > maxInputChars) {
       console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: prompt alone exceeds budget`);
-      return { added: 0, superseded: 0, skippedDuplicates: 0 };
+      return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
     }
 
     // Prune session history for budget
@@ -2725,7 +2755,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
     const chat = await getChat(chatId).catch(() => null);
     if (!chat) {
       console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: chat deleted`);
-      return { added: 0, superseded: 0, skippedDuplicates: 0 };
+      return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
     }
 
     const pulseMessages: ExtractionDialogueMessage[] = [
@@ -2764,12 +2794,14 @@ export async function triggerMidTurnExtractionPulse(opts: {
           settings,
           extractionSettings,
           assumeMutexHeld: false,
+          signal: timeoutController.signal,
         });
       } catch (e) {
         runHandle.fail(e);
         throw e;
       }
 
+      timeoutController.signal.throwIfAborted();
       runHandle.attachOutput(rawOutput);
       const facts = parseExtractionResponse(rawOutput);
 
@@ -2780,7 +2812,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
         extractionMetrics.successfulExtractions++;
         extractionMetrics.lastExtractionAt = new Date().toISOString();
-        return { added: 0, superseded: 0, skippedDuplicates: 0 };
+        return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true };
       }
 
       console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: extracted ${facts.length} fact(s), embedding...`);
@@ -2788,10 +2820,12 @@ export async function triggerMidTurnExtractionPulse(opts: {
       // Embed and save
       let embeddings: number[][];
       try {
+        timeoutController.signal.throwIfAborted();
         embeddings = await withRetry(
           () => embedBatch(facts.map(f => f.text)),
           `embedBatch for ${facts.length} mid-turn pulse facts (chat ${chatId})`,
         );
+        timeoutController.signal.throwIfAborted();
       } catch (e) {
         console.error("[extraction:mid-turn] Embedding failed:", e);
         runHandle.fail(e);
@@ -2807,8 +2841,11 @@ export async function triggerMidTurnExtractionPulse(opts: {
         facts,
         embeddings,
         chatId,
-        { projectId, sourceType: "chat_immediate", sourceId: chatId, turnId },
+        { projectId, sourceType: "chat_immediate", sourceId: chatId, sourceSpan: content.sourceSpan, turnId },
       );
+      if (outcome.added > 0 || outcome.superseded > 0) {
+        invalidateMemoriesCache(chatId);
+      }
 
       // Append to session history for KV cache continuity
       session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || JSON.stringify(facts) });
@@ -2825,16 +2862,26 @@ export async function triggerMidTurnExtractionPulse(opts: {
       extractionMetrics.successfulExtractions++;
       extractionMetrics.lastExtractionAt = new Date().toISOString();
 
-      return outcome;
+      return { ...outcome, completed: true };
     } catch (e) {
       extractionMetrics.failedExtractions++;
       extractionMetrics.lastFailureAt = new Date().toISOString();
       throw e;
     }
+  })();
+
+  operation.catch((e) => {
+    if (!timedOut) return;
+    console.warn(`[extraction:mid-turn] Pulse #${pulseIndex} finished after timeout with error:`, e);
+  });
+
+  try {
+    return await Promise.race([operation, timeoutPromise]);
   } catch (e) {
     console.error(`[extraction:mid-turn] Pulse #${pulseIndex} failed:`, e);
-    // Don't throw — mid-turn extraction should not block the agent loop
-    return { added: 0, superseded: 0, skippedDuplicates: 0 };
+    return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -2884,31 +2931,14 @@ export async function preCompactionFlush(
   removedMessages: ChatMessage[],
   opts?: {
     projectId?: string;
-    /**
-     * Index of the last mid-turn extraction pulse (0-based).
-     * If >= 0, mid-turn pulses already extracted the current turn's
-     * substantive content — skip pre-compaction extraction to avoid
-     * redundant work.
-     */
+    /** Deprecated: pulse count is not a safe proxy for message-index coverage. */
     lastPulseIndex?: number;
   }
 ): Promise<void> {
   const projectId = opts?.projectId;
-  const lastPulseIndex = opts?.lastPulseIndex ?? -1;
 
   if (removedMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: no messages to process");
-    return;
-  }
-
-  // Bypass: if mid-turn pulses ran, they already extracted the current
-  // turn's substantive content (thinking + tool calls + results).
-  // Pre-compaction would just re-extract the same facts.
-  if (lastPulseIndex >= 0) {
-    console.log(
-      `[memory] Pre-compaction flush: skipping — ${lastPulseIndex + 1} mid-turn pulse(s) already extracted turn content ` +
-      `(${removedMessages.length} removed messages bypassed)`
-    );
     return;
   }
 

@@ -16,6 +16,9 @@ export const MAX_EXTRACTION_TIMEOUT_MS = 86_400_000;
 export const DEFAULT_MID_TURN_EXTRACTION_THRESHOLD = 6000;
 export const MIN_MID_TURN_EXTRACTION_THRESHOLD = 500;
 export const MAX_MID_TURN_EXTRACTION_THRESHOLD = 32000;
+export const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 15_000;
+export const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 1_000;
+export const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 120_000;
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number(value);

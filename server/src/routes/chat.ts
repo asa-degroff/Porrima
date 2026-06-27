@@ -10,7 +10,7 @@ import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, ty
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, estimateExtractionSignalTokens, triggerMidTurnExtractionPulse } from "../services/memory-extraction.js";
-import { DEFAULT_MID_TURN_EXTRACTION_THRESHOLD } from "../services/extraction-settings.js";
+import { DEFAULT_MID_TURN_EXTRACTION_THRESHOLD, DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS } from "../services/extraction-settings.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import {
   COMPACTION_HARD_CAP_RATIO,
@@ -930,6 +930,10 @@ async function handleChatStream(
     // don't get buried under compaction during long tool loops.
     midTurnSignalTokens: 0,
     midTurnLastPulseIndex: -1 as number,
+    midTurnLastPulseTextLength: 0,
+    midTurnLastPulseThinkingLength: 0,
+    midTurnLastPulseToolCallCount: 0,
+    midTurnLastPulseToolResultCount: 0,
     // Track last llama.cpp timings for model-stats recording (per-message)
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
@@ -998,6 +1002,10 @@ async function handleChatStream(
     state.needsMidTurnCompaction = false;
     state.midTurnSignalTokens = 0;
     state.midTurnLastPulseIndex = -1;
+    state.midTurnLastPulseTextLength = 0;
+    state.midTurnLastPulseThinkingLength = 0;
+    state.midTurnLastPulseToolCallCount = 0;
+    state.midTurnLastPulseToolResultCount = 0;
     state.lastLlamaTimings = null;
     state.lastLlamaCache = null;
     state.llamaRuns = [];
@@ -1936,30 +1944,52 @@ async function handleChatStream(
               const pulseIndex = state.midTurnLastPulseIndex + 1;
               console.log(`[extraction] Triggering mid-turn pulse #${pulseIndex} at ${state.midTurnSignalTokens} signal tokens (threshold: ${midTurnThreshold})`);
 
-              // Build pulse content from all accumulated state since turn start
-              // (simpler than delta tracking; KV cache session handles efficiency)
+              // Build pulse content from the delta since the last successful
+              // pulse. If a pulse times out, these cursors do not advance, so
+              // the next pulse retries the same uncovered activity plus any
+              // newly accumulated signal.
+              const pulseTextEnd = state.fullText.length;
+              const pulseThinkingEnd = state.thinkingText.length;
+              const pulseToolCallEnd = state.allToolCalls.length;
+              const pulseToolResultEnd = state.allToolResults.length;
               const pulseContent = {
                 userMessage: lastUserMessage || "",
-                thinkingText: state.thinkingText,
-                toolCalls: state.allToolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments || {} })),
-                toolResults: state.allToolResults.map(tr => ({
+                textContent: state.fullText.slice(state.midTurnLastPulseTextLength),
+                thinkingText: state.thinkingText.slice(state.midTurnLastPulseThinkingLength),
+                toolCalls: state.allToolCalls
+                  .slice(state.midTurnLastPulseToolCallCount, pulseToolCallEnd)
+                  .map(tc => ({ name: tc.name, arguments: tc.arguments || {} })),
+                toolResults: state.allToolResults.slice(state.midTurnLastPulseToolResultCount, pulseToolResultEnd).map(tr => ({
                   toolName: tr.toolName,
                   content: tr.content,
                   isError: tr.isError,
                 })),
+                sourceSpan: {
+                  startTimestamp: chat.messages[0]?.timestamp,
+                  endTimestamp: Date.now(),
+                  startIndex: 0,
+                  endIndex: Math.max(0, chat.messages.length - 1),
+                },
               };
 
-              await triggerMidTurnExtractionPulse({
+              const pulseResult = await triggerMidTurnExtractionPulse({
                 modelId: chat.modelId,
                 chatId: chat.id,
                 projectId: chat.projectId || undefined,
                 content: pulseContent,
                 pulseIndex,
                 turnId: state.toolLoopId,
+                timeoutMs: settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
               });
 
-              state.midTurnSignalTokens = 0;
-              state.midTurnLastPulseIndex = pulseIndex;
+              if (pulseResult.completed) {
+                state.midTurnSignalTokens = 0;
+                state.midTurnLastPulseIndex = pulseIndex;
+                state.midTurnLastPulseTextLength = pulseTextEnd;
+                state.midTurnLastPulseThinkingLength = pulseThinkingEnd;
+                state.midTurnLastPulseToolCallCount = pulseToolCallEnd;
+                state.midTurnLastPulseToolResultCount = pulseToolResultEnd;
+              }
             }
 
             // Insert tool_result immediately after its tool_call segment (not at the end),

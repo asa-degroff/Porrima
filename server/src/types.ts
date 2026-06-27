@@ -344,6 +344,7 @@ export interface Settings {
   extractionMaxTokens?: number;     // default 4000 — max output tokens for extraction calls
   extractionTimeoutMs?: number;     // default 600000 — abort extraction requests after this many ms
   midTurnExtractionThreshold?: number; // default 6000 — signal token threshold for mid-turn extraction pulse
+  midTurnExtractionTimeoutMs?: number; // default 15000 — max active-turn wait for a mid-turn extraction pulse
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:32102"
