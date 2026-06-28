@@ -1904,23 +1904,37 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     return newSettings;
   };
 
-  const handleLoadDefaultModel = useCallback(async () => {
-    if (!defaultModelId) return;
+  const prepareSettingsForSave = async (): Promise<Settings | null> => {
+    const nextSettings = handleSave();
+    const currentInferenceServer = llamaServers.find((server) => server.id === "inference");
+    const shouldApplyDefaultModel = Boolean(
+      defaultModelId &&
+      (
+        settings.defaultModelId !== defaultModelId ||
+        defaultModelScanDir ||
+        (currentInferenceServer?.http.routerMode && currentInferenceServer.http.loadedModelId !== defaultModelId)
+      )
+    );
+    if (!shouldApplyDefaultModel) return nextSettings;
+
     setApplyingSlot("inference");
     setLlamaServerMessage(null);
     try {
       const result = await applyLlamaSlotModel("inference", defaultModelId, { scanDir: defaultModelScanDir });
       const appliedModelId = result.server.expectedModel || defaultModelId;
       setDefaultModelId(appliedModelId);
+      setDefaultModelScanDir(undefined);
       setLlamaServers((prev) => prev.map((srv) => srv.id === "inference" ? result.server : srv));
-      await onApply({ ...handleSave(), defaultModelId: appliedModelId });
       refreshModels();
       setLlamaServerMessage({
         type: "ok",
         text: result.reconfiguredModelsDir
           ? `Reconfigured inference server to ${result.reconfiguredModelsDir.replace(osHomePrefix, "~")} and loaded ${appliedModelId}.`
-          : `Loaded ${appliedModelId} on the chat inference router.`,
+          : result.mode === "router-load"
+            ? `Loaded ${appliedModelId} on the chat inference router.`
+            : `Applied ${appliedModelId} to chat inference; service restarted.`,
       });
+      return { ...nextSettings, defaultModelId: appliedModelId };
     } catch (e: any) {
       if (e instanceof ModelsDirConflictError) {
         setModelsDirConflict({
@@ -1930,12 +1944,13 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           currentModelsDir: e.conflict.currentModelsDir,
         });
       } else {
-        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load default model" });
+        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply main chat model" });
       }
+      return null;
     } finally {
       setApplyingSlot(null);
     }
-  }, [defaultModelId, defaultModelScanDir, onApply, handleSave, osHomePrefix, refreshModels]);
+  };
 
   const replaceAutomation = (task: AutomationTask) => {
     setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
@@ -2680,9 +2695,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   }, [isDesktop]);
 
   const activeSection = useActiveSection(SECTIONS.map(s => s.id), scrollRoot);
-  const inferenceServer = llamaServers.find((server) => server.id === "inference");
-  const defaultModelLoaded = Boolean(defaultModelId && inferenceServer?.http.loadedModelId === defaultModelId);
-  const canLoadDefaultModel = Boolean(defaultModelId && inferenceServer?.http.routerMode);
   const defaultChatModelOptions: Array<DiscoveredModel & { parameterSize?: string }> = chatDiskModels.length > 0
     ? chatDiskModels
     : models.map((m) => ({ id: m.id, name: m.name, source: "server" as const, parameterSize: m.parameterSize, scanDir: undefined }));
@@ -2863,24 +2875,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 </button>
               ))}
             </Dropdown>
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
-              <div className="min-w-0">
-                <div className="text-xs text-white/55">Inference router</div>
-                <div className="text-[11px] text-white/30 truncate">
-                  {inferenceServer?.http.routerMode
-                    ? `Loaded: ${inferenceServer.http.loadedModelId || "none"}`
-                    : "Router mode unavailable"}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleLoadDefaultModel}
-                disabled={!canLoadDefaultModel || defaultModelLoaded || applyingSlot === "inference"}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0 pressable"
-              >
-                {applyingSlot === "inference" ? "Loading..." : defaultModelLoaded ? "Loaded" : "Load Default Now"}
-              </button>
-            </div>
           </div>
 
           {/* Preserve Thinking */}
@@ -7428,22 +7422,28 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <button
             onClick={async () => {
               onHighEfficiencyModeChange(deviceHighEfficiencyMode);
-              await onApply(handleSave());
+              const nextSettings = await prepareSettingsForSave();
+              if (!nextSettings) return;
+              await onApply(nextSettings);
               setAppliedFeedback(true);
               setTimeout(() => setAppliedFeedback(false), 2000);
             }}
+            disabled={applyingSlot === "inference"}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
           >
-            {appliedFeedback ? "Applied" : "Apply"}
+            {applyingSlot === "inference" ? "Applying..." : appliedFeedback ? "Applied" : "Apply"}
           </button>
           <button
             onClick={async () => {
               onHighEfficiencyModeChange(deviceHighEfficiencyMode);
-              await onSave(handleSave());
+              const nextSettings = await prepareSettingsForSave();
+              if (!nextSettings) return;
+              await onSave(nextSettings);
             }}
+            disabled={applyingSlot === "inference"}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
-            Save and Close
+            {applyingSlot === "inference" ? "Applying..." : "Save and Close"}
           </button>
         </div>
       </div>
