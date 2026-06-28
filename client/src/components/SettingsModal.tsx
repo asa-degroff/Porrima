@@ -1030,6 +1030,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const osHomePrefix = inferredHomePrefix || (typeof process !== "undefined" && process.env?.HOME) || "/home";
   const defaultModelsDir = `${osHomePrefix}/.local/share/llama-models`;
   const displayPath = useCallback((p: string) => p.replace(osHomePrefix, "~"), [osHomePrefix]);
+  const modelIdFromPath = useCallback((p: string): string | undefined => {
+    const file = p.trim().split(/[\\/]/).pop();
+    return file ? file.replace(/\.gguf$/i, "") : undefined;
+  }, []);
   const modelOptionKey = useCallback((m: { id: string; scanDir?: string; source?: string }) => (
     `${m.id}::${m.scanDir || m.source || "unknown"}`
   ), []);
@@ -3839,24 +3843,20 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    />
 	                                  </div>
 	                                  {draft.mode === "single" ? (
-	                                    <>
-	                                      <div>
-	                                        <label className="block text-xs text-white/50 mb-1">Model ID</label>
-	                                        <input
-	                                          value={draft.modelId || ""}
-	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelId: e.target.value })}
-	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                        />
-	                                      </div>
-	                                      <div>
-	                                        <label className="block text-xs text-white/50 mb-1">Model path</label>
-	                                        <input
-	                                          value={draft.modelPath || ""}
-	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelPath: e.target.value })}
-	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                        />
-	                                      </div>
-	                                    </>
+	                                    <div className="sm:col-span-2">
+	                                      <label className="block text-xs text-white/50 mb-1">Model path</label>
+	                                      <input
+	                                        value={draft.modelPath || ""}
+	                                        onChange={(e) => {
+	                                          const modelPath = e.target.value;
+	                                          updateLlamaServiceDraft(server.id, {
+	                                            modelPath,
+	                                            modelId: modelIdFromPath(modelPath),
+	                                          });
+	                                        }}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                      />
+	                                    </div>
 	                                  ) : (
 	                                    <div className="sm:col-span-2">
 	                                      <label className="block text-xs text-white/50 mb-1">Models directory</label>
