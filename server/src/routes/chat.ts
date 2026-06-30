@@ -601,6 +601,26 @@ async function withSSEKeepalive<T>(res: Response, fn: () => Promise<T>): Promise
 }
 
 /**
+ * Await any in-flight mid-turn extraction pulse so its result (or rollback) is
+ * settled before reading `midTurnLastPulseIndex` or starting another extraction
+ * pass (pre-compaction, end-of-turn immediate). No-op when nothing is in
+ * flight. This is the synchronization point between the non-blocking pulse
+ * dispatch (which runs while the agent loop continues) and the serial
+ * extraction paths that need a consistent cursor state.
+ */
+async function awaitMidTurnPulse(state: {
+  midTurnInFlightPulse: Promise<{ added: number; superseded: number; skippedDuplicates: number; completed: boolean }> | null;
+}): Promise<void> {
+  if (state.midTurnInFlightPulse) {
+    try {
+      await state.midTurnInFlightPulse;
+    } catch {
+      // The pulse's own .catch already handled rollback; just swallow here.
+    }
+  }
+}
+
+/**
  * Parse /compact command from user message.
  * Returns { compact: true, followUpMessage: string | null } if found.
  * /compact alone → followUpMessage is null
@@ -926,14 +946,28 @@ async function handleChatStream(
     // Mid-turn compaction: set when usage > 85% during tool loop
     needsMidTurnCompaction: false,
     // Mid-turn extraction: accumulate post-formatting signal tokens.
-    // When threshold is crossed, trigger a pulse extraction so memories
-    // don't get buried under compaction during long tool loops.
+    // When threshold is crossed, dispatch a pulse extraction in the
+    // background so memories don't get buried under compaction during long
+    // tool loops. The pulse runs on the dedicated extraction model and does
+    // NOT block the agent loop — the main model continues while the pulse is
+    // in flight. At most one pulse is in flight per chat; additional threshold
+    // crossings coalesce into the next pulse once the in-flight one settles.
     midTurnSignalTokens: 0,
     midTurnLastPulseIndex: -1 as number,
     midTurnLastPulseTextLength: 0,
     midTurnLastPulseThinkingLength: 0,
     midTurnLastPulseToolCallCount: 0,
     midTurnLastPulseToolResultCount: 0,
+    // In-flight mid-turn pulse promise. Resolves to the pulse result once the
+    // extraction model finishes (or the pulse times out / fails). Null when no
+    // pulse is running. Awaited before compaction so freshly extracted
+    // memories are available for the rebuilt prompt and so the extraction
+    // server isn't hit concurrently by the pulse and preCompactionFlush.
+    midTurnInFlightPulse: null as Promise<{ added: number; superseded: number; skippedDuplicates: number; completed: boolean }> | null,
+    // Snapshot of signal tokens dispatched with the in-flight pulse. On
+    // failure we roll the accumulator back by this amount so the next pulse
+    // retries the uncovered window plus any newly accumulated signal.
+    midTurnDispatchedSignalTokens: 0,
     // Track last llama.cpp timings for model-stats recording (per-message)
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
@@ -1006,6 +1040,8 @@ async function handleChatStream(
     state.midTurnLastPulseThinkingLength = 0;
     state.midTurnLastPulseToolCallCount = 0;
     state.midTurnLastPulseToolResultCount = 0;
+    state.midTurnInFlightPulse = null;
+    state.midTurnDispatchedSignalTokens = 0;
     state.lastLlamaTimings = null;
     state.lastLlamaCache = null;
     state.llamaRuns = [];
@@ -1938,20 +1974,24 @@ async function handleChatStream(
             state.midTurnSignalTokens += signalDelta;
             console.log(`[extraction] midTurnSignalTokens: ${state.midTurnSignalTokens} (delta: ${signalDelta}, tool: ${event.toolName})`);
 
-            // Check threshold and trigger a mid-turn extraction pulse if crossed
+            // Check threshold and dispatch a mid-turn extraction pulse if crossed.
+            // The pulse runs on the dedicated extraction model in the background
+            // and does NOT block the agent loop — we advance the cursors
+            // optimistically so the agent keeps streaming while the extraction
+            // model works. If the pulse fails or times out, the .catch handler
+            // below rolls the cursors back so the next pulse retries the
+            // uncovered window plus any newly accumulated signal. At most one
+            // pulse is in flight per chat; further threshold crossings while a
+            // pulse is running accumulate into the next pulse after it settles.
             const midTurnThreshold = settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD;
-            if (state.midTurnSignalTokens >= midTurnThreshold) {
+            if (state.midTurnSignalTokens >= midTurnThreshold && !state.midTurnInFlightPulse) {
               const pulseIndex = state.midTurnLastPulseIndex + 1;
-              console.log(`[extraction] Triggering mid-turn pulse #${pulseIndex} at ${state.midTurnSignalTokens} signal tokens (threshold: ${midTurnThreshold})`);
-
-              // Build pulse content from the delta since the last successful
-              // pulse. If a pulse times out, these cursors do not advance, so
-              // the next pulse retries the same uncovered activity plus any
-              // newly accumulated signal.
               const pulseTextEnd = state.fullText.length;
               const pulseThinkingEnd = state.thinkingText.length;
               const pulseToolCallEnd = state.allToolCalls.length;
               const pulseToolResultEnd = state.allToolResults.length;
+              console.log(`[extraction] Dispatching mid-turn pulse #${pulseIndex} in background at ${state.midTurnSignalTokens} signal tokens (threshold: ${midTurnThreshold})`);
+
               const pulseContent = {
                 userMessage: lastUserMessage || "",
                 textContent: state.fullText.slice(state.midTurnLastPulseTextLength),
@@ -1972,7 +2012,31 @@ async function handleChatStream(
                 },
               };
 
-              const pulseResult = await triggerMidTurnExtractionPulse({
+              // Snapshot the pre-dispatch cursor values so we can roll back
+              // to them if the pulse doesn't complete. New signal that
+              // accumulated while the pulse was in flight stays in the
+              // accumulator (it was reset to 0 here, but the next tool result
+              // after this point increments from 0; the rollback adds the
+              // dispatched amount back so the uncovered window is retried
+              // alongside any new signal).
+              const prevPulseIndex = state.midTurnLastPulseIndex;
+              const prevPulseTextLength = state.midTurnLastPulseTextLength;
+              const prevPulseThinkingLength = state.midTurnLastPulseThinkingLength;
+              const prevPulseToolCallCount = state.midTurnLastPulseToolCallCount;
+              const prevPulseToolResultCount = state.midTurnLastPulseToolResultCount;
+              const prevSignalTokens = state.midTurnSignalTokens;
+
+              // Advance cursors optimistically. The agent loop continues
+              // immediately while the extraction model runs in the background.
+              state.midTurnSignalTokens = 0;
+              state.midTurnLastPulseIndex = pulseIndex;
+              state.midTurnLastPulseTextLength = pulseTextEnd;
+              state.midTurnLastPulseThinkingLength = pulseThinkingEnd;
+              state.midTurnLastPulseToolCallCount = pulseToolCallEnd;
+              state.midTurnLastPulseToolResultCount = pulseToolResultEnd;
+              state.midTurnDispatchedSignalTokens = prevSignalTokens;
+
+              state.midTurnInFlightPulse = triggerMidTurnExtractionPulse({
                 modelId: chat.modelId,
                 chatId: chat.id,
                 projectId: chat.projectId || undefined,
@@ -1980,16 +2044,38 @@ async function handleChatStream(
                 pulseIndex,
                 turnId: state.toolLoopId,
                 timeoutMs: settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
-              });
-
-              if (pulseResult.completed) {
-                state.midTurnSignalTokens = 0;
-                state.midTurnLastPulseIndex = pulseIndex;
-                state.midTurnLastPulseTextLength = pulseTextEnd;
-                state.midTurnLastPulseThinkingLength = pulseThinkingEnd;
-                state.midTurnLastPulseToolCallCount = pulseToolCallEnd;
-                state.midTurnLastPulseToolResultCount = pulseToolResultEnd;
-              }
+              })
+                .then((pulseResult) => {
+                  if (pulseResult.completed) {
+                    console.log(`[extraction] Mid-turn pulse #${pulseIndex} completed in background: added=${pulseResult.added} superseded=${pulseResult.superseded}`);
+                  } else {
+                    // Timed out or skipped — roll the cursors back so the next
+                    // pulse retries this window plus whatever accumulated
+                    // while we were waiting.
+                    console.warn(`[extraction] Mid-turn pulse #${pulseIndex} did not complete; rolling back cursors for retry`);
+                    state.midTurnLastPulseIndex = prevPulseIndex;
+                    state.midTurnLastPulseTextLength = prevPulseTextLength;
+                    state.midTurnLastPulseThinkingLength = prevPulseThinkingLength;
+                    state.midTurnLastPulseToolCallCount = prevPulseToolCallCount;
+                    state.midTurnLastPulseToolResultCount = prevPulseToolResultCount;
+                    state.midTurnSignalTokens += state.midTurnDispatchedSignalTokens;
+                  }
+                  return pulseResult;
+                })
+                .catch((err) => {
+                  console.error(`[extraction] Mid-turn pulse #${pulseIndex} failed in background:`, err);
+                  state.midTurnLastPulseIndex = prevPulseIndex;
+                  state.midTurnLastPulseTextLength = prevPulseTextLength;
+                  state.midTurnLastPulseThinkingLength = prevPulseThinkingLength;
+                  state.midTurnLastPulseToolCallCount = prevPulseToolCallCount;
+                  state.midTurnLastPulseToolResultCount = prevPulseToolResultCount;
+                  state.midTurnSignalTokens += state.midTurnDispatchedSignalTokens;
+                  return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+                })
+                .finally(() => {
+                  state.midTurnInFlightPulse = null;
+                  state.midTurnDispatchedSignalTokens = 0;
+                });
             }
 
             // Insert tool_result immediately after its tool_call segment (not at the end),
@@ -2501,6 +2587,9 @@ async function handleChatStream(
               if (compaction.truncated) {
                 // Extract memories from removed messages before rebuilding the memory prompt.
                 if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
+                  // Wait for any in-flight mid-turn pulse so the cursor it
+                  // updates is settled before we read it for the bypass.
+                  await awaitMidTurnPulse(state);
                   await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, {
                     projectId: chat.projectId,
                     lastPulseIndex: state.midTurnLastPulseIndex,
@@ -2894,6 +2983,9 @@ async function handleChatStream(
             // rebuilt prompt would miss the freshly extracted memories from removed context.
             if (isAgent && compaction.removedMessages?.length) {
               try {
+                // Wait for any in-flight mid-turn pulse so the cursor it
+                // updates is settled before we read it for the bypass.
+                await awaitMidTurnPulse(state);
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, {
                   projectId: chat.projectId,
                   lastPulseIndex: state.midTurnLastPulseIndex,
@@ -3434,6 +3526,11 @@ async function handleChatStream(
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if (!currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
+        // Wait for any in-flight mid-turn pulse so the shared immediate
+        // extraction session history is settled before the turn-completion
+        // extraction enqueues. This also lets a failed pulse roll back its
+        // cursor so the turn-completion extraction covers that window.
+        await awaitMidTurnPulse(state);
         enqueueImmediateExtraction(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
