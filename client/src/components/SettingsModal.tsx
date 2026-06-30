@@ -69,6 +69,12 @@ const MAX_EXTRACTION_MAX_TOKENS = 32768;
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 600000;
 const MIN_EXTRACTION_TIMEOUT_MINUTES = 1;
 const MAX_EXTRACTION_TIMEOUT_MINUTES = 1440;
+const DEFAULT_MID_TURN_EXTRACTION_THRESHOLD = 6000;
+const MIN_MID_TURN_EXTRACTION_THRESHOLD = 500;
+const MAX_MID_TURN_EXTRACTION_THRESHOLD = 32000;
+const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 30000;
+const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 5000;
+const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 300000;
 const DEFAULT_INFERENCE_URL = getDefaultLlamaServerUrl("inference");
 const DEFAULT_EXTRACTION_URL = getDefaultLlamaServerUrl("extraction");
 const DEFAULT_RERANKER_URL = getDefaultLlamaServerUrl("reranker");
@@ -83,6 +89,10 @@ function clampIntegerDraft(value: string, fallback: number, min: number, max: nu
 
 function timeoutMsToMinutes(value: number): number {
   return Math.round(value / 60000);
+}
+
+function timeoutMsToSeconds(value: number): number {
+  return Math.round(value / 1000);
 }
 
 const SUPERTONIC_LANGUAGES = [
@@ -510,6 +520,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [extractionMaxTokensDraft, setExtractionMaxTokensDraft] = useState(String(settings.extractionMaxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS));
   const [extractionTimeoutMs, setExtractionTimeoutMs] = useState(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS);
   const [extractionTimeoutMinutesDraft, setExtractionTimeoutMinutesDraft] = useState(String(timeoutMsToMinutes(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS)));
+  // Mid-turn extraction settings (app-level behavior, not server process config)
+  const [midTurnExtractionThreshold, setMidTurnExtractionThreshold] = useState(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD);
+  const [midTurnExtractionThresholdDraft, setMidTurnExtractionThresholdDraft] = useState(String(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD));
+  const [midTurnExtractionTimeoutMs, setMidTurnExtractionTimeoutMs] = useState(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS);
+  const [midTurnExtractionTimeoutSecondsDraft, setMidTurnExtractionTimeoutSecondsDraft] = useState(String(timeoutMsToSeconds(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || DEFAULT_RERANKER_URL);
@@ -1421,6 +1436,29 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     handleLlamaServerSettings("extraction", { timeoutMs: next });
   }, [extractionTimeoutMinutesDraft, extractionTimeoutMs, handleLlamaServerSettings]);
 
+  const applyMidTurnExtractionThresholdDraft = useCallback(() => {
+    const next = clampIntegerDraft(
+      midTurnExtractionThresholdDraft,
+      midTurnExtractionThreshold,
+      MIN_MID_TURN_EXTRACTION_THRESHOLD,
+      MAX_MID_TURN_EXTRACTION_THRESHOLD,
+    );
+    setMidTurnExtractionThreshold(next);
+    setMidTurnExtractionThresholdDraft(String(next));
+  }, [midTurnExtractionThreshold, midTurnExtractionThresholdDraft]);
+
+  const applyMidTurnExtractionTimeoutDraft = useCallback(() => {
+    const seconds = clampIntegerDraft(
+      midTurnExtractionTimeoutSecondsDraft,
+      timeoutMsToSeconds(midTurnExtractionTimeoutMs),
+      MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+      MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+    );
+    const next = seconds * 1000;
+    setMidTurnExtractionTimeoutMs(next);
+    setMidTurnExtractionTimeoutSecondsDraft(String(seconds));
+  }, [midTurnExtractionTimeoutMs, midTurnExtractionTimeoutSecondsDraft]);
+
   // Assign a binary to a specific server slot
   const handleAssignBinary = useCallback(async (slotId: LlamaServerId, binaryDir: string) => {
     setLlamaServerMessage(null);
@@ -1815,6 +1853,19 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         MIN_EXTRACTION_TIMEOUT_MINUTES,
         MAX_EXTRACTION_TIMEOUT_MINUTES,
       ) * 60000;
+    const savedMidTurnExtractionThreshold = clampIntegerDraft(
+      midTurnExtractionThresholdDraft,
+      midTurnExtractionThreshold,
+      MIN_MID_TURN_EXTRACTION_THRESHOLD,
+      MAX_MID_TURN_EXTRACTION_THRESHOLD,
+    );
+    const savedMidTurnExtractionTimeoutMs =
+      clampIntegerDraft(
+        midTurnExtractionTimeoutSecondsDraft,
+        timeoutMsToSeconds(midTurnExtractionTimeoutMs),
+        MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+        MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+      ) * 1000;
     const newSettings: Settings = {
       ...settings,
       agentName: agentName.trim() || undefined,
@@ -1838,6 +1889,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       extractionCtxSize: savedExtractionCtxSize,
       extractionMaxTokens: savedExtractionMaxTokens,
       extractionTimeoutMs: savedExtractionTimeoutMs,
+      midTurnExtractionThreshold: savedMidTurnExtractionThreshold,
+      midTurnExtractionTimeoutMs: savedMidTurnExtractionTimeoutMs,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
       rerankerModelId: rerankerModelId.trim() || undefined,
@@ -5297,10 +5350,52 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                  />
 	                  <span className="text-xs text-white/30">minutes</span>
 	                </div>
-	                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
-	              </div>
-	            </div>
-	          </div>
+                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Mid-Turn Extraction */}
+          <div className="border-t border-white/10 pt-6">
+            <h3 className="text-sm font-semibold text-white/80 mb-1">Mid-Turn Extraction</h3>
+            <p className="text-xs text-white/40 mb-4">
+              Controls when an in-progress agent turn triggers an extraction run to capture memories before the turn ends.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Signal token threshold</label>
+                <div className="flex items-center gap-3 mt-1">
+                  <input
+                    type="number"
+                    value={midTurnExtractionThresholdDraft}
+                    onChange={(e) => setMidTurnExtractionThresholdDraft(e.target.value)}
+                    onBlur={applyMidTurnExtractionThresholdDraft}
+                    min={MIN_MID_TURN_EXTRACTION_THRESHOLD} max={MAX_MID_TURN_EXTRACTION_THRESHOLD} step={500}
+                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                  />
+                  <span className="text-xs text-white/30">tokens</span>
+                </div>
+                <p className="text-xs text-white/30 mt-1">Accumulated signal tokens (text, thinking, tool calls) that trigger a mid-turn pulse. Lower values extract more often; higher values batch more activity per pulse. Default: 6000</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white/60">Pulse timeout</label>
+                <div className="flex items-center gap-3 mt-1">
+                  <input
+                    type="number"
+                    value={midTurnExtractionTimeoutSecondsDraft}
+                    onChange={(e) => setMidTurnExtractionTimeoutSecondsDraft(e.target.value)}
+                    onBlur={applyMidTurnExtractionTimeoutDraft}
+                    min={MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} max={MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} step={1}
+                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                  />
+                  <span className="text-xs text-white/30">seconds</span>
+                </div>
+                <p className="text-xs text-white/30 mt-1">How long a mid-turn pulse may run before aborting.</p>
+              </div>
+            </div>
+          </div>
 
 	          {/* Extraction Prompt */}
 	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
