@@ -2566,6 +2566,7 @@ async function runImmediateBatch(input: {
     extractionMetrics.lastExtractionAt = new Date().toISOString();
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, sourceExchangeId: f.sourceExchangeId })),
+      subject: chunkResult.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
@@ -2949,7 +2950,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: no facts extracted`);
         // Still append to session history for KV cache continuity
         session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || "[]" });
-        runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
+        runHandle.complete({ facts: [], subject: parsed.subject, saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
         extractionMetrics.successfulExtractions++;
         extractionMetrics.lastExtractionAt = new Date().toISOString();
         return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true };
@@ -2992,6 +2993,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
 
       runHandle.complete({
         facts,
+        subject: parsed.subject,
         saved: outcome.added,
         superseded: outcome.superseded,
         skippedDuplicates: outcome.skippedDuplicates,
@@ -3146,6 +3148,7 @@ export async function preCompactionFlush(
       console.log("[memory] Pre-compaction flush: no facts extracted");
       runHandle.complete({
         facts: [],
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -3178,6 +3181,7 @@ export async function preCompactionFlush(
       console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
       runHandle.complete({
         facts,
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -3200,6 +3204,7 @@ export async function preCompactionFlush(
     console.log("[memory] Pre-compaction flush complete");
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      subject: chunkResult.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
@@ -3425,6 +3430,7 @@ export async function extractDelayedMemories(
       await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
       runHandle.complete({
         facts: [],
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -3456,6 +3462,7 @@ export async function extractDelayedMemories(
       console.log(`[memory-delayed] Chat ${chatId} was deleted during extraction, skipping save`);
       runHandle.complete({
         facts,
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -3580,6 +3587,7 @@ export async function extractDelayedMemories(
     console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      subject: chunkResult.subjects[0],
       saved: runSaved,
       superseded: comparisonSuperseded,
       skippedDuplicates: runSkipped,

@@ -48,6 +48,8 @@ export interface ExtractionResults {
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  /** Subject line from the extraction wrapper, providing conversational context. */
+  subject?: string;
   /** Batched LLM comparison results for ambiguous supersession candidates. */
   supersessionResolutions?: ExtractionSupersessionResolution[];
   /** Count of supersession links resolved by the batch comparison step. */
