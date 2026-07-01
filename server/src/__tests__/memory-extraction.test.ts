@@ -13,11 +13,13 @@ describe("parseExtractionResponse", () => {
   it("parses a valid JSON array of facts", () => {
     const input = `[{"text": "User's name is Alex", "category": "fact", "importance": 8}]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0]).toEqual({
       text: "User's name is Alex",
       category: "fact",
       importance: 8,
+      sourceExchangeId: undefined,
+      subject: "",
     });
   });
 
@@ -27,34 +29,34 @@ describe("parseExtractionResponse", () => {
       {"text": "User works at Acme Corp", "category": "fact", "importance": 7}
     ]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(2);
+    expect(result.facts).toHaveLength(2);
   });
 
   it("strips markdown code fences", () => {
     const input = "```json\n[{\"text\": \"User likes cats\", \"category\": \"preference\", \"importance\": 3}]\n```";
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].text).toBe("User likes cats");
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].text).toBe("User likes cats");
   });
 
   it("strips code fences without language tag", () => {
     const input = "```\n[{\"text\": \"Test\", \"category\": \"fact\", \"importance\": 5}]\n```";
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
+    expect(result.facts).toHaveLength(1);
   });
 
   it("returns empty array for empty input", () => {
-    expect(parseExtractionResponse("")).toEqual([]);
-    expect(parseExtractionResponse("  ")).toEqual([]);
+    expect(parseExtractionResponse("").facts).toEqual([]);
+    expect(parseExtractionResponse("  ").facts).toEqual([]);
   });
 
   it("returns empty array for an empty JSON array", () => {
-    expect(parseExtractionResponse("[]")).toEqual([]);
+    expect(parseExtractionResponse("[]").facts).toEqual([]);
   });
 
   it("returns empty array for invalid JSON", () => {
-    expect(parseExtractionResponse("not json at all")).toEqual([]);
-    expect(parseExtractionResponse("{not an array}")).toEqual([]);
+    expect(parseExtractionResponse("not json at all").facts).toEqual([]);
+    expect(parseExtractionResponse("{not an array}").facts).toEqual([]);
   });
 
   it("remaps facts with invalid categories to \"note\"", () => {
@@ -63,11 +65,11 @@ describe("parseExtractionResponse", () => {
       {"text": "Invalid", "category": "opinion", "importance": 3}
     ]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(2);
-    expect(result[0].text).toBe("Valid");
-    expect(result[0].category).toBe("fact");
-    expect(result[1].text).toBe("Invalid");
-    expect(result[1].category).toBe("note");
+    expect(result.facts).toHaveLength(2);
+    expect(result.facts[0].text).toBe("Valid");
+    expect(result.facts[0].category).toBe("fact");
+    expect(result.facts[1].text).toBe("Invalid");
+    expect(result.facts[1].category).toBe("note");
   });
 
   it("filters out facts with missing text", () => {
@@ -77,8 +79,8 @@ describe("parseExtractionResponse", () => {
       {"text": "Valid", "category": "fact", "importance": 5}
     ]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].text).toBe("Valid");
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].text).toBe("Valid");
   });
 
   it("accepts all valid categories", () => {
@@ -89,35 +91,52 @@ describe("parseExtractionResponse", () => {
       {"text": "d", "category": "instruction", "importance": 4}
     ]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(4);
+    expect(result.facts).toHaveLength(4);
   });
 
   it("extracts JSON array from surrounding text", () => {
     const input = `Here are the facts I extracted:\n[{"text": "Found it", "category": "fact", "importance": 5}]\nThat's all.`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].text).toBe("Found it");
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].text).toBe("Found it");
   });
 
   it("strips thinking traces before parsing the final JSON array", () => {
     const input = `<think>I considered a bracketed example: [{"text":"not final"}]</think>
 [{"text": "Final fact", "category": "fact", "importance": 5}]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].text).toBe("Final fact");
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].text).toBe("Final fact");
   });
 
   it("preserves optional source exchange ids for immediate batches", () => {
     const input = `[{"text": "User prefers queued extraction batching", "category": "preference", "importance": 7, "sourceExchangeId": "E2"}]`;
     const result = parseExtractionResponse(input);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0]).toMatchObject({
       text: "User prefers queued extraction batching",
       category: "preference",
       importance: 7,
       sourceExchangeId: "E2",
     });
+  });
+
+  it("parses wrapper format with subject field", () => {
+    const input = `{"subject": "KV cache slot persistence debugging", "memories": [{"text": "Slot persistence merged in PR #20819", "category": "fact", "importance": 8}]}`;
+    const result = parseExtractionResponse(input);
+    expect(result.subject).toBe("KV cache slot persistence debugging");
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].text).toBe("Slot persistence merged in PR #20819");
+    // Subject propagates to facts that don't have their own
+    expect(result.facts[0].subject).toBe("KV cache slot persistence debugging");
+  });
+
+  it("handles wrapper format with per-fact subjects", () => {
+    const input = `{"subject": "General topic", "memories": [{"text": "Fact 1", "category": "fact", "importance": 5, "subject": "Specific fact topic"}]}`;
+    const result = parseExtractionResponse(input);
+    expect(result.subject).toBe("General topic");
+    expect(result.facts[0].subject).toBe("Specific fact topic");
   });
 });
 
@@ -137,7 +156,7 @@ describe("readOpenAIContentStream", () => {
     const result = await readOpenAIContentStream(stream);
 
     expect(result.content).toBe("<think>checking context before JSON</think>[]");
-    expect(parseExtractionResponse(result.content)).toEqual([]);
+    expect(parseExtractionResponse(result.content).facts).toEqual([]);
   });
 
   it("captures streamed usage and timings for cache hit inference", async () => {

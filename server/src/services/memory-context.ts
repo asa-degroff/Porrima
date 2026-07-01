@@ -495,7 +495,10 @@ export function formatRetrievedMemoryForContext(r: RetrievalResult, projectId?: 
   const projectNote = r.memory.projectId && (!projectId || r.memory.projectId !== projectId)
     ? ` [project: ${r.memory.projectId}]`
     : "";
-  return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
+  const subjectLine = r.memory.subject
+    ? `(subject: ${r.memory.subject})\n`
+    : "";
+  return `${subjectLine}- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
 }
 
 function updateAccessMetadata(memories: RetrievalResult[], skipIds?: Set<string>): void {

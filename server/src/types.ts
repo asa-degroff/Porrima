@@ -505,6 +505,7 @@ export interface Memory {
   turnId?: string;  // UUID of the agent turn that extracted this memory (for same-turn retrieval guard)
   supersededBy?: string;  // ID of newer memory that supersedes this one
   supersedes?: string;  // ID of older memory that this one supersedes
+  subject: string;  // Topic framing from extraction context; '' for legacy/user-authored
 }
 
 export interface MemoryStore {

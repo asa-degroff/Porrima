@@ -92,6 +92,7 @@ describe("memory block storage", () => {
         createdAt: now,
         lastAccessed: now,
         accessCount: 0,
+        subject: "",
       });
       await storage.setLastSynthesis(now);
       storage.closeMemoryDb();

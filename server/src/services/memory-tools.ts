@@ -171,6 +171,7 @@ export async function executeMemoryTool(
         text,
         category: (category as MemoryCategory) || "fact",
         importance: Math.min(10, Math.max(1, importance || 5)),
+        subject: '',
       };
 
       await dedupAndSave([fact], [embedding], chatId, { sourceType: 'explicit' });

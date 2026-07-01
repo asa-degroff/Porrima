@@ -586,10 +586,12 @@ I think beyond surface-level facts, considering:
 
 Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 3-5 sentences per memory is ideal.
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (1-3 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10 (10 = critical, 1 = trivial)
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context that produced these memories. Use a noun phrase, not a full sentence. Be specific — name the concrete topic or system discussed, not the activity. Don't use generic labels like "this conversation", "coding session", "debugging", or "project update".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
 
 Categories:
 - "preference" — likes, dislikes, stylistic choices
@@ -603,9 +605,9 @@ Categories:
 
 The categories are guidelines, not strict rules — if something doesn't fit neatly but seems worth remembering, capture it anyway and choose the closest category.
 
-If nothing is significant, output: []
+If nothing is significant, output: {"subject": "", "memories": []}
 
-IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 
 /**
  * Maximum share of the extraction context window that the system prompt
@@ -704,14 +706,16 @@ Previously captured memories are provided alongside the conversation. Those memo
 
 Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10 (10 = critical, 1 = trivial)
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context. Use a noun phrase. Be specific about what topic or system was discussed. Don't use generic labels like "this conversation" or "coding session".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
 
-If nothing is genuinely novel or significant, output: []
+If nothing is genuinely novel or significant, output: {"subject": "", "memories": []}
 
-IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 
 const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
 {{PREVIOUS_MEMORIES}}
@@ -734,6 +738,12 @@ interface ExtractedFact {
   category: MemoryCategory;
   importance: number;
   sourceExchangeId?: string;
+  subject: string;
+}
+
+interface ParsedExtraction {
+  facts: ExtractedFact[];
+  subject: string;
 }
 
 function cleanJsonArrayOutput(text: string): string {
@@ -783,53 +793,118 @@ function findJsonArrayCandidates(cleaned: string): string[] {
   return candidates;
 }
 
-export function parseExtractionResponse(text: string): ExtractedFact[] {
+export function parseExtractionResponse(text: string): ParsedExtraction {
   // Strip thinking blocks before looking for JSON. Reasoning models can include
-  // bracketed examples in <think>...</think>, and grabbing the first "[" across
-  // the entire raw output can corrupt an otherwise valid final JSON array.
+  // bracketed examples in <think>...</think>, and grabbing the first "{" across
+  // the entire raw output can corrupt an otherwise valid final JSON object.
   const cleaned = cleanJsonArrayOutput(text);
 
-  const parseCandidate = (candidate: string): ExtractedFact[] | null => {
-    let arr: unknown;
+  const parseCandidate = (candidate: string): ParsedExtraction | null => {
+    let obj: unknown;
     try {
-      arr = JSON.parse(candidate);
+      obj = JSON.parse(candidate);
     } catch {
       return null;
     }
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((f: any) =>
-        typeof f.text === "string" &&
-        f.text.length > 0
-      )
-      .map((f: any) => {
-        const category = VALID_MEMORY_CATEGORIES.includes(f.category)
-          ? f.category as MemoryCategory
-          : FALLBACK_MEMORY_CATEGORY;
-        if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
-          console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
-        }
-        const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
-          ? f.sourceExchangeId.trim()
-          : undefined;
-        return { text: f.text, category, importance: f.importance, sourceExchangeId };
-      });
+
+    // Handle wrapper format: {"subject": "...", "memories": [...]}
+    if (typeof obj === "object" && obj !== null && "memories" in obj) {
+      const wrapper = obj as any;
+      const subject = typeof wrapper.subject === "string" ? wrapper.subject.trim() : "";
+      const memories = wrapper.memories;
+      if (!Array.isArray(memories)) return null;
+      const facts = memories
+        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
+        .map((f: any) => {
+          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+            ? f.category as MemoryCategory
+            : FALLBACK_MEMORY_CATEGORY;
+          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+          }
+          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+            ? f.sourceExchangeId.trim()
+            : undefined;
+          const factSubject = typeof f.subject === "string" ? f.subject.trim() : subject;
+          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject: factSubject };
+        });
+      return { facts, subject };
+    }
+
+    // Legacy flat array format: [{...}, {...}]
+    if (Array.isArray(obj)) {
+      const facts = obj
+        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
+        .map((f: any) => {
+          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+            ? f.category as MemoryCategory
+            : FALLBACK_MEMORY_CATEGORY;
+          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+          }
+          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+            ? f.sourceExchangeId.trim()
+            : undefined;
+          const subject = typeof f.subject === "string" ? f.subject.trim() : "";
+          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject };
+        });
+      return { facts, subject: "" };
+    }
+
+    return null;
   };
 
-  // Prefer the last valid array. The final answer is usually after any
-  // reasoning/preamble, while earlier bracketed snippets are often examples.
-  const candidates = findJsonArrayCandidates(cleaned);
+  // Find JSON object candidates (wrapper format)
+  const objectCandidates = findJsonObjectCandidates(cleaned);
 
-  for (const candidate of candidates.reverse()) {
-    const facts = parseCandidate(candidate);
-    if (facts && facts.length > 0) return facts;
+  for (const candidate of objectCandidates.reverse()) {
+    const parsed = parseCandidate(candidate);
+    if (parsed && parsed.facts.length > 0) return parsed;
   }
 
-  // Preserve the explicit "[]" no-facts response.
-  return candidates.some((candidate) => {
-    const facts = parseCandidate(candidate);
-    return facts !== null && facts.length === 0;
-  }) ? [] : [];
+  // Fallback: look for flat arrays (legacy format)
+  const arrayCandidates = findJsonArrayCandidates(cleaned);
+  for (const candidate of arrayCandidates.reverse()) {
+    const parsed = parseCandidate(candidate);
+    if (parsed && parsed.facts.length > 0) return parsed;
+  }
+
+  // Preserve the explicit empty response
+  const allCandidates = [...objectCandidates, ...arrayCandidates];
+  if (allCandidates.some((candidate) => {
+    const parsed = parseCandidate(candidate);
+    return parsed !== null && parsed.facts.length === 0;
+  })) {
+    return { facts: [], subject: "" };
+  }
+
+  return { facts: [], subject: "" };
+}
+
+/**
+ * Find JSON object candidates in text (for wrapper format parsing).
+ * Looks for {...} patterns that might contain the extraction response.
+ */
+function findJsonObjectCandidates(cleaned: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        candidates.push(cleaned.slice(start, i + 1));
+        break; // Take the first valid object (usually the last one in output)
+      }
+    }
+  }
+
+  return candidates;
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1211,8 @@ interface ExtractChunkedOptions {
 
 interface ExtractChunkedResult {
   facts: ExtractedFact[];
+  /** Per-chunk subjects from the extraction wrapper format. */
+  subjects: string[];
   /** Raw LLM output per chunk, concatenated with separators for observability. */
   rawOutput: string;
   chunkCount: number;
@@ -1306,8 +1383,10 @@ async function extractInChunks(
       opts.signal,
       { assumeMutexHeld: opts.assumeMutexHeld },
     );
+    const parsed1 = parseExtractionResponse(raw);
     return {
-      facts: parseExtractionResponse(raw),
+      facts: parsed1.facts,
+      subjects: parsed1.subject ? [parsed1.subject] : [],
       rawOutput: raw,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
@@ -1337,8 +1416,10 @@ async function extractInChunks(
       opts.signal,
       { assumeMutexHeld: opts.assumeMutexHeld },
     );
+    const parsed1 = parseExtractionResponse(raw);
     return {
-      facts: parseExtractionResponse(raw),
+      facts: parsed1.facts,
+      subjects: parsed1.subject ? [parsed1.subject] : [],
       rawOutput: raw,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
@@ -1357,7 +1438,7 @@ async function extractInChunks(
 
   const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
   if (chunks.length === 0) {
-    return { facts: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
+    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
   }
 
   if (chunks.length > 1 && opts.contextLabel) {
@@ -1368,6 +1449,7 @@ async function extractInChunks(
   }
 
   const allFacts: ExtractedFact[] = [];
+  const allSubjects: string[] = [];
   const rawOutputs: string[] = [];
   const chunkTimingsMs: number[] = [];
   let lastChunkContent = "";
@@ -1430,8 +1512,11 @@ async function extractInChunks(
     }
 
     rawOutputs.push(raw);
-    const chunkFacts = parseExtractionResponse(raw);
-    if (chunkFacts.length > 0) allFacts.push(...chunkFacts);
+    const chunkParsed = parseExtractionResponse(raw);
+    if (chunkParsed.facts.length > 0) {
+      allFacts.push(...chunkParsed.facts);
+      if (chunkParsed.subject) allSubjects.push(chunkParsed.subject);
+    }
     lastChunkContent = chunkContent;
   }
 
@@ -1450,6 +1535,7 @@ async function extractInChunks(
 
   return {
     facts: allFacts,
+    subjects: allSubjects,
     rawOutput,
     chunkCount: chunks.length,
     chunkTimingsMs,
@@ -1906,6 +1992,7 @@ async function saveExtractedMemory(
     sourceMessageStartIndex: sourceSpan?.startIndex,
     sourceMessageEndIndex: sourceSpan?.endIndex,
     ...(turnId ? { turnId } : {}),
+    subject: fact.subject || '',
   });
   return newMemoryId;
 }
@@ -2371,10 +2458,13 @@ async function runImmediateBatch(input: {
           chunkCount: 1,
           chunkTimingsMs: [Date.now() - t0],
           chunkFailures: 0,
+        subjects: [] as string[],
         };
 
     if (!chunkedFallback) {
-      chunkResult.facts = parseExtractionResponse(chunkResult.rawOutput);
+      const parsed = parseExtractionResponse(chunkResult.rawOutput);
+      chunkResult.facts = parsed.facts;
+      chunkResult.subjects = parsed.subject ? [parsed.subject] : [];
     }
 
     runHandle.attachOutput(chunkResult.rawOutput);
@@ -2681,9 +2771,15 @@ function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
 function buildMidTurnBatchHeader(pulseIndex: number): string {
   return `[MID-TURN PULSE #${pulseIndex}] Review the agent's partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
 
-For every extracted memory, include "sourceExchangeId" as "midturn-${pulseIndex}".
-Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
-If nothing significant has emerged yet, output: []`;
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing what the agent is working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
+  - "sourceExchangeId": Use "midturn-${pulseIndex}" for all memories in this pulse.
+
+If nothing significant has emerged yet, output: {"subject": "", "memories": []}`;
 }
 
 function buildMidTurnUserPrompt(pulseIndex: number, content: MidTurnPulseContent): string {
@@ -2803,7 +2899,8 @@ export async function triggerMidTurnExtractionPulse(opts: {
 
       timeoutController.signal.throwIfAborted();
       runHandle.attachOutput(rawOutput);
-      const facts = parseExtractionResponse(rawOutput);
+      const parsed = parseExtractionResponse(rawOutput);
+      const facts = parsed.facts;
 
       if (facts.length === 0) {
         console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: no facts extracted`);
@@ -2899,12 +2996,14 @@ Focus on:
 
 Each atomic memory should be self-contained and meaningful (2-5 sentences).
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing what this conversation segment was about. Be specific.
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10
 
-Output ONLY the JSON array.`;
+Output ONLY the JSON object.`;
 
 async function buildPreCompactionSystemPrompt(): Promise<string> {
   const prefix = await loadExtractionPrefix();

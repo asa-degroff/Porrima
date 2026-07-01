@@ -523,6 +523,7 @@ export interface MemorySummary {
   sourceId?: string;
   supersededBy?: string;
   supersedes?: string;
+  subject: string;
 }
 
 export interface MemoryLineageEntry {
