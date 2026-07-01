@@ -624,7 +624,7 @@ function RunDetail({ run }: { run: ExtractionRun }) {
       {run.results && run.results.facts.length > 0 && (
         <Section title={`Parsed Memories (${run.results.facts.length})`} defaultOpen>
           {run.results.subject && (
-            <div className="text-[10px] text-sky-300/60 mb-2 font-medium">(subject: {run.results.subject})</div>
+            <div className="text-[10px] text-sky-300/60 mb-2 font-medium">subject: {run.results.subject}</div>
           )}
           <ul className="space-y-1.5">
             {run.results.facts.map((f, i) => (
@@ -915,7 +915,7 @@ function MemoriesTab({
                   }`}
                 >
                   {memory.subject && (
-                    <div className="text-[10px] text-sky-300/50 mb-1.5 font-medium">(subject: {memory.subject})</div>
+                    <div className="text-[10px] text-sky-300/50 mb-1.5 font-medium">subject: {memory.subject}</div>
                   )}
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-xs text-white/70 leading-relaxed flex-1">
