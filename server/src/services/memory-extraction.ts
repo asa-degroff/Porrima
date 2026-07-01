@@ -15,6 +15,7 @@ import {
   getMaxBlockChars,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
+import { getProject } from "./chat-storage.js";
 import { invalidateMemoriesCache } from "./memory-context.js";
 import {
   startExtractionRun,
@@ -883,27 +884,45 @@ export function parseExtractionResponse(text: string): ParsedExtraction {
 
 /**
  * Find JSON object candidates in text (for wrapper format parsing).
- * Looks for {...} patterns that might contain the extraction response.
+ * String-aware brace tracking — mirrors findJsonArrayCandidates so braces
+ * inside string literals (e.g. a subject describing JSON config) don't
+ * truncate the candidate. Iterates every "{" start position so reasoning
+ * preamble containing example objects doesn't shadow the real answer.
  */
 function findJsonObjectCandidates(cleaned: string): string[] {
   const candidates: string[] = [];
-  let start = -1;
-  let depth = 0;
+  for (let start = 0; start < cleaned.length; start++) {
+    if (cleaned[start] !== "{") continue;
 
-  for (let i = 0; i < cleaned.length; i++) {
-    const ch = cleaned[i];
-    if (ch === '{') {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth === 0 && start !== -1) {
-        candidates.push(cleaned.slice(start, i + 1));
-        break; // Take the first valid object (usually the last one in output)
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === "\"") {
+        inString = true;
+      } else if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          candidates.push(cleaned.slice(start, i + 1));
+          break;
+        }
       }
     }
   }
-
   return candidates;
 }
 
@@ -2178,6 +2197,23 @@ function ensureImmediateSession(
   return { session: state.session };
 }
 
+/**
+ * Resolve the project name for an extraction prompt header.
+ * Returns "" for chats without a project or if the project lookup fails.
+ * The header gives the extraction model grounding for broader context;
+ * the subject itself remains topic-focused, not project-focused.
+ */
+async function resolveProjectHeader(projectId?: string): Promise<string> {
+  if (!projectId) return "";
+  try {
+    const project = await getProject(projectId);
+    if (!project?.name) return "";
+    return `Project: ${project.name}\n\n`;
+  } catch {
+    return "";
+  }
+}
+
 function nextImmediateExchangeId(session: ImmediateExtractionSession): string {
   return `E${session.nextExchangeSequence++}`;
 }
@@ -2197,10 +2233,15 @@ function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplet
     : "";
   return `${turnMarker}Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
 
-For every extracted memory, include "sourceExchangeId" with exactly one of these exchange ids: ${ids}.
-Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
-If a memory depends on multiple exchanges, use the exchange that best supports it.
-If nothing is significant, output: []`;
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context. Be specific. Don't use generic labels like "this conversation" or "coding session".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
+  - "sourceExchangeId": Use exactly one of these exchange ids: ${ids}. If a memory depends on multiple exchanges, use the exchange that best supports it.
+
+If nothing is significant, output: {"subject": "", "memories": []}`;
 }
 
 function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
@@ -2390,7 +2431,8 @@ async function runImmediateBatch(input: {
   freshSessionReason?: string;
   isTurnComplete?: boolean;
 }): Promise<void> {
-  const userPrompt = buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false);
+  const projectHeader = await resolveProjectHeader(input.projectId);
+  const userPrompt = `${projectHeader}${buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false)}`;
   const newUserOnly: ExtractionDialogueMessage[] = [{ role: "user", content: userPrompt }];
   const nextUserTooLarge = estimateDialogueChars(newUserOnly) > input.maxInputChars;
   let session = input.session;
@@ -2818,7 +2860,8 @@ export async function triggerMidTurnExtractionPulse(opts: {
     const extractionSettings = await resolveExtractionRequestSettings(settings);
     const systemPrompt = await buildExtractionSystemPrompt(projectId);
     const effectiveModelId = resolveEffectiveExtractionModelId(modelId, settings);
-    const userPrompt = buildMidTurnUserPrompt(pulseIndex, content);
+    const projectHeader = await resolveProjectHeader(projectId);
+    const userPrompt = `${projectHeader}${buildMidTurnUserPrompt(pulseIndex, content)}`;
 
     // Reuse the immediate extraction session for KV cache continuity
     const state = getImmediateQueueState(chatId);
@@ -3086,11 +3129,14 @@ export async function preCompactionFlush(
       messageToExtractionSegment(m, i)
     );
 
+    const projectHeader = await resolveProjectHeader(projectId);
+
     // Retry happens per-chunk inside extractInChunks.
     const chunkResult = await extractInChunks({
       modelId,
       systemPrompt,
       segments,
+      userPromptHeader: projectHeader || undefined,
       contextLabel: `preCompactionFlush chat=${chatId}`,
     });
     runHandle.attachOutput(chunkResult.rawOutput);
@@ -3322,7 +3368,8 @@ export async function extractDelayedMemories(
   );
 
   // Build prompt with previous memories injected — used as the per-chunk header
-  const userPromptHeader = `${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
+  const projectHeader = await resolveProjectHeader(chat.projectId);
+  const userPromptHeader = `${projectHeader}${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
 
   // Each message is a segment; messages too large for the chunk budget get paragraph-split
   const messageSegments: ExtractSegment[] = context.messages.map(({ message, index }) =>

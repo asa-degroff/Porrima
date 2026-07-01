@@ -535,8 +535,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
     db.prepare("DELETE FROM memories").run();
 
     const insertMemory = db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertVec = db.prepare(`
       INSERT INTO vec_memories (id, embedding)
@@ -553,7 +553,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
         m.lastAccessed,
         m.accessCount,
         m.sourceChatId || "",
-        m.projectId || ""
+        m.projectId || "",
+        m.subject || ""
       );
       insertVec.run(m.id, new Float32Array(m.embedding));
     }
