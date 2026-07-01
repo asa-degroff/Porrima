@@ -1820,25 +1820,31 @@ export async function truncateChatHistory(
   const inContextEstimates = inContextIndices.map((idx) => estimateMessageContentTokens(messages[idx]));
 
   // Account for system prompt + tool schema overhead in the budget.
-  // When systemPrompt is provided, use the same scale factor approach as
-  // truncateBeforeSend so the per-message estimates match the actual payload.
-  // Without this, the greedy backfill can keep messages that push the real
-  // payload well past the target, since the system prompt alone can be
-  // thousands of tokens (persona + user doc + memory blocks + zeitgeist).
+  // Uses the same estimateContextBreakdown approach as truncateBeforeSend so
+  // the scale factor reflects the actual LLM-reported token count (usage anchor)
+  // rather than a raw char-estimate. This prevents the budget from keeping too
+  // many messages when the tokenizer inflates tool-heavy payloads well beyond
+  // what char estimation predicts — a systematic undercount that leaves the
+  // context hot enough to immediately re-trigger pre-send compaction on the
+  // next turn (or on manual resume after a failed mid-turn resume).
   let overheadTokens = 0;
   let effectiveEstimates = inContextEstimates;
   let scaleFactor = 1;
   if (systemPrompt) {
-    const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
-    const messageContentTokens = inContextEstimates.reduce((s, t) => s + t, 0);
-    const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
-    // Use max of char-estimate and LLM-reported usage as the numerator: when the
-    // tokenizer inflates the payload beyond what char estimation predicts (tool
-    // schemas, framing, non-ASCII content), char-only scaling under-counts and
-    // the budget keeps too many messages — leaving context hot enough to
-    // immediately re-trigger pre-send compaction on the next turn.
-    const usageForScale = knownUsage && knownUsage > charEstimate ? knownUsage : charEstimate;
-    scaleFactor = charEstimateTotal > 0 ? usageForScale / charEstimateTotal : 1;
+    const breakdown = estimateContextBreakdown(messages, systemPrompt, tools);
+    // displayTokens is the usage-anchored estimate (path A) when a usage anchor
+    // exists; otherwise it falls back to the char-estimate (path B). This is
+    // the same value truncateBeforeSend uses as its planning token count.
+    const charEstimateFull = breakdown.pathBTokens;
+    const usageForScale = breakdown.displayPath === "usage_anchor"
+      ? Math.max(breakdown.displayTokens, charEstimateFull)
+      : (knownUsage && knownUsage > charEstimateFull ? knownUsage : charEstimateFull);
+    // Use charEstimateFull (includes tool schemas + per-message framing) as the
+    // denominator so the scale factor is consistent with the numerator — both
+    // cover the same scope. The old code used a partial denominator (system
+    // prompt + message content only) that excluded tool schemas and framing,
+    // producing an inconsistent and unreliable scale factor.
+    scaleFactor = charEstimateFull > 0 ? usageForScale / charEstimateFull : 1;
     overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
     effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
   }
