@@ -613,6 +613,8 @@ print(numbered)
     }
     const script = `
 import json
+import os
+import tempfile
 from pathlib import Path
 data = json.loads(input())
 root = Path(${pythonLiteral(this.root)})
