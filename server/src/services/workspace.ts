@@ -299,6 +299,12 @@ function sshTarget(connection: SshConnection): string {
 
 interface MasterState {
   establishing: Promise<boolean> | null;
+  pythonInfo: Promise<PythonInfo | null> | null;
+}
+
+interface PythonInfo {
+  /** Absolute path to python3 on the remote (resolved via a login shell). */
+  path: string;
 }
 
 const masterRegistry = new Map<string, MasterState>();
@@ -306,10 +312,10 @@ const masterRegistry = new Map<string, MasterState>();
 function getMasterState(connectionId: string): MasterState {
   let state = masterRegistry.get(connectionId);
   if (!state) {
-    state = { establishing: null };
+    state = { establishing: null, pythonInfo: null };
     masterRegistry.set(connectionId, state);
   }
-  return state;
+  return state!;
 }
 
 /** Build SSH args for a multiplexed client command.
@@ -450,6 +456,7 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
   async destroyMaster(): Promise<void> {
     const state = getMasterState(this.connection.id);
     state.establishing = null;
+    state.pythonInfo = null;
     try {
       await new Promise<void>((resolve) => {
         execFile("ssh", [
@@ -489,6 +496,9 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
             if (masterOk) {
               const state = getMasterState(this.connection.id);
               state.establishing = null;
+              // Drop the cached python path too — the next resolvePython()
+              // will re-detect (which itself re-establishes the master).
+              state.pythonInfo = null;
             }
             resolveResult({
               content: error.killed
@@ -513,8 +523,34 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     return this.exec(`cd -- ${shellQuote(this.root)} && ${command}`, timeoutMs, stdin);
   }
 
+  /**
+   * Resolve the absolute path to python3 on the remote host, using a login
+   * shell so the user's full PATH (pyenv/conda/asdf/mise/custom ~/bin, etc.)
+   * is applied. Result is shared across all adapters on the same connection
+   * via the master registry. Falls back to "python3" if detection fails.
+   */
+  private async resolvePython(): Promise<string> {
+    const state = getMasterState(this.connection.id);
+    if (!state.pythonInfo) {
+      state.pythonInfo = (async () => {
+        // Run via a login shell so profile-augmented PATH is honored.
+        const result = await this.exec(`/bin/bash -lc 'command -v python3'`, 10000);
+        if (result.isError) return null;
+        const trimmed = result.content.trim().split("\n").pop()?.trim();
+        return trimmed ? { path: trimmed } : null;
+      })();
+    }
+    const info = await state.pythonInfo;
+    return info?.path ?? "python3";
+  }
+
   private python(script: string, payload: unknown, timeoutMs = 30000): Promise<{ content: string; isError: boolean }> {
-    return this.inRoot(`python3 -c ${shellQuote(script)}`, timeoutMs, JSON.stringify(payload));
+    // We can't await resolvePython here without changing the signature to
+    // async, but inRoot/exec already return Promises — wrap the path lookup.
+    const stdin = JSON.stringify(payload);
+    return this.resolvePython().then((py) =>
+      this.inRoot(`${shellQuote(py)} -c ${shellQuote(script)}`, timeoutMs, stdin),
+    );
   }
 
   async readFile(args: Record<string, any>, opts: WorkspaceReadFileOptions = {}): Promise<{ content: string; isError: boolean }> {
@@ -661,6 +697,8 @@ print(f"Remote file edited: {target}")
     const script = `
 import glob
 import json
+import os
+import sys
 from pathlib import Path
 data = json.loads(input())
 root = Path(${pythonLiteral(this.root)})
@@ -675,7 +713,15 @@ else:
     base = root / raw
 pattern = data.get("pattern")
 if pattern:
-    matches = glob.glob(pattern, root_dir=str(base), recursive=True)[:200]
+    # glob.root_dir was added in Python 3.10; fall back to a manual join for
+    # older interpreters (RHEL 8 / Ubuntu 20.04 ship 3.8/3.9).
+    if sys.version_info >= (3, 10):
+        matches = glob.glob(pattern, root_dir=str(base), recursive=True)[:200]
+    else:
+        full = os.path.join(str(base), pattern)
+        raw_matches = glob.glob(full, recursive=True)[:200]
+        prefix = str(base) + os.sep
+        matches = [m[len(prefix):] if m.startswith(prefix) else m for m in raw_matches]
     print("\\n".join(matches) if matches else "No files matched the pattern.")
 else:
     entries = []
@@ -705,7 +751,7 @@ for name in ("AGENTS.md", "agents.md"):
         print(p.read_text(encoding="utf-8"))
         raise SystemExit(0)
 `;
-    const result = await this.exec(`python3 -c ${shellQuote(script)}`);
+    const result = await this.python(script, {});
     return result.isError || result.content === "(no output)" ? null : result.content;
   }
 
@@ -729,7 +775,7 @@ else:
         result["error"] = "Path is not readable"
 print(json.dumps(result))
 `;
-    const result = await this.exec(`python3 -c ${shellQuote(script)}`);
+    const result = await this.python(script, {});
     if (result.isError) {
       return { valid: false, exists: false, isDirectory: false, isReadable: false, error: result.content };
     }
@@ -747,7 +793,7 @@ else:
     p.mkdir(parents=True, exist_ok=True)
     print(json.dumps({"success": True, "path": str(p)}))
 `;
-    const result = await this.exec(`python3 -c ${shellQuote(script)}`);
+    const result = await this.python(script, {});
     if (result.isError) {
       return { success: false, error: result.content };
     }
