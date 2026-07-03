@@ -4,7 +4,15 @@ import os from "os";
 import { join } from "path";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
-import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
+import {
+  DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
+  DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
+  MAX_MID_TURN_EXTRACTION_THRESHOLD,
+  MAX_MID_TURN_EXTRACTION_TIMEOUT_MS,
+  MIN_MID_TURN_EXTRACTION_THRESHOLD,
+  MIN_MID_TURN_EXTRACTION_TIMEOUT_MS,
+  normalizeExtractionRequestSettings,
+} from "./extraction-settings.js";
 
 const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
 
@@ -1148,11 +1156,28 @@ const DEFAULT_SETTINGS: Settings = {
 
 function normalizeSettings(settings: Settings): Settings {
   const extraction = normalizeExtractionRequestSettings(settings);
+  const clamp = (value: unknown, fallback: number, min: number, max: number): number => {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(parsed)));
+  };
   return {
     ...settings,
     extractionCtxSize: extraction.ctxSize,
     extractionMaxTokens: extraction.maxTokens,
     extractionTimeoutMs: extraction.timeoutMs,
+    midTurnExtractionThreshold: clamp(
+      settings.midTurnExtractionThreshold,
+      DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
+      MIN_MID_TURN_EXTRACTION_THRESHOLD,
+      MAX_MID_TURN_EXTRACTION_THRESHOLD,
+    ),
+    midTurnExtractionTimeoutMs: clamp(
+      settings.midTurnExtractionTimeoutMs,
+      DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
+      MIN_MID_TURN_EXTRACTION_TIMEOUT_MS,
+      MAX_MID_TURN_EXTRACTION_TIMEOUT_MS,
+    ),
     preserveThinking:
       settings.preserveThinking ??
       Object.values(settings.modelPreserveThinking ?? {}).some(Boolean),

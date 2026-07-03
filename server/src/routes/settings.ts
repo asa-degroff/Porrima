@@ -86,6 +86,13 @@ router.put("/", async (req, res) => {
   if (baselineSensitiveSettingsChanged(before, settings)) {
     clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
   }
+  if (
+    before.defaultModelId !== settings.defaultModelId ||
+    before.llamacppUrl !== settings.llamacppUrl ||
+    before.llamacppEnabled !== settings.llamacppEnabled
+  ) {
+    invalidateModelCache();
+  }
   res.json(settings);
 });
 

@@ -99,7 +99,8 @@ async function applySlotModelRuntime(
     }
 
     const freshStatus = await getLlamaServerStatus(id, settings);
-    const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
+    const slotConfig = await hydrateDefaultConfig(id, settings);
+    const ctxOverride = slotConfig.ctxSize;
     const result = await ensureRouterModelLoaded(freshStatus.url, model.id, { contextWindow: ctxOverride, force: true });
     if (result === "not-router") {
       throw new Error(`Slot reported router mode but /models/load returned 404. Try refreshing.`);
@@ -113,10 +114,6 @@ async function applySlotModelRuntime(
       mode: "router-load",
       reconfiguredModelsDir: options.reconfigureModelsDir ? model.scanDir : undefined,
     };
-  }
-
-  if (id === "inference") {
-    throw new Error("Chat inference model changes require router mode. Update the managed service config or restart with --models-dir.");
   }
 
   const currentConfig = await hydrateDefaultConfig(id, settings);
@@ -534,13 +531,11 @@ router.put("/:id/enabled", async (req, res) => {
 
 // POST /:id/apply-model — Switch the model that a llama.cpp server serves.
 // Two paths:
-//   - Router mode (inference/title-generation/extraction with --models-dir): hits
-//     /models/load on the slot's URL. No systemd write, no restart, no
-//     downtime — just persist the modelId in settings so consumers send the
-//     matching model name in chat-completion requests.
-//   - Single-model mode for non-inference slots: writes a systemd drop-in
-//     override that swaps the ExecStart's -m and --alias, then daemon-reload
-//     + restart the unit.
+//   - Router mode (inference/title-generation/extraction with --models-dir):
+//     hits /models/load on the slot's URL and persists the modelId in settings
+//     so consumers send the matching model name in requests.
+//   - Single-model mode: writes a systemd drop-in override that swaps the
+//     ExecStart's -m and --alias, then daemon-reload + restart the unit.
 // Body: { modelId: string }.
 //
 // Must be declared BEFORE the generic POST /:id/:action route below — Express

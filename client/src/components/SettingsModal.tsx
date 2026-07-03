@@ -69,6 +69,12 @@ const MAX_EXTRACTION_MAX_TOKENS = 32768;
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 600000;
 const MIN_EXTRACTION_TIMEOUT_MINUTES = 1;
 const MAX_EXTRACTION_TIMEOUT_MINUTES = 1440;
+const DEFAULT_MID_TURN_EXTRACTION_THRESHOLD = 6000;
+const MIN_MID_TURN_EXTRACTION_THRESHOLD = 500;
+const MAX_MID_TURN_EXTRACTION_THRESHOLD = 32000;
+const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 30000;
+const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 5000;
+const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 300000;
 const DEFAULT_INFERENCE_URL = getDefaultLlamaServerUrl("inference");
 const DEFAULT_EXTRACTION_URL = getDefaultLlamaServerUrl("extraction");
 const DEFAULT_RERANKER_URL = getDefaultLlamaServerUrl("reranker");
@@ -83,6 +89,10 @@ function clampIntegerDraft(value: string, fallback: number, min: number, max: nu
 
 function timeoutMsToMinutes(value: number): number {
   return Math.round(value / 60000);
+}
+
+function timeoutMsToSeconds(value: number): number {
+  return Math.round(value / 1000);
 }
 
 const SUPERTONIC_LANGUAGES = [
@@ -510,6 +520,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [extractionMaxTokensDraft, setExtractionMaxTokensDraft] = useState(String(settings.extractionMaxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS));
   const [extractionTimeoutMs, setExtractionTimeoutMs] = useState(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS);
   const [extractionTimeoutMinutesDraft, setExtractionTimeoutMinutesDraft] = useState(String(timeoutMsToMinutes(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS)));
+  // Mid-turn extraction settings (app-level behavior, not server process config)
+  const [midTurnExtractionThreshold, setMidTurnExtractionThreshold] = useState(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD);
+  const [midTurnExtractionThresholdDraft, setMidTurnExtractionThresholdDraft] = useState(String(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD));
+  const [midTurnExtractionTimeoutMs, setMidTurnExtractionTimeoutMs] = useState(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS);
+  const [midTurnExtractionTimeoutSecondsDraft, setMidTurnExtractionTimeoutSecondsDraft] = useState(String(timeoutMsToSeconds(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || DEFAULT_RERANKER_URL);
@@ -1030,6 +1045,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const osHomePrefix = inferredHomePrefix || (typeof process !== "undefined" && process.env?.HOME) || "/home";
   const defaultModelsDir = `${osHomePrefix}/.local/share/llama-models`;
   const displayPath = useCallback((p: string) => p.replace(osHomePrefix, "~"), [osHomePrefix]);
+  const modelIdFromPath = useCallback((p: string): string | undefined => {
+    const file = p.trim().split(/[\\/]/).pop();
+    return file ? file.replace(/\.gguf$/i, "") : undefined;
+  }, []);
   const modelOptionKey = useCallback((m: { id: string; scanDir?: string; source?: string }) => (
     `${m.id}::${m.scanDir || m.source || "unknown"}`
   ), []);
@@ -1416,6 +1435,29 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setExtractionTimeoutMinutesDraft(String(minutes));
     handleLlamaServerSettings("extraction", { timeoutMs: next });
   }, [extractionTimeoutMinutesDraft, extractionTimeoutMs, handleLlamaServerSettings]);
+
+  const applyMidTurnExtractionThresholdDraft = useCallback(() => {
+    const next = clampIntegerDraft(
+      midTurnExtractionThresholdDraft,
+      midTurnExtractionThreshold,
+      MIN_MID_TURN_EXTRACTION_THRESHOLD,
+      MAX_MID_TURN_EXTRACTION_THRESHOLD,
+    );
+    setMidTurnExtractionThreshold(next);
+    setMidTurnExtractionThresholdDraft(String(next));
+  }, [midTurnExtractionThreshold, midTurnExtractionThresholdDraft]);
+
+  const applyMidTurnExtractionTimeoutDraft = useCallback(() => {
+    const seconds = clampIntegerDraft(
+      midTurnExtractionTimeoutSecondsDraft,
+      timeoutMsToSeconds(midTurnExtractionTimeoutMs),
+      MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+      MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+    );
+    const next = seconds * 1000;
+    setMidTurnExtractionTimeoutMs(next);
+    setMidTurnExtractionTimeoutSecondsDraft(String(seconds));
+  }, [midTurnExtractionTimeoutMs, midTurnExtractionTimeoutSecondsDraft]);
 
   // Assign a binary to a specific server slot
   const handleAssignBinary = useCallback(async (slotId: LlamaServerId, binaryDir: string) => {
@@ -1811,6 +1853,19 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         MIN_EXTRACTION_TIMEOUT_MINUTES,
         MAX_EXTRACTION_TIMEOUT_MINUTES,
       ) * 60000;
+    const savedMidTurnExtractionThreshold = clampIntegerDraft(
+      midTurnExtractionThresholdDraft,
+      midTurnExtractionThreshold,
+      MIN_MID_TURN_EXTRACTION_THRESHOLD,
+      MAX_MID_TURN_EXTRACTION_THRESHOLD,
+    );
+    const savedMidTurnExtractionTimeoutMs =
+      clampIntegerDraft(
+        midTurnExtractionTimeoutSecondsDraft,
+        timeoutMsToSeconds(midTurnExtractionTimeoutMs),
+        MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+        MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
+      ) * 1000;
     const newSettings: Settings = {
       ...settings,
       agentName: agentName.trim() || undefined,
@@ -1834,6 +1889,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       extractionCtxSize: savedExtractionCtxSize,
       extractionMaxTokens: savedExtractionMaxTokens,
       extractionTimeoutMs: savedExtractionTimeoutMs,
+      midTurnExtractionThreshold: savedMidTurnExtractionThreshold,
+      midTurnExtractionTimeoutMs: savedMidTurnExtractionTimeoutMs,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
       rerankerModelId: rerankerModelId.trim() || undefined,
@@ -1904,23 +1961,37 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     return newSettings;
   };
 
-  const handleLoadDefaultModel = useCallback(async () => {
-    if (!defaultModelId) return;
+  const prepareSettingsForSave = async (): Promise<Settings | null> => {
+    const nextSettings = handleSave();
+    const currentInferenceServer = llamaServers.find((server) => server.id === "inference");
+    const shouldApplyDefaultModel = Boolean(
+      defaultModelId &&
+      (
+        settings.defaultModelId !== defaultModelId ||
+        defaultModelScanDir ||
+        (currentInferenceServer?.http.routerMode && currentInferenceServer.http.loadedModelId !== defaultModelId)
+      )
+    );
+    if (!shouldApplyDefaultModel) return nextSettings;
+
     setApplyingSlot("inference");
     setLlamaServerMessage(null);
     try {
       const result = await applyLlamaSlotModel("inference", defaultModelId, { scanDir: defaultModelScanDir });
       const appliedModelId = result.server.expectedModel || defaultModelId;
       setDefaultModelId(appliedModelId);
+      setDefaultModelScanDir(undefined);
       setLlamaServers((prev) => prev.map((srv) => srv.id === "inference" ? result.server : srv));
-      await onApply({ ...handleSave(), defaultModelId: appliedModelId });
       refreshModels();
       setLlamaServerMessage({
         type: "ok",
         text: result.reconfiguredModelsDir
           ? `Reconfigured inference server to ${result.reconfiguredModelsDir.replace(osHomePrefix, "~")} and loaded ${appliedModelId}.`
-          : `Loaded ${appliedModelId} on the chat inference router.`,
+          : result.mode === "router-load"
+            ? `Loaded ${appliedModelId} on the chat inference router.`
+            : `Applied ${appliedModelId} to chat inference; service restarted.`,
       });
+      return { ...nextSettings, defaultModelId: appliedModelId };
     } catch (e: any) {
       if (e instanceof ModelsDirConflictError) {
         setModelsDirConflict({
@@ -1930,12 +2001,13 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           currentModelsDir: e.conflict.currentModelsDir,
         });
       } else {
-        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load default model" });
+        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply main chat model" });
       }
+      return null;
     } finally {
       setApplyingSlot(null);
     }
-  }, [defaultModelId, defaultModelScanDir, onApply, handleSave, osHomePrefix, refreshModels]);
+  };
 
   const replaceAutomation = (task: AutomationTask) => {
     setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
@@ -2680,9 +2752,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   }, [isDesktop]);
 
   const activeSection = useActiveSection(SECTIONS.map(s => s.id), scrollRoot);
-  const inferenceServer = llamaServers.find((server) => server.id === "inference");
-  const defaultModelLoaded = Boolean(defaultModelId && inferenceServer?.http.loadedModelId === defaultModelId);
-  const canLoadDefaultModel = Boolean(defaultModelId && inferenceServer?.http.routerMode);
   const defaultChatModelOptions: Array<DiscoveredModel & { parameterSize?: string }> = chatDiskModels.length > 0
     ? chatDiskModels
     : models.map((m) => ({ id: m.id, name: m.name, source: "server" as const, parameterSize: m.parameterSize, scanDir: undefined }));
@@ -2863,24 +2932,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 </button>
               ))}
             </Dropdown>
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
-              <div className="min-w-0">
-                <div className="text-xs text-white/55">Inference router</div>
-                <div className="text-[11px] text-white/30 truncate">
-                  {inferenceServer?.http.routerMode
-                    ? `Loaded: ${inferenceServer.http.loadedModelId || "none"}`
-                    : "Router mode unavailable"}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleLoadDefaultModel}
-                disabled={!canLoadDefaultModel || defaultModelLoaded || applyingSlot === "inference"}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0 pressable"
-              >
-                {applyingSlot === "inference" ? "Loading..." : defaultModelLoaded ? "Loaded" : "Load Default Now"}
-              </button>
-            </div>
           </div>
 
           {/* Preserve Thinking */}
@@ -3845,24 +3896,20 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    />
 	                                  </div>
 	                                  {draft.mode === "single" ? (
-	                                    <>
-	                                      <div>
-	                                        <label className="block text-xs text-white/50 mb-1">Model ID</label>
-	                                        <input
-	                                          value={draft.modelId || ""}
-	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelId: e.target.value })}
-	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                        />
-	                                      </div>
-	                                      <div>
-	                                        <label className="block text-xs text-white/50 mb-1">Model path</label>
-	                                        <input
-	                                          value={draft.modelPath || ""}
-	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelPath: e.target.value })}
-	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                        />
-	                                      </div>
-	                                    </>
+	                                    <div className="sm:col-span-2">
+	                                      <label className="block text-xs text-white/50 mb-1">Model path</label>
+	                                      <input
+	                                        value={draft.modelPath || ""}
+	                                        onChange={(e) => {
+	                                          const modelPath = e.target.value;
+	                                          updateLlamaServiceDraft(server.id, {
+	                                            modelPath,
+	                                            modelId: modelIdFromPath(modelPath),
+	                                          });
+	                                        }}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                      />
+	                                    </div>
 	                                  ) : (
 	                                    <div className="sm:col-span-2">
 	                                      <label className="block text-xs text-white/50 mb-1">Models directory</label>
@@ -5303,10 +5350,52 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                  />
 	                  <span className="text-xs text-white/30">minutes</span>
 	                </div>
-	                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
-	              </div>
-	            </div>
-	          </div>
+                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Mid-Turn Extraction */}
+          <div className="border-t border-white/10 pt-6">
+            <h3 className="text-sm font-semibold text-white/80 mb-1">Mid-Turn Extraction</h3>
+            <p className="text-xs text-white/40 mb-4">
+              Controls when an in-progress agent turn triggers an extraction run to capture memories before the turn ends.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Signal token threshold</label>
+                <div className="flex items-center gap-3 mt-1">
+                  <input
+                    type="number"
+                    value={midTurnExtractionThresholdDraft}
+                    onChange={(e) => setMidTurnExtractionThresholdDraft(e.target.value)}
+                    onBlur={applyMidTurnExtractionThresholdDraft}
+                    min={MIN_MID_TURN_EXTRACTION_THRESHOLD} max={MAX_MID_TURN_EXTRACTION_THRESHOLD} step={500}
+                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                  />
+                  <span className="text-xs text-white/30">tokens</span>
+                </div>
+                <p className="text-xs text-white/30 mt-1">Accumulated signal tokens (text, thinking, tool calls) that trigger a mid-turn pulse. Lower values extract more often; higher values batch more activity per pulse. Default: 6000</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white/60">Pulse timeout</label>
+                <div className="flex items-center gap-3 mt-1">
+                  <input
+                    type="number"
+                    value={midTurnExtractionTimeoutSecondsDraft}
+                    onChange={(e) => setMidTurnExtractionTimeoutSecondsDraft(e.target.value)}
+                    onBlur={applyMidTurnExtractionTimeoutDraft}
+                    min={MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} max={MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} step={1}
+                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                  />
+                  <span className="text-xs text-white/30">seconds</span>
+                </div>
+                <p className="text-xs text-white/30 mt-1">How long a mid-turn pulse may run before aborting.</p>
+              </div>
+            </div>
+          </div>
 
 	          {/* Extraction Prompt */}
 	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
@@ -7428,22 +7517,28 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <button
             onClick={async () => {
               onHighEfficiencyModeChange(deviceHighEfficiencyMode);
-              await onApply(handleSave());
+              const nextSettings = await prepareSettingsForSave();
+              if (!nextSettings) return;
+              await onApply(nextSettings);
               setAppliedFeedback(true);
               setTimeout(() => setAppliedFeedback(false), 2000);
             }}
+            disabled={applyingSlot === "inference"}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
           >
-            {appliedFeedback ? "Applied" : "Apply"}
+            {applyingSlot === "inference" ? "Applying..." : appliedFeedback ? "Applied" : "Apply"}
           </button>
           <button
             onClick={async () => {
               onHighEfficiencyModeChange(deviceHighEfficiencyMode);
-              await onSave(handleSave());
+              const nextSettings = await prepareSettingsForSave();
+              if (!nextSettings) return;
+              await onSave(nextSettings);
             }}
+            disabled={applyingSlot === "inference"}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
-            Save and Close
+            {applyingSlot === "inference" ? "Applying..." : "Save and Close"}
           </button>
         </div>
       </div>

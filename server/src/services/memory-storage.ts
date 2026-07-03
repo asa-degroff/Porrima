@@ -176,6 +176,14 @@ export function getDb(): Database.Database {
     db.exec(`ALTER TABLE memories ADD COLUMN source_message_end_index INTEGER`);
     console.log("[memory] Added source_message_end_index column for source-span filtering");
   }
+  if (!cols.some((c) => c.name === "turn_id")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN turn_id TEXT`);
+    console.log("[memory] Added turn_id column for same-turn retrieval guard");
+  }
+  if (!cols.some((c) => c.name === "subject")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''`);
+    console.log("[memory] Added subject column for extraction context framing");
+  }
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
@@ -478,7 +486,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
 
   const rows = db
     .prepare(
-      "SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, v.embedding FROM memories m JOIN vec_memories v ON m.id = v.id"
+      "SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, m.subject, v.embedding FROM memories m JOIN vec_memories v ON m.id = v.id"
     )
     .all() as Array<{
     id: string;
@@ -490,6 +498,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    subject: string;
     embedding: Buffer;
   }>;
 
@@ -504,6 +513,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
     accessCount: r.access_count,
     sourceChatId: r.source_chat_id,
     ...(r.project_id ? { projectId: r.project_id } : {}),
+    subject: r.subject || "",
   }));
 
   const meta = db
@@ -525,8 +535,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
     db.prepare("DELETE FROM memories").run();
 
     const insertMemory = db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertVec = db.prepare(`
       INSERT INTO vec_memories (id, embedding)
@@ -543,7 +553,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
         m.lastAccessed,
         m.accessCount,
         m.sourceChatId || "",
-        m.projectId || ""
+        m.projectId || "",
+        m.subject || ""
       );
       insertVec.run(m.id, new Float32Array(m.embedding));
     }
@@ -573,9 +584,9 @@ export async function addMemory(memory: Memory): Promise<void> {
         source_chat_id, project_id, source_type, source_id,
         source_message_start_ts, source_message_end_ts,
         source_message_start_index, source_message_end_index,
-        superseded_by, supersedes
+        turn_id, superseded_by, supersedes, subject
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memory.id,
       memory.text,
@@ -592,8 +603,10 @@ export async function addMemory(memory: Memory): Promise<void> {
       memory.sourceMessageEndTimestamp ?? null,
       memory.sourceMessageStartIndex ?? null,
       memory.sourceMessageEndIndex ?? null,
+      memory.turnId ?? null,
       memory.supersededBy || null,
-      memory.supersedes || null
+      memory.supersedes || null,
+      memory.subject || ''
     );
     db.prepare("INSERT INTO vec_memories (id, embedding) VALUES (?, ?)").run(
       memory.id,
@@ -656,6 +669,10 @@ export async function updateMemory(
   if (updates.supersedes !== undefined) {
     setClauses.push("supersedes = ?");
     values.push(updates.supersedes);
+  }
+  if (updates.subject !== undefined) {
+    setClauses.push("subject = ?");
+    values.push(updates.subject);
   }
 
   if (setClauses.length === 0 && !updates.embedding) return true;
@@ -1113,7 +1130,7 @@ export async function searchMemories(
     .prepare(
       `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count,
               m.source_chat_id, m.project_id, m.source_message_start_ts, m.source_message_end_ts,
-              m.source_message_start_index, m.source_message_end_index, m.superseded_by, m.supersedes, v.embedding
+              m.source_message_start_index, m.source_message_end_index, m.turn_id, m.superseded_by, m.supersedes, m.subject, v.embedding
        FROM memories m
        JOIN vec_memories v ON m.id = v.id
        WHERE m.id IN (${placeholders})${dateFilter}`
@@ -1132,8 +1149,10 @@ export async function searchMemories(
     source_message_end_ts: number | null;
     source_message_start_index: number | null;
     source_message_end_index: number | null;
+    turn_id: string | null;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
     embedding: Buffer;
   }>;
 
@@ -1162,9 +1181,11 @@ export async function searchMemories(
         sourceMessageEndTimestamp: r.source_message_end_ts ?? undefined,
         sourceMessageStartIndex: r.source_message_start_index ?? undefined,
         sourceMessageEndIndex: r.source_message_end_index ?? undefined,
+        turnId: r.turn_id || undefined,
         ...(r.project_id ? { projectId: r.project_id } : {}),
         supersededBy: r.superseded_by || undefined,
         supersedes: r.supersedes || undefined,
+        subject: r.subject || "",
       },
       score,
     };
@@ -1196,7 +1217,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   const db = getDb();
   const row = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id = ?"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject FROM memories WHERE id = ?"
     )
     .get(id) as {
     id: string;
@@ -1208,6 +1229,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    subject: string;
   } | undefined;
 
   if (!row) return null;
@@ -1223,6 +1245,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     accessCount: row.access_count,
     sourceChatId: row.source_chat_id,
     ...(row.project_id ? { projectId: row.project_id } : {}),
+    subject: row.subject || "",
   };
 }
 
@@ -1296,7 +1319,7 @@ export async function getAllMemories(
   if (limit !== undefined) params.push(limit, offset);
   const rows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories${whereClause} ${orderClause}${pageClause}`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories${whereClause} ${orderClause}${pageClause}`
     )
     .all(...params) as Array<{
     id: string;
@@ -1312,6 +1335,7 @@ export async function getAllMemories(
     source_id: string;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
   }>;
 
   return rows.map((r) => ({
@@ -1328,6 +1352,7 @@ export async function getAllMemories(
     sourceId: r.source_id || undefined,
     supersededBy: r.superseded_by || undefined,
     supersedes: r.supersedes || undefined,
+    subject: r.subject || "",
   }));
 }
 
@@ -1335,7 +1360,7 @@ export async function getAllMemories(
 export function getMemoriesFromChat(chatId: string, limit = 15): Omit<Memory, "embedding">[] {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes
+    `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject
      FROM memories WHERE source_chat_id = ? AND superseded_by IS NULL
      ORDER BY created_at DESC LIMIT ?`
   ).all(chatId, limit) as any[];
@@ -1354,6 +1379,7 @@ export function getMemoriesFromChat(chatId: string, limit = 15): Omit<Memory, "e
     sourceId: r.source_id || undefined,
     supersededBy: r.superseded_by || undefined,
     supersedes: r.supersedes || undefined,
+    subject: r.subject || "",
   }));
 }
 
@@ -1382,7 +1408,7 @@ export async function searchMemoriesRaw(
   const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE id IN (${placeholders})`
     )
     .all(...ids) as Array<{
     id: string;
@@ -1398,6 +1424,7 @@ export async function searchMemoriesRaw(
     source_id: string;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
   }>;
 
   return metaRows.map(r => {
@@ -1419,6 +1446,7 @@ export async function searchMemoriesRaw(
         sourceId: r.source_id || undefined,
         supersededBy: r.superseded_by || undefined,
         supersedes: r.supersedes || undefined,
+        subject: r.subject || "",
       },
       score: 1 - distance,
     };
@@ -1623,7 +1651,7 @@ export async function findSimilarMemoryCandidates(
   const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE id IN (${placeholders})`
     )
     .all(...ids) as Array<{
     id: string;
@@ -1639,6 +1667,7 @@ export async function findSimilarMemoryCandidates(
     source_id: string | null;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
   }>;
 
   const rowsById = new Map(metaRows.map((row) => [row.id, row]));
@@ -1664,6 +1693,7 @@ export async function findSimilarMemoryCandidates(
         sourceId: metaRow.source_id || undefined,
         supersededBy: metaRow.superseded_by || undefined,
         supersedes: metaRow.supersedes || undefined,
+      subject: metaRow.subject || "",
       },
       similarity,
     });
@@ -1694,7 +1724,7 @@ export async function findDuplicates(
 
   const metaRow = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id = ?"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject FROM memories WHERE id = ?"
     )
     .get(vecRow.id) as {
     id: string;
@@ -1706,6 +1736,7 @@ export async function findDuplicates(
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    subject: string;
   } | undefined;
 
   if (!metaRow) return null;
@@ -1722,6 +1753,7 @@ export async function findDuplicates(
       accessCount: metaRow.access_count,
       sourceChatId: metaRow.source_chat_id,
       ...(metaRow.project_id ? { projectId: metaRow.project_id } : {}),
+      subject: metaRow.subject || "",
     },
     similarity,
   };
@@ -1739,7 +1771,7 @@ export async function getMemoriesByChatId(chatId: string): Promise<Omit<Memory, 
   const db = getDb();
   const rows = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE source_chat_id = ? ORDER BY created_at ASC"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE source_chat_id = ? ORDER BY created_at ASC"
     )
     .all(chatId) as Array<{
     id: string;
@@ -1755,6 +1787,7 @@ export async function getMemoriesByChatId(chatId: string): Promise<Omit<Memory, 
     source_id: string;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
   }>;
 
   return rows.map((r) => ({
@@ -1771,6 +1804,7 @@ export async function getMemoriesByChatId(chatId: string): Promise<Omit<Memory, 
     sourceId: r.source_id || undefined,
     supersededBy: r.superseded_by || undefined,
     supersedes: r.supersedes || undefined,
+    subject: r.subject || "",
   }));
 }
 
@@ -1782,7 +1816,7 @@ export async function getDelayedMemoriesByChatId(chatId: string): Promise<Omit<M
   const db = getDb();
   const rows = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE source_chat_id = ? AND source_type = 'chat_delayed' ORDER BY created_at ASC"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE source_chat_id = ? AND source_type = 'chat_delayed' ORDER BY created_at ASC"
     )
     .all(chatId) as Array<{
     id: string;
@@ -1798,6 +1832,7 @@ export async function getDelayedMemoriesByChatId(chatId: string): Promise<Omit<M
     source_id: string;
     superseded_by: string | null;
     supersedes: string | null;
+    subject: string;
   }>;
 
   return rows.map((r) => ({
@@ -1814,6 +1849,7 @@ export async function getDelayedMemoriesByChatId(chatId: string): Promise<Omit<M
     sourceId: r.source_id || undefined,
     supersededBy: r.superseded_by || undefined,
     supersedes: r.supersedes || undefined,
+    subject: r.subject || "",
   }));
 }
 

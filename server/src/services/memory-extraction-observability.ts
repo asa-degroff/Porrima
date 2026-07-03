@@ -9,7 +9,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 
-export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "other";
+export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "mid-turn-pulse" | "other";
 
 export type ExtractionStatus = "running" | "success" | "error";
 
@@ -48,6 +48,8 @@ export interface ExtractionResults {
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  /** Subject line from the extraction wrapper, providing conversational context. */
+  subject?: string;
   /** Batched LLM comparison results for ambiguous supersession candidates. */
   supersessionResolutions?: ExtractionSupersessionResolution[];
   /** Count of supersession links resolved by the batch comparison step. */

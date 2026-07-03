@@ -15,6 +15,7 @@ import {
   getMaxBlockChars,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
+import { getProject } from "./chat-storage.js";
 import { invalidateMemoriesCache } from "./memory-context.js";
 import {
   startExtractionRun,
@@ -26,7 +27,11 @@ import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
 import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY } from "../types.js";
 import { appDataPath } from "./paths.js";
-import { DEFAULT_EXTRACTION_MAX_TOKENS, resolveExtractionRequestSettings } from "./extraction-settings.js";
+import {
+  DEFAULT_EXTRACTION_MAX_TOKENS,
+  DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
+  resolveExtractionRequestSettings,
+} from "./extraction-settings.js";
 
 const LOG_DIR = appDataPath("logs");
 
@@ -582,10 +587,12 @@ I think beyond surface-level facts, considering:
 
 Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 3-5 sentences per memory is ideal.
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (1-3 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10 (10 = critical, 1 = trivial)
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context that produced these memories. Use a noun phrase, not a full sentence. Be specific — name the concrete topic or system discussed, not the activity. Don't use generic labels like "this conversation", "coding session", "debugging", or "project update".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
 
 Categories:
 - "preference" — likes, dislikes, stylistic choices
@@ -599,9 +606,9 @@ Categories:
 
 The categories are guidelines, not strict rules — if something doesn't fit neatly but seems worth remembering, capture it anyway and choose the closest category.
 
-If nothing is significant, output: []
+If nothing is significant, output: {"subject": "", "memories": []}
 
-IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 
 /**
  * Maximum share of the extraction context window that the system prompt
@@ -700,14 +707,16 @@ Previously captured memories are provided alongside the conversation. Those memo
 
 Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10 (10 = critical, 1 = trivial)
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context. Use a noun phrase. Be specific about what topic or system was discussed. Don't use generic labels like "this conversation" or "coding session".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
 
-If nothing is genuinely novel or significant, output: []
+If nothing is genuinely novel or significant, output: {"subject": "", "memories": []}
 
-IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 
 const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
 {{PREVIOUS_MEMORIES}}
@@ -730,6 +739,12 @@ interface ExtractedFact {
   category: MemoryCategory;
   importance: number;
   sourceExchangeId?: string;
+  subject: string;
+}
+
+interface ParsedExtraction {
+  facts: ExtractedFact[];
+  subject: string;
 }
 
 function cleanJsonArrayOutput(text: string): string {
@@ -779,53 +794,136 @@ function findJsonArrayCandidates(cleaned: string): string[] {
   return candidates;
 }
 
-export function parseExtractionResponse(text: string): ExtractedFact[] {
+export function parseExtractionResponse(text: string): ParsedExtraction {
   // Strip thinking blocks before looking for JSON. Reasoning models can include
-  // bracketed examples in <think>...</think>, and grabbing the first "[" across
-  // the entire raw output can corrupt an otherwise valid final JSON array.
+  // bracketed examples in <think>...</think>, and grabbing the first "{" across
+  // the entire raw output can corrupt an otherwise valid final JSON object.
   const cleaned = cleanJsonArrayOutput(text);
 
-  const parseCandidate = (candidate: string): ExtractedFact[] | null => {
-    let arr: unknown;
+  const parseCandidate = (candidate: string): ParsedExtraction | null => {
+    let obj: unknown;
     try {
-      arr = JSON.parse(candidate);
+      obj = JSON.parse(candidate);
     } catch {
       return null;
     }
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((f: any) =>
-        typeof f.text === "string" &&
-        f.text.length > 0
-      )
-      .map((f: any) => {
-        const category = VALID_MEMORY_CATEGORIES.includes(f.category)
-          ? f.category as MemoryCategory
-          : FALLBACK_MEMORY_CATEGORY;
-        if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
-          console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
-        }
-        const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
-          ? f.sourceExchangeId.trim()
-          : undefined;
-        return { text: f.text, category, importance: f.importance, sourceExchangeId };
-      });
+
+    // Handle wrapper format: {"subject": "...", "memories": [...]}
+    if (typeof obj === "object" && obj !== null && "memories" in obj) {
+      const wrapper = obj as any;
+      const subject = typeof wrapper.subject === "string" ? wrapper.subject.trim() : "";
+      const memories = wrapper.memories;
+      if (!Array.isArray(memories)) return null;
+      const facts = memories
+        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
+        .map((f: any) => {
+          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+            ? f.category as MemoryCategory
+            : FALLBACK_MEMORY_CATEGORY;
+          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+          }
+          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+            ? f.sourceExchangeId.trim()
+            : undefined;
+          const factSubject = typeof f.subject === "string" ? f.subject.trim() : subject;
+          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject: factSubject };
+        });
+      return { facts, subject };
+    }
+
+    // Legacy flat array format: [{...}, {...}]
+    if (Array.isArray(obj)) {
+      const facts = obj
+        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
+        .map((f: any) => {
+          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+            ? f.category as MemoryCategory
+            : FALLBACK_MEMORY_CATEGORY;
+          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+          }
+          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+            ? f.sourceExchangeId.trim()
+            : undefined;
+          const subject = typeof f.subject === "string" ? f.subject.trim() : "";
+          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject };
+        });
+      return { facts, subject: "" };
+    }
+
+    return null;
   };
 
-  // Prefer the last valid array. The final answer is usually after any
-  // reasoning/preamble, while earlier bracketed snippets are often examples.
-  const candidates = findJsonArrayCandidates(cleaned);
+  // Find JSON object candidates (wrapper format)
+  const objectCandidates = findJsonObjectCandidates(cleaned);
 
-  for (const candidate of candidates.reverse()) {
-    const facts = parseCandidate(candidate);
-    if (facts && facts.length > 0) return facts;
+  for (const candidate of objectCandidates.reverse()) {
+    const parsed = parseCandidate(candidate);
+    if (parsed && parsed.facts.length > 0) return parsed;
   }
 
-  // Preserve the explicit "[]" no-facts response.
-  return candidates.some((candidate) => {
-    const facts = parseCandidate(candidate);
-    return facts !== null && facts.length === 0;
-  }) ? [] : [];
+  // Fallback: look for flat arrays (legacy format)
+  const arrayCandidates = findJsonArrayCandidates(cleaned);
+  for (const candidate of arrayCandidates.reverse()) {
+    const parsed = parseCandidate(candidate);
+    if (parsed && parsed.facts.length > 0) return parsed;
+  }
+
+  // Preserve the explicit empty response
+  const allCandidates = [...objectCandidates, ...arrayCandidates];
+  if (allCandidates.some((candidate) => {
+    const parsed = parseCandidate(candidate);
+    return parsed !== null && parsed.facts.length === 0;
+  })) {
+    return { facts: [], subject: "" };
+  }
+
+  return { facts: [], subject: "" };
+}
+
+/**
+ * Find JSON object candidates in text (for wrapper format parsing).
+ * String-aware brace tracking — mirrors findJsonArrayCandidates so braces
+ * inside string literals (e.g. a subject describing JSON config) don't
+ * truncate the candidate. Iterates every "{" start position so reasoning
+ * preamble containing example objects doesn't shadow the real answer.
+ */
+function findJsonObjectCandidates(cleaned: string): string[] {
+  const candidates: string[] = [];
+  for (let start = 0; start < cleaned.length; start++) {
+    if (cleaned[start] !== "{") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === "\"") {
+        inString = true;
+      } else if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          candidates.push(cleaned.slice(start, i + 1));
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1165,52 @@ function formatMessageForExtraction(message: ChatMessage, messageIndex: number):
   return `${segment.label}:\n${segment.text}`;
 }
 
+// ---------------------------------------------------------------------------
+// Mid-turn extraction: signal token estimator
+// ---------------------------------------------------------------------------
+// Lightweight estimate of how many "extraction tokens" a turn's content
+// will actually produce after truncation. Mirrors the rules in
+// formatMessageContentForExtraction so the trigger fires at meaningful
+// intervals (every ~3000 extraction tokens ≈ ~1500 actual tokens), not
+// on data movement.
+
+/**
+ * Estimate the number of extraction-signal tokens that will be processed
+ * for a given set of content. Mirrors the truncation rules applied by
+ * formatMessageContentForExtraction.
+ *
+ * - Text/thinking content: full count (~2 chars/token)
+ * - Tool calls: fixed ~150 chars each (name + truncated args)
+ * - Tool results: bulk tools capped at EXTRACT_TOOL_RESULT_MAX (500),
+ *   non-bulk tools full length
+ */
+export function estimateExtractionSignalTokens(
+  thinkingChars: number,
+  textChars: number,
+  toolCallCount: number,
+  toolResults: Array<{ toolName: string; contentLength: number }>
+): number {
+  let chars = 0;
+
+  // Text and thinking — full signal value
+  chars += thinkingChars + textChars;
+
+  // Tool calls — fixed cost (name + truncated args, typically ~150 chars each)
+  chars += toolCallCount * 150;
+
+  // Tool results — bulk tools are truncated to EXTRACT_TOOL_RESULT_MAX
+  for (const tr of toolResults) {
+    if (BULK_TOOL_NAMES.has(tr.toolName)) {
+      chars += Math.min(tr.contentLength, EXTRACT_TOOL_RESULT_MAX);
+    } else {
+      chars += tr.contentLength;
+    }
+  }
+
+  // ~2 chars per token average
+  return Math.ceil(chars / 2);
+}
+
 interface ExtractChunkedOptions {
   modelId: string;
   systemPrompt: string;
@@ -1086,6 +1230,8 @@ interface ExtractChunkedOptions {
 
 interface ExtractChunkedResult {
   facts: ExtractedFact[];
+  /** Per-chunk subjects from the extraction wrapper format. */
+  subjects: string[];
   /** Raw LLM output per chunk, concatenated with separators for observability. */
   rawOutput: string;
   chunkCount: number;
@@ -1256,8 +1402,10 @@ async function extractInChunks(
       opts.signal,
       { assumeMutexHeld: opts.assumeMutexHeld },
     );
+    const parsed1 = parseExtractionResponse(raw);
     return {
-      facts: parseExtractionResponse(raw),
+      facts: parsed1.facts,
+      subjects: parsed1.subject ? [parsed1.subject] : [],
       rawOutput: raw,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
@@ -1287,8 +1435,10 @@ async function extractInChunks(
       opts.signal,
       { assumeMutexHeld: opts.assumeMutexHeld },
     );
+    const parsed1 = parseExtractionResponse(raw);
     return {
-      facts: parseExtractionResponse(raw),
+      facts: parsed1.facts,
+      subjects: parsed1.subject ? [parsed1.subject] : [],
       rawOutput: raw,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
@@ -1307,7 +1457,7 @@ async function extractInChunks(
 
   const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
   if (chunks.length === 0) {
-    return { facts: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
+    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
   }
 
   if (chunks.length > 1 && opts.contextLabel) {
@@ -1318,6 +1468,7 @@ async function extractInChunks(
   }
 
   const allFacts: ExtractedFact[] = [];
+  const allSubjects: string[] = [];
   const rawOutputs: string[] = [];
   const chunkTimingsMs: number[] = [];
   let lastChunkContent = "";
@@ -1380,8 +1531,11 @@ async function extractInChunks(
     }
 
     rawOutputs.push(raw);
-    const chunkFacts = parseExtractionResponse(raw);
-    if (chunkFacts.length > 0) allFacts.push(...chunkFacts);
+    const chunkParsed = parseExtractionResponse(raw);
+    if (chunkParsed.facts.length > 0) {
+      allFacts.push(...chunkParsed.facts);
+      if (chunkParsed.subject) allSubjects.push(chunkParsed.subject);
+    }
     lastChunkContent = chunkContent;
   }
 
@@ -1400,6 +1554,7 @@ async function extractInChunks(
 
   return {
     facts: allFacts,
+    subjects: allSubjects,
     rawOutput,
     chunkCount: chunks.length,
     chunkTimingsMs,
@@ -1832,8 +1987,10 @@ async function saveExtractedMemory(
   projectId: string | undefined,
   sourceType: MemorySourceType,
   sourceId: string | undefined,
-  sourceSpan?: MemorySourceSpan,
+  opts?: { sourceSpan?: MemorySourceSpan; turnId?: string },
 ): Promise<string> {
+  const sourceSpan = opts?.sourceSpan;
+  const turnId = opts?.turnId;
   const now = new Date().toISOString();
   const newMemoryId = uuid();
   await addMemory({
@@ -1853,6 +2010,8 @@ async function saveExtractedMemory(
     sourceMessageEndTimestamp: sourceSpan?.endTimestamp,
     sourceMessageStartIndex: sourceSpan?.startIndex,
     sourceMessageEndIndex: sourceSpan?.endIndex,
+    ...(turnId ? { turnId } : {}),
+    subject: fact.subject || '',
   });
   return newMemoryId;
 }
@@ -1861,11 +2020,19 @@ export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
   chatId: string,
-  projectId?: string,
-  sourceType: MemorySourceType = 'chat',
-  sourceId?: string,
-  sourceSpan?: MemorySourceSpan,
+  opts?: {
+    projectId?: string;
+    sourceType?: MemorySourceType;
+    sourceId?: string;
+    sourceSpan?: MemorySourceSpan;
+    turnId?: string;
+  },
 ): Promise<DedupAndSaveOutcome> {
+  const projectId = opts?.projectId;
+  const sourceType = opts?.sourceType ?? 'chat';
+  const sourceId = opts?.sourceId;
+  const sourceSpan = opts?.sourceSpan;
+  const turnId = opts?.turnId;
   // Guard: if tied to a chat, verify it still exists. Catch races where
   // the chat was deleted during extraction (immediate queue, pre-compaction,
   // delayed, or save_memory tool mid-conversation).
@@ -1902,7 +2069,7 @@ export async function dedupAndSave(
     }
 
     console.log(`[memory] New memory: "${fact.text}"`);
-    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, sourceSpan);
+    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, { sourceSpan, turnId });
     added++;
   }
 
@@ -2030,6 +2197,23 @@ function ensureImmediateSession(
   return { session: state.session };
 }
 
+/**
+ * Resolve the project name for an extraction prompt header.
+ * Returns "" for chats without a project or if the project lookup fails.
+ * The header gives the extraction model grounding for broader context;
+ * the subject itself remains topic-focused, not project-focused.
+ */
+async function resolveProjectHeader(projectId?: string): Promise<string> {
+  if (!projectId) return "";
+  try {
+    const project = await getProject(projectId);
+    if (!project?.name) return "";
+    return `Project: ${project.name}\n\n`;
+  } catch {
+    return "";
+  }
+}
+
 function nextImmediateExchangeId(session: ImmediateExtractionSession): string {
   return `E${session.nextExchangeSequence++}`;
 }
@@ -2042,18 +2226,26 @@ function renderImmediateExchange(exchange: ImmediateExchange): string {
   ].join("\n\n");
 }
 
-function buildImmediateBatchHeader(exchanges: ImmediateExchange[]): string {
+function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
   const ids = exchanges.map((exchange) => exchange.exchangeId).join(", ");
-  return `Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
+  const turnMarker = isTurnComplete
+    ? "[TURN COMPLETE] The agent turn has finished. Extract memories focusing on higher-level patterns, decisions, and insights — not just concrete facts. What emerged from the full trajectory of this turn?\n\n"
+    : "";
+  return `${turnMarker}Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
 
-For every extracted memory, include "sourceExchangeId" with exactly one of these exchange ids: ${ids}.
-Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
-If a memory depends on multiple exchanges, use the exchange that best supports it.
-If nothing is significant, output: []`;
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing the conversational context. Be specific. Don't use generic labels like "this conversation" or "coding session".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
+  - "sourceExchangeId": Use exactly one of these exchange ids: ${ids}. If a memory depends on multiple exchanges, use the exchange that best supports it.
+
+If nothing is significant, output: {"subject": "", "memories": []}`;
 }
 
-function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[]): string {
-  return `${buildImmediateBatchHeader(exchanges)}\n\nEXCHANGES:\n\n${exchanges.map(renderImmediateExchange).join("\n\n---\n\n")}`;
+function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
+  return `${buildImmediateBatchHeader(exchanges, isTurnComplete)}\n\nEXCHANGES:\n\n${exchanges.map(renderImmediateExchange).join("\n\n---\n\n")}`;
 }
 
 function immediateExchangeToSegment(exchange: ImmediateExchange): ExtractSegment {
@@ -2070,13 +2262,14 @@ function immediateExchangeToSegment(exchange: ImmediateExchange): ExtractSegment
 function splitImmediateExchangesIntoBatches(
   exchanges: ImmediateExchange[],
   maxInputChars: number,
+  isTurnComplete: boolean = false,
 ): ImmediateExchange[][] {
   const batches: ImmediateExchange[][] = [];
   let current: ImmediateExchange[] = [];
 
   for (const exchange of exchanges) {
     const candidate = [...current, exchange];
-    const candidatePrompt = buildImmediateBatchUserPrompt(candidate);
+    const candidatePrompt = buildImmediateBatchUserPrompt(candidate, isTurnComplete);
     if (candidatePrompt.length <= maxInputChars || current.length === 0) {
       current = candidate;
       continue;
@@ -2144,9 +2337,11 @@ async function callImmediateSessionLLMWithRetry(input: {
   settings: Settings;
   extractionSettings: ResolvedExtractionSettings;
   assumeMutexHeld: boolean;
+  signal?: AbortSignal;
 }): Promise<string> {
   let result = "";
   await withRetry(async () => {
+    input.signal?.throwIfAborted();
     result = await callExtractionLLMWithMessages(
       input.modelId,
       input.messages,
@@ -2155,6 +2350,7 @@ async function callImmediateSessionLLMWithRetry(input: {
         settings: input.settings,
         extractionSettings: input.extractionSettings,
         assumeMutexHeld: input.assumeMutexHeld,
+        signal: input.signal,
       },
     );
   }, input.retryContext, 2, (err) => !isExtractionContextOverflowError(err));
@@ -2206,10 +2402,7 @@ async function saveImmediateFacts(
       group.facts,
       group.embeddings,
       chatId,
-      projectId,
-      "chat_immediate",
-      chatId,
-      group.sourceSpan,
+      { projectId, sourceType: "chat_immediate", sourceId: chatId, sourceSpan: group.sourceSpan },
     );
     added += outcome.added;
     superseded += outcome.superseded;
@@ -2236,8 +2429,10 @@ async function runImmediateBatch(input: {
   maxInputChars: number;
   assumeMutexHeld: boolean;
   freshSessionReason?: string;
+  isTurnComplete?: boolean;
 }): Promise<void> {
-  const userPrompt = buildImmediateBatchUserPrompt(input.batch);
+  const projectHeader = await resolveProjectHeader(input.projectId);
+  const userPrompt = `${projectHeader}${buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false)}`;
   const newUserOnly: ExtractionDialogueMessage[] = [{ role: "user", content: userPrompt }];
   const nextUserTooLarge = estimateDialogueChars(newUserOnly) > input.maxInputChars;
   let session = input.session;
@@ -2286,7 +2481,7 @@ async function runImmediateBatch(input: {
       ? await extractInChunks({
           modelId: input.modelId,
           systemPrompt: input.systemPrompt,
-          userPromptHeader: `${buildImmediateBatchHeader(input.batch)}\n\nEXCHANGES:`,
+          userPromptHeader: `${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
           segments: input.batch.map(immediateExchangeToSegment),
           contextLabel: `immediateExtraction chat=${input.chatId}`,
           assumeMutexHeld: input.assumeMutexHeld,
@@ -2305,10 +2500,13 @@ async function runImmediateBatch(input: {
           chunkCount: 1,
           chunkTimingsMs: [Date.now() - t0],
           chunkFailures: 0,
+        subjects: [] as string[],
         };
 
     if (!chunkedFallback) {
-      chunkResult.facts = parseExtractionResponse(chunkResult.rawOutput);
+      const parsed = parseExtractionResponse(chunkResult.rawOutput);
+      chunkResult.facts = parsed.facts;
+      chunkResult.subjects = parsed.subject ? [parsed.subject] : [];
     }
 
     runHandle.attachOutput(chunkResult.rawOutput);
@@ -2368,6 +2566,7 @@ async function runImmediateBatch(input: {
     extractionMetrics.lastExtractionAt = new Date().toISOString();
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, sourceExchangeId: f.sourceExchangeId })),
+      subject: chunkResult.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
@@ -2427,7 +2626,9 @@ async function processImmediateExtractionJobs(
     opts.extractionSettings.ctxSize,
     { maxTokens: opts.extractionSettings.maxTokens },
   );
-  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars);
+  // Immediate extraction fires at turn end — signal this so the extraction
+  // model synthesizes higher-level patterns rather than just concrete facts.
+  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars, true);
 
   for (const batch of batches) {
     await runImmediateBatch({
@@ -2447,6 +2648,7 @@ async function processImmediateExtractionJobs(
       maxInputChars,
       assumeMutexHeld: opts.assumeMutexHeld,
       freshSessionReason,
+      isTurnComplete: true,
     });
     session = state.session ?? session;
     freshSessionReason = undefined;
@@ -2551,6 +2753,280 @@ export async function extractMemories(
   return enqueueImmediateExtraction(modelId, chatId, userMsg, assistantMsg, projectId);
 }
 
+// ---------------------------------------------------------------------------
+// Mid-turn extraction pulse
+// ---------------------------------------------------------------------------
+// Triggered mid-turn when the signal token counter crosses the threshold.
+// Reuses the immediate extraction session for KV cache continuity but feeds
+// a structurally different context: thinking blocks, tool calls, and tool
+// results rather than a clean user/assistant exchange pair.
+
+interface MidTurnPulseContent {
+  /** The original user message that triggered this turn */
+  userMessage: string;
+  /** Assistant text emitted since the last successful pulse */
+  textContent?: string;
+  /** Thinking/reasoning text since the last pulse (or turn start) */
+  thinkingText: string;
+  /** Tool calls since the last pulse */
+  toolCalls: Array<{ name: string; arguments: Record<string, any> }>;
+  /** Tool results since the last pulse */
+  toolResults: Array<{ toolName: string; content: string; isError: boolean }>;
+  /** Source span for persisted memories covered by this pulse */
+  sourceSpan?: MemorySourceSpan;
+}
+
+interface MidTurnPulseResult {
+  added: number;
+  superseded: number;
+  skippedDuplicates: number;
+  completed: boolean;
+}
+
+function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
+  const parts: string[] = [];
+
+  if (content.thinkingText?.trim()) {
+    parts.push(`Thinking:\n${content.thinkingText.trim()}`);
+  }
+
+  if (content.textContent?.trim()) {
+    parts.push(`Assistant text:\n${content.textContent.trim()}`);
+  }
+
+  if (content.toolCalls?.length) {
+    const calls = content.toolCalls
+      .map(tc => `- ${tc.name}: ${formatToolArgumentsForExtraction(tc.arguments)}`)
+      .join("\n");
+    parts.push(`Tool calls:\n${calls}`);
+  }
+
+  if (content.toolResults?.length) {
+    const results = content.toolResults
+      .map(tr => formatToolResultForExtraction(tr))
+      .join("\n");
+    parts.push(`Tool results:\n${results}`);
+  }
+
+  return parts.join("\n\n") || "(no text content yet)";
+}
+
+function buildMidTurnBatchHeader(pulseIndex: number): string {
+  return `[MID-TURN PULSE #${pulseIndex}] Review the agent's partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
+
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing what the agent is working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10 (10 = critical, 1 = trivial)
+  - "sourceExchangeId": Use "midturn-${pulseIndex}" for all memories in this pulse.
+
+If nothing significant has emerged yet, output: {"subject": "", "memories": []}`;
+}
+
+function buildMidTurnUserPrompt(pulseIndex: number, content: MidTurnPulseContent): string {
+  const header = buildMidTurnBatchHeader(pulseIndex);
+  const assistantContent = buildMidTurnAssistantContent(content);
+  return `${header}\n\nUSER MESSAGE:\n${content.userMessage}\n\nAGENT PARTIAL PROGRESS:\n${assistantContent}`;
+}
+
+export async function triggerMidTurnExtractionPulse(opts: {
+  modelId: string;
+  chatId: string;
+  projectId?: string;
+  content: MidTurnPulseContent;
+  pulseIndex: number;
+  /** UUID of the current agent turn — used to tag memories for same-turn retrieval guard */
+  turnId?: string;
+  timeoutMs?: number;
+}): Promise<MidTurnPulseResult> {
+  const { modelId, chatId, projectId, content, pulseIndex, turnId } = opts;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS;
+
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<MidTurnPulseResult>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort(new Error(`mid-turn extraction pulse timed out after ${timeoutMs}ms`));
+      console.warn(`[extraction:mid-turn] Pulse #${pulseIndex} skipped after ${timeoutMs}ms timeout`);
+      resolve({ added: 0, superseded: 0, skippedDuplicates: 0, completed: false });
+    }, timeoutMs);
+  });
+
+  const operation = (async (): Promise<MidTurnPulseResult> => {
+    const settings = await getSettings();
+    const extractionSettings = await resolveExtractionRequestSettings(settings);
+    const systemPrompt = await buildExtractionSystemPrompt(projectId);
+    const effectiveModelId = resolveEffectiveExtractionModelId(modelId, settings);
+    const projectHeader = await resolveProjectHeader(projectId);
+    const userPrompt = `${projectHeader}${buildMidTurnUserPrompt(pulseIndex, content)}`;
+
+    // Reuse the immediate extraction session for KV cache continuity
+    const state = getImmediateQueueState(chatId);
+    const identityKey = buildImmediateSessionIdentityKey({
+      projectId,
+      effectiveModelId,
+      extractionUrl: settings.extractionModelUrl,
+      ctxSize: extractionSettings.ctxSize,
+      maxTokens: extractionSettings.maxTokens,
+      systemPrompt,
+    });
+    const { session, freshSessionReason } = ensureImmediateSession(state, chatId, identityKey, systemPrompt);
+
+    const { maxInputChars } = computeExtractionInputBudget(
+      systemPrompt,
+      extractionSettings.ctxSize,
+      { maxTokens: extractionSettings.maxTokens },
+    );
+
+    // Check if the prompt alone exceeds the budget — if so, skip this pulse
+    if (estimateDialogueChars([{ role: "user", content: userPrompt }]) > maxInputChars) {
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: prompt alone exceeds budget`);
+      return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+    }
+
+    // Prune session history for budget
+    let pruned = pruneImmediateSessionForBudget(session, userPrompt, maxInputChars);
+    const messages: ExtractionDialogueMessage[] = [...session.history, { role: "user", content: userPrompt }];
+
+    const chat = await getChat(chatId).catch(() => null);
+    if (!chat) {
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: chat deleted`);
+      return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+    }
+
+    const pulseMessages: ExtractionDialogueMessage[] = [
+      { role: "user", content: content.userMessage },
+      { role: "assistant", content: buildMidTurnAssistantContent(content) },
+    ];
+    const runHandle = startExtractionRun({
+      trigger: "mid-turn-pulse",
+      chatId,
+      chatTitle: chat.title,
+      model: effectiveModelId,
+      priorMemoryCount: 0,
+      messages: pulseMessages,
+      systemPrompt,
+      userPrompt,
+      metadata: {
+        sessionId: session.id,
+        queuedExchangeCount: 0,
+        batchedExchangeCount: 1,
+        sessionMessageCount: messages.length,
+        promptChars: systemPrompt.length + estimateDialogueChars(messages),
+        estimatedPromptTokens: estimateTokensConservative(systemPrompt) + estimateTokensConservative(messages.map(m => m.content).join("\n\n")),
+        prunedPriorMessages: pruned,
+        freshSessionReason,
+      },
+    });
+
+    try {
+      let rawOutput: string;
+      try {
+        rawOutput = await callImmediateSessionLLMWithRetry({
+          modelId,
+          messages,
+          systemPrompt,
+          retryContext: `midTurnPulse #${pulseIndex} chat=${chatId}`,
+          settings,
+          extractionSettings,
+          assumeMutexHeld: false,
+          signal: timeoutController.signal,
+        });
+      } catch (e) {
+        runHandle.fail(e);
+        throw e;
+      }
+
+      timeoutController.signal.throwIfAborted();
+      runHandle.attachOutput(rawOutput);
+      const parsed = parseExtractionResponse(rawOutput);
+      const facts = parsed.facts;
+
+      if (facts.length === 0) {
+        console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: no facts extracted`);
+        // Still append to session history for KV cache continuity
+        session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || "[]" });
+        runHandle.complete({ facts: [], subject: parsed.subject, saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
+        extractionMetrics.successfulExtractions++;
+        extractionMetrics.lastExtractionAt = new Date().toISOString();
+        return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true };
+      }
+
+      console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: extracted ${facts.length} fact(s), embedding...`);
+
+      // Embed and save
+      let embeddings: number[][];
+      try {
+        timeoutController.signal.throwIfAborted();
+        embeddings = await withRetry(
+          () => embedBatch(facts.map(f => f.text)),
+          `embedBatch for ${facts.length} mid-turn pulse facts (chat ${chatId})`,
+        );
+        timeoutController.signal.throwIfAborted();
+      } catch (e) {
+        console.error("[extraction:mid-turn] Embedding failed:", e);
+        runHandle.fail(e);
+        throw e;
+      }
+
+      // Tag facts with the mid-turn source exchange ID
+      for (const fact of facts) {
+        fact.sourceExchangeId = `midturn-${pulseIndex}`;
+      }
+
+      const outcome = await dedupAndSave(
+        facts,
+        embeddings,
+        chatId,
+        { projectId, sourceType: "chat_immediate", sourceId: chatId, sourceSpan: content.sourceSpan, turnId },
+      );
+      if (outcome.added > 0 || outcome.superseded > 0) {
+        invalidateMemoriesCache(chatId);
+      }
+
+      // Append to session history for KV cache continuity
+      session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || JSON.stringify(facts) });
+
+      runHandle.complete({
+        facts,
+        subject: parsed.subject,
+        saved: outcome.added,
+        superseded: outcome.superseded,
+        skippedDuplicates: outcome.skippedDuplicates,
+        errors: 0,
+        chunks: { count: 1, failures: 0, timingsMs: [0] },
+      });
+
+      extractionMetrics.successfulExtractions++;
+      extractionMetrics.lastExtractionAt = new Date().toISOString();
+
+      return { ...outcome, completed: true };
+    } catch (e) {
+      extractionMetrics.failedExtractions++;
+      extractionMetrics.lastFailureAt = new Date().toISOString();
+      throw e;
+    }
+  })();
+
+  operation.catch((e) => {
+    if (!timedOut) return;
+    console.warn(`[extraction:mid-turn] Pulse #${pulseIndex} finished after timeout with error:`, e);
+  });
+
+  try {
+    return await Promise.race([operation, timeoutPromise]);
+  } catch (e) {
+    console.error(`[extraction:mid-turn] Pulse #${pulseIndex} failed:`, e);
+    return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 const PRE_COMPACTION_INSTRUCTIONS = `---
 
 ## Memory Preservation Task
@@ -2565,12 +3041,14 @@ Focus on:
 
 Each atomic memory should be self-contained and meaningful (2-5 sentences).
 
-Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
-- "importance": 1-10
+Output a JSON object with two fields:
+- "subject": A brief topic line (5-15 words) describing what this conversation segment was about. Be specific.
+- "memories": A JSON array. Each item:
+  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
+  - "importance": 1-10
 
-Output ONLY the JSON array.`;
+Output ONLY the JSON object.`;
 
 async function buildPreCompactionSystemPrompt(): Promise<string> {
   const prefix = await loadExtractionPrefix();
@@ -2595,8 +3073,14 @@ export async function preCompactionFlush(
   modelId: string,
   chatId: string,
   removedMessages: ChatMessage[],
-  projectId?: string
+  opts?: {
+    projectId?: string;
+    /** Deprecated: pulse count is not a safe proxy for message-index coverage. */
+    lastPulseIndex?: number;
+  }
 ): Promise<void> {
+  const projectId = opts?.projectId;
+
   if (removedMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: no messages to process");
     return;
@@ -2647,11 +3131,14 @@ export async function preCompactionFlush(
       messageToExtractionSegment(m, i)
     );
 
+    const projectHeader = await resolveProjectHeader(projectId);
+
     // Retry happens per-chunk inside extractInChunks.
     const chunkResult = await extractInChunks({
       modelId,
       systemPrompt,
       segments,
+      userPromptHeader: projectHeader || undefined,
       contextLabel: `preCompactionFlush chat=${chatId}`,
     });
     runHandle.attachOutput(chunkResult.rawOutput);
@@ -2661,6 +3148,7 @@ export async function preCompactionFlush(
       console.log("[memory] Pre-compaction flush: no facts extracted");
       runHandle.complete({
         facts: [],
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -2693,6 +3181,7 @@ export async function preCompactionFlush(
       console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
       runHandle.complete({
         facts,
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -2705,7 +3194,7 @@ export async function preCompactionFlush(
     const sourceSpan = sourceSpanFromIndexedMessages(
       substantiveMessages.map((message) => ({ message })),
     );
-    const outcome = await dedupAndSave(facts, embeddings, chatId, projectId, "chat", chatId, sourceSpan);
+    const outcome = await dedupAndSave(facts, embeddings, chatId, { projectId, sourceType: "chat", sourceId: chatId, sourceSpan });
 
     // Invalidate memories cache so next turn picks up new memories.
     // Block updates are not performed here — they're handled by the main
@@ -2715,6 +3204,7 @@ export async function preCompactionFlush(
     console.log("[memory] Pre-compaction flush complete");
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      subject: chunkResult.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
@@ -2883,7 +3373,8 @@ export async function extractDelayedMemories(
   );
 
   // Build prompt with previous memories injected — used as the per-chunk header
-  const userPromptHeader = `${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
+  const projectHeader = await resolveProjectHeader(chat.projectId);
+  const userPromptHeader = `${projectHeader}${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
 
   // Each message is a segment; messages too large for the chunk budget get paragraph-split
   const messageSegments: ExtractSegment[] = context.messages.map(({ message, index }) =>
@@ -2939,6 +3430,7 @@ export async function extractDelayedMemories(
       await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
       runHandle.complete({
         facts: [],
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -2970,6 +3462,7 @@ export async function extractDelayedMemories(
       console.log(`[memory-delayed] Chat ${chatId} was deleted during extraction, skipping save`);
       runHandle.complete({
         facts,
+        subject: chunkResult.subjects[0],
         saved: 0,
         superseded: 0,
         skippedDuplicates: 0,
@@ -3017,7 +3510,7 @@ export async function extractDelayedMemories(
         chat.projectId,
         "chat_delayed",
         chatId,
-        sourceSpan,
+        { sourceSpan },
       );
       runSaved++;
 
@@ -3094,6 +3587,7 @@ export async function extractDelayedMemories(
     console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      subject: chunkResult.subjects[0],
       saved: runSaved,
       superseded: comparisonSuperseded,
       skippedDuplicates: runSkipped,

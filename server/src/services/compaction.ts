@@ -469,7 +469,7 @@ export async function estimateContextTokensWithExactToolResults(
  *   - even the last single pair + content exceeds the budget (split won't help)
  *   - every pair would be kept (no archiving would happen)
  */
-type AssistantRetentionSplitMode = "tool-pair-tail" | "tool-payload-stripped";
+type AssistantRetentionSplitMode = "tool-pair-tail" | "tool-payload-stripped" | "tool-payload-placeholder";
 
 interface AssistantRetentionSplit {
   head: ChatMessage;
@@ -539,6 +539,8 @@ function trySplitAssistantMessage(
   msg.toolCalls = toolCalls.slice(firstKeptIdx);
   msg.toolResults = toolResults.filter((tr) => !archivedIds.has(tr.toolCallId));
   msg.thinking = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
 
   const archivedTokens = archivedCalls.reduce((sum, tc) => {
     const tr = archivedResults.find((r) => r.toolCallId === tc.id);
@@ -589,6 +591,8 @@ function tryStripAssistantToolPayloadForTextRetention(
   msg.toolCalls = undefined;
   msg.toolResults = undefined;
   msg.thinking = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
 
   return {
     head,
@@ -597,6 +601,89 @@ function tryStripAssistantToolPayloadForTextRetention(
     keptPairs: 0,
     archivedTokens: estimateMessageContentTokens(head),
     mode: "tool-payload-stripped",
+  };
+}
+
+function buildArchivedToolPayloadPlaceholder(msg: ChatMessage): string {
+  const toolCalls = msg.toolCalls ?? [];
+  const toolResults = msg.toolResults ?? [];
+  const toolCallIds = new Set(toolCalls.map((tc) => tc.id));
+  const lines: string[] = [
+    "[Archived tool activity - full tool calls and results are available in the preceding compacted context archive.]",
+  ];
+  const matchedResultIds = new Set<string>();
+  const maxEntries = 6;
+  let emitted = 0;
+
+  for (const tc of toolCalls) {
+    if (emitted >= maxEntries) break;
+    const result = toolResults.find((tr) => tr.toolCallId === tc.id);
+    if (result) matchedResultIds.add(result.toolCallId);
+    const args = summarizeArgs(tc.arguments ?? {}, 120);
+    const resultLabel = result
+      ? `${result.isError ? "error" : "ok"}: ${truncateMiddle(result.content || "(empty result)", 300)}`
+      : "no result";
+    lines.push(`- ${tc.name}${args ? `(${args})` : ""} -> ${resultLabel}`);
+    emitted++;
+  }
+
+  for (const tr of toolResults) {
+    if (emitted >= maxEntries) break;
+    if (matchedResultIds.has(tr.toolCallId)) continue;
+    lines.push(`- ${tr.toolName} result -> ${tr.isError ? "error" : "ok"}: ${truncateMiddle(tr.content || "(empty result)", 300)}`);
+    emitted++;
+  }
+
+  const totalEntries = toolCalls.length + toolResults.filter((tr) => !toolCallIds.has(tr.toolCallId)).length;
+  const remaining = totalEntries - emitted;
+  if (remaining > 0) {
+    lines.push(`- ${remaining} more tool item(s) archived.`);
+  }
+
+  return lines.join("\n");
+}
+
+function tryReplaceToolPayloadWithPlaceholder(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): AssistantRetentionSplit | null {
+  if (msg.role !== "assistant") return null;
+  if (msg.content.trim()) return null;
+  if (!msg.toolResults?.length) return null;
+
+  const placeholder = buildArchivedToolPayloadPlaceholder(msg);
+  const keptTokens = Math.ceil(estimateTokens(placeholder) * scaleFactor)
+    + Math.ceil(MESSAGE_FRAMING_TOKENS * scaleFactor);
+  if (keptTokens > budgetTokens) return null;
+
+  const archivedCalls = msg.toolCalls ? structuredClone(msg.toolCalls) : undefined;
+  const archivedResults = structuredClone(msg.toolResults);
+  const archivedPairCount = Math.max(archivedCalls?.length ?? 0, archivedResults.length);
+  const head: ChatMessage = {
+    role: "assistant",
+    content: "",
+    thinking: msg.thinking,
+    toolCalls: archivedCalls,
+    toolResults: archivedResults,
+    timestamp: msg.timestamp,
+    _outOfContext: true,
+  };
+
+  msg.content = placeholder;
+  msg.thinking = undefined;
+  msg.toolCalls = undefined;
+  msg.toolResults = undefined;
+  msg.segments = undefined;
+  msg.usage = undefined;
+
+  return {
+    head,
+    originalPairs: archivedPairCount,
+    archivedPairs: archivedPairCount,
+    keptPairs: 0,
+    archivedTokens: estimateMessageContentTokens(head),
+    mode: "tool-payload-placeholder",
   };
 }
 
@@ -610,7 +697,8 @@ function tryCompactAssistantMessageForRetention(
   // prose before trying to preserve any tool pairs.
   return (
     tryStripAssistantToolPayloadForTextRetention(msg, budgetTokens, scaleFactor) ??
-    trySplitAssistantMessage(msg, budgetTokens, scaleFactor)
+    trySplitAssistantMessage(msg, budgetTokens, scaleFactor) ??
+    tryReplaceToolPayloadWithPlaceholder(msg, budgetTokens, scaleFactor)
   );
 }
 
@@ -1732,25 +1820,31 @@ export async function truncateChatHistory(
   const inContextEstimates = inContextIndices.map((idx) => estimateMessageContentTokens(messages[idx]));
 
   // Account for system prompt + tool schema overhead in the budget.
-  // When systemPrompt is provided, use the same scale factor approach as
-  // truncateBeforeSend so the per-message estimates match the actual payload.
-  // Without this, the greedy backfill can keep messages that push the real
-  // payload well past the target, since the system prompt alone can be
-  // thousands of tokens (persona + user doc + memory blocks + zeitgeist).
+  // Uses the same estimateContextBreakdown approach as truncateBeforeSend so
+  // the scale factor reflects the actual LLM-reported token count (usage anchor)
+  // rather than a raw char-estimate. This prevents the budget from keeping too
+  // many messages when the tokenizer inflates tool-heavy payloads well beyond
+  // what char estimation predicts — a systematic undercount that leaves the
+  // context hot enough to immediately re-trigger pre-send compaction on the
+  // next turn (or on manual resume after a failed mid-turn resume).
   let overheadTokens = 0;
   let effectiveEstimates = inContextEstimates;
   let scaleFactor = 1;
   if (systemPrompt) {
-    const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
-    const messageContentTokens = inContextEstimates.reduce((s, t) => s + t, 0);
-    const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
-    // Use max of char-estimate and LLM-reported usage as the numerator: when the
-    // tokenizer inflates the payload beyond what char estimation predicts (tool
-    // schemas, framing, non-ASCII content), char-only scaling under-counts and
-    // the budget keeps too many messages — leaving context hot enough to
-    // immediately re-trigger pre-send compaction on the next turn.
-    const usageForScale = knownUsage && knownUsage > charEstimate ? knownUsage : charEstimate;
-    scaleFactor = charEstimateTotal > 0 ? usageForScale / charEstimateTotal : 1;
+    const breakdown = estimateContextBreakdown(messages, systemPrompt, tools);
+    // displayTokens is the usage-anchored estimate (path A) when a usage anchor
+    // exists; otherwise it falls back to the char-estimate (path B). This is
+    // the same value truncateBeforeSend uses as its planning token count.
+    const charEstimateFull = breakdown.pathBTokens;
+    const usageForScale = breakdown.displayPath === "usage_anchor"
+      ? Math.max(breakdown.displayTokens, charEstimateFull)
+      : (knownUsage && knownUsage > charEstimateFull ? knownUsage : charEstimateFull);
+    // Use charEstimateFull (includes tool schemas + per-message framing) as the
+    // denominator so the scale factor is consistent with the numerator — both
+    // cover the same scope. The old code used a partial denominator (system
+    // prompt + message content only) that excluded tool schemas and framing,
+    // producing an inconsistent and unreliable scale factor.
+    scaleFactor = charEstimateFull > 0 ? usageForScale / charEstimateFull : 1;
     overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
     effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
   }

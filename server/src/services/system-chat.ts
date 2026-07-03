@@ -489,10 +489,30 @@ async function buildSynthesisTriggerContent(
     const renderTier = (groups: Array<{ chatLabel: string; items: Memo[] }>) =>
       groups
         .map(({ chatLabel, items }) => {
-          const lines = items
-            .map((m) => `- [imp:${m.importance}] [${m.category}] ${m.text}`)
-            .join("\n");
-          return `**${chatLabel}**\n${lines}`;
+          // Sub-group by subject within each chat. Memories without a subject
+          // collect under a single unlabelled bucket at the end.
+          const subjectGroups = new Map<string, Memo[]>();
+          let noSubject: Memo[] = [];
+          for (const m of items) {
+            const s = m.subject?.trim();
+            if (s) {
+              const arr = subjectGroups.get(s) ?? [];
+              arr.push(m);
+              subjectGroups.set(s, arr);
+            } else {
+              noSubject.push(m);
+            }
+          }
+          const parts: string[] = [`**${chatLabel}**`];
+          for (const [subject, list] of subjectGroups) {
+            const lines = list.map((m) => `- [imp:${m.importance}] [${m.category}] ${m.text}`).join("\n");
+            parts.push(`*(subject: ${subject})*\n${lines}`);
+          }
+          if (noSubject.length > 0) {
+            const lines = noSubject.map((m) => `- [imp:${m.importance}] [${m.category}] ${m.text}`).join("\n");
+            parts.push(lines);
+          }
+          return parts.join("\n\n");
         })
         .join("\n\n");
 

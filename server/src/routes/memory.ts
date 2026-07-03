@@ -505,6 +505,7 @@ router.post("/", async (req, res) => {
     sourceChatId: sourceChatId || "",
     sourceType: sourceType || 'chat',
     sourceId: sourceId || sourceChatId || '',
+    subject: '',
   };
 
   await addMemory(memory);
@@ -634,6 +635,7 @@ router.patch("/:id", async (req, res) => {
       accessCount: 0,
       sourceChatId: existing.sourceChatId,
       ...(existing.projectId ? { projectId: existing.projectId } : {}),
+      subject: existing.subject || '',
     };
 
     await addMemory(newMemory);

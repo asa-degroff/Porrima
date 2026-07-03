@@ -11,6 +11,7 @@ function memory(overrides: Partial<Memory>): Memory {
     createdAt: overrides.createdAt || new Date(0).toISOString(),
     lastAccessed: overrides.lastAccessed || new Date(0).toISOString(),
     accessCount: overrides.accessCount ?? 0,
+    subject: overrides.subject || "",
     ...overrides,
   };
 }

@@ -40,15 +40,28 @@ export interface EnsureRouterLoadOptions {
   force?: boolean;
 }
 
-async function getLoadedModelIds(url: string): Promise<string[] | null> {
+interface LoadedRouterModel {
+  id: string;
+  contextWindow?: number;
+}
+
+function parseCtxSizeFromArgs(args: unknown): number | undefined {
+  if (!Array.isArray(args)) return undefined;
+  const i = args.indexOf("--ctx-size");
+  if (i < 0 || i + 1 >= args.length) return undefined;
+  const n = Number(args[i + 1]);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+async function getLoadedModels(url: string): Promise<LoadedRouterModel[] | null> {
   try {
     const res = await fetch(`${url}/v1/models`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
-    const data = await res.json().catch(() => null) as { data?: Array<{ id?: string; status?: { value?: string } }> } | null;
+    const data = await res.json().catch(() => null) as { data?: Array<{ id?: string; status?: { value?: string; args?: unknown } }> } | null;
     const entries = Array.isArray(data?.data) ? data.data : [];
     return entries
       .filter((m) => typeof m.id === "string" && m.status?.value === "loaded")
-      .map((m) => m.id!);
+      .map((m) => ({ id: m.id!, contextWindow: parseCtxSizeFromArgs(m.status?.args) }));
   } catch {
     return null;
   }
@@ -70,8 +83,8 @@ async function unloadRouterModel(url: string, modelId: string): Promise<void> {
 async function waitForRouterModelUnloaded(url: string, modelId: string, timeoutMs = 15_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const loaded = await getLoadedModelIds(url);
-    if (loaded && !loaded.includes(modelId)) return;
+    const loaded = await getLoadedModels(url);
+    if (loaded && !loaded.some((m) => m.id === modelId)) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
@@ -113,16 +126,24 @@ export async function ensureRouterModelLoaded(
 
   try {
     if (options.force) {
-      const loadedModelIds = await getLoadedModelIds(url);
-      if (loadedModelIds) {
-        const staleModelIds = loadedModelIds.filter((id) => id !== modelId);
-        for (const staleModelId of staleModelIds) {
-          await unloadRouterModel(url, staleModelId);
-          await waitForRouterModelUnloaded(url, staleModelId);
+      const loadedModels = await getLoadedModels(url);
+      if (loadedModels) {
+        const staleModels = loadedModels.filter((m) => m.id !== modelId);
+        for (const staleModel of staleModels) {
+          await unloadRouterModel(url, staleModel.id);
+          await waitForRouterModelUnloaded(url, staleModel.id);
         }
-        if (loadedModelIds.includes(modelId) && staleModelIds.length === 0) {
+        const target = loadedModels.find((m) => m.id === modelId);
+        const contextMatches =
+          !options.contextWindow ||
+          target?.contextWindow === options.contextWindow;
+        if (target && staleModels.length === 0 && contextMatches) {
           lastLoadedByBaseUrl.set(url, { modelId, contextWindow: options.contextWindow, loadedAt: Date.now() });
           return "loaded";
+        }
+        if (target && !contextMatches) {
+          await unloadRouterModel(url, modelId);
+          await waitForRouterModelUnloaded(url, modelId);
         }
       }
     }

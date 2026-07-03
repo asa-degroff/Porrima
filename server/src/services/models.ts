@@ -14,7 +14,7 @@ interface LlamaCppModelEntry {
   id: string;
   object: string;
   owned_by?: string;
-  meta?: { n_ctx_train?: number };
+  meta?: { n_ctx?: number; n_ctx_train?: number };
   status?: {
     value?: string;
     args?: string[];
@@ -104,7 +104,7 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Infer
         // source since the router-level /props returns n_ctx: 0. Per-model /props
         // for loaded models is the next best source.
         let contextWindow = modelProps?.default_generation_settings?.n_ctx ??
-          m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
+          m.meta?.n_ctx ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
         const ctxSizeArgIdx = modelArgs.indexOf("--ctx-size");
         if (ctxSizeArgIdx !== -1 && ctxSizeArgIdx + 1 < modelArgs.length) {
           const parsed = parseInt(modelArgs[ctxSizeArgIdx + 1], 10);

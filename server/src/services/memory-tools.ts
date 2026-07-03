@@ -171,9 +171,10 @@ export async function executeMemoryTool(
         text,
         category: (category as MemoryCategory) || "fact",
         importance: Math.min(10, Math.max(1, importance || 5)),
+        subject: '',
       };
 
-      await dedupAndSave([fact], [embedding], chatId, undefined, 'explicit');
+      await dedupAndSave([fact], [embedding], chatId, { sourceType: 'explicit' });
       return { content: `Saved memory: "${text}"`, isError: false };
     }
 
@@ -212,7 +213,10 @@ export async function executeMemoryTool(
             const supersedes = r.memory.supersedes
               ? `, supersedes: ${r.memory.supersedes}`
               : "";
-            return `- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, created: ${created}, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
+            const subjectLine = r.memory.subject
+              ? `(subject: ${r.memory.subject})\n`
+              : "";
+            return `${subjectLine}- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, created: ${created}, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
           }
         )
         .join("\n");
