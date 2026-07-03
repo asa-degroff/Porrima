@@ -4,13 +4,31 @@ import { getAllModelSummaries, getModelRuns, clearModelStats } from "../services
 
 const router = Router();
 
+function getMostRecentByProvider(
+  summaries: ReturnType<typeof getAllModelSummaries>,
+  filter: (provider: string) => boolean,
+): { modelId: string; provider: string; summary: typeof summaries[0]["summary"] } | null {
+  const matches = summaries.filter(s => filter(s.provider));
+  if (matches.length === 0) return null;
+  // Already sorted by lastUsed DESC from getAllModelSummaries
+  return matches[0];
+}
+
 /**
  * GET /api/model-stats
  * Get all model performance summaries.
+ * With ?active=true, returns only the most recent chat model and extraction model.
  */
-router.get("/", async (_req: Request, res: Response) => {
+router.get("/", async (req: Request, res: Response) => {
   try {
     const summaries = getAllModelSummaries();
+
+    if (req.query.active === "true") {
+      const mainModel = getMostRecentByProvider(summaries, p => !p.toLowerCase().includes("extraction"));
+      const extractionModel = getMostRecentByProvider(summaries, p => p.toLowerCase().includes("extraction"));
+      return res.json({ mainModel, extractionModel });
+    }
+
     res.json(summaries);
   } catch (err) {
     console.error("[model-stats] GET / failed:", err);
