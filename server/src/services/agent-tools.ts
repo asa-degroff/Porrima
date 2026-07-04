@@ -1,10 +1,8 @@
 import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { execFile } from "child_process";
-import { readFile, writeFile, mkdir, readdir, stat, access } from "fs/promises";
-import { resolve, dirname, join, relative } from "path";
+import { readFile, writeFile, mkdir, access } from "fs/promises";
+import { resolve, join } from "path";
 import { homedir } from "os";
-import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
@@ -90,10 +88,11 @@ const READ_PDF_TOOL: Tool = {
 
 const CREATE_ARTIFACT_TOOL: Tool = {
   name: "create_artifact",
-  description: `Create an HTML/JS artifact that will be rendered in a sandboxed iframe. Use for interactive demos, visualizations, or web pages. ${P5_INSTANCE_MODE_GUIDANCE}`,
+  description: `Create an HTML/JS artifact rendered in a sandboxed iframe. Use for interactive demos, visualizations, diagrams, or web pages. Choose display mode: "panel" (default) opens the artifact in a dedicated side panel for complex multi-page interactive apps; "inline" renders it directly in the chat flow for charts, diagrams, flowcharts, and other compact visual aids. Both modes support SVG, Canvas, CSS animations, and CDN libraries (D3.js, Chart.js, Mermaid). ${P5_INSTANCE_MODE_GUIDANCE}`,
   parameters: Type.Object({
     title: Type.String({ description: "Title for the artifact" }),
     html: Type.String({ description: `Complete HTML document (including <html>, <head>, <body> tags). ${P5_INSTANCE_MODE_GUIDANCE}` }),
+    display: Type.Optional(Type.String({ description: "Where to render: 'panel' (default, dedicated side panel for complex interactive apps) or 'inline' (rendered in the chat flow for charts, diagrams, and compact visuals)" })),
   }),
 };
 
@@ -104,15 +103,6 @@ const UPDATE_ARTIFACT_TOOL: Tool = {
     artifactId: Type.String({ description: "The canonical ID of the artifact to update (from a previous create_artifact call)" }),
     html: Type.String({ description: `Complete HTML document with the updated content. ${P5_INSTANCE_MODE_GUIDANCE}` }),
     changeSummary: Type.Optional(Type.String({ description: "Brief description of what changed (e.g., 'Made background blue, added reset button')" })),
-  }),
-};
-
-const CREATE_VISUAL_TOOL: Tool = {
-  name: "create_visual",
-  description: `Create an inline HTML/SVG visualization rendered directly in the chat. Use for charts, diagrams, flowcharts, data visualizations, comparisons, timelines, and other visual aids. You can use any web technology: SVG, Canvas, CSS animations, or libraries like D3.js, Chart.js, or Mermaid (loaded via CDN). The visual renders in an iframe so full HTML documents work. For complex multi-page interactive apps, use create_artifact instead. ${P5_INSTANCE_MODE_GUIDANCE}`,
-  parameters: Type.Object({
-    title: Type.String({ description: "Short title for the visual" }),
-    html: Type.String({ description: `Complete HTML content for the visualization. Can be a full HTML document with <script> tags loading CDN libraries, or simple inline SVG. Will be rendered in a same-origin iframe. ${P5_INSTANCE_MODE_GUIDANCE}` }),
   }),
 };
 
@@ -153,7 +143,7 @@ function getReadFileMaxBytes(settingsMaxBytes: number | undefined, contextWindow
 
 function createWrapResult(contextWindow: number) {
   const maxChars = getMaxToolResultChars(contextWindow);
-  return function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
+  return function wrapResult(result: { content: string; isError: boolean }, toolName?: string): AgentToolResult<{}> {
     if (result.isError) {
       // Truncate error content too — a 1MB error message would blow up the context
       let errText = result.content;
@@ -167,7 +157,14 @@ function createWrapResult(contextWindow: number) {
       const truncated = text.slice(0, maxChars);
       const totalLines = text.split("\n").length;
       const keptLines = truncated.split("\n").length;
-      text = truncated + `\n\n[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(result.content.length / 1024).toFixed(0)}KB). Use offset/limit parameters to read specific sections.]`;
+      // Only read_file supports offset/limit pagination. For other tools, point
+      // at any embedded file path (e.g. bash/web_fetch spill files) or just
+      // report the truncation without misleading pagination guidance.
+      const onlyToolsWithOffset = toolName === "read_file";
+      const footer = onlyToolsWithOffset
+        ? `[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(result.content.length / 1024).toFixed(0)}KB). Use offset/limit parameters to read specific sections.]`
+        : `[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(result.content.length / 1024).toFixed(0)}KB). If the tool result includes a saved file path, use read_file with offset/limit to read more.]`;
+      text = truncated + `\n\n${footer}`;
     }
     return { content: [{ type: "text", text }], details: {} };
   };
@@ -289,7 +286,6 @@ const FILESYSTEM_TOOLS: Tool[] = [
   READ_PDF_TOOL,
   CREATE_ARTIFACT_TOOL,
   UPDATE_ARTIFACT_TOOL,
-  CREATE_VISUAL_TOOL,
   ASK_USER_TOOL,
 ];
 
@@ -321,7 +317,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       label: tool.name,
       execute: async (toolCallId, params) => {
         const args = params as Record<string, any>;
-        return wrapResult(await executeMemoryTool(makeToolCall(toolCallId, tool.name, args), chatId));
+        return wrapResult(await executeMemoryTool(makeToolCall(toolCallId, tool.name, args), chatId), tool.name);
       },
     });
   }
@@ -333,7 +329,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       label: tool.name,
       execute: async (toolCallId, params) => {
         const args = params as Record<string, any>;
-        return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)));
+        return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)), tool.name);
       },
     });
   }
@@ -356,7 +352,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       return wrapResult({
         content: `Reminder scheduled.\n\n- **ID**: ${task.id}\n- **Title**: ${task.title}\n- **Scheduled**: ${task.nextRunAt}\n- **Policy**: ${task.activationPolicy}\n- **Chat**: system`,
         isError: false,
-      });
+      }, "schedule_reminder");
     },
   });
 
@@ -405,7 +401,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       return wrapResult({
         content: `${filter === "history" ? "Archived automations" : "Automations"} (${tasks.length} total):\n\n${lines.join("\n\n")}`,
         isError: false,
-      });
+      }, "list_automations");
     },
   });
 
@@ -417,7 +413,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const args = params as Record<string, any>;
       const existing = getAutomationTask(args.automationId);
       if (!existing) {
-        return wrapResult({ content: `Automation "${args.automationId}" not found.`, isError: true });
+        return wrapResult({ content: `Automation "${args.automationId}" not found.`, isError: true }, "update_automation");
       }
 
       // Permission checks
@@ -428,7 +424,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         return wrapResult({
           content: `Cannot modify "${existing.title}" — this automation was created by the user and is read-only for the agent. You can suggest changes in your response.`,
           isError: true,
-        });
+        }, "update_automation");
       }
 
       const patch: Record<string, any> = { id: args.automationId };
@@ -446,19 +442,19 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
           return wrapResult({
             content: `Cannot modify structural fields (title, enabled) on built-in automation "${existing.title}". Only prompt steps can be edited.`,
             isError: true,
-          });
+          }, "update_automation");
         }
       }
 
       const updated = updateAutomationTask(args.automationId, patch);
       if (!updated) {
-        return wrapResult({ content: `Failed to update automation "${args.automationId}".`, isError: true });
+        return wrapResult({ content: `Failed to update automation "${args.automationId}".`, isError: true }, "update_automation");
       }
 
       return wrapResult({
         content: `Updated "${updated.title}" (${updated.id}).`,
         isError: false,
-      });
+      }, "update_automation");
     },
   });
 
@@ -472,7 +468,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       return wrapResult(await workspace.readFile(params as Record<string, any>, {
         defaultLines: settings?.readFileDefaultLines,
         maxBytes: getReadFileMaxBytes(settings?.readFileMaxBytes, contextWindow),
-      }));
+      }), "read_file");
     },
   });
 
@@ -481,7 +477,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "write_file",
     execute: async (_id, params) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.writeFile(params as Record<string, any>));
+      return wrapResult(await workspace.writeFile(params as Record<string, any>), "write_file");
     },
   });
 
@@ -490,7 +486,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "edit_file",
     execute: async (_id, params) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.editFile(params as Record<string, any>));
+      return wrapResult(await workspace.editFile(params as Record<string, any>), "edit_file");
     },
   });
 
@@ -499,7 +495,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "list_files",
     execute: async (_id, params) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.listFiles(params as Record<string, any>));
+      return wrapResult(await workspace.listFiles(params as Record<string, any>), "list_files");
     },
   });
 
@@ -508,20 +504,20 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "bash",
     execute: async (_id, params) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.bash(params as Record<string, any>));
+      return wrapResult(await workspace.bash(params as Record<string, any>), "bash");
     },
   });
 
   tools.push({
     ...RUN_PYTHON_TOOL,
     label: "run_python",
-    execute: async (_id, params) => wrapResult(await executeRunPython(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeRunPython(params as Record<string, any>), "run_python"),
   });
 
   tools.push({
     ...READ_PDF_TOOL,
     label: "read_pdf",
-    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>, baseDir), "read_pdf"),
   });
 
   // create_artifact — uses effects.onArtifact callback
@@ -531,8 +527,26 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
       const id = uuid();
-      const result = await createArtifact(id, args.html, args.title);
+      const display = args.display === "inline" ? "inline" : "panel";
       const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
+
+      if (display === "inline") {
+        const result = await createVisual(id, args.html, args.title);
+        const visual = { id, title: args.title, html: args.html, url: result.url, version: result.version };
+        effects.onVisual(visual);
+        return withArtifactPreviewReview(`Visual created: "${args.title}"
+Canonical ID: ${id}
+URL: ${result.url}${warningText}`, {
+          id: visual.id,
+          title: visual.title,
+          url: visual.url,
+          version: visual.version,
+          objectKind: "visual",
+          automaticUpdateCount: automaticUpdateCountForCreate(id),
+        });
+      }
+
+      const result = await createArtifact(id, args.html, args.title);
       const artifact = { id, title: args.title, url: result.url, version: result.version };
       effects.onArtifact(artifact);
       return withArtifactPreviewReview(`Artifact created: "${args.title}"
@@ -586,30 +600,6 @@ URL: ${result.url}${warningText}`, {
       } catch (e: any) {
         return { content: [{ type: "text", text: `Error updating: ${e.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
       }
-    },
-  });
-
-  // create_visual — uses effects.onVisual callback
-  tools.push({
-    ...CREATE_VISUAL_TOOL,
-    label: "create_visual",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      const id = uuid();
-      const result = await createVisual(id, args.html, args.title);
-      const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-      const visual = { id, title: args.title, html: args.html, url: result.url, version: result.version };
-      effects.onVisual(visual);
-      return withArtifactPreviewReview(`Visual created: "${args.title}"
-Canonical ID: ${id}
-URL: ${result.url}${warningText}`, {
-        id: visual.id,
-        title: visual.title,
-        url: visual.url,
-        version: visual.version,
-        objectKind: "visual",
-        automaticUpdateCount: automaticUpdateCountForCreate(id),
-      });
     },
   });
 
@@ -740,7 +730,7 @@ export async function executeTool(
   }
 }
 
-// --- Internal executor functions (unchanged) ---
+// --- Internal executor functions ---
 
 /** Resolve a path relative to the base directory (project path or $HOME) */
 function resolvePath(inputPath: string, baseDir: string = HOME): string {
@@ -751,122 +741,6 @@ function resolvePath(inputPath: string, baseDir: string = HOME): string {
     return inputPath;
   }
   return resolve(baseDir, inputPath);
-}
-
-interface ReadFileOpts {
-  defaultLines?: number;
-  maxBytes?: number;
-}
-
-async function executeReadFile(args: Record<string, any>, baseDir: string = HOME, opts: ReadFileOpts = {}): Promise<{ content: string; isError: boolean }> {
-  try {
-    const filePath = resolvePath(args.path, baseDir);
-    const content = await readFile(filePath, "utf-8");
-    const lines = content.split("\n");
-    const totalLines = lines.length;
-
-    const defaultLines = opts.defaultLines ?? 1000;
-    const maxBytes = opts.maxBytes ?? 256 * 1024;
-
-    const offset = Math.max(1, args.offset || 1);
-    const limitProvided = typeof args.limit === "number" && args.limit > 0;
-    const requestedLimit = limitProvided ? args.limit : defaultLines;
-    const sliceEnd = offset - 1 + requestedLimit;
-    const selected = lines.slice(offset - 1, sliceEnd);
-
-    let numbered = selected
-      .map((line, i) => `${String(offset + i).padStart(6)} | ${line}`)
-      .join("\n");
-
-    // Byte-cap safety net for pathological files (minified bundles, base64 blobs).
-    // Trim at a line boundary so the line-number prefix isn't broken mid-line.
-    let byteTruncated = false;
-    if (Buffer.byteLength(numbered, "utf-8") > maxBytes) {
-      const trimmed = numbered.slice(0, maxBytes);
-      const lastNewline = trimmed.lastIndexOf("\n");
-      numbered = lastNewline > 0 ? trimmed.slice(0, lastNewline) : trimmed;
-      byteTruncated = true;
-    }
-
-    const linesShown = numbered ? numbered.split("\n").length : 0;
-    const lastShown = offset - 1 + linesShown;
-    const hasMore = lastShown < totalLines;
-
-    if (hasMore || byteTruncated) {
-      const reason = byteTruncated
-        ? `output exceeded the ${(maxBytes / 1024).toFixed(0)}KB byte cap`
-        : limitProvided
-          ? `requested line limit of ${requestedLimit} reached`
-          : `default line limit of ${defaultLines} reached`;
-      const nextOffset = lastShown + 1;
-      numbered += `\n\n[Truncated: ${reason}. File has ${totalLines} total lines; showing ${offset}-${lastShown}. To read more, call read_file again with offset=${nextOffset}.]`;
-    }
-
-    return { content: numbered, isError: false };
-  } catch (e: any) {
-    return { content: `Error reading file: ${e.message}`, isError: true };
-  }
-}
-
-async function executeWriteFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
-  try {
-    const filePath = resolvePath(args.path, baseDir);
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, args.content, "utf-8");
-    return { content: `File written: ${filePath}`, isError: false };
-  } catch (e: any) {
-    return { content: `Error writing file: ${e.message}`, isError: true };
-  }
-}
-
-async function executeEditFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
-  try {
-    const filePath = resolvePath(args.path, baseDir);
-    const content = await readFile(filePath, "utf-8");
-
-    const occurrences = content.split(args.old_string).length - 1;
-    if (occurrences === 0) {
-      return { content: "old_string not found in file", isError: true };
-    }
-    if (occurrences > 1) {
-      return { content: `old_string found ${occurrences} times — must be unique. Provide more context.`, isError: true };
-    }
-
-    const updated = content.replace(args.old_string, args.new_string);
-    await writeFile(filePath, updated, "utf-8");
-    return { content: `File edited: ${filePath}`, isError: false };
-  } catch (e: any) {
-    return { content: `Error editing file: ${e.message}`, isError: true };
-  }
-}
-
-async function executeListFiles(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
-  try {
-    const basePath = resolvePath(args.path || ".", baseDir);
-
-    if (args.pattern) {
-      // Use glob
-      const matches: string[] = [];
-      for await (const entry of glob(args.pattern, { cwd: basePath })) {
-        matches.push(entry as string);
-        if (matches.length >= 200) break;
-      }
-      if (matches.length === 0) {
-        return { content: "No files matched the pattern.", isError: false };
-      }
-      return { content: matches.join("\n"), isError: false };
-    }
-
-    // List directory
-    const entries = await readdir(basePath, { withFileTypes: true });
-    const listing = entries
-      .slice(0, 200)
-      .map((e) => `${e.isDirectory() ? "d " : "f "} ${e.name}`)
-      .join("\n");
-    return { content: listing, isError: false };
-  } catch (e: any) {
-    return { content: `Error listing files: ${e.message}`, isError: true };
-  }
 }
 
 async function executeRunPython(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
@@ -881,41 +755,6 @@ async function executeRunPython(args: Record<string, any>): Promise<{ content: s
   } catch (e: any) {
     return { content: `Error running Python: ${e.message}`, isError: true };
   }
-}
-
-async function executeBash(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
-  const timeout = (args.timeout || 30) * 1000;
-
-  return new Promise((resolve) => {
-    const proc = execFile(
-      "/bin/bash",
-      ["-c", args.command],
-      {
-        timeout,
-        maxBuffer: 1024 * 1024, // 1MB
-        cwd: baseDir,
-        env: { ...process.env, HOME },
-      },
-      (error, stdout, stderr) => {
-        const output = [
-          stdout ? stdout.trimEnd() : "",
-          stderr ? `[stderr] ${stderr.trimEnd()}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n");
-
-        if (error) {
-          if (error.killed) {
-            resolve({ content: `Command timed out after ${args.timeout || 30}s\n${output}`, isError: true });
-          } else {
-            resolve({ content: output || error.message, isError: true });
-          }
-        } else {
-          resolve({ content: output || "(no output)", isError: false });
-        }
-      }
-    );
-  });
 }
 
 // --- read_pdf implementation ---
@@ -976,17 +815,20 @@ async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME)
       }
     }
     
-    // Build Python script for PyMuPDF processing
+    // Build Python script for PyMuPDF processing. The PDF path is passed as
+    // argv[1] and the extraction flags as argv[2..4] so the script can run in
+    // a clean workspace via executePython (no stdin plumbing required).
     const pythonCode = `
 import fitz  # PyMuPDF
 import base64
 import json
 import sys
 
-def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
-    # Open PDF from bytes
+def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
     doc = fitz.open("pdf", pdf_bytes)
-    
+
     result = {
         "text": "",
         "pages": [],
@@ -998,14 +840,12 @@ def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
             "pages": len(doc),
         }
     }
-    
-    # Extract metadata
+
     metadata = doc.metadata
     result["metadata"]["title"] = metadata.get("title", "")
     result["metadata"]["author"] = metadata.get("author", "")
     result["metadata"]["subject"] = metadata.get("subject", "")
-    
-    # Determine page range
+
     if pages == "all":
         page_range = range(len(doc))
     else:
@@ -1017,20 +857,19 @@ def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
                 page_range = [int(pages) - 1]
         except:
             page_range = range(len(doc))
-    
+
     for page_num in page_range:
         if page_num >= len(doc):
             continue
-        
+
         page = doc[page_num]
-        
-        # Extract text
+
         if ocr:
             textpage = page.get_textpage_ocr(dpi=300, full=True)
             text = page.get_text(textpage=textpage)
         else:
             text = page.get_text()
-        
+
         result["text"] += text + "\\n\\n"
         result["pages"].append({
             "page": page_num + 1,
@@ -1038,8 +877,7 @@ def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
             "width": page.rect.width,
             "height": page.rect.height,
         })
-        
-        # Extract images if requested
+
         if extract_images:
             image_list = page.get_images(full=True)
             for img_idx, img in enumerate(image_list):
@@ -1056,92 +894,72 @@ def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
                             "ext": base_image["ext"],
                             "data": img_data,
                         })
-                except Exception as e:
+                except Exception:
                     pass
-    
+
     doc.close()
     return result
 
-# Read PDF bytes from stdin
-pdf_bytes = sys.stdin.buffer.read()
-extract_images = sys.argv[1] == "true" if len(sys.argv) > 1 else False
-ocr = sys.argv[2] == "true" if len(sys.argv) > 2 else False
-pages = sys.argv[3] if len(sys.argv) > 3 else "all"
+pdf_path = sys.argv[1]
+extract_images = len(sys.argv) > 2 and sys.argv[2] == "true"
+ocr = len(sys.argv) > 3 and sys.argv[3] == "true"
+pages = sys.argv[4] if len(sys.argv) > 4 else "all"
 
-result = process_pdf(pdf_bytes, extract_images, ocr, pages)
+result = process_pdf(pdf_path, extract_images, ocr, pages)
 print(json.dumps(result))
 `.trim();
-    
-    // Execute Python with PDF buffer as stdin
-    const { execFile } = await import("child_process");
-    const { tmpdir } = await import("os");
-    const { writeFile, mkdir, rm } = await import("fs/promises");
-    const { join } = await import("path");
+
+    // Write the PDF buffer to a temp file the script can read by path.
     const { v4: uuid } = await import("uuid");
-    
-    const sandboxId = uuid();
-    const sandboxDir = join(tmpdir(), `porrima-pdf-${sandboxId}`);
-    await mkdir(sandboxDir, { recursive: true });
-    
-    const scriptPath = join(sandboxDir, "process_pdf.py");
-    await writeFile(scriptPath, pythonCode, "utf-8");
-    
-    return new Promise((resolve) => {
-      // Ensure user's local Python packages are in path
-      const env: Record<string, string> = { ...process.env as Record<string, string> };
-      const homeDir = homedir();
-      const userSitePackages = join(homeDir, ".local", "lib", "python3.13", "site-packages");
-      env.PYTHONPATH = userSitePackages + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : "");
-      
-      const proc = execFile("python3", [scriptPath, String(extractImages), String(ocr), pages], {
-        timeout: 30000,
-        maxBuffer: 10 * 1024 * 1024, // 10MB for large PDFs with images
-        env,
-      }, (error, stdout, stderr) => {
-        rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
-        
-        if (error) {
-          if (error.killed) {
-            resolve({ content: "PDF processing timed out after 30s", isError: true });
-          } else if (stderr && stderr.includes("No module named fitz")) {
-            resolve({
-              content: `PyMuPDF (fitz) is not installed. Install it with: pip install PyMuPDF\n\nFor OCR support, also install Tesseract: sudo apt install tesseract-ocr`,
-              isError: true,
-            });
-          } else {
-            resolve({ content: `PDF processing failed: ${stderr || error.message}`, isError: true });
-          }
-          return;
+    const { tmpdir } = await import("os");
+    const { writeFile: writeFileTmp, mkdir: mkdirTmp, rm: rmTmp } = await import("fs/promises");
+    const pdfSandboxDir = join(tmpdir(), `porrima-pdf-${uuid()}`);
+    await mkdirTmp(pdfSandboxDir, { recursive: true });
+    const pdfFilePath = join(pdfSandboxDir, "input.pdf");
+    await writeFileTmp(pdfFilePath, pdfBuffer);
+
+    try {
+      const result = await executePython(
+        pythonCode,
+        30,
+        undefined,
+        {
+          args: [pdfFilePath, String(extractImages), String(ocr), pages],
+          maxBuffer: 10 * 1024 * 1024, // 10MB for large PDFs with images
+        },
+      );
+
+      if (result.exitCode !== 0) {
+        if (result.stderr.includes("No module named fitz")) {
+          return {
+            content: `PyMuPDF (fitz) is not installed. Install it with: pip install PyMuPDF\n\nFor OCR support, also install Tesseract: sudo apt install tesseract-ocr`,
+            isError: true,
+          };
         }
-        
-        try {
-          const result = JSON.parse(stdout);
-          
-          // Check for empty text (possible scanned PDF without OCR)
-          if (!ocr && result.text.trim().length < 10 && result.metadata.pages > 0) {
-            resolve({
-              content: `⚠️ This PDF appears to be scanned (no extractable text found). Try again with ocr=true to enable OCR processing.\n\n${formatPdfResult(result)}`,
-              isError: false,
-            });
-            return;
-          }
-          
-          resolve({ content: formatPdfResult(result), isError: false });
-        } catch (e: any) {
-          resolve({ content: `Failed to parse PDF result: ${e.message}\n${stdout.slice(0, 500)}`, isError: true });
+        if (result.stderr.includes("timed out")) {
+          return { content: "PDF processing timed out after 30s", isError: true };
         }
-      });
-      
-      // Send PDF buffer to stdin.
-      // Attach an error handler BEFORE writing to prevent EPIPE from crashing
-      // the process if the child exits before we finish writing (e.g. missing fitz).
-      if (pdfBuffer && proc.stdin) {
-        proc.stdin.on("error", () => {}); // swallow — the execFile callback handles exit errors
-        proc.stdin.write(pdfBuffer);
-        proc.stdin.end();
+        return { content: `PDF processing failed: ${result.stderr || result.stdout}`, isError: true };
       }
-    });
-    
+
+      try {
+        const parsed = JSON.parse(result.stdout);
+
+        if (!ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0) {
+          return {
+            content: `⚠️ This PDF appears to be scanned (no extractable text found). Try again with ocr=true to enable OCR processing.\n\n${formatPdfResult(parsed)}`,
+            isError: false,
+          };
+        }
+
+        return { content: formatPdfResult(parsed), isError: false };
+      } catch (e: any) {
+        return { content: `Failed to parse PDF result: ${e.message}\n${result.stdout.slice(0, 500)}`, isError: true };
+      }
+    } finally {
+      rmTmp(pdfSandboxDir, { recursive: true, force: true }).catch(() => {});
+    }
+
   } catch (e: any) {
     return { content: `PDF processing failed: ${e.message}`, isError: true };
   }

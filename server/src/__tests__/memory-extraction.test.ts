@@ -220,15 +220,16 @@ describe("formatToolArgumentsForExtraction", () => {
       timestamp: 1,
       toolCalls: [{
         id: "tool-1",
-        name: "create_visual",
+        name: "create_artifact",
         arguments: {
           title: "Wall spread visual",
           html: "<svg>" + "x".repeat(50_000) + "</svg>",
+          display: "inline",
         },
       }],
       toolResults: [{
         toolCallId: "tool-1",
-        toolName: "create_visual",
+        toolName: "create_artifact",
         content: "Visual created: Wall spread visual",
         isError: false,
       }],

@@ -51,10 +51,11 @@ describe("agent artifact update tool", () => {
 
     const createResult = await executeTool({
       id: "create-visual",
-      name: "create_visual",
+      name: "create_artifact",
       arguments: {
         title: "Inline chart",
         html: "<html><head></head><body>v1</body></html>",
+        display: "inline",
       },
     }, "chat-1", effects);
 
