@@ -618,7 +618,7 @@ URL: ${result.url}${warningText}`, {
       label: tool.name,
       execute: async (toolCallId, params) => {
         const args = params as Record<string, any>;
-        const projectIdForLookup = typeof project === "string" ? project : undefined;
+        const projectIdForLookup = typeof project === "string" ? undefined : project?.id;
         return wrapResult(await executeSkillTool(makeToolCall(toolCallId, tool.name, args), projectIdForLookup), tool.name);
       },
     });
