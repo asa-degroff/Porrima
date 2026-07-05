@@ -350,7 +350,9 @@ export async function existsVisual(id: string): Promise<boolean> {
     const metadataPath = join(VISUALS_DIR, id, "metadata.json");
     await import("fs/promises").then(m => m.access(metadataPath));
     return true;
-  } catch {
-    return false;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return false;
+    throw e;
   }
 }
