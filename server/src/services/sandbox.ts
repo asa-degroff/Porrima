@@ -344,3 +344,13 @@ export async function getArtifactMetadata(id: string): Promise<ArtifactMetadata 
     return null;
   }
 }
+
+export async function existsVisual(id: string): Promise<boolean> {
+  try {
+    const metadataPath = join(VISUALS_DIR, id, "metadata.json");
+    await import("fs/promises").then(m => m.access(metadataPath));
+    return true;
+  } catch {
+    return false;
+  }
+}

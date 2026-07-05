@@ -1,11 +1,12 @@
 import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { readFile, writeFile, mkdir, access } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import { resolve, join } from "path";
 import { homedir } from "os";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
-import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
+import { executePython, createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
+import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
 import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
 import { getSettings } from "./chat-storage.js";
@@ -290,7 +291,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
 
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS];
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS];
   return allTools.map(t => ({ name: t.name, description: t.description }));
 }
 
@@ -566,9 +567,8 @@ URL: ${result.url}${warningText}`, {
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
 
-      try {
-        const visualPath = join(VISUALS_DIR, args.artifactId, "metadata.json");
-        await access(visualPath);
+      const isVis = await existsVisual(args.artifactId);
+      if (isVis) {
         const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
         const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
         const visual = { id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version };
@@ -581,14 +581,11 @@ URL: ${result.url}${warningText}`, {
           objectKind: "visual",
           automaticUpdateCount: automaticUpdateCountForUpdate(visual.id),
         });
-      } catch {
-        // Not a visual; fall through to the artifact store.
       }
 
       try {
         const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
         const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-        // Emit artifact event with new version - client will update the display
         const artifact = { id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version };
         effects.onArtifact(artifact);
         return withArtifactPreviewReview(`Artifact updated to version ${result.version} (${result.url})${warningText}`, {
@@ -614,97 +611,18 @@ URL: ${result.url}${warningText}`, {
     },
   });
 
-  // Skill management tools
-  tools.push({
-    name: "install_skill",
-    description: "Install a new Agent Skills compatible skill from a URL (GitHub skill directory or direct SKILL.md link). Use this to extend your capabilities by fetching skills from external sources. Returns the installed skill name and path.",
-    parameters: Type.Object({
-      url: Type.String({ description: "URL to the skill (GitHub tree URL for a skill directory, GitHub blob URL, or direct URL to SKILL.md)" }),
-      name: Type.Optional(Type.String({ description: "Expected skill name. If provided, it must match the SKILL.md frontmatter name." })),
-    }),
-    label: "install_skill",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      try {
-        const { installSkillFromUrl } = await import("./skills.js");
-        const result = await installSkillFromUrl(args.url, args.name);
-        return { 
-          content: [{ type: "text", text: `✅ ${result.message}\n\nSkill installed to: ${result.path}\n\nActivate it in this chat with /${result.name}` }], 
-          details: { name: result.name, path: result.path },
-        };
-      } catch (e: any) {
-        return { 
-          content: [{ type: "text", text: `❌ Failed to install skill: ${e.message}` }], 
-          details: {},
-          isError: true,
-        };
-      }
-    },
-  });
-
-  tools.push({
-    name: "remove_skill",
-    description: "Remove a global skill by name. This deletes the skill from ~/.porrima/skills/. Use when a skill is no longer needed or is causing issues.",
-    parameters: Type.Object({
-      name: Type.String({ description: "Name of the skill to remove (folder name, not display name)" }),
-    }),
-    label: "remove_skill",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      try {
-        const { removeGlobalSkill } = await import("./skills.js");
-        const result = await removeGlobalSkill(args.name);
-        return { 
-          content: [{ type: "text", text: `✅ ${result.message}` }], 
-          details: { success: true, name: args.name },
-        };
-      } catch (e: any) {
-        return { 
-          content: [{ type: "text", text: `❌ Failed to remove skill: ${e.message}` }], 
-          details: {},
-          isError: true,
-        };
-      }
-    },
-  });
-
-  tools.push({
-    name: "list_skills",
-    description: "List all available global skills. Returns skill names, descriptions, and source (global vs project).",
-    parameters: Type.Object({
-      includeProject: Type.Optional(Type.Boolean({ description: "Include project-specific skills if in a project chat (default: false)" })),
-    }),
-    label: "list_skills",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      try {
-        const { discoverSkills } = await import("./skills.js");
-        const skills = await discoverSkills(args.includeProject ? chatId : undefined);
-        
-        if (skills.length === 0) {
-          return { 
-            content: [{ type: "text", text: "No skills available. Install skills using install_skill or add them to ~/.porrima/skills/" }],
-            details: { skills: [] },
-          };
-        }
-        
-        const list = skills.map((s, i) => {
-          const label = s.sourceRoot === "agents" ? "agent global" : s.source;
-          return `${i + 1}. **${s.name}** (${label})\n   ${s.description}`;
-        }).join("\n");
-        return { 
-          content: [{ type: "text", text: `**Available Skills** (${skills.length} total)\n\n${list}` }], 
-          details: { skills: skills.map(s => ({ name: s.name, description: s.description, source: s.source, sourceRoot: s.sourceRoot, managed: s.managed })) },
-        };
-      } catch (e: any) {
-        return { 
-          content: [{ type: "text", text: `Failed to list skills: ${e.message}` }], 
-          details: {},
-          isError: true,
-        };
-      }
-    },
-  });
+  // Skill tools
+  for (const tool of SKILL_TOOLS) {
+    tools.push({
+      ...tool,
+      label: tool.name,
+      execute: async (toolCallId, params) => {
+        const args = params as Record<string, any>;
+        const projectIdForLookup = typeof project === "string" ? project : undefined;
+        return wrapResult(await executeSkillTool(makeToolCall(toolCallId, tool.name, args), projectIdForLookup), tool.name);
+      },
+    });
+  }
 
   return tools;
 }
@@ -758,13 +676,16 @@ async function executeRunPython(args: Record<string, any>): Promise<{ content: s
 
 // --- read_pdf implementation ---
 
+import { fileURLToPath } from "url";
+const PDF_EXTRACT_SCRIPT = join(fileURLToPath(new URL(".", import.meta.url)), "pdf-extract.py");
+
 /**
  * Fetch a PDF from a URL and return the buffer.
  */
 async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<Buffer> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
+
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -772,11 +693,11 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
         "User-Agent": "Mozilla/5.0 (compatible; porrima/1.0)",
       },
     });
-    
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    
+
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);
   } finally {
@@ -786,136 +707,43 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
 
 /**
  * Execute the read_pdf tool using PyMuPDF via Python sandbox.
+ * The extraction script lives in pdf-extract.py alongside this module.
  */
 async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   const pathOrUrl = args.path;
   if (!pathOrUrl) {
     return { content: "Missing required parameter: path", isError: true };
   }
-  
+
   const extractImages = args.extractImages === true;
   const ocr = args.ocr === true;
   const pages = args.pages || "all";
-  
+
   let pdfBuffer: Buffer | null = null;
-  let filePath: string | null = null;
-  
+
   try {
     // Handle URL vs local path
     if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
       pdfBuffer = await fetchPdfFromUrl(pathOrUrl);
     } else {
-      // Local path - resolve and validate
-      filePath = resolvePath(pathOrUrl, baseDir);
+      const resolvedPath = resolvePath(pathOrUrl, baseDir);
       try {
-        pdfBuffer = await readFile(filePath);
+        pdfBuffer = await readFile(resolvedPath);
       } catch (e: any) {
         return { content: `Cannot read PDF file: ${e.message}`, isError: true };
       }
     }
-    
-    // Build Python script for PyMuPDF processing. The PDF path is passed as
-    // argv[1] and the extraction flags as argv[2..4] so the script can run in
-    // a clean workspace via executePython (no stdin plumbing required).
-    const pythonCode = `
-import fitz  # PyMuPDF
-import base64
-import json
-import sys
-
-def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
-    with open(pdf_path, "rb") as f:
-        pdf_bytes = f.read()
-    doc = fitz.open("pdf", pdf_bytes)
-
-    result = {
-        "text": "",
-        "pages": [],
-        "images": [],
-        "metadata": {
-            "title": "",
-            "author": "",
-            "subject": "",
-            "pages": len(doc),
-        }
-    }
-
-    metadata = doc.metadata
-    result["metadata"]["title"] = metadata.get("title", "")
-    result["metadata"]["author"] = metadata.get("author", "")
-    result["metadata"]["subject"] = metadata.get("subject", "")
-
-    if pages == "all":
-        page_range = range(len(doc))
-    else:
-        try:
-            if "-" in pages:
-                start, end = pages.split("-")
-                page_range = range(int(start) - 1, int(end))
-            else:
-                page_range = [int(pages) - 1]
-        except:
-            page_range = range(len(doc))
-
-    for page_num in page_range:
-        if page_num >= len(doc):
-            continue
-
-        page = doc[page_num]
-
-        if ocr:
-            textpage = page.get_textpage_ocr(dpi=300, full=True)
-            text = page.get_text(textpage=textpage)
-        else:
-            text = page.get_text()
-
-        result["text"] += text + "\\n\\n"
-        result["pages"].append({
-            "page": page_num + 1,
-            "text": text,
-            "width": page.rect.width,
-            "height": page.rect.height,
-        })
-
-        if extract_images:
-            image_list = page.get_images(full=True)
-            for img_idx, img in enumerate(image_list):
-                xref = img[0]
-                try:
-                    base_image = doc.extract_image(xref)
-                    if base_image:
-                        img_data = base64.b64encode(base_image["image"]).decode("ascii")
-                        result["images"].append({
-                            "page": page_num + 1,
-                            "index": img_idx,
-                            "width": base_image["width"],
-                            "height": base_image["height"],
-                            "ext": base_image["ext"],
-                            "data": img_data,
-                        })
-                except Exception:
-                    pass
-
-    doc.close()
-    return result
-
-pdf_path = sys.argv[1]
-extract_images = len(sys.argv) > 2 and sys.argv[2] == "true"
-ocr = len(sys.argv) > 3 and sys.argv[3] == "true"
-pages = sys.argv[4] if len(sys.argv) > 4 else "all"
-
-result = process_pdf(pdf_path, extract_images, ocr, pages)
-print(json.dumps(result))
-`.trim();
 
     // Write the PDF buffer to a temp file the script can read by path.
-    const { v4: uuid } = await import("uuid");
-    const { tmpdir } = await import("os");
+    const { tmpdir: tmp } = await import("os");
     const { writeFile: writeFileTmp, mkdir: mkdirTmp, rm: rmTmp } = await import("fs/promises");
-    const pdfSandboxDir = join(tmpdir(), `porrima-pdf-${uuid()}`);
+    const pdfSandboxDir = join(tmp(), `porrima-pdf-${uuid()}`);
     await mkdirTmp(pdfSandboxDir, { recursive: true });
     const pdfFilePath = join(pdfSandboxDir, "input.pdf");
     await writeFileTmp(pdfFilePath, pdfBuffer);
+
+    // Load the extraction script from the bundled Python file.
+    const pythonCode = await readFile(PDF_EXTRACT_SCRIPT, "utf-8");
 
     try {
       const result = await executePython(
@@ -924,7 +752,7 @@ print(json.dumps(result))
         undefined,
         {
           args: [pdfFilePath, String(extractImages), String(ocr), pages],
-          maxBuffer: 10 * 1024 * 1024, // 10MB for large PDFs with images
+          maxBuffer: 10 * 1024 * 1024,
         },
       );
 
