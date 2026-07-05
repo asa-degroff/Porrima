@@ -124,7 +124,6 @@ export interface ToolSideEffects {
 
 // --- Adapter helpers ---
 
-/** Wrap a { content, isError } result into AgentToolResult, throwing on error */
 /**
  * Compute the max tool result size in characters, scaled to the context window.
  * Uses 15% of context (at ~4 chars/token), with a floor of 8k chars.
