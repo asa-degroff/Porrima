@@ -139,7 +139,7 @@ function pickAllowedBooleanOrString<T extends string>(
 const WEB_SEARCH_TOOL: Tool = {
   name: "web_search",
   description:
-    "Search the web. Uses the configured default provider unless provider is supplied as an override. Supports Brave Search, Exa, and Tavily.",
+    "Search the web. Uses the configured default provider unless `provider` is supplied as an override. Supports Brave Search, Exa, and Tavily. Provider-specific knobs (e.g. Exa searchType/contents, Tavily searchDepth/topic/timeRange/includeAnswer/includeRawContent) go in the `providerOptions` object — the server validates them per provider.",
   parameters: Type.Object({
     query: Type.String({ description: "Search query" }),
     count: Type.Optional(
@@ -150,15 +150,6 @@ const WEB_SEARCH_TOOL: Tool = {
       })
     ),
     provider: Type.Optional(Type.String({ description: "Optional provider override: brave, exa, or tavily. Omit to use the configured default. Use the bare value, not a quoted string." })),
-    // Exa-specific parameters (only effective when provider is "exa")
-    searchType: Type.Optional(Type.String({ description: "Exa search type: auto, neural, keyword, hybrid, fast, deep, deep-lite, deep-reasoning, magic, instant (default: auto)" })),
-    contents: Type.Optional(
-      Type.Object({
-        text: Type.Optional(Type.Any({ description: "true or object with includeHtmlTags/maxCharacters" })),
-        highlights: Type.Optional(Type.Any({ description: "object with maxCharacters and optional query" })),
-        summary: Type.Optional(Type.Boolean()),
-      })
-    ),
     startPublishedDate: Type.Optional(
       Type.String({ description: "Exa/Tavily: earliest publication or update date (YYYY-MM-DD)" })
     ),
@@ -171,21 +162,11 @@ const WEB_SEARCH_TOOL: Tool = {
     excludeDomains: Type.Optional(
       Type.Array(Type.String(), { description: "Tavily only: domains to exclude from results" })
     ),
-    // Tavily-specific parameters (only effective when provider is "tavily")
-    searchDepth: Type.Optional(
-      Type.String({ description: "Tavily search depth: basic, advanced, fast, ultra-fast (default: basic). Use the bare value, not a quoted string." })
-    ),
-    topic: Type.Optional(
-      Type.String({ description: "Tavily topic: general, news, or finance (default: general). Use the bare value, not a quoted string." })
-    ),
-    timeRange: Type.Optional(
-      Type.String({ description: "Tavily time range filter: day/week/month/year or d/w/m/y. Use the bare value, not a quoted string." })
-    ),
-    includeAnswer: Type.Optional(
-      Type.Any({ description: "Tavily only: include an LLM-generated answer. Boolean, basic, or advanced. False by default." })
-    ),
-    includeRawContent: Type.Optional(
-      Type.Any({ description: "Tavily only: include cleaned page content. Boolean, markdown, or text. Can increase latency and result size." })
+    providerOptions: Type.Optional(
+      Type.Any({
+        description:
+          "Provider-specific options object. Exa: { searchType: 'auto|neural|keyword|hybrid|fast|deep|deep-lite|deep-reasoning|magic|instant', contents: { text?, highlights?, summary? } }. Tavily: { searchDepth: 'basic|advanced|fast|ultra-fast', topic: 'general|news|finance', timeRange: 'day|week|month|year', includeAnswer: boolean|'basic'|'advanced', includeRawContent: boolean|'markdown'|'text' }. Unknown keys are ignored.",
+      })
     ),
   }),
 };
@@ -215,6 +196,18 @@ const WEB_FETCH_TOOL: Tool = {
 export const WEB_TOOLS: Tool[] = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL];
 
 // --- Execution ---
+
+/**
+ * Resolve a provider-specific option from either the top-level args (legacy
+ * callers) or the nested `providerOptions` object (preferred). Top-level wins
+ * for backwards compatibility with persisted tool calls.
+ */
+function pickOption<T>(args: Record<string, any>, key: string): T | undefined {
+  if (args[key] !== undefined) return args[key] as T;
+  const opts = args.providerOptions;
+  if (opts && typeof opts === "object" && opts[key] !== undefined) return opts[key] as T;
+  return undefined;
+}
 
 export async function executeWebTool(
   toolCall: ToolCall
@@ -369,7 +362,7 @@ async function executeExaSearch(
     const body: Record<string, any> = {
       query,
       numResults,
-      type: normalizeString(args.searchType) || "auto",
+      type: normalizeString(pickOption<string>(args, "searchType")) || "auto",
     };
 
     // Exa-specific filters
@@ -382,11 +375,12 @@ async function executeExaSearch(
 
     // Exa content options — don't enable by default to avoid token bloat
     // Only include if explicitly set
-    if (args.contents) {
+    const contentsOpt = pickOption<any>(args, "contents");
+    if (contentsOpt) {
       const contents: Record<string, any> = {};
-      if (args.contents.text !== undefined) contents.text = args.contents.text;
-      if (args.contents.highlights !== undefined) contents.highlights = args.contents.highlights;
-      if (args.contents.summary !== undefined) contents.summary = args.contents.summary;
+      if (contentsOpt.text !== undefined) contents.text = contentsOpt.text;
+      if (contentsOpt.highlights !== undefined) contents.highlights = contentsOpt.highlights;
+      if (contentsOpt.summary !== undefined) contents.summary = contentsOpt.summary;
       if (Object.keys(contents).length > 0) body.contents = contents;
     }
 
@@ -473,21 +467,21 @@ async function executeTavilySearch(
     const body: Record<string, any> = {
       query,
       max_results: maxResults,
-      search_depth: pickAllowedString(args.searchDepth, TAVILY_SEARCH_DEPTHS, "basic"),
+      search_depth: pickAllowedString(pickOption<string>(args, "searchDepth"), TAVILY_SEARCH_DEPTHS, "basic"),
     };
 
-    const topic = pickAllowedString(args.topic, TAVILY_TOPICS);
+    const topic = pickAllowedString(pickOption<string>(args, "topic"), TAVILY_TOPICS);
     if (topic) body.topic = topic;
 
-    const timeRange = pickAllowedString(args.timeRange, TAVILY_TIME_RANGES);
+    const timeRange = pickAllowedString(pickOption<string>(args, "timeRange"), TAVILY_TIME_RANGES);
     if (timeRange) body.time_range = timeRange;
 
     const startDate = normalizeString(args.startDate) || normalizeString(args.startPublishedDate);
     const endDate = normalizeString(args.endDate) || normalizeString(args.endPublishedDate);
     const includeDomains = normalizeStringArray(args.includeDomains);
     const excludeDomains = normalizeStringArray(args.excludeDomains);
-    const includeAnswer = pickAllowedBooleanOrString(args.includeAnswer, TAVILY_ANSWER_MODES);
-    const includeRawContent = pickAllowedBooleanOrString(args.includeRawContent, TAVILY_RAW_CONTENT_MODES);
+    const includeAnswer = pickAllowedBooleanOrString(pickOption<boolean | string>(args, "includeAnswer"), TAVILY_ANSWER_MODES);
+    const includeRawContent = pickAllowedBooleanOrString(pickOption<boolean | string>(args, "includeRawContent"), TAVILY_RAW_CONTENT_MODES);
     if (startDate) body.start_date = startDate;
     if (endDate) body.end_date = endDate;
     if (includeDomains) body.include_domains = includeDomains;

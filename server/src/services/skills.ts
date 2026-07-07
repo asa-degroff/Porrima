@@ -732,3 +732,105 @@ export async function updateGlobalSkill(skillName: string, content: string): Pro
     name: parsed.frontmatter.name,
   };
 }
+
+// --- Tool definitions and executor ---
+
+import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+
+const INSTALL_SKILL_TOOL: Tool = {
+  name: "install_skill",
+  description: "Install a new Agent Skills compatible skill from a URL (GitHub skill directory or direct SKILL.md link). Use this to extend your capabilities by fetching skills from external sources. Returns the installed skill name and path.",
+  parameters: Type.Object({
+    url: Type.String({ description: "URL to the skill (GitHub tree URL for a skill directory, GitHub blob URL, or direct URL to SKILL.md)" }),
+    name: Type.Optional(Type.String({ description: "Expected skill name. If provided, it must match the SKILL.md frontmatter name." })),
+  }),
+};
+
+const REMOVE_SKILL_TOOL: Tool = {
+  name: "remove_skill",
+  description: "Remove a global skill by name. This deletes the skill from ~/.porrima/skills/. Use when a skill is no longer needed or is causing issues.",
+  parameters: Type.Object({
+    name: Type.String({ description: "Name of the skill to remove (folder name, not display name)" }),
+  }),
+};
+
+const LIST_SKILLS_TOOL: Tool = {
+  name: "list_skills",
+  description: "List all available global skills. Returns skill names, descriptions, and source (global vs project).",
+  parameters: Type.Object({
+    includeProject: Type.Optional(Type.Boolean({ description: "Include project-specific skills if in a project chat (default: false)" })),
+  }),
+};
+
+export const SKILL_TOOLS: Tool[] = [
+  INSTALL_SKILL_TOOL,
+  REMOVE_SKILL_TOOL,
+  LIST_SKILLS_TOOL,
+];
+
+interface SkillToolResult {
+  content: string;
+  isError: boolean;
+}
+
+/**
+ * Execute a skill management tool call.
+ * Returns a result object with content and error flag for the caller to wrap.
+ */
+export async function executeSkillTool(
+  toolCall: ToolCall,
+  projectId?: string,
+): Promise<SkillToolResult> {
+  const args = toolCall.arguments as Record<string, any>;
+
+  switch (toolCall.name) {
+    case "install_skill": {
+      try {
+        const result = await installSkillFromUrl(args.url, args.name);
+        return {
+          content: `✅ ${result.message}\n\nSkill installed to: ${result.path}\n\nActivate it in this chat with /${result.name}`,
+          isError: false,
+        };
+      } catch (e: any) {
+        return { content: `❌ Failed to install skill: ${e.message}`, isError: true };
+      }
+    }
+
+    case "remove_skill": {
+      try {
+        const result = await removeGlobalSkill(args.name);
+        return { content: `✅ ${result.message}`, isError: false };
+      } catch (e: any) {
+        return { content: `❌ Failed to remove skill: ${e.message}`, isError: true };
+      }
+    }
+
+    case "list_skills": {
+      try {
+        const skills = await discoverSkills(args.includeProject ? projectId : undefined);
+
+        if (skills.length === 0) {
+          return {
+            content: "No skills available. Install skills using install_skill or add them to ~/.porrima/skills/",
+            isError: false,
+          };
+        }
+
+        const list = skills.map((s, i) => {
+          const label = s.sourceRoot === "agents" ? "agent global" : s.source;
+          return `${i + 1}. **${s.name}** (${label})\n   ${s.description}`;
+        }).join("\n");
+
+        return {
+          content: `**Available Skills** (${skills.length} total)\n\n${list}`,
+          isError: false,
+        };
+      } catch (e: any) {
+        return { content: `Failed to list skills: ${e.message}`, isError: true };
+      }
+    }
+
+    default:
+      return { content: `Unknown skill tool: ${toolCall.name}`, isError: true };
+  }
+}

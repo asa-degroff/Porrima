@@ -1,6 +1,20 @@
 import { useEffect, useState, useCallback } from "react";
 import { getCacheResidency, type CacheResidency } from "../api/client";
 
+/** Check if we're in a layout wide enough for side-by-side model cards. */
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 768px)").matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return isDesktop;
+}
+
 // --- Types (aligned with server model-stats.ts) ---
 
 interface LlamaTimingsEntry {
@@ -37,7 +51,7 @@ interface ModelSummary {
   runCount: number;
 }
 
-interface ModelStatsRecord {
+interface ActiveModelData {
   modelId: string;
   provider: string;
   summary: ModelSummary;
@@ -128,16 +142,13 @@ function formatChars(n: number | null | undefined): string {
 }
 
 function truncateModelId(id: string): string {
-  // llama.cpp model ids are often long file paths; show the basename
   const basename = id.replace(/^.*[\/\\]/, "");
-  // Further shorten sha prefixes if present (e.g. "qwen3-35b-a3b-q4_k_m-00001-of-00004.gguf")
   const sha = basename.match(/^(.+?)-[0-9a-f]{8}-/);
   if (sha) return sha[1] + "…";
   if (basename.length > 35) return basename.slice(0, 35) + "…";
   return basename;
 }
 
-// Decode speed color: green is fast, red is slow
 function speedColor(tokPerSec: number | null, isDecode = true): string {
   if (tokPerSec === null) return "text-white/30";
   const threshold = isDecode ? 30 : 100;
@@ -147,14 +158,7 @@ function speedColor(tokPerSec: number | null, isDecode = true): string {
   return "text-red-300/80";
 }
 
-// Speed bar width relative to a max reasonable value
-function speedBarWidth(tokPerSec: number | null, maxRef: number): string {
-  if (tokPerSec === null) return "w-0";
-  const pct = Math.min(tokPerSec / maxRef * 100, 100);
-  return `w-[${pct.toFixed(1)}%]`;
-}
-
-// --- Components ---
+// --- Collapsible Section ---
 
 function Section({
   title,
@@ -170,7 +174,7 @@ function Section({
     <div>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-white/40 hover:text-white/70 transition-colors"
+        className="flex items-center gap-2 w-full text-left text-[10px] uppercase tracking-wider text-white/40 hover:text-white/70 transition-colors"
       >
         <span>{open ? "▼" : "▶"}</span>
         <span>{title}</span>
@@ -215,220 +219,229 @@ function CacheBar({ ratio, label }: { ratio: number | null | undefined; label: s
   );
 }
 
-function ModelCard({
-  record,
-  onLoadDetail,
+// --- Active Model Card ---
+
+function ActiveModelCard({
+  data,
+  label,
+  expanded,
+  onToggleExpand,
 }: {
-  record: ModelStatsRecord;
-  onLoadDetail: (modelId: string, provider: string) => void;
+  data: ActiveModelData | null;
+  label: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
-  const { summary } = record;
+  const [detail, setDetail] = useState<ModelStatsDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // Fetch detail when expanded and not yet loaded
+  useEffect(() => {
+    if (!expanded || !data || detail) return;
+    setDetailLoading(true);
+    fetch(
+      `/api/model-stats/${encodeURIComponent(data.modelId)}?provider=${encodeURIComponent(data.provider)}`,
+      { credentials: "include" },
+    )
+      .then((res) => res.ok ? res.json() : null)
+      .then((d) => { if (d) setDetail(d); })
+      .catch((err) => console.error("[model-stats] detail fetch failed:", err))
+      .finally(() => setDetailLoading(false));
+  }, [expanded, data, detail]);
+
+  // Reset detail when data changes (e.g. modal reopens with new data)
+  useEffect(() => {
+    setDetail(null);
+    setDetailLoading(false);
+  }, [data?.modelId]);
+
+  if (!data) {
+    return (
+      <div className="bg-white/5 rounded-lg p-4 border border-white/5 flex flex-col items-center justify-center min-h-[160px]">
+        <div className="text-[10px] text-white/20 uppercase tracking-wider mb-2">{label}</div>
+        <div className="text-white/30 text-sm">No data</div>
+      </div>
+    );
+  }
+
+  const { summary } = data;
   const last = summary.lastRun;
 
   return (
-    <div className="bg-white/5 rounded-lg p-3 space-y-2 border border-white/5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-mono text-white/80 truncate">{truncateModelId(record.modelId)}</span>
-          <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{record.provider}</span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[10px] text-white/30">{summary.runCount} run{summary.runCount !== 1 ? "s" : ""}</span>
-          <button
-            onClick={() => onLoadDetail(record.modelId, record.provider)}
-            className="text-[10px] text-purple-300/60 hover:text-purple-300 transition-colors"
-          >
-            expand →
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2">
-        <div>
-          <div className="text-[10px] text-white/30">avg decode</div>
-          <div className={`text-sm font-mono ${speedColor(summary.avgPredictedTokensPerSec)}`}>
-            {summary.avgPredictedTokensPerSec !== null ? summary.avgPredictedTokensPerSec.toFixed(1) : "—"}
-            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+    <div className="bg-white/5 rounded-lg border border-white/5 overflow-hidden">
+      {/* Header — clickable to expand */}
+      <button
+        onClick={onToggleExpand}
+        className="w-full text-left p-3 hover:bg-white/[0.03] transition-colors"
+      >
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] uppercase tracking-wider text-white/30">{label}</span>
+            <span className="text-white/50">·</span>
+            <span className="text-[10px] text-white/30">{summary.runCount} run{summary.runCount !== 1 ? "s" : ""}</span>
           </div>
-        </div>
-        <div>
-          <div className="text-[10px] text-white/30">last decode</div>
-          <div className={`text-sm font-mono ${speedColor(last?.predictedTokensPerSec ?? null)}`}>
-            {last ? last.predictedTokensPerSec.toFixed(1) : "—"}
-            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] text-white/30">avg prefill</div>
-          <div className={`text-sm font-mono ${speedColor(summary.avgPromptTokensPerSec, false)}`}>
-            {summary.avgPromptTokensPerSec !== null ? summary.avgPromptTokensPerSec.toFixed(1) : "—"}
-            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] text-white/30">last prefill</div>
-          <div className={`text-sm font-mono ${speedColor(last?.promptTokensPerSec ?? null, false)}`}>
-            {last ? last.promptTokensPerSec.toFixed(1) : "—"}
-            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-white/5">
-        <div className="flex items-center gap-1.5">
-          <span className="text-white/40">cache prompt</span>
-          <span className={last?.cachePrompt ? "text-cyan-200/80" : "text-white/30"}>
-            {last?.cachePrompt ? "enabled" : "not recorded"}
+          <span className={`text-[10px] ${expanded ? "text-purple-300/60" : "text-white/20"}`}>
+            {expanded ? "▾ collapse" : "▸ detail"}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-white/40">avg hit</span>
-          <div className="w-16 h-1 bg-white/5 rounded-full overflow-hidden">
+
+        <div className="flex items-center gap-2 min-w-0 mb-2.5">
+          <span className="text-sm font-mono text-white/80 truncate">{truncateModelId(data.modelId)}</span>
+          <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded shrink-0">{data.provider}</span>
+        </div>
+
+        {/* Compact stats grid */}
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <div>
+            <div className="text-[10px] text-white/30">avg decode</div>
+            <div className={`text-sm font-mono ${speedColor(summary.avgPredictedTokensPerSec)}`}>
+              {summary.avgPredictedTokensPerSec !== null ? summary.avgPredictedTokensPerSec.toFixed(1) : "—"}
+              <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-white/30">avg prefill</div>
+            <div className={`text-sm font-mono ${speedColor(summary.avgPromptTokensPerSec, false)}`}>
+              {summary.avgPromptTokensPerSec !== null ? summary.avgPromptTokensPerSec.toFixed(1) : "—"}
+              <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Cache hit bar */}
+        <div className="flex items-center gap-2 mt-2.5">
+          <span className="text-[10px] text-white/40">cache hit</span>
+          <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
             <div
-              className="h-full rounded-full bg-cyan-300/70"
+              className="h-full rounded-full bg-cyan-300/70 transition-all duration-300"
               style={{ width: summary.avgInferredCacheHitRatio != null ? `${Math.round(summary.avgInferredCacheHitRatio * 100)}%` : "0%" }}
             />
           </div>
-          <span className="text-cyan-200/80 font-mono">{formatPercent(summary.avgInferredCacheHitRatio)}</span>
-        </div>
-      </div>
-
-      {last && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/30 pt-1 border-t border-white/5">
-          <span>last: {formatTimeAgo(last.timestamp)}</span>
-          <span>prefill: {formatDuration(last.promptMs)}</span>
-          <span>decode: {formatDuration(last.predictedMs)}</span>
-          <span>
-            {last.promptTokens}p / {last.predictedTokens}d tokens
-          </span>
-          <span>
-            cache: {formatNumber(last.inferredCachedTokens)}
+          <span className="text-[10px] w-12 text-right shrink-0 text-cyan-200/80 font-mono">
+            {formatPercent(summary.avgInferredCacheHitRatio)}
           </span>
         </div>
-      )}
-    </div>
-  );
-}
 
-function ModelDetail({
-  detail,
-  onBack,
-}: {
-  detail: ModelStatsDetail;
-  onBack: () => void;
-}) {
-  const { summary, runs } = detail;
+        {last && (
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/30 mt-2 pt-2 border-t border-white/5">
+            <span>last: {formatTimeAgo(last.timestamp)}</span>
+            <span>
+              {last.promptTokens}p / {last.predictedTokens}d
+            </span>
+            <span>
+              cache: {formatNumber(last.inferredCachedTokens)}
+            </span>
+          </div>
+        )}
+      </button>
 
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onBack}
-          className="text-[10px] text-purple-300/60 hover:text-purple-300 transition-colors"
-        >
-          ← back
-        </button>
-        <span className="text-sm font-mono text-white/80">{truncateModelId(detail.modelId)}</span>
-      </div>
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 border-t border-white/5 space-y-3">
+          {detailLoading && <div className="text-white/30 text-sm text-center py-4">Loading…</div>}
+          {detail && (
+            <>
+              <Section title={`Averages (${detail.summary.runCount} runs)`} defaultOpen>
+                <div className="space-y-2">
+                  <SpeedBar value={detail.summary.avgPredictedTokensPerSec} maxRef={80} isDecode label="decode EMA" />
+                  <SpeedBar value={detail.summary.avgPromptTokensPerSec} maxRef={200} isDecode={false} label="prefill EMA" />
+                  {detail.summary.avgPredictedMs !== null && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-white/40 w-12 shrink-0">dec/ms</span>
+                      <span className="text-[10px] text-white/60">{detail.summary.avgPredictedMs.toFixed(1)}ms avg</span>
+                    </div>
+                  )}
+                </div>
+              </Section>
 
-      <Section title={`Averages (${summary.runCount} runs)`} defaultOpen>
-        <div className="space-y-2">
-          <SpeedBar value={summary.avgPredictedTokensPerSec} maxRef={80} isDecode label="decode EMA" />
-          <SpeedBar value={summary.avgPromptTokensPerSec} maxRef={200} isDecode={false} label="prefill EMA" />
-          {summary.avgPredictedMs !== null && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-white/40 w-12 shrink-0">dec/ms</span>
-              <span className="text-[10px] text-white/60">{summary.avgPredictedMs.toFixed(1)}ms avg</span>
-            </div>
+              <Section title="Cache" defaultOpen>
+                <div className="space-y-2">
+                  <CacheBar ratio={detail.summary.avgInferredCacheHitRatio} label="hit EMA" />
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-white/40">Avg cached</span>
+                      <span className="text-white/70 font-mono">{formatNumber(detail.summary.avgInferredCachedTokens)}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-white/40">Last cached</span>
+                      <span className="text-white/70 font-mono">{formatNumber(detail.summary.lastRun?.inferredCachedTokens)}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-white/40">Last hit</span>
+                      <span className="text-white/70 font-mono">{formatPercent(detail.summary.lastRun?.inferredCacheHitRatio)}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-white/40">Mode</span>
+                      <span className="text-white/70 font-mono">{detail.summary.lastRun?.cacheMode ?? "—"}</span>
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <Section title="Last Run" defaultOpen>
+                {detail.summary.lastRun ? (
+                  <div className="space-y-1.5 text-[11px]">
+                    {(Object.entries({
+                      "Decode": `${detail.summary.lastRun.predictedTokensPerSec.toFixed(1)} t/s`,
+                      "Prefill": `${detail.summary.lastRun.promptTokensPerSec.toFixed(1)} t/s`,
+                      "Decode time": formatDuration(detail.summary.lastRun.predictedMs),
+                      "Prefill time": formatDuration(detail.summary.lastRun.promptMs),
+                      "Total time": formatDuration(detail.summary.lastRun.totalMs),
+                      "Prompt eval tokens": detail.summary.lastRun.promptTokens,
+                      "Reported prompt tokens": formatNumber(detail.summary.lastRun.reportedPromptTokens),
+                      "Inferred cached tokens": formatNumber(detail.summary.lastRun.inferredCachedTokens),
+                      "Inferred cache hit": formatPercent(detail.summary.lastRun.inferredCacheHitRatio),
+                      "Cache prompt": detail.summary.lastRun.cachePrompt ? "enabled" : "disabled/not recorded",
+                      "Request messages": formatNumber(detail.summary.lastRun.requestMessageCount),
+                      "Request size": formatChars(detail.summary.lastRun.requestCharCount),
+                      "Predicted tokens": detail.summary.lastRun.predictedTokens,
+                    }) as [string, string][]).map(([k, v]) => (
+                      <div key={k} className="flex justify-between">
+                        <span className="text-white/40">{k}</span>
+                        <span className="text-white/70 font-mono">{v}</span>
+                      </div>
+                    ))}
+                    <div className="text-white/30 pt-1">Run: {formatTimeAgo(detail.summary.lastRun.timestamp)}</div>
+                  </div>
+                ) : (
+                  <div className="text-white/30 text-xs">No data</div>
+                )}
+              </Section>
+
+              <Section title={`Run History (${detail.runs.length})`}>
+                {detail.runs.length === 0 ? (
+                  <div className="text-white/30 text-xs">No runs recorded</div>
+                ) : (
+                  <div className="space-y-1">
+                    {detail.runs.map((run) => (
+                      <div
+                        key={run.id}
+                        className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-white/5"
+                      >
+                        <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
+                        <span className={`w-20 shrink-0 font-mono ${speedColor(run.predictedTokensPerSec)}`}>
+                          {run.predictedTokensPerSec.toFixed(1)} t/s
+                        </span>
+                        <span className={`w-20 shrink-0 font-mono ${speedColor(run.promptTokensPerSec, false)}`}>
+                          {run.promptTokensPerSec.toFixed(1)} t/s
+                        </span>
+                        <span className="text-white/30 w-14 shrink-0">{formatDuration(run.predictedMs)}</span>
+                        <span className="text-white/30 w-14 shrink-0">{formatDuration(run.promptMs)}</span>
+                        <span className="text-white/30 shrink-0">
+                          {run.promptTokens}p / {run.predictedTokens}d
+                        </span>
+                        <span className="text-cyan-200/60 shrink-0">
+                          {formatNumber(run.inferredCachedTokens)} cached
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            </>
           )}
         </div>
-      </Section>
-
-      <Section title="Cache" defaultOpen>
-        <div className="space-y-2">
-          <CacheBar ratio={summary.avgInferredCacheHitRatio} label="hit EMA" />
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-            <div className="flex justify-between gap-2">
-              <span className="text-white/40">Avg cached</span>
-              <span className="text-white/70 font-mono">{formatNumber(summary.avgInferredCachedTokens)}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-white/40">Last cached</span>
-              <span className="text-white/70 font-mono">{formatNumber(summary.lastRun?.inferredCachedTokens)}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-white/40">Last hit</span>
-              <span className="text-white/70 font-mono">{formatPercent(summary.lastRun?.inferredCacheHitRatio)}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-white/40">Mode</span>
-              <span className="text-white/70 font-mono">{summary.lastRun?.cacheMode ?? "—"}</span>
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      <Section title="Last Run" defaultOpen>
-        {summary.lastRun ? (
-          <div className="space-y-1.5 text-[11px]">
-            {(Object.entries({
-              "Decode": `${summary.lastRun.predictedTokensPerSec.toFixed(1)} t/s`,
-              "Prefill": `${summary.lastRun.promptTokensPerSec.toFixed(1)} t/s`,
-              "Decode time": formatDuration(summary.lastRun.predictedMs),
-              "Prefill time": formatDuration(summary.lastRun.promptMs),
-              "Total time": formatDuration(summary.lastRun.totalMs),
-              "Prompt eval tokens": summary.lastRun.promptTokens,
-              "Reported prompt tokens": formatNumber(summary.lastRun.reportedPromptTokens),
-              "Inferred cached tokens": formatNumber(summary.lastRun.inferredCachedTokens),
-              "Inferred cache hit": formatPercent(summary.lastRun.inferredCacheHitRatio),
-              "Cache prompt": summary.lastRun.cachePrompt ? "enabled" : "disabled/not recorded",
-              "Request messages": formatNumber(summary.lastRun.requestMessageCount),
-              "Request size": formatChars(summary.lastRun.requestCharCount),
-              "Request digest": summary.lastRun.requestDigest || "n/a",
-              "Predicted tokens": summary.lastRun.predictedTokens,
-            }) as [string, string][]).map(([k, v]) => (
-              <div key={k} className="flex justify-between">
-                <span className="text-white/40">{k}</span>
-                <span className="text-white/70 font-mono">{v}</span>
-              </div>
-            ))}
-            <div className="text-white/30 pt-1">Run: {formatTimeAgo(summary.lastRun.timestamp)}</div>
-          </div>
-        ) : (
-          <div className="text-white/30 text-xs">No data</div>
-        )}
-      </Section>
-
-      <Section title={`Run History (${runs.length})`}>
-        {runs.length === 0 ? (
-          <div className="text-white/30 text-xs">No runs recorded</div>
-        ) : (
-          <div className="space-y-1">
-            {runs.map((run) => (
-              <div
-                key={run.id}
-                className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-white/5"
-              >
-                <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
-                <span className={`w-20 shrink-0 font-mono ${speedColor(run.predictedTokensPerSec)}`}>
-                  {run.predictedTokensPerSec.toFixed(1)} t/s
-                </span>
-                <span className={`w-20 shrink-0 font-mono ${speedColor(run.promptTokensPerSec, false)}`}>
-                  {run.promptTokensPerSec.toFixed(1)} t/s
-                </span>
-                <span className="text-white/30 w-14 shrink-0">{formatDuration(run.predictedMs)}</span>
-                <span className="text-white/30 w-14 shrink-0">{formatDuration(run.promptMs)}</span>
-                <span className="text-white/30 shrink-0">
-                  {run.promptTokens}p / {run.predictedTokens}d
-                </span>
-                <span className="text-cyan-200/60 shrink-0">
-                  {formatNumber(run.inferredCachedTokens)} cached
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+      )}
     </div>
   );
 }
@@ -453,8 +466,6 @@ function latencyColor(ms: number, timeoutMs: number): string {
 }
 
 function scoreSpreadLabel(spread: number | null): { text: string; color: string } {
-  // scoreSpread = scoreMax - scoreMedian. Model runs produce wide spreads (0.5+).
-  // Fallback runs produce near-zero spreads (flat scores like 0.04–1.0 / 0.077).
   if (spread === null) return { text: "—", color: "text-white/30" };
   if (spread >= 0.5) return { text: "high", color: "text-emerald-300" };
   if (spread >= 0.2) return { text: "medium", color: "text-amber-300" };
@@ -565,9 +576,9 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
   const timeoutMs = data.timeoutMs ?? 25_000;
 
   return (
-    <div className="space-y-3">
+    <div className="bg-white/5 rounded-lg border border-white/5 overflow-hidden divide-y divide-white/5">
       {/* Health overview */}
-      <div className="bg-white/5 rounded-lg p-3 border border-white/5 space-y-3">
+      <div className="p-3 space-y-3">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2">
           <div>
             <div className="text-[10px] text-white/30">model success</div>
@@ -608,89 +619,99 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
         </div>
       </div>
 
-      {/* Throughput & scores */}
-      <Section title="Per-Run Metrics" defaultOpen>
-        <div className="space-y-1.5">
-          {(Object.entries({
-            "Avg documents": `${summary.avgDocumentCount !== null ? summary.avgDocumentCount.toFixed(0) : "—"} per call`,
-            "Avg tokens": `${summary.avgTotalTokens !== null ? Math.round(summary.avgTotalTokens).toLocaleString() : "—"} prompt`,
-            "Avg score spread": scoreSpreadLabel(summary.avgScoreSpread).text,
-            "Last run": last ? (last.usedModel ? "model" : "fallback") : "—",
-            "Last latency": last ? formatDuration(last.latencyMs) : "—",
-            "Last docs/tokens": last ? `${last.documentCount} / ${last.totalTokens.toLocaleString()}` : "—",
-            "Last scores": last ? `${last.scoreMin.toFixed(4)} – ${last.scoreMax.toFixed(4)} (med: ${last.scoreMedian.toFixed(4)})` : "—",
-            "Last chat type": last ? last.chatType : "—",
-            "Last source": last ? formatRerankerSource(last.source) : "—",
-          }) as [string, string][]).map(([k, v]) => (
-            <div key={k} className="flex items-baseline justify-between gap-2 text-[11px]">
-              <span className="text-white/40 shrink-0">{k}</span>
-              <span className="text-white/70 font-mono text-right break-words">{v}</span>
-            </div>
-          ))}
-          {last && (
-            <div className="text-white/30 pt-1 text-[10px]">Run: {formatTimeAgo(last.timestamp)}</div>
-          )}
-        </div>
-      </Section>
+      {/* Per-Run Metrics */}
+      <div className="px-3 py-2">
+        <Section title="Per-Run Metrics">
+          <div className="space-y-1.5">
+            {(Object.entries({
+              "Avg documents": `${summary.avgDocumentCount !== null ? summary.avgDocumentCount.toFixed(0) : "—"} per call`,
+              "Avg tokens": `${summary.avgTotalTokens !== null ? Math.round(summary.avgTotalTokens).toLocaleString() : "—"} prompt`,
+              "Avg score spread": scoreSpreadLabel(summary.avgScoreSpread).text,
+              "Last run": last ? (last.usedModel ? "model" : "fallback") : "—",
+              "Last latency": last ? formatDuration(last.latencyMs) : "—",
+              "Last docs/tokens": last ? `${last.documentCount} / ${last.totalTokens.toLocaleString()}` : "—",
+              "Last scores": last ? `${last.scoreMin.toFixed(4)} – ${last.scoreMax.toFixed(4)} (med: ${last.scoreMedian.toFixed(4)})` : "—",
+              "Last chat type": last ? last.chatType : "—",
+              "Last source": last ? formatRerankerSource(last.source) : "—",
+            }) as [string, string][]).map(([k, v]) => (
+              <div key={k} className="flex items-baseline justify-between gap-2 text-[11px]">
+                <span className="text-white/40 shrink-0">{k}</span>
+                <span className="text-white/70 font-mono text-right break-words">{v}</span>
+              </div>
+            ))}
+            {last && (
+              <div className="text-white/30 pt-1 text-[10px]">Run: {formatTimeAgo(last.timestamp)}</div>
+            )}
+          </div>
+        </Section>
+      </div>
 
       {/* Run history */}
-      <Section title={`Run History (${runs.length})`}>
-        {runs.length === 0 ? (
-          <div className="text-white/30 text-xs">No runs recorded</div>
-        ) : (
-          <div className="space-y-0">
-            {runs.map((run) => (
-              <RerankerRunRow key={run.id} run={run} timeoutMs={timeoutMs} />
-            ))}
-          </div>
-        )}
-      </Section>
+      <div className="px-3 py-2">
+        <Section title={`Run History (${runs.length})`}>
+          {runs.length === 0 ? (
+            <div className="text-white/30 text-xs">No runs recorded</div>
+          ) : (
+            <div className="space-y-0">
+              {runs.map((run) => (
+                <RerankerRunRow key={run.id} run={run} timeoutMs={timeoutMs} />
+              ))}
+            </div>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }
 
 // --- Main Modal ---
 
+interface ActiveModelsResponse {
+  mainModel: ActiveModelData | null;
+  extractionModel: ActiveModelData | null;
+}
+
 export function ModelStatsModal({ isOpen, onClose }: Props) {
-  const [records, setRecords] = useState<ModelStatsRecord[]>([]);
+  const [activeModels, setActiveModels] = useState<ActiveModelsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "extraction" | "reranker" | "cache">("chat");
-  const [detailModelId, setDetailModelId] = useState<string | null>(null);
-  const [detailData, setDetailData] = useState<ModelStatsDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [cacheResidency, setCacheResidency] = useState<CacheResidency[]>([]);
   const [cacheLoading, setCacheLoading] = useState(false);
   const [rerankerData, setRerankerData] = useState<RerankerStatsData | null>(null);
   const [rerankerLoading, setRerankerLoading] = useState(false);
 
-  const fetchData = useCallback(async () => {
+  // Coupled expansion on desktop, independent on mobile
+  const isDesktop = useIsDesktop();
+  const [mainExpanded, setMainExpanded] = useState(false);
+  const [extExpanded, setExtExpanded] = useState(false);
+
+  const toggleBothExpand = useCallback(() => {
+    const next = !mainExpanded;
+    setMainExpanded(next);
+    setExtExpanded(next);
+  }, [mainExpanded]);
+
+  const toggleMainExpand = useCallback(() => {
+    setMainExpanded((v) => !v);
+    if (isDesktop) setExtExpanded((prev) => !prev);
+  }, [isDesktop]);
+
+  const toggleExtExpand = useCallback(() => {
+    setExtExpanded((v) => !v);
+    if (isDesktop) setMainExpanded((prev) => !prev);
+  }, [isDesktop]);
+
+  const fetchActiveModels = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/model-stats", { credentials: "include" });
+      const res = await fetch("/api/model-stats?active=true", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        setRecords(data);
+        setActiveModels(data);
       }
     } catch (err) {
-      console.error("[model-stats] fetch failed:", err);
+      console.error("[model-stats] fetch active failed:", err);
     } finally {
       setLoading(false);
-    }
-  }, []);
-
-  const loadDetail = useCallback(async (modelId: string, provider: string) => {
-    setDetailModelId(modelId);
-    setDetailLoading(true);
-    try {
-      const res = await fetch(`/api/model-stats/${encodeURIComponent(modelId)}?provider=${encodeURIComponent(provider)}`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setDetailData(data);
-      }
-    } catch (err) {
-      console.error("[model-stats] detail fetch failed:", err);
-    } finally {
-      setDetailLoading(false);
     }
   }, []);
 
@@ -723,19 +744,13 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
 
   useEffect(() => {
     if (isOpen) {
-      fetchData();
+      fetchActiveModels();
       fetchCacheResidency();
       fetchRerankerStats();
-      setDetailModelId(null);
-      setActiveTab("chat");
+      setMainExpanded(false);
+      setExtExpanded(false);
     }
-  }, [isOpen, fetchData, fetchCacheResidency, fetchRerankerStats]);
-
-  // Filter records by tab: extraction models have provider containing "extraction"
-  const filteredRecords = records.filter((r) => {
-    const isExtraction = r.provider.toLowerCase().includes("extraction");
-    return activeTab === "extraction" ? isExtraction : !isExtraction;
-  });
+  }, [isOpen, fetchActiveModels, fetchCacheResidency, fetchRerankerStats]);
 
   if (!isOpen) return null;
 
@@ -748,34 +763,9 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="relative flex items-center flex-wrap gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+        {/* Header — no tabs */}
+        <header className="relative flex items-center gap-2 px-4 py-3 border-b border-white/10 shrink-0">
           <h2 className="text-sm font-medium text-white/90 shrink-0">Model Stats</h2>
-          <div className="flex items-center bg-white/5 rounded-sm p-0.5">
-            <button
-              onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
-              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-            >
-              Chat
-            </button>
-            <button
-              onClick={() => { setActiveTab("extraction"); setDetailModelId(null); }}
-              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-            >
-              Extraction
-            </button>
-            <button
-              onClick={() => { setActiveTab("reranker"); setDetailModelId(null); fetchRerankerStats(); }}
-              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-            >
-              Reranker
-            </button>
-            <button
-              onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
-              className={`px-2 py-0.5 rounded-sm text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-            >
-              Cache
-            </button>
-          </div>
           {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
           <button
             onClick={onClose}
@@ -788,27 +778,53 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4">
-          {activeTab === "reranker" ? (
-            rerankerLoading ? (
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* Active Models — side by side on desktop */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-2">Active Models</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <ActiveModelCard
+                data={activeModels?.mainModel ?? null}
+                label="Main"
+                expanded={mainExpanded}
+                onToggleExpand={isDesktop ? toggleBothExpand : toggleMainExpand}
+              />
+              <ActiveModelCard
+                data={activeModels?.extractionModel ?? null}
+                label="Extraction"
+                expanded={extExpanded}
+                onToggleExpand={isDesktop ? toggleBothExpand : toggleExtExpand}
+              />
+            </div>
+          </section>
+
+          {/* Reranker */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-2">Reranker</div>
+            {rerankerLoading ? (
               <div className="text-white/30 text-sm text-center py-8">Loading…</div>
             ) : !rerankerData || rerankerData.summary.runCount === 0 ? (
-              <div className="p-8 text-center text-white/30 text-sm">
+              <div className="bg-white/5 rounded-lg p-4 border border-white/5 text-center text-white/30 text-sm">
                 No reranker stats recorded yet. Reranker stats are captured during memory retrieval.
               </div>
             ) : (
               <RerankerStatsPanel data={rerankerData} />
-            )
-          ) : activeTab === "cache" ? (
-            cacheLoading ? (
+            )}
+          </section>
+
+          {/* Cache Residency */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-2">Cache Residency</div>
+            {cacheLoading ? (
               <div className="text-white/30 text-sm text-center py-8">Loading…</div>
             ) : cacheResidency.length === 0 ? (
-              <div className="p-8 text-center text-white/30 text-sm">
+              <div className="bg-white/5 rounded-lg p-4 border border-white/5 text-center text-white/30 text-sm">
                 No observed warm prompt-cache entries yet. Warmth is recorded after a llama.cpp turn completes.
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-[10px] text-white/30 mb-2">
+                <p className="text-[10px] text-white/30">
                   Observed llama.cpp prompt-cache residency. Auto mode does not enforce physical slot ownership.
                 </p>
                 <div className="overflow-x-auto">
@@ -857,33 +873,8 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
                   </table>
                 </div>
               </div>
-            )
-          ) : detailModelId && detailData ? (
-            <ModelDetail detail={detailData} onBack={() => setDetailModelId(null)} />
-          ) : detailLoading ? (
-            <div className="text-white/30 text-sm text-center py-8">Loading…</div>
-          ) : filteredRecords.length === 0 && !loading ? (
-            <div className="p-8 text-center text-white/30 text-sm">
-              {activeTab === "extraction"
-                ? "No extraction model stats recorded yet. Configure an extraction model to start tracking."
-                : "No model stats recorded yet. Run at least one message through a llama.cpp model."}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredRecords.map((record) => (
-                <ModelCard
-                  key={`${record.provider}:${record.modelId}`}
-                  record={record}
-                  onLoadDetail={loadDetail}
-                />
-              ))}
-            </div>
-          )}
-          <div className="text-center pt-3">
-            <span className="text-[10px] text-white/20">
-              {activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}
-            </span>
-          </div>
+            )}
+          </section>
         </div>
       </div>
     </div>

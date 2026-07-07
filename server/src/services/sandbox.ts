@@ -74,11 +74,13 @@ export interface ExecutionResult {
  * @param sessionId - Optional session ID for a persistent workspace. If provided,
  *   the directory persists between calls, allowing file I/O across executions.
  *   If not provided, a temporary workspace is created and destroyed after execution.
+ * @param options - Optional execution overrides (e.g. larger maxBuffer for PDFs).
  */
 export async function executePython(
   code: string,
   timeout: number = 30,
-  sessionId?: string
+  sessionId?: string,
+  options: { maxBuffer?: number; args?: string[] } = {}
 ): Promise<ExecutionResult> {
   let workspaceDir: string;
   let isPersistent = false;
@@ -117,10 +119,10 @@ export async function executePython(
     return await new Promise<ExecutionResult>((resolve) => {
       execFile(
         "python3",
-        [scriptPath],
+        [scriptPath, ...(options.args ?? [])],
         {
           timeout: timeout * 1000,
-          maxBuffer: 1024 * 1024,
+          maxBuffer: options.maxBuffer ?? 1024 * 1024,
           cwd: workspaceDir,
           env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
         },
@@ -340,5 +342,17 @@ export async function getArtifactMetadata(id: string): Promise<ArtifactMetadata 
     return JSON.parse(content) as ArtifactMetadata;
   } catch {
     return null;
+  }
+}
+
+export async function existsVisual(id: string): Promise<boolean> {
+  try {
+    const metadataPath = join(VISUALS_DIR, id, "metadata.json");
+    await import("fs/promises").then(m => m.access(metadataPath));
+    return true;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return false;
+    throw e;
   }
 }

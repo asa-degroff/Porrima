@@ -151,6 +151,65 @@ function suggestSimilarBlocks(query: string): string {
     .join("\n");
 }
 
+// --- Memory block context helpers ---
+
+type BlockType = "note" | "notebook" | "synthesis";
+
+/**
+ * Resolve the block identity (id + blockType) for a freshly created block.
+ * Blocks created during the notebook synthesis cycle are routed through the
+ * notebook ID prefix and tagged `notebook` so they inherit the same system-block
+ * exclusion as blocks created via createNotebookBlock. All other blocks get a
+ * plain `blk-<uuid>` id and `note` type.
+ */
+async function resolveNewBlockIdentity(chatId: string): Promise<{ id: string; blockType: BlockType }> {
+  const { v4: uuid } = await import("uuid");
+  const { NOTEBOOK_CYCLE_CHAT_ID, generateNotebookBlockId } = await import("./notebook-storage.js");
+  if (chatId === NOTEBOOK_CYCLE_CHAT_ID) {
+    return { id: generateNotebookBlockId("notebook"), blockType: "notebook" };
+  }
+  return { id: `blk-${uuid()}`, blockType: "note" };
+}
+
+/**
+ * Resolve the block identity for a superseding block, preserving the original's
+ * category so the replacement inherits the same system-block exclusion. Falls
+ * back to a plain `blk-<uuid>` when the original has no special prefix.
+ */
+async function resolveSupersedingBlockIdentity(existing: {
+  id: string;
+  blockType?: string;
+}): Promise<{ id: string; blockType: BlockType }> {
+  const { v4: uuid } = await import("uuid");
+  const { generateNotebookBlockId } = await import("./notebook-storage.js");
+  if (existing.blockType === "notebook" || existing.id.startsWith("blk-notebook-")) {
+    return { id: generateNotebookBlockId("notebook"), blockType: "notebook" };
+  }
+  if (existing.blockType === "synthesis" || existing.id.startsWith("blk-synth-")) {
+    return { id: generateNotebookBlockId("synthesis"), blockType: "synthesis" };
+  }
+  return { id: `blk-${uuid()}`, blockType: "note" };
+}
+
+/**
+ * Auto-assign a projectId for project-scoped blocks when the caller didn't
+ * supply one. Infers it from the chat context (the agent may not have the UUID).
+ * Pass `existingProjectId` when updating so it's preserved unless overridden.
+ */
+async function resolveProjectIdForScope(
+  scope: string | undefined,
+  projectId: string | undefined,
+  chatId: string | undefined,
+): Promise<string> {
+  if (projectId) return projectId;
+  if (scope === "project" && chatId && !projectId) {
+    const { getChat } = await import("./chat-storage.js");
+    const chat = await getChat(chatId);
+    if (chat?.projectId) return chat.projectId;
+  }
+  return "";
+}
+
 export async function executeMemoryTool(
   toolCall: ToolCall,
   chatId: string
@@ -238,35 +297,18 @@ export async function executeMemoryTool(
       const { query, memory_id, chat_id, limit: maxResults } = toolCall.arguments;
       if (!query) return { content: "Missing query", isError: true };
 
-      // Resolve chat_id from memory if provided
-      let targetChatId: string | undefined = chat_id;
-      let memoryContext = "";
-
-      if (memory_id && !targetChatId) {
-        const memory = await getMemoryById(memory_id);
-        if (!memory) {
-          return { content: `Memory not found: ${memory_id}`, isError: true };
-        }
-        if (memory.sourceChatId) {
-          targetChatId = memory.sourceChatId;
-          memoryContext = `Searching conversation that produced memory: "${memory.text}"\n\n`;
-        } else {
-          return {
-            content: `Memory "${memory_id}" has no linked source conversation.`,
-            isError: false,
-          };
-        }
+      const target = await resolveTargetChat(memory_id, chat_id);
+      if (!target.ok) {
+        return { content: target.content, isError: target.isError };
       }
+      const { targetChatId, memoryContext } = target;
+      const scopeToSingleChat = !!targetChatId;
 
       const resultLimit = Math.min(50, Math.max(1, maxResults || 5));
-      const CONTEXT_RADIUS = 2; // messages before/after each match
-      const MAX_CONTENT_CHARS = 6000;
       const matches = searchChatMessages(query, {
         chatId: targetChatId,
         limit: resultLimit,
       });
-
-      // Also search archived context blocks (cross-chat)
       const archiveMatches = searchArchives(query, {
         chatId: targetChatId,
         limit: Math.min(5, resultLimit),
@@ -282,9 +324,8 @@ export async function executeMemoryTool(
         };
       }
 
-      // Group matches by chat, preserving BM25 relevance ordering.
-      // Sort by rank first (BM25: lower = more relevant), then by message index.
-      const sortedMatches = [...matches].sort((a, b) => {
+      // Sort by BM25 rank, then message index, and group by chat.
+      const sortedMatches = [...(matches as ChatMessageMatch[])].sort((a, b) => {
         const rankDiff = a.rank - b.rank;
         if (rankDiff !== 0) return rankDiff;
         return a.messageIndex - b.messageIndex;
@@ -298,69 +339,26 @@ export async function executeMemoryTool(
         byChatId.set(m.chatId, entry);
       }
 
-      // Compute each chat's best rank for relevance-based ordering
-      const bestRank = (ranks: number[]) => Math.min(...ranks);
-
       const sections: string[] = [];
       if (memoryContext) sections.push(memoryContext.trim());
 
       let isFirstSection = true;
       for (const [cid, data] of byChatId) {
-        const title = getChatTitle(cid);
-        const chatLabel = targetChatId
-          ? ""
-          : `\n--- ${title || "Untitled"} (${cid}) [rank: ${Math.abs(bestRank(data.ranks)).toFixed(1)}] ---\n`;
-
-        // Merge overlapping context windows
-        const sortedIndices = [...new Set(data.indices)].sort((a, b) => a - b);
-        const ranges: Array<[number, number]> = [];
-        for (const idx of sortedIndices) {
-          const start = Math.max(0, idx - CONTEXT_RADIUS);
-          const end = idx + CONTEXT_RADIUS;
-          if (ranges.length > 0 && start <= ranges[ranges.length - 1][1] + 1) {
-            ranges[ranges.length - 1][1] = Math.max(ranges[ranges.length - 1][1], end);
-          } else {
-            ranges.push([start, end]);
-          }
-        }
-
-        const messageGroups: string[] = [];
-        for (const [start, end] of ranges) {
-          const contextMsgs = getChatMessageRange(cid, start, end);
-          const formatted = contextMsgs
-            .map((m) => {
-              const marker = sortedIndices.includes(m.messageIndex) ? " <<<" : "";
-              const text = truncateAroundMatch(m.content, query, 800);
-              return `  [${m.messageIndex}] ${m.role}: ${text}${marker}`;
-            })
-            .join("\n");
-          messageGroups.push(formatted);
-        }
-
-        const section = chatLabel + messageGroups.join("\n  ...\n");
-
-        // Always include first section; enforce budget for additional ones
-        if (!isFirstSection && sections.join("\n").length + section.length > MAX_CONTENT_CHARS) {
+        const section = formatMatchSection(cid, data, query, scopeToSingleChat);
+        if (!isFirstSection && sections.join("\n").length + section.length > CONVERSATION_MAX_CONTENT_CHARS) {
           break;
         }
         isFirstSection = false;
-
         sections.push(section);
       }
 
-      // Append archive matches if any
       if (archiveMatches.length > 0) {
-        sections.push("\n--- Archived Context ---");
-        for (const am of archiveMatches) {
-          const chatLabel = targetChatId ? "" : ` (${getChatTitle(am.chatId) || am.chatId})`;
-          sections.push(`  [${am.id}]${chatLabel}: ${am.indexEntry}`);
-        }
-        sections.push("  Use read_archived_context(archive_id) to retrieve full content.");
+        sections.push(formatArchiveSection(archiveMatches as ArchiveMatch[], scopeToSingleChat));
       }
 
       const content = sections.join("\n");
       const totalMatches = matches.length + archiveMatches.length;
-      const truncated = content.length > MAX_CONTENT_CHARS;
+      const truncated = content.length > CONVERSATION_MAX_CONTENT_CHARS;
       return {
         content: `Found ${totalMatches} match(es) (${matches.length} messages, ${archiveMatches.length} archived)${truncated ? " (truncated)" : ""}:\n\n${content}`,
         isError: false,
@@ -416,29 +414,10 @@ export async function executeMemoryTool(
       if (content.length > maxChars) {
         return { content: `Content exceeds ${maxChars} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
       }
-      const { v4: uuid } = await import("uuid");
-      // Route blocks created during the notebook cycle through the notebook
-      // prefix so they inherit the same system-block exclusion as blocks
-      // created via createNotebookBlock (kept out of the stable prefix and
-      // the "Available Memory Blocks" index).
-      const { NOTEBOOK_CYCLE_CHAT_ID, generateNotebookBlockId } = await import("./notebook-storage.js");
-      const id = chatId === NOTEBOOK_CYCLE_CHAT_ID
-        ? generateNotebookBlockId("notebook")
-        : `blk-${uuid()}`;
-      const blockType = chatId === NOTEBOOK_CYCLE_CHAT_ID ? "notebook" : "note";
+      const { id, blockType } = await resolveNewBlockIdentity(chatId);
+      const finalProjectId = await resolveProjectIdForScope(scope, project_id, chatId);
       const now = new Date().toISOString();
-      
-      // Auto-assign projectId for project-scoped blocks when created in a project chat
-      // The agent may not have the project UUID, so we infer it from the chat context
-      let finalProjectId = project_id || "";
-      if (scope === "project" && !project_id && chatId) {
-        const { getChat } = await import("./chat-storage.js");
-        const chat = await getChat(chatId);
-        if (chat?.projectId) {
-          finalProjectId = chat.projectId;
-        }
-      }
-      
+
       const block = createMemoryBlock({
         id,
         name,
@@ -477,13 +456,7 @@ export async function executeMemoryTool(
         // Content too large — create a superseding block instead.
         // Preserve notebook/synthesis prefix so the replacement inherits the
         // same system-block exclusion as the original.
-        const { v4: uuid } = await import("uuid");
-        const { generateNotebookBlockId } = await import("./notebook-storage.js");
-        const newId = existing.blockType === "notebook" || existing.id.startsWith("blk-notebook-")
-          ? generateNotebookBlockId("notebook")
-          : existing.blockType === "synthesis" || existing.id.startsWith("blk-synth-")
-          ? generateNotebookBlockId("synthesis")
-          : `blk-${uuid()}`;
+        const { id: newId } = await resolveSupersedingBlockIdentity(existing);
         const now = new Date().toISOString();
         const newBlock = supersedeBlock(existing.id, {
           id: newId,
@@ -638,4 +611,122 @@ function truncateAroundMatch(text: string, query: string, maxLen: number): strin
   const prefix = start > 0 ? "... " : "";
   const suffix = end < text.length ? " ... [truncated]" : "";
   return prefix + slice + suffix;
+}
+
+// --- search_conversation helpers ---
+
+type ChatMessageMatch = {
+  chatId: string;
+  messageIndex: number;
+  role: string;
+  content: string;
+  rank: number;
+};
+
+type ArchiveMatch = { id: string; chatId: string; indexEntry: string; rank: number };
+
+const CONVERSATION_CONTEXT_RADIUS = 2;
+const CONVERSATION_MAX_CONTENT_CHARS = 6000;
+
+/**
+ * Resolve the target chat for a conversation search from either an explicit
+ * `chat_id` or a `memory_id` (looking up the memory's source chat).
+ * Returns `{ targetChatId, memoryContext }` on success, or an early-exit
+ * result string when the memory is missing or has no linked conversation.
+ */
+async function resolveTargetChat(
+  memoryId: string | undefined,
+  chatId: string | undefined,
+): Promise<
+  | { ok: true; targetChatId: string | undefined; memoryContext: string }
+  | { ok: false; content: string; isError: boolean }
+> {
+  if (!memoryId || chatId) {
+    return { ok: true, targetChatId: chatId, memoryContext: "" };
+  }
+  const memory = await getMemoryById(memoryId);
+  if (!memory) {
+    return { ok: false, content: `Memory not found: ${memoryId}`, isError: true };
+  }
+  if (memory.sourceChatId) {
+    return {
+      ok: true,
+      targetChatId: memory.sourceChatId,
+      memoryContext: `Searching conversation that produced memory: "${memory.text}"\n\n`,
+    };
+  }
+  return {
+    ok: false,
+    content: `Memory "${memoryId}" has no linked source conversation.`,
+    isError: false,
+  };
+}
+
+/**
+ * Merge overlapping context-window indices into a minimal set of [start, end]
+ * ranges. Each index expands to `[idx - radius, idx + radius]`; adjacent or
+ * overlapping ranges are coalesced.
+ */
+function mergeContextRanges(indices: number[], radius: number): Array<[number, number]> {
+  const sorted = [...new Set(indices)].sort((a, b) => a - b);
+  const ranges: Array<[number, number]> = [];
+  for (const idx of sorted) {
+    const start = Math.max(0, idx - radius);
+    const end = idx + radius;
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      ranges.push([start, end]);
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Format one chat's matches into a single section string: a chat label (when
+ * searching across chats), then each merged context range rendered with
+ * match markers (`<<<`) and per-message truncation around the query terms.
+ */
+function formatMatchSection(
+  chatId: string,
+  data: { indices: number[]; ranks: number[] },
+  query: string,
+  scopeToSingleChat: boolean,
+): string {
+  const title = getChatTitle(chatId);
+  const chatLabel = scopeToSingleChat
+    ? ""
+    : `\n--- ${title || "Untitled"} (${chatId}) [rank: ${Math.abs(Math.min(...data.ranks)).toFixed(1)}] ---\n`;
+
+  const sortedIndices = [...new Set(data.indices)].sort((a, b) => a - b);
+  const ranges = mergeContextRanges(sortedIndices, CONVERSATION_CONTEXT_RADIUS);
+
+  const groups: string[] = [];
+  for (const [start, end] of ranges) {
+    const contextMsgs = getChatMessageRange(chatId, start, end);
+    const formatted = contextMsgs
+      .map((m) => {
+        const marker = sortedIndices.includes(m.messageIndex) ? " <<<" : "";
+        const text = truncateAroundMatch(m.content, query, 800);
+        return `  [${m.messageIndex}] ${m.role}: ${text}${marker}`;
+      })
+      .join("\n");
+    groups.push(formatted);
+  }
+
+  return chatLabel + groups.join("\n  ...\n");
+}
+
+/**
+ * Format archive matches into a trailing section.
+ */
+function formatArchiveSection(archiveMatches: ArchiveMatch[], scopeToSingleChat: boolean): string {
+  const lines: string[] = ["\n--- Archived Context ---"];
+  for (const am of archiveMatches) {
+    const chatLabel = scopeToSingleChat ? "" : ` (${getChatTitle(am.chatId) || am.chatId})`;
+    lines.push(`  [${am.id}]${chatLabel}: ${am.indexEntry}`);
+  }
+  lines.push("  Use read_archived_context(archive_id) to retrieve full content.");
+  return lines.join("\n");
 }

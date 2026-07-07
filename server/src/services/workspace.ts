@@ -1,8 +1,8 @@
-import { execFile } from "child_process";
-import { access, mkdir, readFile, readdir, writeFile, stat, unlink } from "fs/promises";
+import { execFile, spawn } from "child_process";
+import { access, mkdir, readFile, readdir, writeFile, stat, unlink, open, appendFile } from "fs/promises";
 import { constants } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
@@ -11,6 +11,13 @@ import { appDataPath } from "./paths.js";
 const HOME = homedir();
 const SSH_MUX_DIR = appDataPath("ssh-mux");
 const SSH_KNOWN_HOSTS = appDataPath("ssh-known-hosts");
+
+// Bash output streaming thresholds — mirrors pi-agent-core's shell-output defaults.
+// Keep a rolling in-memory window; once the cap is crossed, spill the full output
+// to a temp file and only return the tail plus a pointer the model can read_file.
+const BASH_OUTPUT_BYTE_CAP = 50 * 1024;
+const BASH_OUTPUT_WINDOW_BYTES = BASH_OUTPUT_BYTE_CAP * 2;
+const BASH_OUTPUT_TEMP_PREFIX = "porrima-bash-";
 
 /**
  * Initialize SSH infrastructure: create mux directory and clean stale sockets.
@@ -129,6 +136,116 @@ function formatReadContent(content: string, args: Record<string, any>, opts: Wor
   return numbered;
 }
 
+function sanitizeBinaryOutput(str: string): string {
+  let out = "";
+  for (const char of Array.from(str)) {
+    const code = char.codePointAt(0);
+    if (code === undefined) continue;
+    if (code === 0x09 || code === 0x0a || code === 0x0d) { out += char; continue; }
+    if (code <= 0x1f) continue;
+    if (code >= 0xfff9 && code <= 0xfffb) continue;
+    out += char;
+  }
+  return out;
+}
+
+function utf8ByteLength(s: string): number {
+  return Buffer.byteLength(s, "utf-8");
+}
+
+/**
+ * Execute a bash command with streaming output capture.
+ *
+ * Mirrors pi-agent-core's `executeShellWithCapture`: keeps a rolling in-memory
+ * tail of the output; once the byte cap is crossed, spills the full output to a
+ * temp file and returns its path so the model can paginate via `read_file`.
+ * Returns the tail (truncated) plus a footer describing where the rest lives.
+ *
+ * `cwd` is the working directory; `timeoutSec` clamps the run.
+ */
+function runStreamingBash(
+  command: string,
+  cwd: string,
+  timeoutSec: number,
+): Promise<{ content: string; isError: boolean }> {
+  return new Promise((resolveResult) => {
+    const proc = spawn("/bin/bash", ["-c", command], {
+      cwd,
+      env: { ...process.env, HOME },
+    });
+
+    const chunks: string[] = [];
+    let windowBytes = 0;
+    let totalBytes = 0;
+    let fullOutputPath: string | null = null;
+    let writeChain: Promise<void> = Promise.resolve();
+    let captureError: unknown = null;
+
+    const onChunk = (raw: string, stream: "stdout" | "stderr") => {
+      try {
+        const text = (stream === "stderr" ? "[stderr] " : "") + sanitizeBinaryOutput(raw).replace(/\r/g, "");
+        totalBytes += utf8ByteLength(raw);
+        if (totalBytes > BASH_OUTPUT_BYTE_CAP && !fullOutputPath) {
+          // First spill: write everything captured so far, then this chunk.
+          const path = join(tmpdir(), `${BASH_OUTPUT_TEMP_PREFIX}${process.pid}-${Date.now()}.log`);
+          writeChain = writeChain
+            .then(() => open(path, "w").then(h => { fullOutputPath = path; return h; }))
+            .then(handle => handle.writeFile(chunks.join("") + text, "utf-8").then(() => handle.close()));
+        } else if (fullOutputPath) {
+          const path = fullOutputPath;
+          writeChain = writeChain.then(() => appendFile(path, text));
+        }
+        chunks.push(text);
+        windowBytes += text.length;
+        while (windowBytes > BASH_OUTPUT_WINDOW_BYTES && chunks.length > 1) {
+          const removed = chunks.shift()!;
+          windowBytes -= removed.length;
+        }
+      } catch (e) {
+        captureError = e;
+      }
+    };
+
+    proc.stdout.on("data", (b: Buffer) => onChunk(b.toString("utf-8"), "stdout"));
+    proc.stderr.on("data", (b: Buffer) => onChunk(b.toString("utf-8"), "stderr"));
+    proc.on("error", (e) => {
+      captureError = e;
+    });
+
+    const timer = setTimeout(() => proc.kill("SIGTERM"), timeoutSec * 1000);
+
+    proc.on("close", async (code, signal) => {
+      clearTimeout(timer);
+      try { await writeChain; } catch (e) { captureError = e; }
+
+      if (captureError) {
+        resolveResult({
+          content: `Error capturing bash output: ${captureError instanceof Error ? captureError.message : String(captureError)}`,
+          isError: true,
+        });
+        return;
+      }
+
+      const tail = chunks.join("");
+      const truncated = !!fullOutputPath;
+
+      let content = tail;
+      if (truncated && fullOutputPath) {
+        const footer =
+          `\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. The full output (${(totalBytes / 1024).toFixed(0)}KB) was saved to: ${fullOutputPath}\n` +
+          `Use read_file(path="${fullOutputPath}", offset=N) to read more. The tail is shown above.]`;
+        content = tail + footer;
+      }
+      if (signal === "SIGTERM" || (code !== 0 && code !== null)) {
+        const prefix = signal === "SIGTERM" ? `Command timed out after ${timeoutSec}s\n` : "";
+        resolveResult({ content: prefix + (content || "(no output)"), isError: true });
+      } else {
+        resolveResult({ content: content || "(no output)", isError: false });
+      }
+    });
+  });
+}
+
 export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
 
@@ -195,22 +312,8 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   }
 
   async bash(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
-    const timeout = (args.timeout || 30) * 1000;
-    return new Promise((resolveResult) => {
-      execFile("/bin/bash", ["-c", args.command], {
-        timeout,
-        maxBuffer: 1024 * 1024,
-        cwd: this.root,
-        env: { ...process.env, HOME },
-      }, (error, stdout, stderr) => {
-        const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
-        if (error) {
-          resolveResult({ content: error.killed ? `Command timed out after ${args.timeout || 30}s\n${output}` : (output || error.message), isError: true });
-        } else {
-          resolveResult({ content: output || "(no output)", isError: false });
-        }
-      });
-    });
+    const timeout = (args.timeout || 30);
+    return runStreamingBash(args.command, this.root, timeout);
   }
 
   async readAgentsMd(): Promise<string | null> {
