@@ -281,7 +281,11 @@ export interface InferenceModel {
   provider: InferenceProvider;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "custom";
+export interface CustomTheme {
+  background: string;
+  accent: string;
+}
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
@@ -313,6 +317,7 @@ export interface Settings {
   imageBackend?: "comfyui" | "sdcpp";  // default "comfyui"
   imageSandboxEnabled?: boolean;        // default true — shows the Image Sandbox launcher
   theme?: Theme;
+  customTheme?: CustomTheme;
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;

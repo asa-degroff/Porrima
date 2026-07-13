@@ -1163,6 +1163,7 @@ function normalizeSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    customTheme: normalizeCustomTheme(settings.customTheme),
     extractionCtxSize: extraction.ctxSize,
     extractionMaxTokens: extraction.maxTokens,
     extractionTimeoutMs: extraction.timeoutMs,
@@ -1182,6 +1183,36 @@ function normalizeSettings(settings: Settings): Settings {
       settings.preserveThinking ??
       Object.values(settings.modelPreserveThinking ?? {}).some(Boolean),
   };
+}
+
+function normalizeCustomTheme(value: Settings["customTheme"]): Settings["customTheme"] {
+  if (!value || typeof value !== "object") return undefined;
+
+  const normalizeHex = (color: unknown): string | null => {
+    if (typeof color !== "string") return null;
+    const raw = color.trim().toLowerCase();
+    const short = /^#([0-9a-f]{3})$/.exec(raw);
+    if (short) return `#${short[1].split("").map((part) => `${part}${part}`).join("")}`;
+    return /^#[0-9a-f]{6}$/.test(raw) ? raw : null;
+  };
+
+  const background = normalizeHex(value.background);
+  const accent = normalizeHex(value.accent);
+  if (!background || !accent) return undefined;
+
+  const luminance = (channel: number): number => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const red = Number.parseInt(background.slice(1, 3), 16);
+  const green = Number.parseInt(background.slice(3, 5), 16);
+  const blue = Number.parseInt(background.slice(5, 7), 16);
+  const relativeLuminance = 0.2126 * luminance(red) + 0.7152 * luminance(green) + 0.0722 * luminance(blue);
+  if (relativeLuminance > 0.183) return undefined;
+
+  return { background, accent };
 }
 
 export async function getSettings(): Promise<Settings> {

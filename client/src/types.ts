@@ -315,7 +315,13 @@ export interface ConversationSearchResult {
   rank: number;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "custom";
+export interface CustomTheme {
+  /** Dark base color used to derive the page background gradient. */
+  background: string;
+  /** Canonical accent color used by the existing theme token system. */
+  accent: string;
+}
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper";
 export type CornerRadius = "tiny" | "small" | "default";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
@@ -349,6 +355,7 @@ export interface Settings {
   imageBackend?: "comfyui" | "sdcpp";
   imageSandboxEnabled?: boolean;
   theme?: Theme;
+  customTheme?: CustomTheme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
   chromaticAberration?: boolean;

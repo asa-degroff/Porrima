@@ -303,6 +303,41 @@
   --theme-glow: rgba(210, 130, 50, 0.15);
 }
 
+[data-theme="custom"] {
+  /* Custom themes keep the existing token contract while deriving their
+     palette from the two user-selected colors supplied by the client. */
+  --theme-primary: var(--custom-theme-accent-rgb, 162, 74, 255);
+  --theme-primary-muted: var(--custom-theme-accent-rgb, 162, 74, 255), 0.2;
+  --theme-primary-border: var(--custom-theme-accent-rgb, 162, 74, 255), 0.3;
+  --theme-primary-text: var(--custom-theme-primary-text-rgb, 216, 180, 254), 0.9;
+
+  --theme-accent: var(--custom-theme-accent-rgb, 251, 191, 36);
+  --theme-accent-muted: var(--custom-theme-accent-rgb, 251, 191, 36), 0.15;
+  --theme-accent-border: var(--custom-theme-accent-rgb, 251, 191, 36), 0.2;
+  --theme-accent-text: var(--custom-theme-accent-text-rgb, 251, 191, 36), 0.85;
+
+  --theme-secondary: var(--custom-theme-secondary-rgb, 59, 132, 250);
+  --theme-secondary-muted: var(--custom-theme-secondary-rgb, 59, 132, 250), 0.2;
+  --theme-secondary-border: var(--custom-theme-secondary-rgb, 59, 132, 250), 0.25;
+  --theme-secondary-text: var(--custom-theme-secondary-text-rgb, 147, 197, 253), 0.9;
+
+  --theme-grid: var(--custom-theme-accent-rgb, 162, 74, 255);
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(
+    135deg,
+    var(--custom-theme-gradient-edge, #0f172a) 0%,
+    var(--custom-theme-gradient-quarter, #181845) 25%,
+    var(--custom-theme-gradient-near-center, #1c1a49) 38%,
+    var(--custom-theme-background, #1e1b4b) 50%,
+    var(--custom-theme-gradient-near-center, #1c1a49) 62%,
+    var(--custom-theme-gradient-quarter, #181845) 75%,
+    var(--custom-theme-gradient-edge, #0f172a) 100%
+  );
+  --theme-bg-flat: var(--custom-theme-background, #1e1b4b);
+  --theme-glow: rgba(var(--custom-theme-accent-rgb, 162, 74, 255), 0.15);
+}
+
 /* Disable chromatic aberration globally when user toggles it off */
 [data-chromatic-aberration="off"] {
   --theme-aberration-strength: 0;

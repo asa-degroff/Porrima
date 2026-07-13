@@ -44,6 +44,12 @@ import type { ReadAloudOptions, SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatMessage, ChatType, CornerRadius } from "./types";
+import {
+  applyCustomThemeCssVariables,
+  clearCustomThemeCssVariables,
+  DEFAULT_CUSTOM_THEME,
+  isCustomThemeBackgroundDark,
+} from "./utils/custom-theme";
 
 const CORNER_RADIUS_KEY = "porrima-corner-radius";
 const LEGACY_CORNER_RADIUS_KEY = "quje-corner-radius";
@@ -517,7 +523,12 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   // Apply theme to document
   useEffect(() => {
     const theme = settings.theme || 'default';
-    document.documentElement.setAttribute('data-theme', theme);
+    const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    clearCustomThemeCssVariables(root);
+    if (theme === "custom") {
+      applyCustomThemeCssVariables(root, settings.customTheme || DEFAULT_CUSTOM_THEME);
+    }
     
     // Update PWA theme-color meta tag
     const themeColorMeta = document.getElementById('theme-color-meta');
@@ -536,9 +547,13 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         iron: '#121214',
         rust: '#1a0e06',
       };
-      themeColorMeta.setAttribute('content', themeColors[theme] || '#0f172a');
+      const customBackground = settings.customTheme?.background;
+      const themeColor = theme === "custom" && customBackground && isCustomThemeBackgroundDark(customBackground)
+        ? customBackground
+        : themeColors[theme] || DEFAULT_CUSTOM_THEME.background;
+      themeColorMeta.setAttribute('content', themeColor);
     }
-  }, [settings.theme]);
+  }, [settings.customTheme, settings.theme]);
 
   // Apply flat background toggle
   useEffect(() => {

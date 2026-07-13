@@ -5,6 +5,7 @@ import { useDropdown } from "../hooks/useDropdown";
 import { useCarouselMask } from "../hooks/useCarouselMask";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
+import { ThemePicker, THEME_OPTIONS } from "./ThemePicker";
 import type { ActivityShape, BackgroundEffect, InferenceModel, Settings, AutomationTask, Theme } from "../types";
 import type { AvailableLlamaModel, LlamaServerId, LlamaServerStatus, RuntimeModelApplyId } from "../api/client";
 import {
@@ -19,6 +20,7 @@ import {
 import { updatePersona } from "../api/persona";
 import { updateUserDocument } from "../api/user";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
+import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme } from "../utils/custom-theme";
 
 type SetupStep = "welcome" | "identity" | "system" | "models" | "automations" | "appearance" | "review";
 type NoticeType = "ok" | "warn" | "err";
@@ -63,21 +65,6 @@ const STEPS: Array<{ id: SetupStep; label: string; description: string }> = [
   { id: "automations", label: "Automations", description: "Synthesis & wake" },
   { id: "appearance", label: "Appearance", description: "Theme & activity" },
   { id: "review", label: "Review", description: "Confirm & finish" },
-];
-
-const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string }> = [
-  { value: "default", label: "Lapis", preview: "from-purple-900" },
-  { value: "ocean", label: "Ocean", preview: "from-sky-900" },
-  { value: "forest", label: "Forest", preview: "from-green-900" },
-  { value: "crimson", label: "Crimson", preview: "from-rose-900" },
-  { value: "mono", label: "Asphalt", preview: "from-gray-900" },
-  { value: "strawberry", label: "Strawberry", preview: "from-pink-700" },
-  { value: "coffee", label: "Coffee", preview: "from-amber-950" },
-  { value: "emerald", label: "Emerald", preview: "from-emerald-900" },
-  { value: "copper", label: "Copper", preview: "from-orange-900" },
-  { value: "oxidized-copper", label: "Verdigris", preview: "from-teal-900" },
-  { value: "iron", label: "Iron", preview: "from-gray-800" },
-  { value: "rust", label: "Rust", preview: "from-orange-950" },
 ];
 
 const BACKGROUND_EFFECT_OPTIONS: Array<{ value: BackgroundEffect; label: string; description: string }> = [
@@ -244,6 +231,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
   const [wakeInterval, setWakeInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
   const [sleepThreshold, setSleepThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
+  const [customTheme, setCustomTheme] = useState(normalizeCustomTheme(settings.customTheme) || DEFAULT_CUSTOM_THEME);
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [activityHue, setActivityHue] = useState(settings.activityHue ?? 38);
@@ -293,6 +281,9 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
   const selectedTheme = THEME_OPTIONS.find((opt) => opt.value === theme) || THEME_OPTIONS[0];
   const selectedBackgroundEffect = BACKGROUND_EFFECT_OPTIONS.find((opt) => opt.value === backgroundEffect) || BACKGROUND_EFFECT_OPTIONS[0];
   const selectedActivityShape = ACTIVITY_SHAPE_OPTIONS.find((opt) => opt.value === activityShape) || ACTIVITY_SHAPE_OPTIONS[0];
+  const customThemeValidationError = theme === "custom"
+    ? getCustomThemeBackgroundError(customTheme.background)
+    : null;
 
   const findSelectedOption = useCallback((slot: RuntimeModelApplyId, modelId: string): ModelOption | undefined => {
     const scanDir = selectedScanDirs[slot];
@@ -339,10 +330,12 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
       }
     }
 
-    return { errors, warnings };
-  }, [effectiveModelIds, findSelectedOption, serverById]);
+    if (customThemeValidationError) errors.push(customThemeValidationError);
 
-  const hasSetupFailures = !setupLoading && readiness.errors.length > 0;
+    return { errors, warnings };
+  }, [customThemeValidationError, effectiveModelIds, findSelectedOption, serverById]);
+
+  const hasSetupFailures = (!setupLoading && readiness.errors.length > 0) || Boolean(customThemeValidationError);
 
   const refreshSetupState = useCallback(async (showSpinner = false) => {
     if (showSpinner) setSetupLoading(true);
@@ -575,6 +568,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
         wakeCycleIntervalHours: wakeEnabled ? wakeInterval : settings.wakeCycleIntervalHours,
         sleepCycleThresholdMinutes: sleepThreshold,
         theme,
+        customTheme,
         backgroundEffect,
         activityShape,
         activityHue,
@@ -606,7 +600,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
     } finally {
       setLoading(false);
     }
-  }, [activityHue, activitySaturation, activityShape, agentName, applyModelSelections, automations, backgroundEffect, effectiveModelIds, onClose, onSave, personaContent, readiness.errors, settings, sleepThreshold, synthesisSchedule, theme, userDocContent, wakeEnabled, wakeInterval]);
+  }, [activityHue, activitySaturation, activityShape, agentName, applyModelSelections, automations, backgroundEffect, customTheme, effectiveModelIds, onClose, onSave, personaContent, readiness.errors, settings, sleepThreshold, synthesisSchedule, theme, userDocContent, wakeEnabled, wakeInterval]);
 
   const handleSkip = useCallback(async () => {
     try {
@@ -1032,24 +1026,12 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-white/60">Color Theme</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {THEME_OPTIONS.map((opt) => (
-                    <button
-                      type="button"
-                      key={opt.value}
-                      onClick={() => setTheme(opt.value)}
-                      aria-pressed={theme === opt.value}
-                      className={`relative px-3 py-3 rounded-lg text-sm font-medium border transition-all overflow-hidden min-h-12 ${
-                        theme === opt.value
-                          ? "border-white/30"
-                          : "border-white/10 hover:border-white/20"
-                      } pressable`}
-                    >
-                      <div className={`absolute inset-0 bg-gradient-to-br ${opt.preview} to-transparent opacity-20`} />
-                      <span className="relative z-10">{opt.label}</span>
-                    </button>
-                  ))}
-                </div>
+                <ThemePicker
+                  theme={theme}
+                  customTheme={customTheme}
+                  onThemeChange={setTheme}
+                  onCustomThemeChange={setCustomTheme}
+                />
               </div>
 
               <div className="space-y-2">

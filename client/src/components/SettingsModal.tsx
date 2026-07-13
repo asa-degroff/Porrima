@@ -25,15 +25,17 @@ import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from 
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, InferenceModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
+import { ThemePicker } from "./ThemePicker";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
+import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme } from "../utils/custom-theme";
 
 const SECTIONS = [
   { id: 'models', label: 'Models' },
@@ -636,6 +638,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     settings.preserveThinking ?? Object.values(settings.modelPreserveThinking ?? {}).some(Boolean)
   );
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
+  const [customTheme, setCustomTheme] = useState<CustomTheme>(
+    normalizeCustomTheme(settings.customTheme) || DEFAULT_CUSTOM_THEME
+  );
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
   const [deviceHighEfficiencyMode, setDeviceHighEfficiencyMode] = useState(highEfficiencyMode);
@@ -645,6 +650,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [activityHue, setActivityHue] = useState<number>(settings.activityHue ?? 38);
   const [activitySaturation, setActivitySaturation] = useState<number>(settings.activitySaturation ?? 85);
+  const customThemeValidationError = theme === "custom"
+    ? getCustomThemeBackgroundError(customTheme.background)
+    : null;
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetContent, setEditingPresetContent] = useState<string>("");
@@ -1901,6 +1909,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       embeddingUrl: embeddingUrl.trim() || undefined,
       embeddingModel: embeddingModel.trim() || undefined,
       theme,
+      customTheme,
       backgroundEffect,
       flatBackground,
       chromaticAberration,
@@ -1962,6 +1971,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   };
 
   const prepareSettingsForSave = async (): Promise<Settings | null> => {
+    if (customThemeValidationError) return null;
     const nextSettings = handleSave();
     const currentInferenceServer = llamaServers.find((server) => server.id === "inference");
     const shouldApplyDefaultModel = Boolean(
@@ -4071,35 +4081,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           {/* Color Theme */}
           <div id="theme" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Color Theme</label>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { value: "default" as Theme, label: "Lapis", preview: "from-purple-900" },
-                { value: "ocean" as Theme, label: "Ocean", preview: "from-sky-900" },
-                { value: "forest" as Theme, label: "Forest", preview: "from-green-900" },
-                { value: "crimson" as Theme, label: "Crimson", preview: "from-rose-900" },
-                { value: "mono" as Theme, label: "Asphalt", preview: "from-gray-900" },
-                { value: "strawberry" as Theme, label: "Strawberry", preview: "from-pink-700" },
-                { value: "coffee" as Theme, label: "Coffee", preview: "from-amber-950" },
-                { value: "emerald" as Theme, label: "Emerald", preview: "from-emerald-900" },
-                { value: "copper" as Theme, label: "Copper", preview: "from-orange-900" },
-                { value: "oxidized-copper" as Theme, label: "Verdigris", preview: "from-teal-900" },
-                { value: "iron" as Theme, label: "Iron", preview: "from-gray-800" },
-                { value: "rust" as Theme, label: "Rust", preview: "from-orange-950" },
-              ].map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setTheme(opt.value)}
-                  className={`relative px-3 py-3 rounded-lg text-sm font-medium border transition-all overflow-hidden ${
-                    theme === opt.value
-                      ? "border-white/30"
-                      : "border-white/10 hover:border-white/20"
-                  } pressable`}
-                >
-                  <div className={`absolute inset-0 bg-gradient-to-br ${opt.preview} to-transparent opacity-20`} />
-                  <span className="relative z-10">{opt.label}</span>
-                </button>
-              ))}
-            </div>
+            <ThemePicker
+              theme={theme}
+              customTheme={customTheme}
+              onThemeChange={setTheme}
+              onCustomThemeChange={setCustomTheme}
+            />
           </div>
 
           {/* Flat Background */}
@@ -7523,7 +7510,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               setAppliedFeedback(true);
               setTimeout(() => setAppliedFeedback(false), 2000);
             }}
-            disabled={applyingSlot === "inference"}
+            disabled={applyingSlot === "inference" || Boolean(customThemeValidationError)}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
           >
             {applyingSlot === "inference" ? "Applying..." : appliedFeedback ? "Applied" : "Apply"}
@@ -7535,7 +7522,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               if (!nextSettings) return;
               await onSave(nextSettings);
             }}
-            disabled={applyingSlot === "inference"}
+            disabled={applyingSlot === "inference" || Boolean(customThemeValidationError)}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
             {applyingSlot === "inference" ? "Applying..." : "Save and Close"}
