@@ -99,220 +99,11 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 }
 
 const SIDEBAR_COLLAPSE_DURATION_MS = 200;
-type SidebarRevealOrigin = "top" | "bottom";
-
-function snapToDevicePixel(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  const ratio = window.devicePixelRatio || 1;
-  return Math.round(value * ratio) / ratio;
-}
 
 function ceilToDevicePixel(value: number) {
   if (!Number.isFinite(value)) return 0;
   const ratio = window.devicePixelRatio || 1;
   return Math.ceil(value * ratio) / ratio;
-}
-
-function usePrefersReducedMotion() {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-
-  useEffect(() => {
-    if (!window.matchMedia) return;
-
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setPrefersReducedMotion(query.matches);
-    update();
-
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return prefersReducedMotion;
-}
-
-interface SidebarSectionSnapshot {
-  expanded: boolean[];
-  tops: Array<number | null>;
-}
-
-interface OpeningSectionMotion {
-  index: number | null;
-  revealOrigin: SidebarRevealOrigin;
-}
-
-function measureSectionTops(refs: Array<React.RefObject<HTMLDivElement | null>>) {
-  return refs.map((ref) => ref.current?.getBoundingClientRect().top ?? null);
-}
-
-function useOpeningSectionMotion(
-  refs: Array<React.RefObject<HTMLDivElement | null>>,
-  expandedStates: boolean[],
-  layoutKey: string
-) {
-  const previousSnapshotRef = useRef<SidebarSectionSnapshot | null>(null);
-  const [openingSectionMotion, setOpeningSectionMotion] = useState<OpeningSectionMotion>({
-    index: null,
-    revealOrigin: "top",
-  });
-  const prefersReducedMotion = usePrefersReducedMotion();
-
-  const captureSnapshot = useCallback(() => {
-    previousSnapshotRef.current = {
-      expanded: [...expandedStates],
-      tops: measureSectionTops(refs),
-    };
-  }, [refs, expandedStates]);
-
-  useLayoutEffect(() => {
-    const elements = refs.map((ref) => ref.current);
-    const targetTops = measureSectionTops(refs);
-    const previousSnapshot = previousSnapshotRef.current;
-    const nextSnapshot = { expanded: [...expandedStates], tops: targetTops };
-
-    if (prefersReducedMotion || !previousSnapshot || previousSnapshot.expanded.length !== expandedStates.length) {
-      previousSnapshotRef.current = nextSnapshot;
-      setOpeningSectionMotion({ index: null, revealOrigin: "top" });
-      return;
-    }
-
-    const changedIndexes = expandedStates.flatMap((expanded, index) =>
-      expanded === previousSnapshot.expanded[index] ? [] : [index]
-    );
-    const changedIndex = changedIndexes.length === 1 ? changedIndexes[0] : -1;
-    const isOpening = changedIndex >= 0 && !previousSnapshot.expanded[changedIndex] && expandedStates[changedIndex];
-
-    previousSnapshotRef.current = nextSnapshot;
-
-    if (!isOpening) {
-      setOpeningSectionMotion({ index: null, revealOrigin: "top" });
-      return;
-    }
-
-    const changedPreviousTop = previousSnapshot.tops[changedIndex];
-    const changedTargetTop = targetTops[changedIndex];
-    const changedDeltaY = changedPreviousTop !== null && changedTargetTop !== null
-      ? snapToDevicePixel(changedPreviousTop - changedTargetTop)
-      : 0;
-    const revealOrigin: SidebarRevealOrigin = changedDeltaY > 0.5 ? "bottom" : "top";
-    setOpeningSectionMotion({ index: changedIndex, revealOrigin });
-
-    const movingElements = elements.flatMap((element, index) => {
-      const previousTop = previousSnapshot.tops[index];
-      const targetTop = targetTops[index];
-      const deltaY = previousTop !== null && targetTop !== null ? snapToDevicePixel(previousTop - targetTop) : 0;
-
-      if (!element || Math.abs(deltaY) < 0.5) {
-        return [];
-      }
-
-      return [{
-        element,
-        deltaY,
-        previousStyles: {
-          transition: element.style.transition,
-          transform: element.style.transform,
-          zIndex: element.style.zIndex,
-          willChange: element.style.willChange,
-        },
-      }];
-    });
-
-    for (const { element, deltaY, previousStyles } of movingElements) {
-      element.style.transition = "none";
-      element.style.transform = `${previousStyles.transform ? `${previousStyles.transform} ` : ""}translateY(${deltaY}px)`;
-      element.style.zIndex = "20";
-      element.style.willChange = "transform";
-    }
-
-    movingElements[0]?.element.getBoundingClientRect();
-
-    const frame = movingElements.length > 0
-      ? window.requestAnimationFrame(() => {
-          for (const { element, previousStyles } of movingElements) {
-            element.style.transition = `transform ${SIDEBAR_COLLAPSE_DURATION_MS}ms ease-out`;
-            element.style.transform = previousStyles.transform;
-          }
-        })
-      : null;
-
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      if (frame !== null) {
-        window.cancelAnimationFrame(frame);
-      }
-      for (const { element, previousStyles } of movingElements) {
-        element.style.transition = previousStyles.transition;
-        element.style.transform = previousStyles.transform;
-        element.style.zIndex = previousStyles.zIndex;
-        element.style.willChange = previousStyles.willChange;
-      }
-      previousSnapshotRef.current = {
-        expanded: [...expandedStates],
-        tops: measureSectionTops(refs),
-      };
-      setOpeningSectionMotion({ index: null, revealOrigin: "top" });
-    };
-
-    const timer = window.setTimeout(finish, SIDEBAR_COLLAPSE_DURATION_MS);
-
-    return () => {
-      window.clearTimeout(timer);
-      finish();
-    };
-  }, [layoutKey, prefersReducedMotion, refs, expandedStates]);
-
-  useLayoutEffect(() => {
-    if (openingSectionMotion.index !== null) return;
-    previousSnapshotRef.current = {
-      expanded: [...expandedStates],
-      tops: measureSectionTops(refs),
-    };
-  });
-
-  return { openingSectionMotion, captureSnapshot };
-}
-
-function AnimatedListReveal({
-  open,
-  animate = false,
-  origin = "top",
-  children,
-  className = "",
-}: {
-  open: boolean;
-  animate?: boolean;
-  origin?: SidebarRevealOrigin;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  const [revealed, setRevealed] = useState(false);
-
-  useLayoutEffect(() => {
-    if (!open || !animate) {
-      setRevealed(true);
-      return;
-    }
-
-    setRevealed(false);
-    const frame = window.requestAnimationFrame(() => setRevealed(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, [open, animate, origin]);
-
-  const isRevealing = open && animate && !revealed;
-
-  return (
-    <div
-      className={`min-h-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${className}`}
-      style={{
-        opacity: isRevealing ? 0.45 : undefined,
-        transform: isRevealing ? `translateY(${origin === "bottom" ? "6px" : "-6px"})` : undefined,
-      }}
-    >
-      {children}
-    </div>
-  );
 }
 
 function AnimatedCollapse({
@@ -420,69 +211,6 @@ function AnimatedCollapse({
   );
 }
 
-function useCollapsedPreviewFade(expanded: boolean, hasPreview: boolean) {
-  const [fadingIn, setFadingIn] = useState(!expanded && hasPreview);
-
-  useEffect(() => {
-    if (expanded || !hasPreview) {
-      setFadingIn(false);
-      return;
-    }
-
-    // Start invisible, fade in after collapse animation completes
-    setFadingIn(false);
-    const timer = window.setTimeout(() => {
-      setFadingIn(true);
-    }, SIDEBAR_COLLAPSE_DURATION_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [expanded, hasPreview]);
-
-  // Preview is always in the DOM when collapsed (reserves layout space),
-  // but fades in after the collapse animation to avoid visual clutter mid-animation.
-  return { showPreview: !expanded && hasPreview, fadeIn: fadingIn };
-}
-
-function CollapsedPreviewFrame({
-  children,
-  fadeIn = true,
-  measureRef,
-  measuring = false,
-}: {
-  children: React.ReactNode;
-  fadeIn?: boolean;
-  measureRef?: React.RefObject<HTMLDivElement | null>;
-  measuring?: boolean;
-}) {
-  return (
-    <div
-      ref={measureRef}
-      aria-hidden={measuring || !fadeIn}
-      className={`px-2 pb-2 ${
-        measuring
-          ? "absolute left-0 right-0 top-0 invisible pointer-events-none"
-          : `transition-opacity duration-200 ease-out ${fadeIn ? "opacity-100" : "opacity-0 pointer-events-none"}`
-      }`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SectionDepthShadow({ visible }: { visible: boolean }) {
-  if (!visible) return null;
-  return (
-    <div
-      className="pointer-events-none absolute inset-x-0 bottom-px h-5 z-10 bg-gradient-to-t from-black/10 via-black/3 to-transparent"
-      style={{
-        maskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
-        WebkitMaskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
-      }}
-      aria-hidden="true"
-    />
-  );
-}
-
 // Dynamic sidebar logo — mirrors the octahedron geometry with user-selected hue/saturation
 function SidebarLogo({ size = 24 }: { size?: number }) {
   const hue = useActivityHue()
@@ -517,20 +245,6 @@ function SidebarLogo({ size = 24 }: { size?: number }) {
       />
     </svg>
   )
-}
-
-function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
-  if (!residency) return undefined;
-  const parts = [residency.active ? "Cache active" : "Cache warm"];
-  if (typeof residency.inferredCacheHitRatio === "number") {
-    parts.push(`last hit ${(residency.inferredCacheHitRatio * 100).toFixed(1)}%`);
-  }
-  if (typeof residency.slotId === "number") {
-    parts.push(`slot ${residency.slotId}`);
-  } else {
-    parts.push(`${residency.bindingMode} slot selection`);
-  }
-  return parts.join(" - ");
 }
 
 function formatNewChatBaselineTitle(residency?: CacheResidency | null): string | undefined {
@@ -880,159 +594,6 @@ function ChangeProjectDirectoryModal({
   );
 }
 
-function RecentChatItem({
-  chat,
-  active,
-  lastActive,
-  cacheResidency,
-  onSelect,
-  onDelete,
-  onSendToNotebook,
-  onWarmCache,
-  color = "purple",
-  cacheWarming = false,
-  cacheWarmError,
-}: {
-  chat: ChatListItemType;
-  active: boolean;
-  lastActive?: boolean;
-  cacheResidency?: CacheResidency | null;
-  onSelect: () => void;
-  onDelete?: () => void;
-  onSendToNotebook?: (chatId: string, chatTitle: string) => void;
-  onWarmCache?: (chatId: string) => void;
-  color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
-  cacheWarming?: boolean;
-  cacheWarmError?: string;
-}) {
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  }, []);
-
-  const openContextMenu = useCallback((pos: { x: number; y: number }) => {
-    setContextMenu(pos);
-  }, []);
-  const longPressProps = useLongPress(openContextMenu);
-
-  const borderColors: Record<string, string> = {
-    purple: "border-purple-400/20",
-    blue: "border-blue-400/20",
-    emerald: "border-emerald-400/20",
-    amber: "border-amber-400/20",
-    rose: "border-rose-400/20",
-    cyan: "border-cyan-400/20",
-    violet: "border-violet-400/20",
-    orange: "border-orange-400/20",
-    pink: "border-pink-400/20",
-    teal: "border-teal-400/20",
-  };
-
-  const borderColor = borderColors[color] || borderColors.purple;
-  const cacheTitle = formatCacheResidencyTitle(cacheResidency);
-  const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
-  const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
-  const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
-
-  const hasMenu = onDelete || onSendToNotebook || (onWarmCache && chat.type === "agent");
-
-  return (
-    <>
-      <button
-        onClick={onSelect}
-        onContextMenu={hasMenu ? handleContextMenu : undefined}
-        {...(hasMenu ? longPressProps : {})}
-        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border select-none ${
-          active
-            ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
-                ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-                : cacheResidency
-                  ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-                  : "")
-            : cacheResidency && lastActive
-              ? "hover:bg-white/8 border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-              : cacheResidency
-                ? "hover:bg-white/8 border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-                : `hover:bg-white/8 ${borderColor}`
-        }`}
-        title={effectiveTitle}
-      >
-        {/* Vignette overlay — darkens edges for a brighter-center active highlight effect */}
-        {active && (
-          <div
-            className="absolute inset-0 rounded-xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
-            aria-hidden="true"
-          />
-        )}
-        <div className="flex items-start min-w-0">
-          <div className="flex-1 min-w-0 pr-5">
-            <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
-              {chat.title}
-            </p>
-          </div>
-        </div>
-        {(effectiveCacheWarming || isQueued) && (
-          <div className="absolute right-2 top-1/2 -translate-y-1/2" title={isQueued ? "Cache warming queued" : "Warming cache"}>
-            <PrefillActivityIcon paused={isQueued} />
-          </div>
-        )}
-        {cacheWarmError && !effectiveCacheWarming && !isQueued && (
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 8v5" />
-              <path d="M12 17h.01" />
-            </svg>
-          </div>
-        )}
-      </button>
-      {contextMenu && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} blocksSidebarClose>
-          {onSendToNotebook && (
-            <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">
-                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                <polyline points="14 2 14 8 20 8" />
-                <path d="M12 18v-6" />
-                <path d="m8 15 4 4 4-4" />
-              </svg>
-              Send to notebook
-            </ContextMenuItem>
-          )}
-          {onWarmCache && chat.type === "agent" && (
-            <ContextMenuItem onClick={() => { setContextMenu(null); onWarmCache(chat.id); }} disabled={effectiveCacheWarming}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={effectiveCacheWarming ? "animate-pulse" : "opacity-70"} style={{ color: `rgba(var(--theme-accent), ${effectiveCacheWarming ? 0.9 : 0.7})` }}>
-                <path d="M8 18c-2.2 0-4 1.8-4 4" />
-                <path d="M16 18c2.2 0 4 1.8 4 4" />
-                <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
-                <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
-                <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
-                <path d="M5 18h14" />
-              </svg>
-              {effectiveCacheWarming ? "Warming..." : "Warm Cache"}
-            </ContextMenuItem>
-          )}
-          {onDelete && (
-            <ContextMenuItem destructive onClick={() => { setContextMenu(null); onDelete(); }}>
-              <svg className="trash-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ overflow: 'visible' }}>
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                <g className="trash-lid">
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </g>
-              </svg>
-              Delete
-            </ContextMenuItem>
-          )}
-        </ContextMenu>
-      )}
-    </>
-  );
-}
-
 function ProjectSection({
   project,
   chats,
@@ -1104,7 +665,6 @@ function ProjectSection({
     }
   }, [expanded]);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const collapsedPreviewMeasureRef = useRef<HTMLDivElement>(null);
   const expandedContentId = useId();
 
   const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1133,9 +693,7 @@ function ProjectSection({
 
   const handleToggleExpanded = useCallback(() => {
     if (expanded) {
-      const expandedHeight = document.getElementById(expandedContentId)?.offsetHeight ?? 0;
-      const previewHeight = collapsedPreviewMeasureRef.current?.offsetHeight ?? 0;
-      setExpandedCloseHeight(Math.max(0, expandedHeight - previewHeight));
+      setExpandedCloseHeight(document.getElementById(expandedContentId)?.offsetHeight ?? 0);
     }
     onToggleExpanded();
   }, [expanded, expandedContentId, onToggleExpanded]);
@@ -1164,7 +722,6 @@ function ProjectSection({
   };
 
   const colors = colorClasses[project.color] || colorClasses.emerald;
-  const { showPreview: collapsedPreviewVisible, fadeIn: collapsedPreviewFade } = useCollapsedPreviewFade(expanded, chats.length > 0);
 
   const handlePinToggle = async () => {
     await onEditProject({ ...project, pinned: !project.pinned });
@@ -1206,35 +763,21 @@ function ProjectSection({
   }, [project.name]);
 
   return (
-    <div className="relative rounded-lg bg-white/[0.03] border border-white/[0.06]">
-      {chats.length > 0 && (
-        <CollapsedPreviewFrame measureRef={collapsedPreviewMeasureRef} measuring>
-          <RecentChatItem
-            chat={chats[0]}
-            active={chats[0].id === activeChatId}
-            lastActive={chats[0].id === lastActiveChatId}
-            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
-            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
-            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
-            onSelect={() => onSelectChat(chats[0].id)}
-            onDelete={() => onDeleteChat(chats[0].id)}
-            onSendToNotebook={onSendToNotebook}
-            onWarmCache={onWarmCache}
-            color={project.color as any}
-          />
-        </CollapsedPreviewFrame>
-      )}
+    <div className="relative">
       <div
-        className="flex items-center gap-1.5 px-2 py-1 group select-none"
-        onContextMenu={handleHeaderContextMenu}
-        {...longPressProps}
+        className="group flex min-h-8 items-center gap-1 px-1 py-0.5 select-none"
       >
         <button
           onClick={handleToggleExpanded}
+          onContextMenu={handleHeaderContextMenu}
+          {...longPressProps}
           aria-expanded={expanded}
           aria-controls={expandedContentId}
-          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-white/[0.04]"
         >
+          <span className="shrink-0 text-white/25 group-hover:text-white/45">
+            <ChevronIcon expanded={expanded} />
+          </span>
           <span className={colors.icon}>
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
@@ -1252,7 +795,7 @@ function ProjectSection({
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
+            <span className="truncate text-xs font-medium text-white/75">{project.name}</span>
           )}
           {project.pinned && (
             <span className="text-amber-400/50 shrink-0 ml-1" title="Pinned">
@@ -1262,9 +805,26 @@ function ProjectSection({
               </svg>
             </span>
           )}
-          <span className="text-white/20 ml-auto shrink-0">
-            <ChevronIcon expanded={expanded} />
+          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-white/20">
+            {chats.length}
           </span>
+        </button>
+        <button
+          onClick={() => onNewChat("agent", project.id)}
+          onContextMenu={handleNewChatContextMenu}
+          {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
+          aria-label={`New chat in ${project.name}`}
+          title={newChatBaselineTitle || `New chat in ${project.name}`}
+          className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-white/30 transition-colors hover:bg-white/[0.06] hover:text-white/70 pressable ${newChatBaselineClass(newChatBaselineResidency)} ${newChatBaselineResidency ? "border-amber-400/30" : "border-transparent"}`}
+        >
+          {(newChatBaselineWarming || newChatBaselineQueued) ? (
+            <PrefillActivityIcon paused={newChatBaselineQueued} />
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+          )}
         </button>
       </div>
       {/* Project context menu */}
@@ -1375,78 +935,44 @@ function ProjectSection({
       )}
       
       <AnimatedCollapse open={expanded} id={expandedContentId} closeFromHeight={expandedCloseHeight}>
-        <div className="px-1 pt-1 pb-1.5">
-          <button
-            onClick={() => onNewChat("agent", project.id)}
-            onContextMenu={handleNewChatContextMenu}
-            {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
-            title={newChatBaselineTitle}
-            className={`w-full px-2 py-1.5 rounded-xl text-sm font-medium border ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-            New Chat
-            {(newChatBaselineWarming || newChatBaselineQueued) && (
-              <span className="absolute right-2 top-1/2 -translate-y-1/2" title={newChatBaselineQueued ? "New chat baseline warm queued" : "Warming new chat baseline"}>
-                <PrefillActivityIcon paused={newChatBaselineQueued} />
-              </span>
+        <div className="ml-7 mr-1 border-l border-white/[0.07] pb-1 pl-2">
+          <div className="project-chat-scroll-pane max-h-[min(12rem,30vh)] overflow-y-auto overflow-x-clip pr-1">
+            {chats.length > 0 ? (
+              <>
+                <div className="space-y-px">
+                  {(showAllChats ? chats : chats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
+                    <ChatListItem
+                      key={chat.id}
+                      chat={chat}
+                      active={chat.id === activeChatId}
+                      lastActive={chat.id === lastActiveChatId}
+                      cacheResidency={cacheResidency?.get(chat.id) ?? null}
+                      onSelect={() => onSelectChat(chat.id)}
+                      onDelete={() => onDeleteChat(chat.id)}
+                      onSendToNotebook={onSendToNotebook}
+                      onWarmCache={onWarmCache}
+                      cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
+                      cacheWarmError={cacheWarmErrors?.get(chat.id)}
+                    />
+                  ))}
+                </div>
+                {!showAllChats && chats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+                  <button
+                    onClick={() => setShowAllChats(true)}
+                    className={`mt-1 w-full rounded-lg border px-2 py-1.5 text-xs font-medium transition-all ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} pressable`}
+                  >
+                    Show {chats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="px-2 py-1.5 text-[10px] text-white/25">
+                No chats yet
+              </p>
             )}
-          </button>
-          {chats.length > 0 ? (
-            <>
-              <div className="space-y-0.5">
-                {(showAllChats ? chats : chats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
-                  <ChatListItem
-                    key={chat.id}
-                    chat={chat}
-                    active={chat.id === activeChatId}
-                    lastActive={chat.id === lastActiveChatId}
-                    cacheResidency={cacheResidency?.get(chat.id) ?? null}
-                    onSelect={() => onSelectChat(chat.id)}
-                    onDelete={() => onDeleteChat(chat.id)}
-                    onSendToNotebook={onSendToNotebook}
-                    onWarmCache={onWarmCache}
-                    cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
-                    cacheWarmError={cacheWarmErrors?.get(chat.id)}
-                  />
-                ))}
-              </div>
-              {!showAllChats && chats.length > SIDEBAR_CHAT_PAGE_SIZE && (
-                <button
-                  onClick={() => setShowAllChats(true)}
-                  className={`w-full px-2 py-1.5 mt-1 rounded-xl text-xs font-medium border transition-all ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} pressable`}
-                >
-                  Show {chats.length - SIDEBAR_CHAT_PAGE_SIZE} more
-                </button>
-              )}
-            </>
-          ) : (
-            <p className="text-center text-white/20 text-[10px] py-2">
-              No chats yet
-            </p>
-          )}
+          </div>
         </div>
       </AnimatedCollapse>
-      {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
-      {collapsedPreviewVisible && (
-        <CollapsedPreviewFrame fadeIn={collapsedPreviewFade}>
-          <RecentChatItem
-            chat={chats[0]}
-            active={chats[0].id === activeChatId}
-            lastActive={chats[0].id === lastActiveChatId}
-            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
-            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
-            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
-            onSelect={() => onSelectChat(chats[0].id)}
-            onDelete={() => onDeleteChat(chats[0].id)}
-            onSendToNotebook={onSendToNotebook}
-            onWarmCache={onWarmCache}
-            color={project.color as any}
-          />
-        </CollapsedPreviewFrame>
-      )}
     </div>
   );
 }
@@ -1502,16 +1028,7 @@ export function Sidebar({
   showSystemStats = false,
   agentName = "Porrima",
 }: Props) {
-  const {
-    projectsExpanded,
-    setProjectsExpanded,
-    agentExpanded,
-    setAgentExpanded,
-    quickExpanded,
-    setQuickExpanded,
-    getProjectExpanded,
-    setProjectExpanded,
-  } = useSidebarState();
+  const { getProjectExpanded, setProjectExpanded } = useSidebarState();
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
   const systemPauseActive = systemPause?.active ?? false;
@@ -1535,21 +1052,6 @@ export function Sidebar({
   const [searchLoading, setSearchLoading] = useState(false);
   const [newChatContextMenu, setNewChatContextMenu] = useState<{ x: number; y: number } | null>(null);
   const headerRef = useRef<HTMLDivElement>(null);
-  const projectsSectionRef = useRef<HTMLDivElement>(null);
-  const agentSectionRef = useRef<HTMLDivElement>(null);
-  const quickSectionRef = useRef<HTMLDivElement>(null);
-  const agentScrollRef = useRef<HTMLDivElement>(null);
-  const quickScrollRef = useRef<HTMLDivElement>(null);
-  const agentPreviewMeasureRef = useRef<HTMLDivElement>(null);
-  const quickPreviewMeasureRef = useRef<HTMLDivElement>(null);
-  const projectsContentId = useId();
-  const agentContentId = useId();
-  const quickContentId = useId();
-  const [projectsCloseHeight, setProjectsCloseHeight] = useState<number | null>(null);
-  const [agentCloseHeight, setAgentCloseHeight] = useState<number | null>(null);
-  const [quickCloseHeight, setQuickCloseHeight] = useState<number | null>(null);
-  const [agentScrolled, setAgentScrolled] = useState(false);
-  const [quickScrolled, setQuickScrolled] = useState(false);
   const [agentShowAll, setAgentShowAll] = useState(false);
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
@@ -1577,41 +1079,6 @@ export function Sidebar({
       window.removeEventListener("sidebar-block-close:hide", onHide);
     };
   }, []);
-  const mainSectionRefs = useMemo(
-    () => [projectsSectionRef, agentSectionRef, quickSectionRef],
-    []
-  );
-  const mainSectionExpandedStates = useMemo(
-    () => [projects.length > 0 && projectsExpanded, agentExpanded, quickExpanded],
-    [projects.length, projectsExpanded, agentExpanded, quickExpanded]
-  );
-  const mainSectionLayoutKey = mainSectionExpandedStates.join(":");
-  const { openingSectionMotion, captureSnapshot: captureMainSectionSnapshot } = useOpeningSectionMotion(
-    mainSectionRefs,
-    mainSectionExpandedStates,
-    mainSectionLayoutKey
-  );
-
-  useEffect(() => {
-    if (!agentExpanded) { setAgentScrolled(false); setAgentShowAll(false); return; }
-    const el = agentScrollRef.current;
-    if (!el) return;
-    const onScroll = () => setAgentScrolled(el.scrollTop > 0);
-    onScroll();
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [agentExpanded]);
-
-  useEffect(() => {
-    if (!quickExpanded) { setQuickScrolled(false); setQuickShowAll(false); return; }
-    const el = quickScrollRef.current;
-    if (!el) return;
-    const onScroll = () => setQuickScrolled(el.scrollTop > 0);
-    onScroll();
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [quickExpanded]);
-
   // Click outside to close search
   useEffect(() => {
     if (!searchActive) return;
@@ -1679,34 +1146,6 @@ export function Sidebar({
   }, [onWarmNewChatBaseline]);
   const newChatLongPressProps = useLongPress(openNewChatContextMenu);
 
-  const handleToggleProjectsExpanded = useCallback(() => {
-    captureMainSectionSnapshot();
-    if (projectsExpanded) {
-      setProjectsCloseHeight(document.getElementById(projectsContentId)?.offsetHeight ?? null);
-    }
-    setProjectsExpanded(!projectsExpanded);
-  }, [captureMainSectionSnapshot, projectsExpanded, projectsContentId, setProjectsExpanded]);
-
-  const handleToggleAgentExpanded = useCallback(() => {
-    captureMainSectionSnapshot();
-    if (agentExpanded) {
-      const expandedHeight = document.getElementById(agentContentId)?.offsetHeight ?? 0;
-      const previewHeight = agentPreviewMeasureRef.current?.offsetHeight ?? 0;
-      setAgentCloseHeight(Math.max(0, expandedHeight - previewHeight));
-    }
-    setAgentExpanded(!agentExpanded);
-  }, [captureMainSectionSnapshot, agentExpanded, agentContentId, setAgentExpanded]);
-
-  const handleToggleQuickExpanded = useCallback(() => {
-    captureMainSectionSnapshot();
-    if (quickExpanded) {
-      const expandedHeight = document.getElementById(quickContentId)?.offsetHeight ?? 0;
-      const previewHeight = quickPreviewMeasureRef.current?.offsetHeight ?? 0;
-      setQuickCloseHeight(Math.max(0, expandedHeight - previewHeight));
-    }
-    setQuickExpanded(!quickExpanded);
-  }, [captureMainSectionSnapshot, quickExpanded, quickContentId, setQuickExpanded]);
-
   const agentChats = useMemo(
     () => chats.filter((c) => c.type === "agent" && !c.projectId),
     [chats]
@@ -1719,9 +1158,6 @@ export function Sidebar({
     () => chats.filter((c) => c.type === "system" && !c.projectId),
     [chats]
   );
-  const { showPreview: agentPreviewVisible, fadeIn: agentPreviewFade } = useCollapsedPreviewFade(agentExpanded, agentChats.length > 0);
-  const { showPreview: quickPreviewVisible, fadeIn: quickPreviewFade } = useCollapsedPreviewFade(quickExpanded, quickChats.length > 0);
-
   // Group chats by project
   const chatsByProject = useMemo(() => {
     const map: Record<string, ChatListItemType[]> = {};
@@ -1973,6 +1409,7 @@ export function Sidebar({
           </div>
         )}
 
+        <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-2">
         {/* System Chat Section */}
         {systemChats.length > 0 && (
           <div className="px-3 py-1 shrink-0 border-b border-white/5">
@@ -1987,7 +1424,7 @@ export function Sidebar({
                   <button
                     key={chat.id}
                     onClick={() => { onSelectChat(chat.id); onClose(); }}
-                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border group flex items-center gap-1.5 ${
+                    className={`group relative flex min-h-8 w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-left text-xs transition-all ${
                       chat.id === activeChatId                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
                         : isLastActive
                           ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
@@ -2054,163 +1491,90 @@ export function Sidebar({
           </div>
         )}
 
-        {/* Projects Section */}
-        {projects.length > 0 && (
-          <div ref={projectsSectionRef} className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
-            <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center justify-between">
-              <button
-                onClick={handleToggleProjectsExpanded}
-                aria-expanded={projectsExpanded}
-                aria-controls={projectsContentId}
-                className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
-              >
-                <span className="text-white/30 group-hover:text-white/50 transition-colors">
-                  <ChevronIcon expanded={projectsExpanded} />
-                </span>
-                <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
-                  Projects
-                </span>
-              </button>
-              <div className="mb-1 ml-1 min-w-5 h-5 flex items-center justify-center shrink-0">
-                {projectsExpanded ? (
-                  <button
-                    onClick={onNewProject}
-                    className="w-5 h-5 flex items-center justify-center rounded-md text-white hover:text-white hover:bg-white/5 transition-colors pressable"
-                    title="New project"
-                    aria-label="New project"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-30 hover:opacity-60 transition-opacity">
-                      <path d="M12 5v14" />
-                      <path d="M5 12h14" />
-                    </svg>
-                  </button>
-                ) : (
-                  <span className="text-[10px] text-white/20 px-1">{projects.length}</span>
-                )}
-              </div>
-            </div>
-            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-              <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
-                <AnimatedListReveal
-                  open={projectsExpanded}
-                  animate={openingSectionMotion.index === 0}
-                  origin={openingSectionMotion.index === 0 ? openingSectionMotion.revealOrigin : "top"}
-                  className="space-y-1 pl-3 pr-2"
-                >
-                  {projects.map((project) => (
-                    <ProjectSection
-                      key={project.id}
-                      project={project}
-                      chats={chatsByProject[project.id] || []}
-                      expanded={getProjectExpanded(project.id)}
-                      onToggleExpanded={() => setProjectExpanded(project.id, !getProjectExpanded(project.id))}
-                      activeChatId={activeChatId}
-                      onSelectChat={(id) => { onSelectChat(id); onClose(); }}
-                      onNewChat={onNewChat}
-                      onDeleteChat={onDeleteChat}
-                      onDeleteProject={onDeleteProject}
-                      onEditProject={async (updatedProject) => {
-                        const res = await fetch(`/api/projects/${updatedProject.id}`, {
-                          method: "PATCH",
-                          credentials: "include",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ 
-                            name: updatedProject.name, 
-                            path: updatedProject.path,
-                            locationType: updatedProject.locationType || "local",
-                            sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
-                            color: updatedProject.color, 
-                            pinned: updatedProject.pinned 
-                          }),
-                        });
-                        if (!res.ok) {
-                          const err = await res.json().catch(() => ({}));
-                          throw new Error((err as any).error || "Failed to update project");
-                        }
-                        // Trigger a refresh of projects
-                        window.dispatchEvent(new CustomEvent("projects:updated"));
-                      }}
-                      onSendToNotebook={onSendToNotebook}
-                      onWarmCache={onWarmCache}
-                      onWarmNewChatBaseline={onWarmNewChatBaseline}
-                      cacheWarmingChatIds={cacheWarmingChatIds}
-                      cacheWarmErrors={cacheWarmErrors}
-                      newChatBaselineCacheWarming={newChatBaselineCacheWarming}
-                      newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
-                      lastActiveChatId={lastActiveChatId}
-                      cacheResidency={cacheResidency}
-                      newChatBaselineResidency={newChatBaselineResidency}
-                    />
-                  ))}
-                </AnimatedListReveal>
-              </div>
-            </AnimatedCollapse>
-            <SectionDepthShadow visible={projectsExpanded} />
-          </div>
-        )}
-
-        {/* New Project button when no projects exist */}
-        {projects.length === 0 && (
-          <div className="px-3 pt-3 pb-1 shrink-0 border-b border-white/5">
+        {/* Projects — root nodes with nested, independently bounded chat lists. */}
+        <section className="border-b border-white/5 pb-1" aria-labelledby="sidebar-projects-heading">
+          <div className="flex min-h-8 items-center px-3 pt-1.5">
+            <h2 id="sidebar-projects-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+              Projects
+            </h2>
+            <span className="mr-1 text-[10px] tabular-nums text-white/20">{projects.length}</span>
             <button
               onClick={onNewProject}
-              className="w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-sm font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-2 pressable"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-white/30 transition-colors hover:bg-white/[0.06] hover:text-white/70 pressable"
+              title="New project"
+              aria-label="New project"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" />
                 <path d="M5 12h14" />
               </svg>
-              New Project
             </button>
           </div>
-        )}
-
-        {/* Agent Chats Section */}
-        <div ref={agentSectionRef} className={`relative flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
-          {agentChats.length > 0 && (
-            <CollapsedPreviewFrame measureRef={agentPreviewMeasureRef} measuring>
-              <RecentChatItem
-                chat={agentChats[0]}
-                active={agentChats[0].id === activeChatId}
-                lastActive={agentChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
-                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(agentChats[0].id)}
+          <div className="space-y-px px-2">
+            {projects.map((project) => (
+              <ProjectSection
+                key={project.id}
+                project={project}
+                chats={chatsByProject[project.id] || []}
+                expanded={getProjectExpanded(project.id)}
+                onToggleExpanded={() => setProjectExpanded(project.id, !getProjectExpanded(project.id))}
+                activeChatId={activeChatId}
+                onSelectChat={(id) => { onSelectChat(id); onClose(); }}
+                onNewChat={onNewChat}
+                onDeleteChat={onDeleteChat}
+                onDeleteProject={onDeleteProject}
+                onEditProject={async (updatedProject) => {
+                  const res = await fetch(`/api/projects/${updatedProject.id}`, {
+                    method: "PATCH",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name: updatedProject.name,
+                      path: updatedProject.path,
+                      locationType: updatedProject.locationType || "local",
+                      sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
+                      color: updatedProject.color,
+                      pinned: updatedProject.pinned,
+                    }),
+                  });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error((err as any).error || "Failed to update project");
+                  }
+                  window.dispatchEvent(new CustomEvent("projects:updated"));
+                }}
                 onSendToNotebook={onSendToNotebook}
                 onWarmCache={onWarmCache}
-                color="purple"
+                onWarmNewChatBaseline={onWarmNewChatBaseline}
+                cacheWarmingChatIds={cacheWarmingChatIds}
+                cacheWarmErrors={cacheWarmErrors}
+                newChatBaselineCacheWarming={newChatBaselineCacheWarming}
+                newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
+                lastActiveChatId={lastActiveChatId}
+                cacheResidency={cacheResidency}
+                newChatBaselineResidency={newChatBaselineResidency}
               />
-            </CollapsedPreviewFrame>
-          )}
-          {/* Section header — always visible */}
-          <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center">
-            <button
-              onClick={handleToggleAgentExpanded}
-              aria-expanded={agentExpanded}
-              aria-controls={agentContentId}
-              className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
-            >
-              <span className="text-white/30 group-hover:text-white/50 transition-colors">
-                <ChevronIcon expanded={agentExpanded} />
-              </span>
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
-                Global Chats
-              </span>
-              {!agentExpanded && agentChats.length > 0 && (
-                <span className="text-[10px] text-white/20 ml-auto">{agentChats.length}</span>
-              )}
-            </button>
+            ))}
+            {projects.length === 0 && (
+              <p className="px-2 pb-1.5 text-[10px] text-white/25">No projects yet</p>
+            )}
+          </div>
+        </section>
+
+        {/* Global agent chats */}
+        <section className="border-b border-white/5 pb-1" aria-labelledby="sidebar-global-heading">
+          <div className="flex min-h-8 items-center px-3 pt-1.5">
+            <h2 id="sidebar-global-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+              Global Chats
+            </h2>
+            <span className="mr-1 text-[10px] tabular-nums text-white/20">{agentChats.length}</span>
             <button
               onClick={() => { onNewChat("agent"); onClose(); }}
               onContextMenu={handleNewChatContextMenu}
               {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
-              aria-label="New agent chat"
-              title={newChatBaselineTitle || "New agent chat"}
-              aria-hidden={!(agentExpanded && agentScrolled)}
-              tabIndex={agentExpanded && agentScrolled ? 0 : -1}
-              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer pressable border ${newChatBaselineResidency ? "border-amber-400/35 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "border-transparent"} ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+              aria-label="New global chat"
+              title={newChatBaselineTitle || "New global chat"}
+              className={`relative flex h-7 w-7 items-center justify-center rounded-md border text-purple-300/50 transition-colors hover:bg-purple-500/10 hover:text-purple-200 pressable ${newChatBaselineClass(newChatBaselineResidency)} ${newChatBaselineResidency ? "border-amber-400/30" : "border-transparent"}`}
             >
               {(newChatBaselineWarming || newChatBaselineQueued) ? (
                 <PrefillActivityIcon paused={newChatBaselineQueued} />
@@ -2222,127 +1586,48 @@ export function Sidebar({
               )}
             </button>
           </div>
-           {/* Scrollable chat list */}
-          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-1">
-              <AnimatedListReveal
-                open={agentExpanded}
-                animate={openingSectionMotion.index === 1}
-                origin={openingSectionMotion.index === 1 ? openingSectionMotion.revealOrigin : "top"}
-                className="space-y-0.5 px-3 pt-1"
-              >
-                <button
-                  onClick={() => { onNewChat("agent"); onClose(); }}
-                  onContextMenu={handleNewChatContextMenu}
-                  {...(onWarmNewChatBaseline ? newChatLongPressProps : {})}
-                  title={newChatBaselineTitle}
-                  className={`w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable relative ${newChatBaselineClass(newChatBaselineResidency)}`}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 5v14" />
-                    <path d="M5 12h14" />
-                  </svg>
-                  New Chat
-                  {(newChatBaselineWarming || newChatBaselineQueued) && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2" title={newChatBaselineQueued ? "New chat baseline warm queued" : "Warming new chat baseline"}>
-                      <PrefillActivityIcon paused={newChatBaselineQueued} />
-                    </span>
-                  )}
-                </button>
-                {(agentShowAll ? agentChats : agentChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
-                  <ChatListItem
-                    key={chat.id}
-                    chat={chat}
-                    active={chat.id === activeChatId}
-                    lastActive={chat.id === lastActiveChatId}
-                    cacheResidency={cacheResidency.get(chat.id) ?? null}
-                    onSelect={() => { onSelectChat(chat.id); onClose(); }}
-                    onDelete={() => onDeleteChat(chat.id)}
-                    onSendToNotebook={onSendToNotebook}
-                    onWarmCache={onWarmCache}
-                    cacheWarming={cacheWarmingChatIds.has(chat.id)}
-                    cacheWarmError={cacheWarmErrors.get(chat.id)}
-                  />
-                ))}
-                {!agentShowAll && agentChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
-                  <button
-                    onClick={() => setAgentShowAll(true)}
-                    className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-xs font-medium hover:bg-purple-500/25 transition-all pressable"
-                  >
-                    Show {agentChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
-                  </button>
-                )}
-                {agentChats.length === 0 && (
-                  <p className="text-center text-white/20 text-xs py-3 px-2">
-                    Agent chats have persistent memory
-                  </p>
-                )}
-              </AnimatedListReveal>
-            </div>
-          </AnimatedCollapse>
-          {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
-          {agentPreviewVisible && (
-            <CollapsedPreviewFrame fadeIn={agentPreviewFade}>
-              <RecentChatItem
-                chat={agentChats[0]}
-                active={agentChats[0].id === activeChatId}
-                lastActive={agentChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
-                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(agentChats[0].id)}
+          <div className="space-y-px px-3">
+            {(agentShowAll ? agentChats : agentChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
+              <ChatListItem
+                key={chat.id}
+                chat={chat}
+                active={chat.id === activeChatId}
+                lastActive={chat.id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(chat.id) ?? null}
+                onSelect={() => { onSelectChat(chat.id); onClose(); }}
+                onDelete={() => onDeleteChat(chat.id)}
                 onSendToNotebook={onSendToNotebook}
                 onWarmCache={onWarmCache}
-                color="purple"
+                cacheWarming={cacheWarmingChatIds.has(chat.id)}
+                cacheWarmError={cacheWarmErrors.get(chat.id)}
               />
-            </CollapsedPreviewFrame>
-          )}
-          <SectionDepthShadow visible={agentExpanded} />
-        </div>
+            ))}
+            {!agentShowAll && agentChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+              <button
+                onClick={() => setAgentShowAll(true)}
+                className="w-full rounded-lg border border-purple-400/20 bg-purple-500/10 px-2 py-1.5 text-xs font-medium text-purple-300 transition-colors hover:bg-purple-500/20 pressable"
+              >
+                Show {agentChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+              </button>
+            )}
+            {agentChats.length === 0 && (
+              <p className="px-2 pb-1.5 text-[10px] text-white/25">No global chats yet</p>
+            )}
+          </div>
+        </section>
 
-        {/* Quick Chats Section */}
-        <div ref={quickSectionRef} className={`relative flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
-          {quickChats.length > 0 && (
-            <CollapsedPreviewFrame measureRef={quickPreviewMeasureRef} measuring>
-              <RecentChatItem
-                chat={quickChats[0]}
-                active={quickChats[0].id === activeChatId}
-                lastActive={quickChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
-                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(quickChats[0].id)}
-                color="blue"
-              />
-            </CollapsedPreviewFrame>
-          )}
-          {/* Section header — always visible */}
-          <div className="px-3 pt-1.5 pb-0.5 shrink-0 flex items-center">
-            <button
-              onClick={handleToggleQuickExpanded}
-              aria-expanded={quickExpanded}
-              aria-controls={quickContentId}
-              className="flex items-center gap-1.5 px-1 mb-0.5 group cursor-pointer flex-1 min-w-0"
-            >
-              <span className="text-white/30 group-hover:text-white/50 transition-colors">
-                <ChevronIcon expanded={quickExpanded} />
-              </span>
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
-                Quick Chats
-              </span>
-              {!quickExpanded && quickChats.length > 0 && (
-                <span className="text-[10px] text-white/20 ml-auto">{quickChats.length}</span>
-              )}
-            </button>
+        {/* Quick chats */}
+        <section className="pb-1" aria-labelledby="sidebar-quick-heading">
+          <div className="flex min-h-8 items-center px-3 pt-1.5">
+            <h2 id="sidebar-quick-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+              Quick Chats
+            </h2>
+            <span className="mr-1 text-[10px] tabular-nums text-white/20">{quickChats.length}</span>
             <button
               onClick={() => { onNewChat("quick"); onClose(); }}
               aria-label="New quick chat"
               title="New quick chat"
-              aria-hidden={!(quickExpanded && quickScrolled)}
-              tabIndex={quickExpanded && quickScrolled ? 0 : -1}
-              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-blue-300/70 hover:text-blue-200 hover:bg-blue-500/15 transition-opacity cursor-pointer pressable ${quickExpanded && quickScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-blue-300/50 transition-colors hover:bg-blue-500/10 hover:text-blue-200 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" />
@@ -2350,73 +1635,36 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          {/* Scrollable chat list */}
-          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-2">
-              <AnimatedListReveal
-                open={quickExpanded}
-                animate={openingSectionMotion.index === 2}
-                origin={openingSectionMotion.index === 2 ? openingSectionMotion.revealOrigin : "top"}
-                className="space-y-0.5 px-3"
-              >
-                <button
-                  onClick={() => { onNewChat("quick"); onClose(); }}
-                  className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 5v14" />
-                    <path d="M5 12h14" />
-                  </svg>
-                  New Quick Chat
-                </button>
-                {(quickShowAll ? quickChats : quickChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
-                  <ChatListItem
-                    key={chat.id}
-                    chat={chat}
-                    active={chat.id === activeChatId}
-                    lastActive={chat.id === lastActiveChatId}
-                    cacheResidency={cacheResidency.get(chat.id) ?? null}
-                    onSelect={() => { onSelectChat(chat.id); onClose(); }}
-                    onDelete={() => onDeleteChat(chat.id)}
-                    onSendToNotebook={onSendToNotebook}
-                    onWarmCache={onWarmCache}
-                    cacheWarming={cacheWarmingChatIds.has(chat.id)}
-                    cacheWarmError={cacheWarmErrors.get(chat.id)}
-                  />
-                ))}
-                {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
-                  <button
-                    onClick={() => setQuickShowAll(true)}
-                    className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-xs font-medium hover:bg-blue-500/25 transition-all pressable"
-                  >
-                    Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
-                  </button>
-                )}
-                {quickChats.length === 0 && (
-                  <p className="text-center text-white/20 text-xs py-3 px-2">
-                    Standalone one-off conversations
-                  </p>
-                )}
-              </AnimatedListReveal>
-            </div>
-          </AnimatedCollapse>
-          {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
-          {quickPreviewVisible && (
-            <CollapsedPreviewFrame fadeIn={quickPreviewFade}>
-              <RecentChatItem
-                chat={quickChats[0]}
-                active={quickChats[0].id === activeChatId}
-                lastActive={quickChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
-                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(quickChats[0].id)}
-                color="blue"
+          <div className="space-y-px px-3">
+            {(quickShowAll ? quickChats : quickChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
+              <ChatListItem
+                key={chat.id}
+                chat={chat}
+                active={chat.id === activeChatId}
+                lastActive={chat.id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(chat.id) ?? null}
+                onSelect={() => { onSelectChat(chat.id); onClose(); }}
+                onDelete={() => onDeleteChat(chat.id)}
+                onSendToNotebook={onSendToNotebook}
+                onWarmCache={onWarmCache}
+                cacheWarming={cacheWarmingChatIds.has(chat.id)}
+                cacheWarmError={cacheWarmErrors.get(chat.id)}
               />
-            </CollapsedPreviewFrame>
-          )}
-          <SectionDepthShadow visible={quickExpanded} />
+            ))}
+            {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+              <button
+                onClick={() => setQuickShowAll(true)}
+                className="w-full rounded-lg border border-blue-400/20 bg-blue-500/10 px-2 py-1.5 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-500/20 pressable"
+              >
+                Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+              </button>
+            )}
+            {quickChats.length === 0 && (
+              <p className="px-2 pb-1.5 text-[10px] text-white/25">No quick chats yet</p>
+            )}
+          </div>
+        </section>
+
         </div>
 
 
