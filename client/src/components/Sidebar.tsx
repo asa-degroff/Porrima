@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection, SystemPauseStatus } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
@@ -93,7 +93,7 @@ const PROJECT_COLOR_CLASSES: Record<string, { icon: string; bg: string; border: 
 };
 
 function projectInitial(name: string) {
-  return Array.from(name.trim())[0]?.toLocaleUpperCase() || "•";
+  return Array.from(name.trim())[0] || "•";
 }
 
 const DEFAULT_PROJECT_WORKSPACE_HEIGHT = "clamp(7rem, 28vh, 14rem)";
@@ -1049,6 +1049,14 @@ export function Sidebar({
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId]
   );
+  const projectRailProjects = useMemo(
+    () => [
+      ...projects.filter((project) => project.pinned),
+      ...projects.filter((project) => !project.pinned),
+    ],
+    [projects]
+  );
+  const pinnedProjectCount = projectRailProjects.findIndex((project) => !project.pinned);
   const displayedProject = selectedProject ?? projects[0] ?? null;
   const activeChatProjectId = useMemo(
     () => chats.find((chat) => chat.id === activeChatId)?.projectId ?? null,
@@ -1519,32 +1527,36 @@ export function Sidebar({
                 aria-label="Projects"
               >
                 <div className="flex flex-col items-center gap-1">
-                  {projects.map((project) => {
+                  {projectRailProjects.map((project, index) => {
                     const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
                     const selected = project.id === displayedProject.id;
                     const containsActiveChat = project.id === activeChatProjectId;
                     return (
-                      <button
-                        key={project.id}
-                        type="button"
-                        onClick={() => setSelectedProjectId(project.id)}
-                        aria-label={`Select ${project.name}`}
-                        aria-pressed={selected}
-                        title={project.name}
-                        className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
-                          selected
-                            ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
-                            : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
-                        }`}
-                      >
-                        {projectInitial(project.name)}
-                        {project.pinned && (
-                          <span className="absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-amber-300/70" aria-label="Pinned" />
+                      <Fragment key={project.id}>
+                        {pinnedProjectCount > 0 && index === pinnedProjectCount && (
+                          <span
+                            aria-hidden="true"
+                            className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]"
+                          />
                         )}
-                        {containsActiveChat && (
-                          <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
-                        )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedProjectId(project.id)}
+                          aria-label={`Select ${project.name}`}
+                          aria-pressed={selected}
+                          title={project.name}
+                          className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
+                            selected
+                              ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
+                              : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
+                          }`}
+                        >
+                          {projectInitial(project.name)}
+                          {containsActiveChat && (
+                            <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
+                          )}
+                        </button>
+                      </Fragment>
                     );
                   })}
                 </div>
