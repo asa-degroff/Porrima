@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback, useId, useLayoutEffect } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection, SystemPauseStatus } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
@@ -79,136 +79,36 @@ interface Props {
   agentName?: string;
 }
 
-function ChevronIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
-    >
-      <path d="M9 18l6-6-6-6" />
-    </svg>
-  );
+const PROJECT_COLOR_CLASSES: Record<string, { icon: string; bg: string; border: string; text: string; hover: string }> = {
+  emerald: { icon: "text-emerald-400/60", bg: "bg-emerald-500/15", border: "border-emerald-400/25", text: "text-emerald-300", hover: "hover:bg-emerald-500/25" },
+  purple: { icon: "text-purple-400/60", bg: "bg-purple-500/15", border: "border-purple-400/25", text: "text-purple-300", hover: "hover:bg-purple-500/25" },
+  blue: { icon: "text-blue-400/60", bg: "bg-blue-500/15", border: "border-blue-400/25", text: "text-blue-300", hover: "hover:bg-blue-500/25" },
+  amber: { icon: "text-amber-400/60", bg: "bg-amber-500/15", border: "border-amber-400/25", text: "text-amber-300", hover: "hover:bg-amber-500/25" },
+  rose: { icon: "text-rose-400/60", bg: "bg-rose-500/15", border: "border-rose-400/25", text: "text-rose-300", hover: "hover:bg-rose-500/25" },
+  cyan: { icon: "text-cyan-400/60", bg: "bg-cyan-500/15", border: "border-cyan-400/25", text: "text-cyan-300", hover: "hover:bg-cyan-500/25" },
+  violet: { icon: "text-violet-400/60", bg: "bg-violet-500/15", border: "border-violet-400/25", text: "text-violet-300", hover: "hover:bg-violet-500/25" },
+  orange: { icon: "text-orange-400/60", bg: "bg-orange-500/15", border: "border-orange-400/25", text: "text-orange-300", hover: "hover:bg-orange-500/25" },
+  pink: { icon: "text-pink-400/60", bg: "bg-pink-500/15", border: "border-pink-400/25", text: "text-pink-300", hover: "hover:bg-pink-500/25" },
+  teal: { icon: "text-teal-400/60", bg: "bg-teal-500/15", border: "border-teal-400/25", text: "text-teal-300", hover: "hover:bg-teal-500/25" },
+};
+
+function projectInitial(name: string) {
+  return Array.from(name.trim())[0]?.toLocaleUpperCase() || "•";
 }
 
-const SIDEBAR_COLLAPSE_DURATION_MS = 200;
+const DEFAULT_PROJECT_WORKSPACE_HEIGHT = "clamp(7rem, 28vh, 14rem)";
+const MIN_PROJECT_WORKSPACE_HEIGHT = 112;
+const MAX_PROJECT_WORKSPACE_HEIGHT = 420;
 
-function ceilToDevicePixel(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  const ratio = window.devicePixelRatio || 1;
-  return Math.ceil(value * ratio) / ratio;
-}
-
-function AnimatedCollapse({
-  open,
-  id,
-  closeFromHeight,
-  children,
-  className = "",
-  innerClassName = "",
-}: {
-  open: boolean;
-  id?: string;
-  closeFromHeight?: number | null;
-  children: React.ReactNode;
-  className?: string;
-  innerClassName?: string;
-}) {
-  const [shouldRender, setShouldRender] = useState(open);
-  const [maxHeight, setMaxHeight] = useState<string | undefined>(open ? undefined : "0px");
-  const [visible, setVisible] = useState(open);
-  const outerRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
-
-  const measureOpenHeight = useCallback((outer: HTMLDivElement | null, inner: HTMLDivElement | null, fallbackHeight: number) => {
-    if (!outer) {
-      return ceilToDevicePixel(inner?.scrollHeight ?? fallbackHeight);
-    }
-
-    const previousTransition = outer.style.transition;
-    const previousMaxHeight = outer.style.maxHeight;
-
-    outer.style.transition = "none";
-    outer.style.maxHeight = "none";
-    const allocatedHeight = outer.getBoundingClientRect().height;
-    outer.style.maxHeight = previousMaxHeight;
-    outer.style.transition = previousTransition;
-
-    return ceilToDevicePixel(allocatedHeight || inner?.scrollHeight || fallbackHeight);
-  }, []);
-
-  useLayoutEffect(() => {
-    const outer = outerRef.current;
-    const inner = innerRef.current;
-
-    if (open) {
-      setShouldRender(true);
-      const currentHeight = ceilToDevicePixel(outer?.getBoundingClientRect().height ?? 0);
-      const targetHeight = measureOpenHeight(outer, inner, currentHeight);
-      setMaxHeight(`${currentHeight}px`);
-      setVisible(true);
-
-      const frame = window.requestAnimationFrame(() => {
-        setMaxHeight(`${targetHeight}px`);
-      });
-
-      const timer = window.setTimeout(() => {
-        setMaxHeight(undefined);
-      }, SIDEBAR_COLLAPSE_DURATION_MS);
-
-      return () => {
-        window.cancelAnimationFrame(frame);
-        window.clearTimeout(timer);
-      };
-    }
-
-    if (!shouldRender) {
-      return;
-    }
-
-    const currentHeight = closeFromHeight ?? outer?.offsetHeight ?? inner?.scrollHeight ?? 0;
-    setMaxHeight(`${currentHeight}px`);
-    setVisible(true);
-
-    const frame = window.requestAnimationFrame(() => {
-      setVisible(false);
-      setMaxHeight("0px");
-    });
-
-    const timer = window.setTimeout(() => {
-      setShouldRender(false);
-    }, SIDEBAR_COLLAPSE_DURATION_MS);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
-    };
-  }, [open, shouldRender, closeFromHeight]);
-
-  if (!shouldRender && !open) return null;
-
-  return (
-    <div
-      ref={outerRef}
-      id={id}
-      aria-hidden={!open}
-      className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out motion-reduce:transition-none ${
-        visible ? "opacity-100" : "opacity-0 pointer-events-none"
-      } ${className}`}
-      style={{ maxHeight }}
-    >
-      <div ref={innerRef} className={`min-h-0 overflow-hidden ${innerClassName}`}>
-        {children}
-      </div>
-    </div>
+function clampProjectWorkspaceHeight(height: number) {
+  const viewportLimit = typeof window === "undefined"
+    ? MAX_PROJECT_WORKSPACE_HEIGHT
+    : Math.floor(window.innerHeight * 0.55);
+  const maxHeight = Math.max(
+    MIN_PROJECT_WORKSPACE_HEIGHT,
+    Math.min(MAX_PROJECT_WORKSPACE_HEIGHT, viewportLimit),
   );
+  return Math.round(Math.min(Math.max(height, MIN_PROJECT_WORKSPACE_HEIGHT), maxHeight));
 }
 
 // Dynamic sidebar logo — mirrors the octahedron geometry with user-selected hue/saturation
@@ -594,12 +494,10 @@ function ChangeProjectDirectoryModal({
   );
 }
 
-function ProjectSection({
+function SelectedProjectPanel({
   project,
   chats,
   activeChatId,
-  expanded,
-  onToggleExpanded,
   onSelectChat,
   onNewChat,
   onDeleteChat,
@@ -619,8 +517,6 @@ function ProjectSection({
   project: Project;
   chats: ChatListItemType[];
   activeChatId: string | null;
-  expanded: boolean;
-  onToggleExpanded: () => void;
   onSelectChat: (id: string) => void;
   onNewChat: (type: ChatType, projectId?: string) => void;
   onDeleteChat: (id: string) => void;
@@ -643,7 +539,6 @@ function ProjectSection({
   const [changingDirectory, setChangingDirectory] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(project.name);
-  const [expandedCloseHeight, setExpandedCloseHeight] = useState<number | null>(null);
   const [showAllChats, setShowAllChats] = useState(false);
 
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
@@ -660,12 +555,14 @@ function ProjectSection({
   );
 
   useEffect(() => {
-    if (!expanded) {
-      setShowAllChats(false);
-    }
-  }, [expanded]);
+    if (!confirmDelete) return;
+    window.dispatchEvent(new CustomEvent("sidebar-block-close:show"));
+    return () => {
+      window.dispatchEvent(new CustomEvent("sidebar-block-close:hide"));
+    };
+  }, [confirmDelete]);
+
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const expandedContentId = useId();
 
   const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -691,13 +588,6 @@ function ProjectSection({
   }, [onWarmNewChatBaseline]);
   const newChatLongPressProps = useLongPress(openNewChatContextMenu);
 
-  const handleToggleExpanded = useCallback(() => {
-    if (expanded) {
-      setExpandedCloseHeight(document.getElementById(expandedContentId)?.offsetHeight ?? 0);
-    }
-    onToggleExpanded();
-  }, [expanded, expandedContentId, onToggleExpanded]);
-
   // Focus name input when editing starts
   useEffect(() => {
     if (editingName && nameInputRef.current) {
@@ -706,22 +596,7 @@ function ProjectSection({
     }
   }, [editingName]);
 
-  // Color mapping for Tailwind classes
-  // Note: All color classes must be fully written out for Tailwind v4 to detect them
-  const colorClasses: Record<string, { icon: string; bg: string; border: string; text: string; hover: string }> = {
-    emerald: { icon: "text-emerald-400/50", bg: "bg-emerald-500/15", border: "border-emerald-400/25", text: "text-emerald-300", hover: "hover:bg-emerald-500/25" },
-    purple: { icon: "text-purple-400/50", bg: "bg-purple-500/15", border: "border-purple-400/25", text: "text-purple-300", hover: "hover:bg-purple-500/25" },
-    blue: { icon: "text-blue-400/50", bg: "bg-blue-500/15", border: "border-blue-400/25", text: "text-blue-300", hover: "hover:bg-blue-500/25" },
-    amber: { icon: "text-amber-400/50", bg: "bg-amber-500/15", border: "border-amber-400/25", text: "text-amber-300", hover: "hover:bg-amber-500/25" },
-    rose: { icon: "text-rose-400/50", bg: "bg-rose-500/15", border: "border-rose-400/25", text: "text-rose-300", hover: "hover:bg-rose-500/25" },
-    cyan: { icon: "text-cyan-400/50", bg: "bg-cyan-500/15", border: "border-cyan-400/25", text: "text-cyan-300", hover: "hover:bg-cyan-500/25" },
-    violet: { icon: "text-violet-400/50", bg: "bg-violet-500/15", border: "border-violet-400/25", text: "text-violet-300", hover: "hover:bg-violet-500/25" },
-    orange: { icon: "text-orange-400/50", bg: "bg-orange-500/15", border: "border-orange-400/25", text: "text-orange-300", hover: "hover:bg-orange-500/25" },
-    pink: { icon: "text-pink-400/50", bg: "bg-pink-500/15", border: "border-pink-400/25", text: "text-pink-300", hover: "hover:bg-pink-500/25" },
-    teal: { icon: "text-teal-400/50", bg: "bg-teal-500/15", border: "border-teal-400/25", text: "text-teal-300", hover: "hover:bg-teal-500/25" },
-  };
-
-  const colors = colorClasses[project.color] || colorClasses.emerald;
+  const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
 
   const handlePinToggle = async () => {
     await onEditProject({ ...project, pinned: !project.pinned });
@@ -763,21 +638,16 @@ function ProjectSection({
   }, [project.name]);
 
   return (
-    <div className="relative">
-      <div
-        className="group flex min-h-8 items-center gap-1 px-1 py-0.5 select-none"
-      >
-        <button
-          onClick={handleToggleExpanded}
+    <div className="relative flex h-full min-h-0 flex-col">
+      <div className="group flex min-h-9 shrink-0 items-center gap-1 border-b border-white/[0.06] px-1.5 py-0.5 select-none">
+        <div
           onContextMenu={handleHeaderContextMenu}
           {...longPressProps}
-          aria-expanded={expanded}
-          aria-controls={expandedContentId}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-white/[0.04]"
+          role="button"
+          tabIndex={0}
+          aria-label={`${project.name} project options`}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-white/[0.04]"
         >
-          <span className="shrink-0 text-white/25 group-hover:text-white/45">
-            <ChevronIcon expanded={expanded} />
-          </span>
           <span className={colors.icon}>
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
@@ -805,10 +675,8 @@ function ProjectSection({
               </svg>
             </span>
           )}
-          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-white/20">
-            {chats.length}
-          </span>
-        </button>
+          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-white/25">{chats.length}</span>
+        </div>
         <button
           onClick={() => onNewChat("agent", project.id)}
           onContextMenu={handleNewChatContextMenu}
@@ -855,14 +723,14 @@ function ProjectSection({
           {/* Color sub-section */}
           <div className="px-4 py-1.5 border-t border-white/5">
             <div className="flex gap-1.5 flex-wrap">
-              {Object.keys(colorClasses).map((color) => (
+              {Object.keys(PROJECT_COLOR_CLASSES).map((color) => (
                 <button
                   key={color}
                   onClick={() => handleColorChange(color)}
                   className={`w-4 h-4 rounded-full border transition-all ${
-                    colorClasses[color as keyof typeof colorClasses].bg
+                    PROJECT_COLOR_CLASSES[color].bg
                   } ${
-                    colorClasses[color as keyof typeof colorClasses].border
+                    PROJECT_COLOR_CLASSES[color].border
                   } ${
                     project.color === color ? 'ring-1 ring-white/50 scale-110' : 'hover:scale-105'
                   }`}
@@ -933,10 +801,7 @@ function ProjectSection({
           onSave={onEditProject}
         />
       )}
-      
-      <AnimatedCollapse open={expanded} id={expandedContentId} closeFromHeight={expandedCloseHeight}>
-        <div className="ml-7 mr-1 border-l border-white/[0.07] pb-1 pl-2">
-          <div className="project-chat-scroll-pane max-h-[min(12rem,30vh)] overflow-y-auto overflow-x-clip pr-1">
+      <div className="project-chat-scroll-pane min-h-0 flex-1 overflow-y-auto overflow-x-clip px-1.5 py-1">
             {chats.length > 0 ? (
               <>
                 <div className="space-y-px">
@@ -966,13 +831,11 @@ function ProjectSection({
                 )}
               </>
             ) : (
-              <p className="px-2 py-1.5 text-[10px] text-white/25">
+              <p className="px-2 py-2 text-[10px] text-white/25">
                 No chats yet
               </p>
             )}
-          </div>
-        </div>
-      </AnimatedCollapse>
+      </div>
     </div>
   );
 }
@@ -1028,7 +891,12 @@ export function Sidebar({
   showSystemStats = false,
   agentName = "Porrima",
 }: Props) {
-  const { getProjectExpanded, setProjectExpanded } = useSidebarState();
+  const {
+    selectedProjectId,
+    setSelectedProjectId,
+    projectWorkspaceHeight,
+    setProjectWorkspaceHeight,
+  } = useSidebarState();
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
   const systemPauseActive = systemPause?.active ?? false;
@@ -1052,6 +920,17 @@ export function Sidebar({
   const [searchLoading, setSearchLoading] = useState(false);
   const [newChatContextMenu, setNewChatContextMenu] = useState<{ x: number; y: number } | null>(null);
   const headerRef = useRef<HTMLDivElement>(null);
+  const projectWorkspaceRef = useRef<HTMLDivElement>(null);
+  const projectResizeRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    currentHeight: number;
+  } | null>(null);
+  const [projectWorkspaceHeightDraft, setProjectWorkspaceHeightDraft] = useState<number | null>(() =>
+    projectWorkspaceHeight === null ? null : clampProjectWorkspaceHeight(projectWorkspaceHeight)
+  );
+  const [isProjectWorkspaceResizing, setIsProjectWorkspaceResizing] = useState(false);
   const [agentShowAll, setAgentShowAll] = useState(false);
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
@@ -1166,6 +1045,124 @@ export function Sidebar({
     }
     return map;
   }, [chats, projects]);
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId]
+  );
+  const displayedProject = selectedProject ?? projects[0] ?? null;
+  const activeChatProjectId = useMemo(
+    () => chats.find((chat) => chat.id === activeChatId)?.projectId ?? null,
+    [activeChatId, chats]
+  );
+  const lastAutoSelectedChatIdRef = useRef<string | null>(null);
+  const knownProjectIdsRef = useRef<Set<string> | null>(null);
+
+  // Navigating into a project chat selects its workspace. Manual rail selection
+  // remains stable because this only runs when the active chat actually changes.
+  useEffect(() => {
+    if (!activeChatProjectId || !activeChatId) {
+      lastAutoSelectedChatIdRef.current = null;
+      return;
+    }
+    if (lastAutoSelectedChatIdRef.current === activeChatId) return;
+    lastAutoSelectedChatIdRef.current = activeChatId;
+    setSelectedProjectId(activeChatProjectId);
+  }, [activeChatId, activeChatProjectId, setSelectedProjectId]);
+
+  // Keep persisted selection valid as projects are loaded or deleted.
+  useEffect(() => {
+    if (projects.length === 0) {
+      if (selectedProjectId !== null) setSelectedProjectId(null);
+      return;
+    }
+    if (!projects.some((project) => project.id === selectedProjectId)) {
+      const activeProjectStillExists = projects.some((project) => project.id === activeChatProjectId);
+      setSelectedProjectId(activeProjectStillExists ? activeChatProjectId : projects[0].id);
+    }
+  }, [activeChatProjectId, projects, selectedProjectId, setSelectedProjectId]);
+
+  // A newly created project becomes the visible workspace without requiring a
+  // second click after the creation modal closes.
+  useEffect(() => {
+    const nextIds = new Set(projects.map((project) => project.id));
+    const knownIds = knownProjectIdsRef.current;
+    knownProjectIdsRef.current = nextIds;
+    if (!knownIds) return;
+    const addedProjects = projects.filter((project) => !knownIds.has(project.id));
+    if (addedProjects.length === 1) {
+      setSelectedProjectId(addedProjects[0].id);
+    }
+  }, [projects, setSelectedProjectId]);
+
+  useEffect(() => {
+    if (isProjectWorkspaceResizing) return;
+    setProjectWorkspaceHeightDraft(
+      projectWorkspaceHeight === null ? null : clampProjectWorkspaceHeight(projectWorkspaceHeight)
+    );
+  }, [isProjectWorkspaceResizing, projectWorkspaceHeight]);
+
+  const handleProjectResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !projectWorkspaceRef.current) return;
+    const startHeight = projectWorkspaceRef.current.getBoundingClientRect().height;
+    const initialHeight = clampProjectWorkspaceHeight(startHeight);
+    projectResizeRef.current = {
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startHeight: initialHeight,
+      currentHeight: initialHeight,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setProjectWorkspaceHeightDraft(initialHeight);
+    setIsProjectWorkspaceResizing(true);
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleProjectResizePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = projectResizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+    const nextHeight = clampProjectWorkspaceHeight(resize.startHeight + e.clientY - resize.startY);
+    resize.currentHeight = nextHeight;
+    setProjectWorkspaceHeightDraft(nextHeight);
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const finishProjectResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = projectResizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    projectResizeRef.current = null;
+    setIsProjectWorkspaceResizing(false);
+    setProjectWorkspaceHeight(resize.currentHeight);
+    e.preventDefault();
+    e.stopPropagation();
+  }, [setProjectWorkspaceHeight]);
+
+  const resetProjectWorkspaceHeight = useCallback(() => {
+    projectResizeRef.current = null;
+    setIsProjectWorkspaceResizing(false);
+    setProjectWorkspaceHeightDraft(null);
+    setProjectWorkspaceHeight(null);
+  }, [setProjectWorkspaceHeight]);
+
+  const handleProjectResizeKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Home") {
+      e.preventDefault();
+      resetProjectWorkspaceHeight();
+      return;
+    }
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const currentHeight = projectWorkspaceHeightDraft
+      ?? projectWorkspaceRef.current?.getBoundingClientRect().height
+      ?? MIN_PROJECT_WORKSPACE_HEIGHT;
+    const nextHeight = clampProjectWorkspaceHeight(currentHeight + (e.key === "ArrowDown" ? 16 : -16));
+    setProjectWorkspaceHeightDraft(nextHeight);
+    setProjectWorkspaceHeight(nextHeight);
+  }, [projectWorkspaceHeightDraft, resetProjectWorkspaceHeight, setProjectWorkspaceHeight]);
 
   // Gesture drawer hook for mobile slide-over
   const { handlers: gestureHandlers, edgeHandlers, containerRef: gestureRef, style: gestureStyle, openProgress, isDragging, isAnimating } = useGestureDrawer({
@@ -1174,7 +1171,7 @@ export function Sidebar({
     onOpen,
     direction: "right",
     threshold: 0.4, // 40% of sidebar width to snap
-    disabled: blockClose,
+    disabled: blockClose || isProjectWorkspaceResizing,
     disabledRef: blockCloseRef,
   });
 
@@ -1266,7 +1263,7 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Chat Sections — flex column, each section grows when expanded */}
+      {/* Chat navigation — fixed controls above one flowing scroll region. */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Synthesis status & action buttons row */}
         <div className="px-3 pt-2 pb-2 shrink-0">
@@ -1491,8 +1488,8 @@ export function Sidebar({
           </div>
         )}
 
-        {/* Projects — root nodes with nested, independently bounded chat lists. */}
-        <section className="border-b border-white/5 pb-1" aria-labelledby="sidebar-projects-heading">
+        {/* Projects — compact workspace rail plus one selected project's chats. */}
+        <section className={displayedProject ? "" : "border-b border-white/5 pb-1"} aria-labelledby="sidebar-projects-heading">
           <div className="flex min-h-8 items-center px-3 pt-1.5">
             <h2 id="sidebar-projects-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
               Projects
@@ -1510,55 +1507,122 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          <div className="space-y-px px-2">
-            {projects.map((project) => (
-              <ProjectSection
-                key={project.id}
-                project={project}
-                chats={chatsByProject[project.id] || []}
-                expanded={getProjectExpanded(project.id)}
-                onToggleExpanded={() => setProjectExpanded(project.id, !getProjectExpanded(project.id))}
-                activeChatId={activeChatId}
-                onSelectChat={(id) => { onSelectChat(id); onClose(); }}
-                onNewChat={onNewChat}
-                onDeleteChat={onDeleteChat}
-                onDeleteProject={onDeleteProject}
-                onEditProject={async (updatedProject) => {
-                  const res = await fetch(`/api/projects/${updatedProject.id}`, {
-                    method: "PATCH",
-                    credentials: "include",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      name: updatedProject.name,
-                      path: updatedProject.path,
-                      locationType: updatedProject.locationType || "local",
-                      sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
-                      color: updatedProject.color,
-                      pinned: updatedProject.pinned,
-                    }),
-                  });
-                  if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error((err as any).error || "Failed to update project");
-                  }
-                  window.dispatchEvent(new CustomEvent("projects:updated"));
-                }}
-                onSendToNotebook={onSendToNotebook}
-                onWarmCache={onWarmCache}
-                onWarmNewChatBaseline={onWarmNewChatBaseline}
-                cacheWarmingChatIds={cacheWarmingChatIds}
-                cacheWarmErrors={cacheWarmErrors}
-                newChatBaselineCacheWarming={newChatBaselineCacheWarming}
-                newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
-                lastActiveChatId={lastActiveChatId}
-                cacheResidency={cacheResidency}
-                newChatBaselineResidency={newChatBaselineResidency}
+          {displayedProject ? (
+            <>
+            <div
+              ref={projectWorkspaceRef}
+              className="mx-2 flex min-h-0 overflow-hidden"
+              style={{ height: projectWorkspaceHeightDraft ?? DEFAULT_PROJECT_WORKSPACE_HEIGHT }}
+            >
+              <div
+                className="project-rail-scroll-pane w-11 shrink-0 overflow-y-auto overflow-x-hidden border-r border-white/[0.06] px-1 py-1.5"
+                aria-label="Projects"
+              >
+                <div className="flex flex-col items-center gap-1">
+                  {projects.map((project) => {
+                    const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
+                    const selected = project.id === displayedProject.id;
+                    const containsActiveChat = project.id === activeChatProjectId;
+                    return (
+                      <button
+                        key={project.id}
+                        type="button"
+                        onClick={() => setSelectedProjectId(project.id)}
+                        aria-label={`Select ${project.name}`}
+                        aria-pressed={selected}
+                        title={project.name}
+                        className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
+                          selected
+                            ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
+                            : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
+                        }`}
+                      >
+                        {projectInitial(project.name)}
+                        {project.pinned && (
+                          <span className="absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-amber-300/70" aria-label="Pinned" />
+                        )}
+                        {containsActiveChat && (
+                          <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="min-w-0 flex-1">
+                <SelectedProjectPanel
+                  key={displayedProject.id}
+                  project={displayedProject}
+                  chats={chatsByProject[displayedProject.id] || []}
+                  activeChatId={activeChatId}
+                  onSelectChat={(id) => { onSelectChat(id); onClose(); }}
+                  onNewChat={onNewChat}
+                  onDeleteChat={onDeleteChat}
+                  onDeleteProject={onDeleteProject}
+                  onEditProject={async (updatedProject) => {
+                    const res = await fetch(`/api/projects/${updatedProject.id}`, {
+                      method: "PATCH",
+                      credentials: "include",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        name: updatedProject.name,
+                        path: updatedProject.path,
+                        locationType: updatedProject.locationType || "local",
+                        sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
+                        color: updatedProject.color,
+                        pinned: updatedProject.pinned,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({}));
+                      throw new Error((err as any).error || "Failed to update project");
+                    }
+                    window.dispatchEvent(new CustomEvent("projects:updated"));
+                  }}
+                  onSendToNotebook={onSendToNotebook}
+                  onWarmCache={onWarmCache}
+                  onWarmNewChatBaseline={onWarmNewChatBaseline}
+                  cacheWarmingChatIds={cacheWarmingChatIds}
+                  cacheWarmErrors={cacheWarmErrors}
+                  newChatBaselineCacheWarming={newChatBaselineCacheWarming}
+                  newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
+                  lastActiveChatId={lastActiveChatId}
+                  cacheResidency={cacheResidency}
+                  newChatBaselineResidency={newChatBaselineResidency}
+                />
+              </div>
+            </div>
+            <div
+              role="separator"
+              aria-label="Resize projects section"
+              aria-orientation="horizontal"
+              aria-valuemin={MIN_PROJECT_WORKSPACE_HEIGHT}
+              aria-valuemax={clampProjectWorkspaceHeight(Number.MAX_SAFE_INTEGER)}
+              aria-valuenow={projectWorkspaceHeightDraft ?? projectWorkspaceHeight ?? undefined}
+              tabIndex={0}
+              title="Drag to resize projects. Double-click or press Home to reset."
+              onPointerDown={handleProjectResizePointerDown}
+              onPointerMove={handleProjectResizePointerMove}
+              onPointerUp={finishProjectResize}
+              onPointerCancel={finishProjectResize}
+              onDoubleClick={resetProjectWorkspaceHeight}
+              onKeyDown={handleProjectResizeKeyDown}
+              onTouchStart={(e) => e.stopPropagation()}
+              className="group relative h-2 cursor-row-resize touch-none select-none outline-none"
+            >
+              <span
+                className={`pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 transition-colors ${
+                  isProjectWorkspaceResizing
+                    ? "bg-white/30"
+                    : "bg-white/[0.06] group-hover:bg-white/20 group-focus:bg-white/20"
+                }`}
+                aria-hidden="true"
               />
-            ))}
-            {projects.length === 0 && (
-              <p className="px-2 pb-1.5 text-[10px] text-white/25">No projects yet</p>
-            )}
-          </div>
+            </div>
+            </>
+          ) : (
+            <p className="px-4 pb-1.5 text-[10px] text-white/25">No projects yet</p>
+          )}
         </section>
 
         {/* Global agent chats */}

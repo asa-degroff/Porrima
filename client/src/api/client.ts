@@ -1704,6 +1704,8 @@ export interface UserUIState {
     agentExpanded: boolean;
     quickExpanded: boolean;
     projectStates: Record<string, boolean>;
+    selectedProjectId?: string | null;
+    projectWorkspaceHeight?: number | null;
   };
   notebookLastSeen?: string | null;
   activeChatId?: string | null;
