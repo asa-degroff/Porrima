@@ -896,6 +896,8 @@ export function Sidebar({
     setSelectedProjectId,
     projectWorkspaceHeight,
     setProjectWorkspaceHeight,
+    projectsExpanded,
+    setProjectsExpanded,
     quickExpanded,
     setQuickExpanded,
   } = useSidebarState();
@@ -1416,8 +1418,7 @@ export function Sidebar({
           </div>
         )}
 
-        <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-2">
-        {/* System Chat Section */}
+        {/* System Chat — fixed above the projects workspace. */}
         {systemChats.length > 0 && (
           <div className="px-3 py-1 shrink-0 border-b border-white/5">
             <div className="px-1">
@@ -1441,14 +1442,12 @@ export function Sidebar({
                   >
                     <span className="min-w-0 flex-1 truncate md:group-hover:pr-5">{chat.title}</span>
 
-                    {/* Warming animation (active or queued) */}
                     {(isWarming || isQueued) && (
                       <div className="shrink-0 pointer-events-none" title={isQueued ? "Cache warming queued" : "Warming cache"}>
                         <PrefillActivityIcon paused={isQueued} />
                       </div>
                     )}
 
-                    {/* Error indicator */}
                     {warmError && !isWarming && !isQueued && (
                       <div className="shrink-0 text-red-300/80" title={`Cache warm failed: ${warmError}`}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
@@ -1459,7 +1458,6 @@ export function Sidebar({
                       </div>
                     )}
 
-                    {/* Hover warm action — desktop only */}
                     {!isWarming && !isQueued && (
                       <div
                         onClick={(e) => {
@@ -1498,12 +1496,41 @@ export function Sidebar({
           </div>
         )}
 
-        {/* Projects — compact workspace rail plus one selected project's chats. */}
-        <section className={displayedProject ? "" : "border-b border-white/5 pb-1"} aria-labelledby="sidebar-projects-heading">
+        {/* Projects — top-anchored workspace with a persisted collapse toggle. */}
+        <section
+          className={`shrink-0 border-b border-white/5 ${displayedProject ? "" : "pb-1"}`}
+          aria-labelledby="sidebar-projects-heading"
+        >
           <div className="flex min-h-8 items-center px-3 pt-1.5">
-            <h2 id="sidebar-projects-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
-              Projects
-            </h2>
+            <button
+              type="button"
+              onClick={() => setProjectsExpanded(!projectsExpanded)}
+              aria-expanded={projectsExpanded}
+              aria-controls="sidebar-projects-workspace"
+              className="group flex min-w-0 flex-1 items-center gap-1 text-left pressable"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`shrink-0 text-white/30 transition-transform duration-200 ${projectsExpanded ? "rotate-180" : ""}`}
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+              <h2 id="sidebar-projects-heading" className="shrink-0 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+                Projects
+              </h2>
+              <span className="min-w-0 flex-1 truncate px-1 text-[10px] text-white/30">
+                {!projectsExpanded && displayedProject ? displayedProject.name : ""}
+              </span>
+            </button>
             <span className="mr-1 text-[10px] tabular-nums text-white/20">{projects.length}</span>
             <button
               onClick={onNewProject}
@@ -1517,128 +1544,132 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          {displayedProject ? (
-            <>
-            <div
-              ref={projectWorkspaceRef}
-              className="mx-2 flex min-h-0 overflow-hidden"
-              style={{ height: projectWorkspaceHeightDraft ?? DEFAULT_PROJECT_WORKSPACE_HEIGHT }}
-            >
-              <div
-                className="project-rail-scroll-pane w-11 shrink-0 overflow-y-auto overflow-x-hidden border-r border-white/[0.06] px-1 py-1.5"
-                aria-label="Projects"
-              >
-                <div className="flex flex-col items-center gap-1">
-                  {projectRailProjects.map((project, index) => {
-                    const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
-                    const selected = project.id === displayedProject.id;
-                    const containsActiveChat = project.id === activeChatProjectId;
-                    return (
-                      <Fragment key={project.id}>
-                        {pinnedProjectCount > 0 && index === pinnedProjectCount && (
-                          <span
-                            aria-hidden="true"
-                            className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]"
-                          />
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedProjectId(project.id)}
-                          aria-label={`Select ${project.name}`}
-                          aria-pressed={selected}
-                          title={project.name}
-                          className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
-                            selected
-                              ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
-                              : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
-                          }`}
-                        >
-                          {projectInitial(project.name)}
-                          {containsActiveChat && (
-                            <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
-                          )}
-                        </button>
-                      </Fragment>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="min-w-0 flex-1">
-                <SelectedProjectPanel
-                  key={displayedProject.id}
-                  project={displayedProject}
-                  chats={chatsByProject[displayedProject.id] || []}
-                  activeChatId={activeChatId}
-                  onSelectChat={(id) => { onSelectChat(id); onClose(); }}
-                  onNewChat={onNewChat}
-                  onDeleteChat={onDeleteChat}
-                  onDeleteProject={onDeleteProject}
-                  onEditProject={async (updatedProject) => {
-                    const res = await fetch(`/api/projects/${updatedProject.id}`, {
-                      method: "PATCH",
-                      credentials: "include",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        name: updatedProject.name,
-                        path: updatedProject.path,
-                        locationType: updatedProject.locationType || "local",
-                        sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
-                        color: updatedProject.color,
-                        pinned: updatedProject.pinned,
-                      }),
-                    });
-                    if (!res.ok) {
-                      const err = await res.json().catch(() => ({}));
-                      throw new Error((err as any).error || "Failed to update project");
-                    }
-                    window.dispatchEvent(new CustomEvent("projects:updated"));
-                  }}
-                  onSendToNotebook={onSendToNotebook}
-                  onWarmCache={onWarmCache}
-                  onWarmNewChatBaseline={onWarmNewChatBaseline}
-                  cacheWarmingChatIds={cacheWarmingChatIds}
-                  cacheWarmErrors={cacheWarmErrors}
-                  newChatBaselineCacheWarming={newChatBaselineCacheWarming}
-                  newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
-                  lastActiveChatId={lastActiveChatId}
-                  cacheResidency={cacheResidency}
-                  newChatBaselineResidency={newChatBaselineResidency}
-                />
-              </div>
-            </div>
-            <div
-              role="separator"
-              aria-label="Resize projects section"
-              aria-orientation="horizontal"
-              aria-valuemin={MIN_PROJECT_WORKSPACE_HEIGHT}
-              aria-valuemax={clampProjectWorkspaceHeight(Number.MAX_SAFE_INTEGER)}
-              aria-valuenow={projectWorkspaceHeightDraft ?? projectWorkspaceHeight ?? undefined}
-              tabIndex={0}
-              title="Drag to resize projects. Double-click or press Home to reset."
-              onPointerDown={handleProjectResizePointerDown}
-              onPointerMove={handleProjectResizePointerMove}
-              onPointerUp={finishProjectResize}
-              onPointerCancel={finishProjectResize}
-              onDoubleClick={resetProjectWorkspaceHeight}
-              onKeyDown={handleProjectResizeKeyDown}
-              onTouchStart={(e) => e.stopPropagation()}
-              className="group relative h-2 cursor-row-resize touch-none select-none outline-none"
-            >
-              <span
-                className={`pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 transition-colors ${
-                  isProjectWorkspaceResizing
-                    ? "bg-white/30"
-                    : "bg-white/[0.06] group-hover:bg-white/20 group-focus:bg-white/20"
-                }`}
-                aria-hidden="true"
-              />
-            </div>
-            </>
-          ) : (
-            <p className="px-4 pb-1.5 text-[10px] text-white/25">No projects yet</p>
-          )}
+          <div
+            id="sidebar-projects-workspace"
+            className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${projectsExpanded ? "max-h-[30rem] opacity-100" : "max-h-0 opacity-0"}`}
+            inert={!projectsExpanded}
+          >
+            {displayedProject ? (
+                <>
+                  <div
+                    ref={projectWorkspaceRef}
+                    className="mx-2 flex min-h-0 overflow-hidden"
+                    style={{ height: projectWorkspaceHeightDraft ?? DEFAULT_PROJECT_WORKSPACE_HEIGHT }}
+                  >
+                    <div
+                      className="project-rail-scroll-pane w-11 shrink-0 overflow-y-auto overflow-x-hidden border-r border-white/[0.06] px-1 py-1.5"
+                      aria-label="Projects"
+                    >
+                      <div className="flex flex-col items-center gap-1">
+                        {projectRailProjects.map((project, index) => {
+                          const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
+                          const selected = project.id === displayedProject.id;
+                          const containsActiveChat = project.id === activeChatProjectId;
+                          return (
+                            <Fragment key={project.id}>
+                              {pinnedProjectCount > 0 && index === pinnedProjectCount && (
+                                <span aria-hidden="true" className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]" />
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedProjectId(project.id)}
+                                aria-label={`Select ${project.name}`}
+                                aria-pressed={selected}
+                                title={project.name}
+                                className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
+                                  selected
+                                    ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
+                                    : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
+                                }`}
+                              >
+                                {projectInitial(project.name)}
+                                {containsActiveChat && (
+                                  <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
+                                )}
+                              </button>
+                            </Fragment>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <SelectedProjectPanel
+                        key={displayedProject.id}
+                        project={displayedProject}
+                        chats={chatsByProject[displayedProject.id] || []}
+                        activeChatId={activeChatId}
+                        onSelectChat={(id) => { onSelectChat(id); onClose(); }}
+                        onNewChat={onNewChat}
+                        onDeleteChat={onDeleteChat}
+                        onDeleteProject={onDeleteProject}
+                        onEditProject={async (updatedProject) => {
+                          const res = await fetch(`/api/projects/${updatedProject.id}`, {
+                            method: "PATCH",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              name: updatedProject.name,
+                              path: updatedProject.path,
+                              locationType: updatedProject.locationType || "local",
+                              sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
+                              color: updatedProject.color,
+                              pinned: updatedProject.pinned,
+                            }),
+                          });
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            throw new Error((err as any).error || "Failed to update project");
+                          }
+                          window.dispatchEvent(new CustomEvent("projects:updated"));
+                        }}
+                        onSendToNotebook={onSendToNotebook}
+                        onWarmCache={onWarmCache}
+                        onWarmNewChatBaseline={onWarmNewChatBaseline}
+                        cacheWarmingChatIds={cacheWarmingChatIds}
+                        cacheWarmErrors={cacheWarmErrors}
+                        newChatBaselineCacheWarming={newChatBaselineCacheWarming}
+                        newChatBaselineCacheWarmError={newChatBaselineCacheWarmError}
+                        lastActiveChatId={lastActiveChatId}
+                        cacheResidency={cacheResidency}
+                        newChatBaselineResidency={newChatBaselineResidency}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    role="separator"
+                    aria-label="Resize projects section"
+                    aria-orientation="horizontal"
+                    aria-valuemin={MIN_PROJECT_WORKSPACE_HEIGHT}
+                    aria-valuemax={clampProjectWorkspaceHeight(Number.MAX_SAFE_INTEGER)}
+                    aria-valuenow={projectWorkspaceHeightDraft ?? projectWorkspaceHeight ?? undefined}
+                    tabIndex={0}
+                    title="Drag to resize projects. Double-click or press Home to reset."
+                    onPointerDown={handleProjectResizePointerDown}
+                    onPointerMove={handleProjectResizePointerMove}
+                    onPointerUp={finishProjectResize}
+                    onPointerCancel={finishProjectResize}
+                    onDoubleClick={resetProjectWorkspaceHeight}
+                    onKeyDown={handleProjectResizeKeyDown}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    className="group relative h-2 cursor-row-resize touch-none select-none outline-none"
+                  >
+                    <span
+                      className={`pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 transition-colors ${
+                        isProjectWorkspaceResizing
+                          ? "bg-white/30"
+                          : "bg-white/[0.06] group-hover:bg-white/20 group-focus:bg-white/20"
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </>
+            ) : (
+              <p className="px-4 pb-1.5 text-[10px] text-white/25">No projects yet</p>
+            )}
+          </div>
         </section>
 
+        <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-clip pb-2">
         {/* Global agent chats */}
         <section className="border-b border-white/5 pb-1" aria-labelledby="sidebar-global-heading">
           <div className="flex min-h-8 items-center px-3 pt-1.5">
