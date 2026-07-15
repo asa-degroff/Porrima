@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, lazy, Suspense, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense, useRef } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { NotebookView } from "./components/NotebookView";
@@ -179,6 +179,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   const refreshActiveChatFromServerRef = useRef<((id: string, options?: { force?: boolean; priority?: "high" | "low" | "auto" }) => Promise<boolean>) | null>(null);
   const genericAutomationRunningRef = useRef(false);
   const lastGenericAutomationTaskIdRef = useRef<string | null>(null);
+  const wasWakeCycleRunningRef = useRef(false);
   const streamingRef = useRef(false);
   const tts = useTTS();
   const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
@@ -193,6 +194,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     removeEntry,
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
+    refresh: refreshNotebooks,
     searchResults: notebookSearchResults,
     searchQuery: notebookSearchQuery,
     isSearching: isSearchingNotebooks,
@@ -376,7 +378,9 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       try {
         const status = await fetchSynthesisStatus();
         const prev = wasSynthesizingRef.current;
+        const wasWakeCycleRunning = wasWakeCycleRunningRef.current;
         wasSynthesizingRef.current = status.isSynthesizing;
+        wasWakeCycleRunningRef.current = status.isWakeCycleRunning;
         setIsSynthesizing(status.isSynthesizing);
         setIsAutomationRunning(!!status.isAutomationRunning && !status.isSynthesizing && !status.isWakeCycleRunning);
         setIsExtractionRunning(status.isExtractionRunning);
@@ -401,6 +405,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
           lastGenericAutomationTaskIdRef.current = null;
           console.log(`[automation] ${completedTaskId || "task"} finished, refreshing system chat`);
           refresh();
+          void refreshNotebooks();
           if (activeChatIdStateRef.current === SYSTEM_CHAT_ID) {
             refreshActiveChatFromServerRef.current?.(SYSTEM_CHAT_ID, { force: true, priority: "low" }).catch(() => {});
           } else {
@@ -412,7 +417,11 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         } else if (prev) {
           // Transition from active → idle: synthesis just finished.
           setSynthesisComplete(true);
+          void refreshNotebooks();
           setTimeout(() => setSynthesisComplete(false), 5000);
+        }
+        if (wasWakeCycleRunning && !status.isWakeCycleRunning) {
+          void refreshNotebooks();
         }
       } catch {
         // Ignore polling errors
@@ -421,7 +430,27 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     poll();
     const interval = setInterval(poll, 10000);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [refresh, refreshNotebooks]);
+
+  // Notebook indexes live for the lifetime of the app, while autonomous
+  // tasks and other devices can add entries at any time. Block the notebook
+  // view on each entry until its authoritative indexes have been refreshed,
+  // preventing the previous visit's snapshot from flashing first.
+  useLayoutEffect(() => {
+    if (activeView !== "notebooks") return;
+    void refreshNotebooks({ blocking: true });
+  }, [activeView, refreshNotebooks]);
+
+  // Pick up remote/background notebook changes when returning to the app.
+  useEffect(() => {
+    if (activeView !== "notebooks") return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshNotebooks();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [activeView, refreshNotebooks]);
 
   // Persist lastActiveChatId to settings (debounced, so we don't churn writes)
   useEffect(() => {

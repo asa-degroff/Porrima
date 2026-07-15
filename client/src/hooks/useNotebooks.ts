@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   fetchUserNotebooks,
   fetchAgentNotebooks,
@@ -16,6 +16,11 @@ import type { NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, 
 const NOTEBOOK_LAST_SEEN_KEY = "porrima-notebook-agent-last-seen";
 const LEGACY_NOTEBOOK_LAST_SEEN_KEY = "quje-notebook-agent-last-seen";
 
+interface NotebookRefreshOptions {
+  /** Hide the existing snapshot until the fresh indexes arrive. */
+  blocking?: boolean;
+}
+
 export function useNotebooks() {
   const [userNotebooks, setUserNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
   const [agentNotebooks, setAgentNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
@@ -26,6 +31,8 @@ export function useNotebooks() {
   const [searchResults, setSearchResults] = useState<NotebookSearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const refreshRequestRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
   // Load last-seen from server on mount
   useEffect(() => {
@@ -45,27 +52,40 @@ export function useNotebooks() {
       });
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ blocking = false }: NotebookRefreshOptions = {}) => {
+    const requestId = ++refreshRequestRef.current;
+    if (blocking) setLoading(true);
+
     try {
       const [user, agent] = await Promise.all([
         fetchUserNotebooks(),
         fetchAgentNotebooks(),
       ]);
+      if (requestId !== refreshRequestRef.current) return;
+
       setUserNotebooks(user);
       setAgentNotebooks(agent);
       setError(null);
+      hasLoadedRef.current = true;
     } catch (e) {
-      if (e instanceof OfflineError) {
-        setError("Network unavailable");
-      } else {
-        setError(e instanceof Error ? e.message : "Failed to load notebooks");
+      if (requestId !== refreshRequestRef.current) return;
+
+      // Preserve a previously loaded snapshot during transient background
+      // failures. The initial load still surfaces an actionable error.
+      if (!hasLoadedRef.current) {
+        if (e instanceof OfflineError) {
+          setError("Network unavailable");
+        } else {
+          setError(e instanceof Error ? e.message : "Failed to load notebooks");
+        }
       }
+    } finally {
+      if (requestId === refreshRequestRef.current) setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh({ blocking: true });
   }, [refresh]);
 
   const createUserEntry = useCallback(
