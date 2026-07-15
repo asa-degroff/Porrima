@@ -81,6 +81,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
   const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
+  const hasCacheIndicator = effectiveCacheWarming || isQueued || Boolean(cacheWarmError);
 
   const handleWarm = useCallback(() => {
     setContextMenu(null);
@@ -119,7 +120,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       )}
       {/* Keep sidebar rows compact: the title carries the identity; previews live in search. */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <p className="truncate text-xs font-medium leading-4 text-white/80 pr-5">
+        <p className={`truncate text-xs font-medium leading-4 text-white/80 ${hasCacheIndicator ? "pr-5" : "md:group-hover:pr-5"}`}>
           {chat.title}
         </p>
       </div>
@@ -180,7 +181,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
               handleDeleteClick(e);
             }
           }}
-          className="absolute right-0 top-0 bottom-0 items-center pr-2 pl-6 rounded-r-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex"
+          className="absolute right-0 top-0 bottom-0 items-center pr-2 pl-6 rounded-r-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer pointer-events-none group-hover:pointer-events-auto hidden md:flex"
           title={chat.type === "agent" ? "Warm cache" : "Delete chat"}
         >
           <div className={`transition-colors p-0.5 ${chat.type === "agent" ? "text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]" : "text-white/30 hover:text-red-400"}`}>

@@ -1437,7 +1437,7 @@ export function Sidebar({
                     }`}
                     title={warmError ? `Cache warm failed: ${warmError}` : undefined}
                   >
-                    <span className="flex-1 truncate">{chat.title}</span>
+                    <span className="min-w-0 flex-1 truncate md:group-hover:pr-5">{chat.title}</span>
 
                     {/* Warming animation (active or queued) */}
                     {(isWarming || isQueued) && (
@@ -1465,7 +1465,7 @@ export function Sidebar({
                           onWarmCache?.(chat.id);
                         }}
                         title="Warm cache"
-                        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-opacity"
                       >
                         <div className="transition-colors p-0.5 text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]">
                           <svg
