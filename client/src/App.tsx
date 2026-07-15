@@ -66,6 +66,7 @@ const BUILT_IN_AUTOMATION_IDS = new Set(["builtin:synthesis", "builtin:wake"]);
 const ACTIVE_CHAT_HEADER_POLL_INTERVAL_MS = 5_000;
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
 const MANUAL_TTS_FOLLOW_RETRY_MS = 300;
+const MANUAL_TTS_FOLLOW_MAX_PLAYBACK_RETRIES = 2;
 const MANUAL_TTS_MIN_CONTINUATION_CHARS = 40;
 const MANUAL_TTS_MIN_CONTINUATION_WORDS = 6;
 const MANUAL_TTS_MAX_CONTINUATION_CHARS = 220;
@@ -182,7 +183,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   const wasWakeCycleRunningRef = useRef(false);
   const streamingRef = useRef(false);
   const tts = useTTS();
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, handleAgentAudioError, cleanupLiveAudio } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -693,13 +694,20 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       if (detail.chatId !== activeChatId) return;
       handleAgentAudioDone();
     };
+    const errorHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { chatId: string; error: string };
+      if (detail.chatId !== activeChatId) return;
+      handleAgentAudioError(detail.error);
+    };
     window.addEventListener("agent-audio-chunk", chunkHandler);
     window.addEventListener("agent-audio-done", doneHandler);
+    window.addEventListener("agent-audio-error", errorHandler);
     return () => {
       window.removeEventListener("agent-audio-chunk", chunkHandler);
       window.removeEventListener("agent-audio-done", doneHandler);
+      window.removeEventListener("agent-audio-error", errorHandler);
     };
-  }, [activeChatId, ttsSettings.enabled, handleAgentAudioChunk, handleAgentAudioDone]);
+  }, [activeChatId, ttsSettings.enabled, handleAgentAudioChunk, handleAgentAudioDone, handleAgentAudioError]);
 
   useEffect(() => {
     return () => {
@@ -721,6 +729,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     chatId: string | null;
     cursor: number;
     timer: number | null;
+    playbackRetries: number;
   } | null>(null);
   const manualReadAloudFollowIdRef = useRef(0);
   const continueManualReadAloudFollowRef = useRef<(id: number) => void>(() => {});
@@ -753,6 +762,26 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     manualReadAloudFollowIdRef.current += 1;
     setTtsContinuationWaiting(false);
   }, [setTtsContinuationWaiting]);
+
+  const retryManualReadAloudFollow = useCallback((id: number) => {
+    const follow = manualReadAloudFollowRef.current;
+    if (!follow || follow.id !== id || follow.chatId !== latestActiveChatIdRef.current) return;
+
+    if (follow.playbackRetries >= MANUAL_TTS_FOLLOW_MAX_PLAYBACK_RETRIES) {
+      clearManualReadAloudFollow();
+      return;
+    }
+
+    follow.playbackRetries += 1;
+    setTtsContinuationWaiting(true);
+    follow.timer = window.setTimeout(() => {
+      const current = manualReadAloudFollowRef.current;
+      if (current?.id === id) {
+        current.timer = null;
+      }
+      continueManualReadAloudFollowRef.current(id);
+    }, MANUAL_TTS_FOLLOW_RETRY_MS);
+  }, [clearManualReadAloudFollow, setTtsContinuationWaiting]);
 
   const continueManualReadAloudFollow = useCallback((id: number) => {
     const follow = manualReadAloudFollowRef.current;
@@ -794,10 +823,17 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         return;
       }
 
-      follow.cursor = latestText.length;
+      const attemptEnd = latestText.length;
       setTtsContinuationWaiting(false);
       void playTts(unreadText, {
-        onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+        onPlaybackEnd: () => {
+          const current = manualReadAloudFollowRef.current;
+          if (!current || current.id !== id) return;
+          current.cursor = Math.max(current.cursor, attemptEnd);
+          current.playbackRetries = 0;
+          continueManualReadAloudFollowRef.current(id);
+        },
+        onPlaybackError: () => retryManualReadAloudFollow(id),
       });
       return;
     }
@@ -815,7 +851,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     }
 
     clearManualReadAloudFollow();
-  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting, ttsSettings.streamingBoundaryTier]);
+  }, [clearManualReadAloudFollow, playTts, retryManualReadAloudFollow, setTtsContinuationWaiting, ttsSettings.streamingBoundaryTier]);
 
   useEffect(() => {
     continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;
@@ -860,14 +896,22 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     manualReadAloudFollowRef.current = {
       id,
       chatId: latestActiveChatIdRef.current,
-      cursor: liveFragmentCursor,
+      cursor: 0,
       timer: null,
+      playbackRetries: 0,
     };
 
     void playTts(text, {
-      onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+      onPlaybackEnd: () => {
+        const current = manualReadAloudFollowRef.current;
+        if (!current || current.id !== id) return;
+        current.cursor = liveFragmentCursor;
+        current.playbackRetries = 0;
+        continueManualReadAloudFollowRef.current(id);
+      },
+      onPlaybackError: () => retryManualReadAloudFollow(id),
     });
-  }, [clearManualReadAloudFollow, playTts]);
+  }, [clearManualReadAloudFollow, playTts, retryManualReadAloudFollow]);
 
   const handleStandaloneReadAloud = useCallback((text: string) => {
     clearManualReadAloudFollow();

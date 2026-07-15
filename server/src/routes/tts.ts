@@ -8,6 +8,7 @@ import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
 import { chunkPlanOptionsForSettings, generateTTSChunks, planTTSChunks, generateTTSChunksStreamed } from "../services/tts-chunking.js";
 import { getTtsPythonStatus } from "../services/tts-python.js";
+import { TTSChunkGenerationError } from "../services/tts-retry.js";
 import { APP_DATA_DIR } from "../services/paths.js";
 
 const router = express.Router();
@@ -570,8 +571,16 @@ router.post("/generate-stream", async (req, res) => {
   } catch (error) {
     console.error("[TTS] Chunked generation error:", error);
     const message = error instanceof Error ? error.message : "Failed to generate chunked audio";
+    const failure = error instanceof TTSChunkGenerationError
+      ? {
+          chunkIndex: error.index,
+          totalChunks: error.totalChunks,
+          attempts: error.attempts,
+          backend: error.backend,
+        }
+      : {};
     if (res.headersSent) {
-      res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+      res.write(`event: error\ndata: ${JSON.stringify({ error: message, ...failure })}\n\n`);
       res.end();
     } else {
       res.status(500).json({ error: message });

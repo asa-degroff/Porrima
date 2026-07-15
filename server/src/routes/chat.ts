@@ -35,6 +35,7 @@ import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAt
 import { hydrateUserImageAttachments, saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
 import { saveToolResultImage, stripToolResultImageData } from "../services/tool-result-image-storage.js";
 import { streamTTS, isStreamingCapable, TTS_FLUSH_SIGNAL, type StreamingTTSTextInput } from "../services/tts-streaming.js";
+import { TTSChunkGenerationError } from "../services/tts-retry.js";
 import type { TTSSettings } from "../types/tts.js";
 import { getCurrentTTSSettings } from "./tts.js";
 import { log } from "../services/logger.js";
@@ -1826,7 +1827,13 @@ async function handleChatStream(
         } catch (err) {
           console.error("[TTS] Streaming error:", err);
           if (!connectionClosed && !res.writableEnded) {
-            res.write(`event: audio_error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : String(err) })}\n\n`);
+            const failure = err instanceof TTSChunkGenerationError
+              ? { chunkIndex: err.index, attempts: err.attempts, backend: err.backend }
+              : {};
+            res.write(`event: audio_error\ndata: ${JSON.stringify({
+              error: err instanceof Error ? err.message : String(err),
+              ...failure,
+            })}\n\n`);
           }
         }
       })();
