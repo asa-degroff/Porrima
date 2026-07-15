@@ -896,6 +896,8 @@ export function Sidebar({
     setSelectedProjectId,
     projectWorkspaceHeight,
     setProjectWorkspaceHeight,
+    quickExpanded,
+    setQuickExpanded,
   } = useSidebarState();
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
@@ -1692,12 +1694,37 @@ export function Sidebar({
           </div>
         </section>
 
+        </div>
+
         {/* Quick chats */}
-        <section className="pb-1" aria-labelledby="sidebar-quick-heading">
+        <section className="shrink-0 border-t border-white/5 bg-black/5 pb-1" aria-labelledby="sidebar-quick-heading">
           <div className="flex min-h-8 items-center px-3 pt-1.5">
-            <h2 id="sidebar-quick-heading" className="flex-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
-              Quick Chats
-            </h2>
+            <button
+              type="button"
+              onClick={() => setQuickExpanded(!quickExpanded)}
+              aria-expanded={quickExpanded}
+              aria-controls="sidebar-quick-list"
+              className="group flex min-w-0 flex-1 items-center gap-1 text-left pressable"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`shrink-0 text-white/30 transition-transform duration-200 ${quickExpanded ? "rotate-180" : ""}`}
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+              <h2 id="sidebar-quick-heading" className="truncate px-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+                Quick Chats
+              </h2>
+            </button>
             <span className="mr-1 text-[10px] tabular-nums text-white/20">{quickChats.length}</span>
             <button
               onClick={() => { onNewChat("quick"); onClose(); }}
@@ -1711,37 +1738,46 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          <div className="space-y-px px-3">
-            {(quickShowAll ? quickChats : quickChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
-              <ChatListItem
-                key={chat.id}
-                chat={chat}
-                active={chat.id === activeChatId}
-                lastActive={chat.id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(chat.id) ?? null}
-                onSelect={() => { onSelectChat(chat.id); onClose(); }}
-                onDelete={() => onDeleteChat(chat.id)}
-                onSendToNotebook={onSendToNotebook}
-                onWarmCache={onWarmCache}
-                cacheWarming={cacheWarmingChatIds.has(chat.id)}
-                cacheWarmError={cacheWarmErrors.get(chat.id)}
-              />
-            ))}
-            {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
-              <button
-                onClick={() => setQuickShowAll(true)}
-                className="w-full rounded-lg border border-blue-400/20 bg-blue-500/10 px-2 py-1.5 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-500/20 pressable"
-              >
-                Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
-              </button>
-            )}
-            {quickChats.length === 0 && (
-              <p className="px-2 pb-1.5 text-[10px] text-white/25">No quick chats yet</p>
-            )}
+          <div
+            id="sidebar-quick-list"
+            className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${quickExpanded ? "max-h-[30rem] opacity-100" : "max-h-0 opacity-0"}`}
+          >
+            <div
+              className="sidebar-scroll-pane max-h-[min(30vh,18rem)] overflow-y-auto px-3 pb-1"
+              aria-hidden={!quickExpanded}
+              inert={!quickExpanded}
+            >
+              <div className="space-y-px">
+                {(quickShowAll ? quickChats : quickChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
+                  <ChatListItem
+                    key={chat.id}
+                    chat={chat}
+                    active={chat.id === activeChatId}
+                    lastActive={chat.id === lastActiveChatId}
+                    cacheResidency={cacheResidency.get(chat.id) ?? null}
+                    onSelect={() => { onSelectChat(chat.id); onClose(); }}
+                    onDelete={() => onDeleteChat(chat.id)}
+                    onSendToNotebook={onSendToNotebook}
+                    onWarmCache={onWarmCache}
+                    cacheWarming={cacheWarmingChatIds.has(chat.id)}
+                    cacheWarmError={cacheWarmErrors.get(chat.id)}
+                  />
+                ))}
+                {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+                  <button
+                    onClick={() => setQuickShowAll(true)}
+                    className="w-full rounded-lg border border-blue-400/20 bg-blue-500/10 px-2 py-1.5 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-500/20 pressable"
+                  >
+                    Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+                  </button>
+                )}
+                {quickChats.length === 0 && (
+                  <p className="px-2 pb-1.5 text-[10px] text-white/25">No quick chats yet</p>
+                )}
+              </div>
+            </div>
           </div>
         </section>
-
-        </div>
 
 
       </div>

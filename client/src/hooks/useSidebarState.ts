@@ -17,7 +17,7 @@ const LEGACY_LOCAL_STORAGE_KEY = "quje-sidebar-state";
 const DEFAULT_STATE: SidebarState = {
   projectsExpanded: true,
   agentExpanded: true,
-  quickExpanded: true,
+  quickExpanded: false,
   projectStates: {},
   selectedProjectId: null,
   projectWorkspaceHeight: null,
