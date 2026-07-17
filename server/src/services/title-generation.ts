@@ -84,7 +84,7 @@ export async function generateTitle(
   const truncatedResponse = assistantResponse.slice(0, 500);
 
   const systemContent =
-    "Generate a short title (3-8 words) summarizing this conversation. " +
+    "Generate a short title (2-5 words) summarizing this conversation. " +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation.";
   const userContent = `User: ${truncatedUser}\n\nAssistant: ${truncatedResponse}`;
 
@@ -150,7 +150,7 @@ export async function regenerateTitle(
   const context = parts.join("\n\n");
 
   const systemContent =
-    "Generate a short title (3-8 words) summarizing this conversation. " +
+    "Generate a short title (2-5 words) summarizing this conversation. " +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation. " +
     "Focus on the current topic being discussed.";
 
@@ -183,7 +183,7 @@ export async function generateSystemCycleTitle(
   const truncatedResponse = assistantResponse.slice(0, 1200);
 
   const systemContent =
-    `Generate a short sidebar title (3-8 words) for the latest ${cycleLabel}. ` +
+    `Generate a short sidebar title (2-5 words) for the latest ${cycleLabel}. ` +
     "Focus on the concrete topic, outcome, or theme. " +
     "Avoid generic titles like 'Daily Synthesis' or 'Wake Cycle' unless there is no better subject. " +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation.";
