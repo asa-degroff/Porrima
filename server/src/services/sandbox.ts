@@ -80,7 +80,7 @@ export async function executePython(
   code: string,
   timeout: number = 30,
   sessionId?: string,
-  options: { maxBuffer?: number; args?: string[] } = {}
+  options: { maxBuffer?: number; args?: string[]; signal?: AbortSignal } = {}
 ): Promise<ExecutionResult> {
   let workspaceDir: string;
   let isPersistent = false;
@@ -123,6 +123,7 @@ export async function executePython(
         {
           timeout: timeout * 1000,
           maxBuffer: options.maxBuffer ?? 1024 * 1024,
+          signal: options.signal,
           cwd: workspaceDir,
           env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
         },

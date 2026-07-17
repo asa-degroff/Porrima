@@ -41,6 +41,16 @@ async function saveManifest(manifest: CacheManifest): Promise<void> {
   await writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), "utf-8");
 }
 
+let manifestWriteChain: Promise<void> = Promise.resolve();
+function updateManifest(mutator: (manifest: CacheManifest) => void): Promise<void> {
+  manifestWriteChain = manifestWriteChain.then(async () => {
+    const manifest = await loadManifest();
+    mutator(manifest);
+    await saveManifest(manifest);
+  });
+  return manifestWriteChain;
+}
+
 async function cleanupOldCache(): Promise<void> {
   try {
     const manifest = await loadManifest();
@@ -54,7 +64,9 @@ async function cleanupOldCache(): Promise<void> {
     }
 
     if (stale.length > 0) {
-      await saveManifest(manifest);
+      await updateManifest((current) => {
+        for (const [hash] of stale) delete current[hash];
+      });
     }
   } catch (e) {
     // Non-fatal — cleanup failures don't affect the fetch
@@ -143,18 +155,18 @@ const WEB_SEARCH_TOOL: Tool = {
   parameters: Type.Object({
     query: Type.String({ description: "Search query" }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results (1-20, default 5)",
         minimum: 1,
         maximum: 20,
       })
     ),
-    provider: Type.Optional(Type.String({ description: "Optional provider override: brave, exa, or tavily. Omit to use the configured default. Use the bare value, not a quoted string." })),
+    provider: Type.Optional(Type.Enum(WEB_SEARCH_PROVIDERS, { description: "Optional provider override; omit to use the configured default" })),
     startPublishedDate: Type.Optional(
-      Type.String({ description: "Exa/Tavily: earliest publication or update date (YYYY-MM-DD)" })
+      Type.String({ description: "Exa/Tavily: earliest publication or update date", format: "date" })
     ),
     endPublishedDate: Type.Optional(
-      Type.String({ description: "Exa/Tavily: latest publication or update date (YYYY-MM-DD)" })
+      Type.String({ description: "Exa/Tavily: latest publication or update date", format: "date" })
     ),
     includeDomains: Type.Optional(
       Type.Array(Type.String(), { description: "Exa/Tavily: domains to include in results" })
@@ -163,10 +175,28 @@ const WEB_SEARCH_TOOL: Tool = {
       Type.Array(Type.String(), { description: "Tavily only: domains to exclude from results" })
     ),
     providerOptions: Type.Optional(
-      Type.Any({
-        description:
-          "Provider-specific options object. Exa: { searchType: 'auto|neural|keyword|hybrid|fast|deep|deep-lite|deep-reasoning|magic|instant', contents: { text?, highlights?, summary? } }. Tavily: { searchDepth: 'basic|advanced|fast|ultra-fast', topic: 'general|news|finance', timeRange: 'day|week|month|year', includeAnswer: boolean|'basic'|'advanced', includeRawContent: boolean|'markdown'|'text' }. Unknown keys are ignored.",
-      })
+      Type.Object({
+        searchType: Type.Optional(Type.Enum(["auto", "neural", "keyword", "hybrid", "fast", "deep", "deep-lite", "deep-reasoning", "magic", "instant"] as const)),
+        searchDepth: Type.Optional(Type.Enum(TAVILY_SEARCH_DEPTHS)),
+        topic: Type.Optional(Type.Enum(TAVILY_TOPICS)),
+        timeRange: Type.Optional(Type.Enum(TAVILY_TIME_RANGES)),
+        includeAnswer: Type.Optional(Type.Union([Type.Boolean(), ...TAVILY_ANSWER_MODES.map((value) => Type.Literal(value))])),
+        includeRawContent: Type.Optional(Type.Union([Type.Boolean(), ...TAVILY_RAW_CONTENT_MODES.map((value) => Type.Literal(value))])),
+        contents: Type.Optional(Type.Object({
+          text: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+            maxCharacters: Type.Optional(Type.Integer({ minimum: 1 })),
+            includeHtmlTags: Type.Optional(Type.Boolean()),
+          }, { additionalProperties: false })])),
+          highlights: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+            query: Type.Optional(Type.String()),
+            numSentences: Type.Optional(Type.Integer({ minimum: 1 })),
+            highlightsPerUrl: Type.Optional(Type.Integer({ minimum: 1 })),
+          }, { additionalProperties: false })])),
+          summary: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+            query: Type.Optional(Type.String()),
+          }, { additionalProperties: false })])),
+        }, { additionalProperties: false })),
+      }, { additionalProperties: false, description: "Provider-specific Exa or Tavily options" })
     ),
   }),
 };
@@ -174,11 +204,11 @@ const WEB_SEARCH_TOOL: Tool = {
 const WEB_FETCH_TOOL: Tool = {
   name: "web_fetch",
   description:
-    "Fetch a web page, save its full content to a cached file, and return a preview (first ~10K chars) with the file path and total size. Uses a headless browser to render JavaScript. By default, extracts the main article content; set raw=true to get the full page.",
+    "Fetch a JavaScript-rendered web page and return readable markdown. Large pages are cached internally; paginate them by calling web_fetch again with the same URL and a larger offset.",
   parameters: Type.Object({
     url: Type.String({ description: "URL to fetch (http or https)" }),
     timeout: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Navigation timeout in seconds (5-60, default 30)",
         minimum: 5,
         maximum: 60,
@@ -190,6 +220,8 @@ const WEB_FETCH_TOOL: Tool = {
           "If true, return the full page HTML as markdown instead of extracting the main content (default false)",
       })
     ),
+    offset: Type.Optional(Type.Integer({ description: "Character offset into cached page content (default 0)", minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ description: "Characters to return (default 10000, max 50000)", minimum: 1000, maximum: 50000 })),
   }),
 };
 
@@ -210,13 +242,14 @@ function pickOption<T>(args: Record<string, any>, key: string): T | undefined {
 }
 
 export async function executeWebTool(
-  toolCall: ToolCall
+  toolCall: ToolCall,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   switch (toolCall.name) {
     case "web_search":
-      return executeWebSearch(toolCall.arguments);
+      return executeWebSearch(toolCall.arguments, signal);
     case "web_fetch":
-      return executeWebFetch(toolCall.arguments);
+      return executeWebFetch(toolCall.arguments, signal);
     default:
       return { content: `Unknown web tool: ${toolCall.name}`, isError: true };
   }
@@ -258,7 +291,8 @@ async function getDefaultWebSearchProvider(): Promise<WebSearchProvider> {
 }
 
 async function executeWebSearch(
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   const requestedProvider = normalizeString(args.provider);
   if (requestedProvider !== undefined && !isWebSearchProvider(requestedProvider)) {
@@ -271,17 +305,18 @@ async function executeWebSearch(
   const provider = requestedProvider || await getDefaultWebSearchProvider();
 
   if (provider === "exa") {
-    return executeExaSearch(args);
+    return executeExaSearch(args, signal);
   }
   if (provider === "tavily") {
-    return executeTavilySearch(args);
+    return executeTavilySearch(args, signal);
   }
 
-  return executeBraveSearch(args);
+  return executeBraveSearch(args, signal);
 }
 
 async function executeBraveSearch(
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   const apiKey = await getBraveApiKey();
   if (!apiKey) {
@@ -305,6 +340,7 @@ async function executeBraveSearch(
     url.searchParams.set("count", String(count));
 
     const response = await fetch(url.toString(), {
+      signal,
       headers: {
         Accept: "application/json",
         "Accept-Encoding": "gzip",
@@ -340,7 +376,8 @@ async function executeBraveSearch(
 }
 
 async function executeExaSearch(
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   const apiKey = await getExaApiKey();
   if (!apiKey) {
@@ -391,6 +428,7 @@ async function executeExaSearch(
         "x-api-key": apiKey,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -445,7 +483,8 @@ async function executeExaSearch(
 }
 
 async function executeTavilySearch(
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   const apiKey = await getTavilyApiKey();
   if (!apiKey) {
@@ -496,6 +535,7 @@ async function executeTavilySearch(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -549,7 +589,8 @@ async function executeTavilySearch(
 // --- web_fetch ---
 
 async function executeWebFetch(
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   const urlStr = args.url;
   if (!urlStr) {
@@ -571,19 +612,34 @@ async function executeWebFetch(
     };
   }
 
+  const timeoutMs = (Math.min(60, Math.max(5, args.timeout || 30))) * 1000;
+  const raw = args.raw === true;
+  const offset = Math.max(0, args.offset || 0);
+  const limit = Math.min(50_000, Math.max(1_000, args.limit || PREVIEW_LENGTH));
+  const hash = urlToHash(`${urlStr}\0raw=${raw}`);
+  const cachedPath = join(WEB_CACHE_DIR, `${hash}.md`);
+
+  try {
+    const manifest = await loadManifest();
+    const entry = manifest[hash];
+    if (entry && Date.now() - entry.fetchedAt <= CACHE_TTL_MS) {
+      const markdown = await readFile(cachedPath, "utf-8");
+      return { content: formatWebFetchSlice(markdown, urlStr, offset, limit, true), isError: false };
+    }
+  } catch {
+    // Missing or corrupt cache entries are treated as a normal cache miss.
+  }
+
   const chromePath = findChromePath();
   if (!chromePath) {
     return {
-      content:
-        "No Chrome/Chromium installation found. Install Google Chrome or Chromium to use web_fetch.",
+      content: "No Chrome/Chromium installation found. Install Google Chrome or Chromium to use web_fetch.",
       isError: true,
     };
   }
 
-  const timeoutMs = (Math.min(60, Math.max(5, args.timeout || 30))) * 1000;
-  const raw = args.raw === true;
-
-  let browser;
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
+  let onAbort: (() => void) | undefined;
   try {
     browser = await puppeteer.launch({
       executablePath: chromePath,
@@ -592,6 +648,8 @@ async function executeWebFetch(
     });
 
     const page = await browser.newPage();
+    onAbort = () => { void browser?.close(); };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     // Block image/media requests to avoid base64-encoded content bloating the output
     await page.setRequestInterception(true);
@@ -614,6 +672,8 @@ async function executeWebFetch(
     });
 
     const html = await page.content();
+    signal?.removeEventListener("abort", onAbort);
+    onAbort = undefined;
     await browser.close();
     browser = null;
 
@@ -660,34 +720,20 @@ async function executeWebFetch(
     }
 
     // Cache + progressive disclosure for large pages
-    if (markdown.length > PREVIEW_LENGTH) {
-      const hash = urlToHash(urlStr);
-      const filePath = join(WEB_CACHE_DIR, `${hash}.md`);
-
+    if (markdown.length > PREVIEW_LENGTH || offset > 0) {
       // Save full content to cache
       await mkdir(WEB_CACHE_DIR, { recursive: true });
-      await writeFile(filePath, markdown, "utf-8");
+      await writeFile(cachedPath, markdown, "utf-8");
 
       // Update manifest
-      const manifest = await loadManifest();
-      manifest[hash] = { url: urlStr, hash, fetchedAt: Date.now(), charCount: markdown.length };
-      await saveManifest(manifest);
+      await updateManifest((manifest) => {
+        manifest[hash] = { url: urlStr, hash, fetchedAt: Date.now(), charCount: markdown.length };
+      });
 
       // Run cleanup asynchronously (non-blocking)
       cleanupOldCache().catch(() => {});
 
-      const preview = markdown.slice(0, PREVIEW_LENGTH);
-      return {
-        content:
-          `[web_fetch] Saved to: ${filePath}\n` +
-          `  URL: ${urlStr}\n` +
-          `  Total: ${markdown.length.toLocaleString()} characters\n\n` +
-          preview +
-          `\n\n---\n` +
-          `Use read_file(path="${filePath}", offset=N) to read more.\n` +
-          `The cached file contains all ${markdown.length.toLocaleString()} characters.`,
-        isError: false,
-      };
+      return { content: formatWebFetchSlice(markdown, urlStr, offset, limit, false), isError: false };
     }
 
     // Small content — return inline, no cache needed
@@ -695,10 +741,21 @@ async function executeWebFetch(
   } catch (e: any) {
     return { content: `Web fetch failed: ${e.message}`, isError: true };
   } finally {
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
     if (browser) {
       try {
         await browser.close();
       } catch {}
     }
   }
+}
+
+function formatWebFetchSlice(markdown: string, url: string, offset: number, limit: number, cached: boolean): string {
+  const start = Math.min(offset, markdown.length);
+  const end = Math.min(markdown.length, start + limit);
+  const header = `[web_fetch${cached ? " cached" : ""}] ${url}\nCharacters ${start}-${end} of ${markdown.length}`;
+  const next = end < markdown.length
+    ? `\n\n---\nCall web_fetch again with the same URL and offset=${end} to continue.`
+    : "";
+  return `${header}\n\n${markdown.slice(start, end)}${next}`;
 }

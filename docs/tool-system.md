@@ -4,14 +4,16 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 ## Registry (`server/src/services/agent-tools.ts`)
 
-- `getAgentTools(chatId, effects, contextWindow)` returns all tools with context-aware result limits; `executeTool(toolCall, chatId, onEvent?)` dispatches by name.
+- `getAgentTools(chatId, effects, contextWindow, project, chatType)` returns the runtime registry with context-aware result limits and chat-type gating. System/headless chats omit interactive skill/automation management tools and `ask_user`.
 - **Memory tools** (from `memory-tools.ts`): `save_memory`, `search_memory`, `forget_memory`
 - **Conversation search**: `search_conversation` — FTS5 search on chat history AND archived context blocks (cross-chat), scoped to single chat or global
 - **Archive retrieval**: `read_archived_context` — dereferences an archive block ID to return full original messages (tool outputs, code, reasoning)
 - **Memory blocks**: `create_memory_block`, `update_memory_block`, `read_memory_block`, `list_memory_blocks`, `get_block_history` — structured knowledge documents (see [memory-blocks.md](memory-blocks.md))
-- **Filesystem tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
-- **Web tools**: `web_search`, `web_fetch` — provider-backed web search (Brave, Exa, Tavily) plus rendered page fetch.
-- **Sandbox tools**: `run_python`, `create_artifact`
+- **Workspace tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`, `run_python`, `read_pdf`. They share the same local/SSH workspace adapter, path policy, and cancellation signal.
+- **Web tools**: `web_search`, `web_fetch` — provider-backed web search (Brave, Exa, Tavily) plus rendered page fetch. Large fetches are paginated through `web_fetch` offsets, not server-local file paths.
+- **Artifact tools**: `create_artifact`, `update_artifact`. HTML guidance (including p5 instance-mode checks) is emitted as result-side lint warnings instead of repeated in the tool schema.
+- **Automation tools**: `schedule_reminder`, `list_automations`, `update_automation` (interactive agent chats only).
+- **Skill tools**: `list_skills`, `install_skill`, `remove_skill` (interactive agent chats only).
 - **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
 
 ## Tool Result Limits
@@ -20,7 +22,7 @@ Tool results are dynamically truncated based on the effective context window to 
 
 - **Formula**: `Math.max(8000, contextWindow * 4 * 0.15)` — 15% of context as chars (4 chars/token estimate)
 - 50k context → ~30k char limit; 128k → ~77k; 256k → ~154k
-- Truncated results include a message telling the model to use `offset`/`limit` parameters
+- `read_file` and `web_fetch` expose explicit pagination. Other oversized results are truncated without claiming that a remote workspace can read a server-local spill file.
 - `contextWindow` is passed to `getAgentTools()` after model discovery
 
 ## Tool Loop (`agent-loop-runner.ts`)
@@ -30,6 +32,7 @@ Tool results are dynamically truncated based on the effective context window to 
 - The HTTP chat route owns SSE, persistence, memory extraction, compaction, and pending `ask_user` behavior through callbacks around the shared runner.
 - Headless system-chat, wake, and custom automation turns use `runHeadlessChatTurn()` in `chat-turn-runner.ts`, which adapts the same runner to `SynthesisEmitter` events and persisted system-chat rows.
 - Tool iterations tracked via `turn_end` events from the agent loop
+- The global default is parallel execution. Mutating/stateful tools declare `executionMode: "sequential"`, which serializes the whole tool-call batch when any such tool is present.
 - Each `turn_end` with `stopReason === "toolUse"` is persisted immediately as a canonical assistant row containing only that iteration's tool calls/results. Rows in the same visible assistant response share `_toolLoopId`; tool-use rows have `_toolLoopFragment: true`.
 - The route emits `message_complete` with `continues: true` after a persisted tool-use row so the client can finalize that raw row and create the next live assistant placeholder without showing multiple bubbles.
 - **Mid-turn overflow detection**: At each `turn_end` with `stopReason === "toolUse"`, checks if token usage > 85% of context. If so, aborts the agent loop and enters compaction cycle.
