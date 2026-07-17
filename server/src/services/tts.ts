@@ -106,16 +106,22 @@ async function runKokoro(
       stderrData += data.toString();
     });
 
-    proc.on("close", (code) => {
+    const pid = proc.pid;
+
+    proc.on("close", (code, signal) => {
       if (code !== 0) {
+        const exitDetail = signal
+          ? `pid=${pid ?? "unknown"} signal=${signal}`
+          : `pid=${pid ?? "unknown"} code=${code ?? "unknown"}`;
         // Try to parse error from stderr
         try {
           const lines = stderrData.trim().split("\n");
           const lastLine = lines[lines.length - 1];
           const error = JSON.parse(lastLine);
-          reject(new Error(error.error || "TTS generation failed"));
+          reject(new Error(`${error.error || "TTS generation failed"} (${exitDetail})`));
         } catch {
-          reject(new Error(stderrData || `TTS process exited with code ${code}`));
+          const stderr = stderrData.trim();
+          reject(new Error(stderr ? `${stderr} (${exitDetail})` : `TTS process exited (${exitDetail})`));
         }
         return;
       }

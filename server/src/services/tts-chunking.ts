@@ -3,6 +3,7 @@ import { extractTextForTTS, splitIntoSentences } from "./tts-text-preprocessor.j
 import { generateTTS, getAudioFile } from "./tts.js";
 import { getQwen3AudioFile } from "./tts-qwen3.js";
 import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
+import { withTTSChunkRetry } from "./tts-retry.js";
 
 export interface TTSStreamedChunk {
   chunkId: string;
@@ -119,7 +120,15 @@ export async function* generateTTSChunks(
 
   for (let index = 0; index < totalChunks; index++) {
     const chunkText = textChunks[index];
-    const audio = await generateTTS({ ...request, text: chunkText }, settings);
+    const audio = await withTTSChunkRetry(
+      () => generateTTS({ ...request, text: chunkText }, settings),
+      {
+        backend: settings.backend,
+        index,
+        totalChunks,
+        textLength: chunkText.length,
+      },
+    );
     yield {
       ...audio,
       chunkId: `${index + 1}-${Date.now().toString(36)}`,
@@ -154,7 +163,15 @@ export async function* generateTTSChunksStreamed(
     const chunkText = textChunks[index];
 
     if (settings.backend === "supertonic-3") {
-      const result = await generateSupertonicTTSDirect(chunkText, settings);
+      const result = await withTTSChunkRetry(
+        () => generateSupertonicTTSDirect(chunkText, settings),
+        {
+          backend: settings.backend,
+          index,
+          totalChunks,
+          textLength: chunkText.length,
+        },
+      );
       yield {
         chunkId: `${index + 1}-${Date.now().toString(36)}`,
         index,
@@ -166,25 +183,35 @@ export async function* generateTTSChunksStreamed(
       };
     } else {
       // Fallback: use existing disk-based generation for other backends
-      const audio = await generateTTS({ ...request, text: chunkText }, settings);
-      const cacheKey = audio.audioUrl.replace("/api/tts/audio/", "").replace(".wav", "");
-      const buf = settings.backend === "qwen3-tts"
-        ? getQwen3AudioFile(cacheKey)
-        : getAudioFile(cacheKey);
+      const { audio, buf } = await withTTSChunkRetry(
+        async () => {
+          const audio = await generateTTS({ ...request, text: chunkText }, settings);
+          const cacheKey = audio.audioUrl.replace("/api/tts/audio/", "").replace(".wav", "");
+          const buf = settings.backend === "qwen3-tts"
+            ? getQwen3AudioFile(cacheKey)
+            : getAudioFile(cacheKey);
 
-      if (buf) {
-        yield {
-          chunkId: `${index + 1}-${Date.now().toString(36)}`,
+          if (!buf) {
+            throw new Error(`Generated TTS audio was not found in the ${settings.backend} cache`);
+          }
+          return { audio, buf };
+        },
+        {
+          backend: settings.backend,
           index,
           totalChunks,
-          audioBase64: buf.toString("base64"),
-          duration: audio.duration,
-          sampleRate: 24000,
-          mimeType: "audio/wav",
-        };
-      } else {
-        throw new Error(`Generated TTS audio was not found in the ${settings.backend} cache`);
-      }
+          textLength: chunkText.length,
+        },
+      );
+      yield {
+        chunkId: `${index + 1}-${Date.now().toString(36)}`,
+        index,
+        totalChunks,
+        audioBase64: buf.toString("base64"),
+        duration: audio.duration,
+        sampleRate: 24000,
+        mimeType: "audio/wav",
+      };
     }
   }
 }

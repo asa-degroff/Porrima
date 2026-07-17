@@ -247,6 +247,10 @@ function listAgentNotebookEntries(since?: string): NotebookIndex {
   if (since) {
     blocks = blocks.filter((b) => b.createdAt > since);
   }
+  // listMemoryBlocks is ordered by updatedAt for the block-management UI.
+  // Notebook recency is creation-based: editing an older entry must not move
+  // it ahead of a newer notebook entry or corrupt lastActivityDate.
+  blocks.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const entries = blocks.map((b) => ({
     id: b.id,
     createdAt: b.createdAt,

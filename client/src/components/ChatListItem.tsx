@@ -81,6 +81,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
   const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
+  const hasCacheIndicator = effectiveCacheWarming || isQueued || Boolean(cacheWarmError);
 
   const handleWarm = useCallback(() => {
     setContextMenu(null);
@@ -93,7 +94,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       onClick={onSelect}
       onContextMenu={handleContextMenu}
       {...longPressProps}
-      className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative border select-none ${
+      className={`w-full min-h-8 text-left px-2 py-1.5 rounded-lg transition-all group relative border select-none ${
         active ? "bg-white/10" : "hover:bg-white/6"
       } ${
         active
@@ -113,20 +114,15 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       {/* Vignette overlay — darkens edges for a brighter-center active highlight effect */}
       {active && (
         <div
-          className="absolute inset-0 rounded-xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
+          className="absolute inset-0 rounded-lg pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
           aria-hidden="true"
         />
       )}
-      {/* Always-rendered content to maintain consistent height */}
+      {/* Keep sidebar rows compact: the title carries the identity; previews live in search. */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <p className="text-sm font-medium text-white/90 leading-snug pr-5">
+        <p className={`truncate text-xs font-medium leading-4 text-white/80 ${hasCacheIndicator ? "pr-5" : "md:group-hover:pr-5"}`}>
           {chat.title}
         </p>
-        {chat.preview && (
-          <p className="text-xs text-white/40 truncate mt-0.25 pr-5">
-            {chat.preview}
-          </p>
-        )}
       </div>
 
       {/* Delete confirmation overlay — absolute so it doesn't affect height */}
@@ -185,7 +181,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
               handleDeleteClick(e);
             }
           }}
-          className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex`}
+          className="absolute right-0 top-0 bottom-0 items-center pr-2 pl-6 rounded-r-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer pointer-events-none group-hover:pointer-events-auto hidden md:flex"
           title={chat.type === "agent" ? "Warm cache" : "Delete chat"}
         >
           <div className={`transition-colors p-0.5 ${chat.type === "agent" ? "text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]" : "text-white/30 hover:text-red-400"}`}>

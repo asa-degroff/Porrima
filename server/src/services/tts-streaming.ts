@@ -12,6 +12,7 @@ import { resolveTtsPython } from "./tts-python.js";
 import { generateTTS, getAudioFile } from "./tts.js";
 import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
+import { withTTSChunkRetry } from "./tts-retry.js";
 
 const QWEN3_WRAPPER = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
 
@@ -43,13 +44,26 @@ export async function* streamTTS(
     maxChars: 500,
     boundaryTier: options.boundaryTier ?? 'clause',
   });
+  let chunkIndex = 0;
+
+  const generateChunk = async (chunkText: string): Promise<Buffer | null> => {
+    const index = chunkIndex++;
+    return withTTSChunkRetry(
+      () => generateTTSChunk(chunkText, options),
+      {
+        backend: options.backend,
+        index,
+        textLength: chunkText.length,
+      },
+    );
+  };
   
   for await (const token of textStream) {
     if (token === TTS_FLUSH_SIGNAL) {
       if (buffer.length > 0) {
         const chunkText = buffer.flush();
         if (chunkText.trim()) {
-          const wav = await generateTTSChunk(chunkText, options);
+          const wav = await generateChunk(chunkText);
           if (wav) {
             yield wav;
           }
@@ -66,7 +80,7 @@ export async function* streamTTS(
       buffer.flush();
       
       // Generate audio for this chunk
-      const wav = await generateTTSChunk(chunkText, options);
+      const wav = await generateChunk(chunkText);
       if (wav) {
         yield wav;
       }
@@ -75,7 +89,7 @@ export async function* streamTTS(
   
   // Flush remaining text
   if (buffer.length > 0) {
-    const wav = await generateTTSChunk(buffer.flush(), options);
+    const wav = await generateChunk(buffer.flush());
     if (wav) {
       yield wav;
     }

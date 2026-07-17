@@ -223,6 +223,27 @@ body::before {
   overflow-x: clip;
 }
 
+/* Nested project chat lists hand scrolling back to the main sidebar at their edges. */
+.project-chat-scroll-pane {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+.project-rail-scroll-pane {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+.project-rail-scroll-pane::-webkit-scrollbar {
+  width: 3px;
+}
+
 /* Hidden scrollbar — for overflow containers that should scroll but not show a track */
 .scrollbar-hide {
   -ms-overflow-style: none;

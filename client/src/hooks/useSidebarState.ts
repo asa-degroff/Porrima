@@ -7,6 +7,8 @@ interface SidebarState {
   agentExpanded: boolean;
   quickExpanded: boolean;
   projectStates: Record<string, boolean>;
+  selectedProjectId: string | null;
+  projectWorkspaceHeight: number | null;
 }
 
 const LOCAL_STORAGE_KEY = "porrima-sidebar-state";
@@ -15,8 +17,10 @@ const LEGACY_LOCAL_STORAGE_KEY = "quje-sidebar-state";
 const DEFAULT_STATE: SidebarState = {
   projectsExpanded: true,
   agentExpanded: true,
-  quickExpanded: true,
+  quickExpanded: false,
   projectStates: {},
+  selectedProjectId: null,
+  projectWorkspaceHeight: null,
 };
 
 function loadLocalState(): SidebarState {
@@ -48,7 +52,7 @@ export function useSidebarState() {
     fetchUserUIState()
       .then((serverState) => {
         if (serverState.sidebarState) {
-          setState(serverState.sidebarState);
+          setState({ ...DEFAULT_STATE, ...serverState.sidebarState });
         }
         setSynced(true);
       })
@@ -96,6 +100,14 @@ export function useSidebarState() {
     return state.projectStates[projectId] ?? true;
   }, [state.projectStates]);
 
+  const setSelectedProjectId = useCallback((projectId: string | null) => {
+    setState((prev) => ({ ...prev, selectedProjectId: projectId }));
+  }, []);
+
+  const setProjectWorkspaceHeight = useCallback((height: number | null) => {
+    setState((prev) => ({ ...prev, projectWorkspaceHeight: height }));
+  }, []);
+
   return {
     projectsExpanded: state.projectsExpanded,
     agentExpanded: state.agentExpanded,
@@ -105,5 +117,9 @@ export function useSidebarState() {
     setQuickExpanded,
     setProjectExpanded,
     getProjectExpanded,
+    selectedProjectId: state.selectedProjectId,
+    setSelectedProjectId,
+    projectWorkspaceHeight: state.projectWorkspaceHeight,
+    setProjectWorkspaceHeight,
   };
 }

@@ -47,6 +47,7 @@ interface TTSQueueItem {
   duration: number;
   index: number;
   totalChunks: number;
+  playbackAttempts?: number;
 }
 
 interface PlayOptions {
@@ -55,6 +56,8 @@ interface PlayOptions {
   pitch?: number;
   /** Called when playback naturally ends (not on abort/reset). */
   onPlaybackEnd?: () => void;
+  /** Called after already-buffered audio drains when generation or playback fails. */
+  onPlaybackError?: (error: Error) => void;
 }
 
 function audioBlobUrlFromBase64(base64Audio: string, mimeType = "audio/wav"): string {
@@ -98,6 +101,7 @@ export function useTTS() {
   const chunkQueueRef = useRef<TTSQueueItem[]>([]);
   const chunkModeRef = useRef<"url" | "data" | null>(null);
   const chunkAudioActiveRef = useRef(false);
+  const audioPlaybackSequenceRef = useRef(0);
   const chunkStreamDoneRef = useRef(false);
   const liveAgentAudioActiveRef = useRef(false);
   const liveAgentChunkIndexRef = useRef(0);
@@ -107,10 +111,13 @@ export function useTTS() {
   });
   // Ref for the onPlaybackEnd callback — always points to the latest one
   const onPlaybackEndRef = useRef<(() => void) | undefined>(undefined);
+  const onPlaybackErrorRef = useRef<((error: Error) => void) | undefined>(undefined);
+  const chunkStreamErrorRef = useRef<Error | null>(null);
   // While snapshot playback is active, don't re-init the live queue
   const snapshotPlayingRef = useRef(false);
   // Tracks whether the live agent stream ended while snapshot playback was active
   const liveStreamDoneDuringSnapshotRef = useRef(false);
+  const liveStreamErrorDuringSnapshotRef = useRef<Error | null>(null);
   // Buffers live audio chunks that arrive during snapshot playback, so they can
   // be played after the snapshot finishes instead of being dropped.
   const pendingLiveChunksRef = useRef<TTSQueueItem[]>([]);
@@ -249,7 +256,9 @@ export function useTTS() {
     chunkAudioActiveRef.current = false;
     chunkModeRef.current = null;
     liveStreamDoneDuringSnapshotRef.current = false;
+    liveStreamErrorDuringSnapshotRef.current = null;
     livePlaybackEndRef.current = null;
+    chunkStreamErrorRef.current = null;
     loadingRef.current = false;
   }, []);
 
@@ -258,8 +267,10 @@ export function useTTS() {
     streamAbortRef.current = null;
     cleanupLiveAudio();
     onPlaybackEndRef.current = undefined;
+    onPlaybackErrorRef.current = undefined;
     snapshotPlayingRef.current = false;
     liveStreamDoneDuringSnapshotRef.current = false;
+    liveStreamErrorDuringSnapshotRef.current = null;
     onAudioEndedRef.current = () => {
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
     };
@@ -276,6 +287,8 @@ export function useTTS() {
       chunkAudioActiveRef.current = false;
       if (chunkStreamDoneRef.current) {
         chunkModeRef.current = null;
+        const playbackError = chunkStreamErrorRef.current;
+        chunkStreamErrorRef.current = null;
         const currentAudioUrl = currentAudioUrlRef.current;
         if (currentAudioUrl?.startsWith("blob:")) {
           URL.revokeObjectURL(currentAudioUrl);
@@ -292,11 +305,17 @@ export function useTTS() {
         // URL-mode playback finished. Fire the appropriate callback:
         // - onPlaybackEnd for snapshot playback (used to chain follow-up reads)
         // - livePlaybackEnd for live-mode handoff (used to clear the follow state)
-        if (onPlaybackEndRef.current) {
+        if (snapshotPlayingRef.current) {
           snapshotPlayingRef.current = false;
-          const cb = onPlaybackEndRef.current;
+          const endCb = onPlaybackEndRef.current;
+          const errorCb = onPlaybackErrorRef.current;
           onPlaybackEndRef.current = undefined;
-          if (cb) cb();
+          onPlaybackErrorRef.current = undefined;
+          if (playbackError) {
+            errorCb?.(playbackError);
+          } else {
+            endCb?.();
+          }
         }
         if (livePlaybackEndRef.current) {
           liveAgentAudioActiveRef.current = false;
@@ -325,6 +344,7 @@ export function useTTS() {
     }
 
     chunkAudioActiveRef.current = true;
+    const playbackSequence = ++audioPlaybackSequenceRef.current;
     currentAudioUrlRef.current = next.audioUrl;
     loadingRef.current = true;
     // The global `ended` listener registered in the useEffect will also fire
@@ -342,7 +362,12 @@ export function useTTS() {
     // chunk off the queue and cut the in-flight chunk off after a few hundred
     // milliseconds of audio.
     const handleChunkEnded = () => {
-      if (playId !== playIdRef.current || chunkModeRef.current !== "url") return;
+      if (
+        playId !== playIdRef.current ||
+        chunkModeRef.current !== "url" ||
+        playbackSequence !== audioPlaybackSequenceRef.current ||
+        !audio.ended
+      ) return;
       void playQueuedChunk(playId);
     };
     audio.addEventListener("ended", handleChunkEnded, { once: true });
@@ -368,6 +393,9 @@ export function useTTS() {
       }
 
       loadingRef.current = false;
+      if ((next.playbackAttempts ?? 0) > 0) {
+        setError(null);
+      }
       setPlaybackState({
         isPlaying: true,
         isPaused: false,
@@ -382,13 +410,38 @@ export function useTTS() {
 
       await audio.play();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to play audio chunk";
+      const playbackError = err instanceof Error ? err : new Error("Failed to play audio chunk");
+      const message = playbackError.message;
       setError(message);
       console.error("[TTS] Chunk playback error:", err);
       audio.removeEventListener("ended", handleChunkEnded);
       loadingRef.current = false;
       chunkAudioActiveRef.current = false;
-      setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
+
+      if (playId !== playIdRef.current || chunkModeRef.current !== "url") return;
+
+      const playbackAttempts = next.playbackAttempts ?? 0;
+      if (playbackAttempts < 1) {
+        chunkQueueRef.current.unshift({ ...next, playbackAttempts: playbackAttempts + 1 });
+        setPlaybackState((prev) => ({ ...prev, isLoading: true, isPlaying: false }));
+        window.setTimeout(() => {
+          if (playId === playIdRef.current && chunkModeRef.current === "url" && !chunkAudioActiveRef.current) {
+            void playQueuedChunk(playId);
+          }
+        }, 150);
+        return;
+      }
+
+      chunkStreamErrorRef.current ??= playbackError;
+      setPlaybackState((prev) => ({
+        ...prev,
+        isLoading: chunkQueueRef.current.length > 0 || !chunkStreamDoneRef.current,
+        isPlaying: false,
+      }));
+
+      if (chunkQueueRef.current.length > 0 || chunkStreamDoneRef.current) {
+        void playQueuedChunk(playId);
+      }
     }
   }, []);
 
@@ -451,6 +504,7 @@ export function useTTS() {
 
     // Store the callback on the ref so the audio 'ended' handler can access the latest one
     onPlaybackEndRef.current = options?.onPlaybackEnd;
+    onPlaybackErrorRef.current = options?.onPlaybackError;
     snapshotPlayingRef.current = true;
 
     const controller = new AbortController();
@@ -569,17 +623,28 @@ export function useTTS() {
         }
 
         if (event === "error") {
-          throw new Error(data.error || "Chunked TTS generation failed");
+          const generationError = new Error(data.error || "Chunked TTS generation failed");
+          chunkStreamErrorRef.current = generationError;
+          chunkStreamDoneRef.current = true;
+          setError(generationError.message);
+          if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
+            void playQueuedChunk(playId);
+          }
+          return;
         }
       });
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      const message = err instanceof Error ? err.message : "Failed to play audio";
-      setError(message);
+      const streamError = err instanceof Error ? err : new Error("Failed to play audio");
+      setError(streamError.message);
       console.error("[TTS] Chunked play error:", err);
       loadingRef.current = false;
-      resetPlayback();
-      setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
+      if (playId !== playIdRef.current || chunkModeRef.current !== "url") return;
+      chunkStreamErrorRef.current = streamError;
+      chunkStreamDoneRef.current = true;
+      if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
+        void playQueuedChunk(playId);
+      }
     }
   }, [
     playQueuedChunk,
@@ -613,13 +678,15 @@ export function useTTS() {
       }
 
       setError(null);
+      const playId = ++playIdRef.current;
+      resetPlayback();
+      const controller = new AbortController();
+      streamAbortRef.current = controller;
 
       try {
-        const playId = ++playIdRef.current;
-        resetPlayback();
-
         // Store the callback on the ref
         onPlaybackEndRef.current = options?.onPlaybackEnd;
+        onPlaybackErrorRef.current = options?.onPlaybackError;
         snapshotPlayingRef.current = true;
 
         // Single-mode playback ends via the audio element 'ended' event.
@@ -633,6 +700,7 @@ export function useTTS() {
           snapshotPlayingRef.current = false;
           const cb = onPlaybackEndRef.current;
           onPlaybackEndRef.current = undefined;
+          onPlaybackErrorRef.current = undefined;
           if (cb) cb();
         };
 
@@ -654,6 +722,7 @@ export function useTTS() {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             text,
             voice: options?.voice ?? settings.voice,
@@ -679,6 +748,8 @@ export function useTTS() {
         const data = await res.json();
         const audioUrl = data.audioUrl;
 
+        if (playId !== playIdRef.current) return;
+
         if (audioRef.current) {
           const audio = audioRef.current;
           currentAudioUrlRef.current = audioUrl;
@@ -696,6 +767,8 @@ export function useTTS() {
             audio.addEventListener("error", onError, { once: true });
             audio.src = audioUrl;
           });
+
+          if (playId !== playIdRef.current) return;
 
           loadingRef.current = false;
 
@@ -715,11 +788,18 @@ export function useTTS() {
           await audio.play();
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to play audio";
+        if ((err as Error).name === "AbortError" || playId !== playIdRef.current) return;
+        const playbackError = err instanceof Error ? err : new Error("Failed to play audio");
+        const message = playbackError.message;
         setError(message);
         console.error("[TTS] Play error:", err);
         loadingRef.current = false;
-        setPlaybackState((prev) => ({ ...prev, isLoading: false }));
+        snapshotPlayingRef.current = false;
+        const errorCb = onPlaybackErrorRef.current;
+        onPlaybackEndRef.current = undefined;
+        onPlaybackErrorRef.current = undefined;
+        setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
+        errorCb?.(playbackError);
       }
     },
     [
@@ -842,6 +922,10 @@ export function useTTS() {
       liveStreamDoneDuringSnapshotRef.current = false;
       chunkStreamDoneRef.current = true;
       liveAgentAudioActiveRef.current = false;
+      if (liveStreamErrorDuringSnapshotRef.current) {
+        chunkStreamErrorRef.current = liveStreamErrorDuringSnapshotRef.current;
+        liveStreamErrorDuringSnapshotRef.current = null;
+      }
     } else {
       // Agent is still streaming — expect more live chunks.
       chunkStreamDoneRef.current = false;
@@ -964,6 +1048,29 @@ export function useTTS() {
     }
   }, [playQueuedChunk]);
 
+  const handleAgentAudioError = useCallback((message: string) => {
+    const streamError = new Error(message || "Live TTS streaming failed");
+    setError(streamError.message);
+
+    if (snapshotPlayingRef.current) {
+      liveStreamDoneDuringSnapshotRef.current = true;
+      liveStreamErrorDuringSnapshotRef.current = streamError;
+      return;
+    }
+
+    chunkStreamErrorRef.current = streamError;
+    chunkStreamDoneRef.current = true;
+    liveAgentAudioActiveRef.current = false;
+    setPlaybackState((prev) => ({
+      ...prev,
+      isLoading: chunkAudioActiveRef.current || chunkQueueRef.current.length > 0,
+    }));
+
+    if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
+      void playQueuedChunk(playIdRef.current);
+    }
+  }, [playQueuedChunk]);
+
   return {
     settings,
     playbackState,
@@ -978,6 +1085,7 @@ export function useTTS() {
     checkAvailability,
     handleAgentAudioChunk,
     handleAgentAudioDone,
+    handleAgentAudioError,
     resumeLivePlayback,
     cleanupLiveAudio,
   };

@@ -54,6 +54,47 @@ describe("memory tools", () => {
     }
   });
 
+  it("orders agent notebook entries by creation time rather than update time", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-notebook-order-"));
+    try {
+      const { notebookStorage, memoryStorage } = await loadMemoryTools(homeDir);
+
+      memoryStorage.createMemoryBlock({
+        id: "blk-notebook-older-edited",
+        name: "Older edited notebook",
+        description: "Older entry edited most recently",
+        content: "Older notebook content.",
+        scope: "global",
+        projectId: "",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+        updatedBy: "agent",
+        blockType: "notebook",
+      });
+      memoryStorage.createMemoryBlock({
+        id: "blk-notebook-newer",
+        name: "Newer notebook",
+        description: "Newer entry",
+        content: "Newer notebook content.",
+        scope: "global",
+        projectId: "",
+        createdAt: "2026-02-01T00:00:00.000Z",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        updatedBy: "agent",
+        blockType: "notebook",
+      });
+
+      const index = await notebookStorage.listNotebookEntries("agent");
+      expect(index.entries.map((entry) => entry.id)).toEqual([
+        "blk-notebook-newer",
+        "blk-notebook-older-edited",
+      ]);
+      expect(index.lastActivityDate).toBe("2026-02-01T00:00:00.000Z");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("suggests matching blocks when update_memory_block receives a missing id", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-tools-"));
     try {
