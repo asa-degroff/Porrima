@@ -1,23 +1,35 @@
 import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { readFile, writeFile, mkdir } from "fs/promises";
-import { resolve, join } from "path";
-import { homedir } from "os";
+import { readFile } from "fs/promises";
+import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
 import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
-import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
+import { formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
 import { getSettings } from "./chat-storage.js";
-import { getWorkspaceForProject } from "./workspace.js";
+import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, InlineVisual, Project } from "../types.js";
-import { appDataPath } from "./paths.js";
 
-const HOME = homedir();
-const VISUALS_DIR = appDataPath("visuals");
 const MAX_AUTOMATIC_ARTIFACT_REVIEW_UPDATES = 2;
+const mutationQueues = new Map<string, Promise<void>>();
+
+async function withMutationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = mutationQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const queued = previous.catch(() => {}).then(() => gate);
+  mutationQueues.set(key, queued);
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (mutationQueues.get(key) === queued) mutationQueues.delete(key);
+  }
+}
 
 // --- Filesystem tool definitions ---
 
@@ -26,8 +38,8 @@ const READ_FILE_TOOL: Tool = {
   description: "Read the contents of a file. Returns content with line numbers. When `limit` is omitted, returns up to the maximum number of lines. For large files, paginate with `offset`/`limit` instead of issuing repeated full reads.",
   parameters: Type.Object({
     path: Type.String({ description: "File path (relative to working directory or absolute)" }),
-    offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-based)" })),
-    limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read. Defaults to the configured tool option (1000)." })),
+    offset: Type.Optional(Type.Integer({ description: "Line number to start reading from (1-based)", minimum: 1 })),
+    limit: Type.Optional(Type.Integer({ description: "Maximum number of lines to read. Defaults to the configured tool option (1000).", minimum: 1, maximum: 10000 })),
   }),
 };
 
@@ -64,24 +76,25 @@ const BASH_TOOL: Tool = {
   description: "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, installing packages, running scripts, etc.",
   parameters: Type.Object({
     command: Type.String({ description: "The bash command to execute" }),
-    timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default 30)" })),
+    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
   }),
 };
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code and return the output. Runs in a clean workspace directory with full system access (filesystem, network, environment) and a 30s timeout. Use for data processing, computation, and any Python task.",
+  description: "Execute Python code in the active workspace and return stdout/stderr. Uses the project root for project chats and the configured remote host for SSH projects.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
+    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
   }),
 };
 
 const READ_PDF_TOOL: Tool = {
   name: "read_pdf",
-  description: "Read a PDF file and extract text, images, and metadata. Supports local files and URLs. Can use OCR for scanned PDFs.",
+  description: "Read a PDF and extract text and metadata. Supports workspace paths and URLs, optional OCR, and embedded-image metadata.",
   parameters: Type.Object({
     path: Type.String({ description: "PDF path (local file path or URL starting with http/https)" }),
-    extractImages: Type.Optional(Type.Boolean({ description: "Extract embedded images from PDF (default false)" })),
+    extractImages: Type.Optional(Type.Boolean({ description: "Report embedded image dimensions, format, and size (default false)" })),
     ocr: Type.Optional(Type.Boolean({ description: "Use OCR for scanned PDFs (default false). Requires Tesseract installed." })),
     pages: Type.Optional(Type.String({ description: "Page range to process, e.g. '1-5' or 'all' (default 'all')" })),
   }),
@@ -89,20 +102,20 @@ const READ_PDF_TOOL: Tool = {
 
 const CREATE_ARTIFACT_TOOL: Tool = {
   name: "create_artifact",
-  description: `Create an HTML/JS artifact rendered in a sandboxed iframe. Use for interactive demos, visualizations, diagrams, or web pages. Choose display mode: "panel" (default) opens the artifact in a dedicated side panel for complex multi-page interactive apps; "inline" renders it directly in the chat flow for charts, diagrams, flowcharts, and other compact visual aids. Both modes support SVG, Canvas, CSS animations, and CDN libraries (D3.js, Chart.js, Mermaid). ${P5_INSTANCE_MODE_GUIDANCE}`,
+  description: "Create an HTML/JS artifact in a sandboxed iframe. Use panel (default) for complex apps and inline for compact charts, diagrams, or visual aids.",
   parameters: Type.Object({
     title: Type.String({ description: "Title for the artifact" }),
-    html: Type.String({ description: `Complete HTML document (including <html>, <head>, <body> tags). ${P5_INSTANCE_MODE_GUIDANCE}` }),
-    display: Type.Optional(Type.String({ description: "Where to render: 'panel' (default, dedicated side panel for complex interactive apps) or 'inline' (rendered in the chat flow for charts, diagrams, and compact visuals)" })),
+    html: Type.String({ description: "Complete HTML document, including html, head, and body tags" }),
+    display: Type.Optional(Type.Enum({ panel: "panel", inline: "inline" }, { description: "Render in the side panel (default) or inline in chat" })),
   }),
 };
 
 const UPDATE_ARTIFACT_TOOL: Tool = {
   name: "update_artifact",
-  description: `Update an existing artifact or visual with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact. ${P5_INSTANCE_MODE_GUIDANCE}`,
+  description: "Update an existing artifact or inline visual with a complete replacement HTML document.",
   parameters: Type.Object({
     artifactId: Type.String({ description: "The canonical ID of the artifact to update (from a previous create_artifact call)" }),
-    html: Type.String({ description: `Complete HTML document with the updated content. ${P5_INSTANCE_MODE_GUIDANCE}` }),
+    html: Type.String({ description: "Complete HTML document with the updated content" }),
     changeSummary: Type.Optional(Type.String({ description: "Brief description of what changed (e.g., 'Made background blue, added reset button')" })),
   }),
 };
@@ -245,10 +258,10 @@ const SCHEDULE_REMINDER_TOOL: Tool = {
   parameters: Type.Object({
     message: Type.String({ description: "The prompt content to deliver to your future self — what you want to be reminded to do or think about" }),
     title: Type.String({ description: "Short label for the reminder (e.g. 'Check PR #22616 status')" }),
-    scheduledAt: Type.String({ description: "ISO 8601 timestamp for when to fire (must be at least 2 minutes in the future)" }),
+    scheduledAt: Type.String({ description: "ISO 8601 timestamp for when to fire (must be at least 2 minutes in the future)", format: "date-time" }),
     activationPolicy: Type.Optional(Type.Enum(["idle", "absent", "manual_only"] as const, { description: "When to fire: 'idle' (default, fires when system is idle), 'absent' (waits for user absence threshold), 'manual_only' (never auto-fires)" })),
-    maxIterations: Type.Optional(Type.Number({ description: "Max tool-loop iterations (default 5)" })),
-    timeoutMs: Type.Optional(Type.Number({ description: "Max execution time in ms (default 300000 = 5 min)" })),
+    maxIterations: Type.Optional(Type.Integer({ description: "Max tool-loop iterations (default 5)", minimum: 1, maximum: 50 })),
+    timeoutMs: Type.Optional(Type.Integer({ description: "Max execution time in ms (default 300000 = 5 min)", minimum: 1000, maximum: 1800000 })),
   }),
 };
 
@@ -289,16 +302,34 @@ const FILESYSTEM_TOOLS: Tool[] = [
   ASK_USER_TOOL,
 ];
 
+const AUTOMATION_TOOLS: Tool[] = [SCHEDULE_REMINDER_TOOL, LIST_AUTOMATIONS_TOOL, UPDATE_AUTOMATION_TOOL];
+const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
+  "ask_user",
+  "schedule_reminder",
+  "list_automations",
+  "update_automation",
+  ...SKILL_TOOLS.map((tool) => tool.name),
+]);
+const SEQUENTIAL_TOOL_NAMES = new Set([
+  "save_memory", "create_memory_block", "update_memory_block", "create_notebook",
+  "write_file", "edit_file", "bash", "run_python", "web_fetch",
+  "create_artifact", "update_artifact", "ask_user",
+  "schedule_reminder", "update_automation", "install_skill", "remove_skill",
+]);
+
+function toolIsAvailable(name: string, chatType?: string): boolean {
+  return chatType !== "system" || !SYSTEM_CHAT_EXCLUDED_TOOLS.has(name);
+}
+
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS];
-  return allTools.map(t => ({ name: t.name, description: t.description }));
+  const allTools = [...MEMORY_TOOLS, ...WEB_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
+  return allTools.filter((tool) => toolIsAvailable(tool.name, chatType)).map(t => ({ name: t.name, description: t.description }));
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
 export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string): AgentTool[] {
   const workspacePromise = getWorkspaceForProject(project);
-  const baseDir = typeof project === "string" ? project : project?.path || HOME;
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
   const artifactReviewUpdateCounts = new Map<string, number>();
@@ -327,9 +358,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     tools.push({
       ...tool,
       label: tool.name,
-      execute: async (toolCallId, params) => {
+      execute: async (toolCallId, params, signal) => {
         const args = params as Record<string, any>;
-        return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)), tool.name);
+        return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args), signal), tool.name);
       },
     });
   }
@@ -462,62 +493,72 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...READ_FILE_TOOL,
     label: "read_file",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const settings = await getSettings().catch(() => undefined);
       const workspace = await workspacePromise;
       return wrapResult(await workspace.readFile(params as Record<string, any>, {
         defaultLines: settings?.readFileDefaultLines,
         maxBytes: getReadFileMaxBytes(settings?.readFileMaxBytes, contextWindow),
-      }), "read_file");
+      }, signal), "read_file");
     },
   });
 
   tools.push({
     ...WRITE_FILE_TOOL,
     label: "write_file",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.writeFile(params as Record<string, any>), "write_file");
+      return withMutationLock(`workspace:${workspace.label}`, async () =>
+        wrapResult(await workspace.writeFile(params as Record<string, any>, signal), "write_file"));
     },
   });
 
   tools.push({
     ...EDIT_FILE_TOOL,
     label: "edit_file",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.editFile(params as Record<string, any>), "edit_file");
+      return withMutationLock(`workspace:${workspace.label}`, async () =>
+        wrapResult(await workspace.editFile(params as Record<string, any>, signal), "edit_file"));
     },
   });
 
   tools.push({
     ...LIST_FILES_TOOL,
     label: "list_files",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.listFiles(params as Record<string, any>), "list_files");
+      return wrapResult(await workspace.listFiles(params as Record<string, any>, signal), "list_files");
     },
   });
 
   tools.push({
     ...BASH_TOOL,
     label: "bash",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const workspace = await workspacePromise;
-      return wrapResult(await workspace.bash(params as Record<string, any>), "bash");
+      return withMutationLock(`workspace:${workspace.label}`, async () =>
+        wrapResult(await workspace.bash(params as Record<string, any>, signal), "bash"));
     },
   });
 
   tools.push({
     ...RUN_PYTHON_TOOL,
     label: "run_python",
-    execute: async (_id, params) => wrapResult(await executeRunPython(params as Record<string, any>), "run_python"),
+    execute: async (_id, params, signal) => {
+      const workspace = await workspacePromise;
+      return withMutationLock(`workspace:${workspace.label}`, async () =>
+        wrapResult(await workspace.runPython(params as Record<string, any>, signal), "run_python"));
+    },
   });
 
   tools.push({
     ...READ_PDF_TOOL,
     label: "read_pdf",
-    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>, baseDir), "read_pdf"),
+    execute: async (_id, params, signal) => {
+      const workspace = await workspacePromise;
+      return wrapResult(await executeReadPdf(params as Record<string, any>, workspace, signal), "read_pdf");
+    },
   });
 
   // create_artifact — uses effects.onArtifact callback
@@ -566,36 +607,37 @@ URL: ${result.url}${warningText}`, {
     label: "update_artifact",
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
+      return withMutationLock(`artifact:${args.artifactId}`, async () => {
+        const isVis = await existsVisual(args.artifactId);
+        if (isVis) {
+          const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
+          const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
+          const visual = { id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version };
+          effects.onVisual(visual);
+          return withArtifactPreviewReview(`Visual updated to version ${result.version} (${result.url})${warningText}`, {
+            id: visual.id,
+            title: visual.title,
+            url: visual.url,
+            version: visual.version,
+            objectKind: "visual",
+            automaticUpdateCount: automaticUpdateCountForUpdate(visual.id),
+          });
+        }
 
-      const isVis = await existsVisual(args.artifactId);
-      if (isVis) {
-        const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
-        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-        const visual = { id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version };
-        effects.onVisual(visual);
-        return withArtifactPreviewReview(`Visual updated to version ${result.version} (${result.url})${warningText}`, {
-          id: visual.id,
-          title: visual.title,
-          url: visual.url,
-          version: visual.version,
-          objectKind: "visual",
-          automaticUpdateCount: automaticUpdateCountForUpdate(visual.id),
-        });
-      }
-
-      try {
-        const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
-        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-        const artifact = { id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version };
-        effects.onArtifact(artifact);
-        return withArtifactPreviewReview(`Artifact updated to version ${result.version} (${result.url})${warningText}`, {
-          ...artifact,
-          objectKind: "artifact",
-          automaticUpdateCount: automaticUpdateCountForUpdate(artifact.id),
-        });
-      } catch (e: any) {
-        return { content: [{ type: "text", text: `Error updating: ${e.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
-      }
+        try {
+          const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
+          const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
+          const artifact = { id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version };
+          effects.onArtifact(artifact);
+          return withArtifactPreviewReview(`Artifact updated to version ${result.version} (${result.url})${warningText}`, {
+            ...artifact,
+            objectKind: "artifact",
+            automaticUpdateCount: automaticUpdateCountForUpdate(artifact.id),
+          });
+        } catch (e: any) {
+          throw new Error(`Error updating: ${e.message}. Make sure the ID is from a previously created artifact or visual.`);
+        }
+      });
     },
   });
 
@@ -624,54 +666,9 @@ URL: ${result.url}${warningText}`, {
     });
   }
 
-  return tools;
-}
-
-/** Execute a single tool call using the AgentTool registry */
-export async function executeTool(
-  toolCall: { id: string; name: string; arguments: Record<string, unknown> },
-  chatId: string,
-  effects: ToolSideEffects,
-): Promise<{ toolCallId: string; toolName: string; content: string; isError: boolean }> {
-  const tools = getAgentTools(chatId, effects);
-  const tool = tools.find(t => t.name === toolCall.name);
-  if (!tool) {
-    return { toolCallId: toolCall.id, toolName: toolCall.name, content: `Unknown tool: ${toolCall.name}`, isError: true };
-  }
-  try {
-    const result = await tool.execute(toolCall.id, toolCall.arguments);
-    const text = result.content?.map((c: any) => c.text || "").join("") || "";
-    return { toolCallId: toolCall.id, toolName: toolCall.name, content: text, isError: false };
-  } catch (e) {
-    return { toolCallId: toolCall.id, toolName: toolCall.name, content: e instanceof Error ? e.message : String(e), isError: true };
-  }
-}
-
-// --- Internal executor functions ---
-
-/** Resolve a path relative to the base directory (project path or $HOME) */
-function resolvePath(inputPath: string, baseDir: string = HOME): string {
-  if (inputPath.startsWith("~")) {
-    return resolve(HOME, inputPath.slice(2));
-  }
-  if (inputPath.startsWith("/")) {
-    return inputPath;
-  }
-  return resolve(baseDir, inputPath);
-}
-
-async function executeRunPython(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
-  try {
-    const result = await executePython(args.code);
-    const parts: string[] = [];
-    if (result.stdout) parts.push(result.stdout.trimEnd());
-    if (result.stderr) parts.push(`[stderr] ${result.stderr.trimEnd()}`);
-    const output = parts.join("\n") || "(no output)";
-
-    return { content: output, isError: result.exitCode !== 0 };
-  } catch (e: any) {
-    return { content: `Error running Python: ${e.message}`, isError: true };
-  }
+  return tools
+    .filter((tool) => toolIsAvailable(tool.name, chatType))
+    .map((tool) => SEQUENTIAL_TOOL_NAMES.has(tool.name) ? { ...tool, executionMode: "sequential" as const } : tool);
 }
 
 // --- read_pdf implementation ---
@@ -682,9 +679,13 @@ const PDF_EXTRACT_SCRIPT = join(fileURLToPath(new URL(".", import.meta.url)), "p
 /**
  * Fetch a PDF from a URL and return the buffer.
  */
-async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<Buffer> {
+const MAX_PDF_BYTES = 50 * 1024 * 1024;
+
+async function fetchPdfFromUrl(url: string, signal?: AbortSignal, timeoutMs: number = 30000): Promise<Buffer> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
     const response = await fetch(url, {
@@ -698,10 +699,29 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (declaredLength > MAX_PDF_BYTES) {
+      throw new Error(`PDF exceeds the ${MAX_PDF_BYTES / 1024 / 1024}MB size limit`);
+    }
+
+    if (!response.body) throw new Error("PDF response had no body");
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_PDF_BYTES) {
+        await reader.cancel();
+        throw new Error(`PDF exceeds the ${MAX_PDF_BYTES / 1024 / 1024}MB size limit`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, totalBytes);
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -709,7 +729,7 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
  * Execute the read_pdf tool using PyMuPDF via Python sandbox.
  * The extraction script lives in pdf-extract.py alongside this module.
  */
-async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
+async function executeReadPdf(args: Record<string, any>, workspace: WorkspaceAdapter, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
   const pathOrUrl = args.path;
   if (!pathOrUrl) {
     return { content: "Missing required parameter: path", isError: true };
@@ -718,20 +738,24 @@ async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME)
   const extractImages = args.extractImages === true;
   const ocr = args.ocr === true;
   const pages = args.pages || "all";
+  if (pages !== "all" && !/^\d+(?:-\d+)?$/.test(pages)) {
+    return { content: "Invalid pages value. Use 'all', a page number, or a range such as '1-5'.", isError: true };
+  }
 
   let pdfBuffer: Buffer | null = null;
 
   try {
     // Handle URL vs local path
     if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
-      pdfBuffer = await fetchPdfFromUrl(pathOrUrl);
+      pdfBuffer = await fetchPdfFromUrl(pathOrUrl, signal);
     } else {
-      const resolvedPath = resolvePath(pathOrUrl, baseDir);
-      try {
-        pdfBuffer = await readFile(resolvedPath);
-      } catch (e: any) {
-        return { content: `Cannot read PDF file: ${e.message}`, isError: true };
-      }
+      const pythonCode = await readFile(PDF_EXTRACT_SCRIPT, "utf-8");
+      const result = await workspace.runPython({
+        code: pythonCode,
+        argv: [pathOrUrl, String(extractImages), String(ocr), pages],
+        timeout: 30,
+      }, signal, { trusted: true, maxBuffer: 10 * 1024 * 1024 });
+      return parsePdfExecutionResult(result, ocr);
     }
 
     // Write the PDF buffer to a temp file the script can read by path.
@@ -753,42 +777,45 @@ async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME)
         {
           args: [pdfFilePath, String(extractImages), String(ocr), pages],
           maxBuffer: 10 * 1024 * 1024,
+          signal,
         },
       );
-
-      if (result.exitCode !== 0) {
-        if (result.stderr.includes("No module named fitz")) {
-          return {
-            content: `PyMuPDF (fitz) is not installed. Install it with: pip install PyMuPDF\n\nFor OCR support, also install Tesseract: sudo apt install tesseract-ocr`,
-            isError: true,
-          };
-        }
-        if (result.stderr.includes("timed out")) {
-          return { content: "PDF processing timed out after 30s", isError: true };
-        }
-        return { content: `PDF processing failed: ${result.stderr || result.stdout}`, isError: true };
-      }
-
-      try {
-        const parsed = JSON.parse(result.stdout);
-
-        if (!ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0) {
-          return {
-            content: `⚠️ This PDF appears to be scanned (no extractable text found). Try again with ocr=true to enable OCR processing.\n\n${formatPdfResult(parsed)}`,
-            isError: false,
-          };
-        }
-
-        return { content: formatPdfResult(parsed), isError: false };
-      } catch (e: any) {
-        return { content: `Failed to parse PDF result: ${e.message}\n${result.stdout.slice(0, 500)}`, isError: true };
-      }
+      return parsePdfExecutionResult({
+        content: [result.stdout.trimEnd(), result.stderr ? `[stderr] ${result.stderr.trimEnd()}` : ""].filter(Boolean).join("\n"),
+        isError: result.exitCode !== 0,
+      }, ocr, result.stdout, result.stderr);
     } finally {
       rmTmp(pdfSandboxDir, { recursive: true, force: true }).catch(() => {});
     }
 
   } catch (e: any) {
     return { content: `PDF processing failed: ${e.message}`, isError: true };
+  }
+}
+
+function parsePdfExecutionResult(
+  result: { content: string; isError: boolean },
+  ocr: boolean,
+  stdout = result.content,
+  stderr = result.isError ? result.content : "",
+): { content: string; isError: boolean } {
+  if (result.isError) {
+    if (stderr.includes("No module named") && stderr.includes("fitz")) {
+      return { content: "PyMuPDF (fitz) is not installed in the active workspace environment.", isError: true };
+    }
+    if (/timed out|aborted/i.test(stderr)) {
+      return { content: stderr, isError: true };
+    }
+    return { content: `PDF processing failed: ${stderr || stdout}`, isError: true };
+  }
+  try {
+    const parsed = JSON.parse(stdout);
+    const formatted = formatPdfResult(parsed);
+    return !ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0
+      ? { content: `⚠️ This PDF appears to be scanned. Try again with ocr=true.\n\n${formatted}`, isError: false }
+      : { content: formatted, isError: false };
+  } catch (e: any) {
+    return { content: `Failed to parse PDF result: ${e.message}\n${stdout.slice(0, 500)}`, isError: true };
   }
 }
 
@@ -808,10 +835,10 @@ function formatPdfResult(result: { text: string; pages: any[]; images: any[]; me
   
   // Images summary
   if (result.images.length > 0) {
-    parts.push("## Extracted Images");
+    parts.push("## Embedded Image Metadata");
     parts.push(`Found ${result.images.length} image(s):`);
     result.images.forEach((img, i) => {
-      parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.data.length / 1024).toFixed(1)} KB)`);
+      parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.byteLength / 1024).toFixed(1)} KB)`);
     });
     parts.push("");
   }

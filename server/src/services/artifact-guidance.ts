@@ -1,6 +1,3 @@
-export const P5_INSTANCE_MODE_GUIDANCE =
-  "For p5.js sketches, prefer instance mode: create new p5((p) => { ... }, container); keep sketch state inside the instance closure; define p.setup, p.draw, and pointer/resize handlers on p; call p5 APIs through p, such as p.createCanvas, p.color, p.randomSeed, and p.noiseSeed; avoid global p5 callbacks and helper names that shadow p5 APIs such as randomSeed, noiseSeed, color, setup, or draw.";
-
 const P5_GLOBAL_CALLBACKS = [
   "setup",
   "draw",

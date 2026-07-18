@@ -1,9 +1,11 @@
 import fitz  # PyMuPDF
-import base64
 import json
+import os
 import sys
 
 def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
+    if os.path.getsize(pdf_path) > 50 * 1024 * 1024:
+        raise ValueError("PDF exceeds the 50MB size limit")
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
     doc = fitz.open("pdf", pdf_bytes)
@@ -28,14 +30,16 @@ def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
     if pages == "all":
         page_range = range(len(doc))
     else:
-        try:
-            if "-" in pages:
-                start, end = pages.split("-")
-                page_range = range(int(start) - 1, int(end))
-            else:
-                page_range = [int(pages) - 1]
-        except:
-            page_range = range(len(doc))
+        if "-" in pages:
+            start, end = map(int, pages.split("-", 1))
+            if start < 1 or end < start or start > len(doc):
+                raise ValueError("Page range is outside the PDF or reversed")
+            page_range = range(start - 1, min(end, len(doc)))
+        else:
+            page_number = int(pages)
+            if page_number < 1 or page_number > len(doc):
+                raise ValueError("Page number is outside the PDF")
+            page_range = [page_number - 1]
 
     for page_num in page_range:
         if page_num >= len(doc):
@@ -64,14 +68,13 @@ def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
                 try:
                     base_image = doc.extract_image(xref)
                     if base_image:
-                        img_data = base64.b64encode(base_image["image"]).decode("ascii")
                         result["images"].append({
                             "page": page_num + 1,
                             "index": img_idx,
                             "width": base_image["width"],
                             "height": base_image["height"],
                             "ext": base_image["ext"],
-                            "data": img_data,
+                            "byteLength": len(base_image["image"]),
                         })
                 except Exception:
                     pass

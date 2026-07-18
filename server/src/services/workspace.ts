@@ -67,13 +67,19 @@ export interface WorkspaceReadFileOptions {
   maxBytes?: number;
 }
 
+export interface WorkspacePythonOptions {
+  trusted?: boolean;
+  maxBuffer?: number;
+}
+
 export interface WorkspaceAdapter {
   readonly label: string;
-  readFile(args: Record<string, any>, opts?: WorkspaceReadFileOptions): Promise<{ content: string; isError: boolean }>;
-  writeFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }>;
-  editFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }>;
-  listFiles(args: Record<string, any>): Promise<{ content: string; isError: boolean }>;
-  bash(args: Record<string, any>): Promise<{ content: string; isError: boolean }>;
+  readFile(args: Record<string, any>, opts?: WorkspaceReadFileOptions, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  listFiles(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  runPython(args: Record<string, any>, signal?: AbortSignal, opts?: WorkspacePythonOptions): Promise<{ content: string; isError: boolean }>;
   readAgentsMd(): Promise<string | null>;
   validateRoot(): Promise<WorkspaceValidationResult>;
   createRootDirectory(): Promise<{ success: boolean; alreadyExists?: boolean; path?: string; error?: string }>;
@@ -167,8 +173,13 @@ function runStreamingBash(
   command: string,
   cwd: string,
   timeoutSec: number,
+  signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
   return new Promise((resolveResult) => {
+    if (signal?.aborted) {
+      resolveResult({ content: "Command aborted", isError: true });
+      return;
+    }
     const proc = spawn("/bin/bash", ["-c", command], {
       cwd,
       env: { ...process.env, HOME },
@@ -212,10 +223,17 @@ function runStreamingBash(
       captureError = e;
     });
 
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      proc.kill("SIGTERM");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => proc.kill("SIGTERM"), timeoutSec * 1000);
 
-    proc.on("close", async (code, signal) => {
+    proc.on("close", async (code, exitSignal) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       try { await writeChain; } catch (e) { captureError = e; }
 
       if (captureError) {
@@ -236,8 +254,8 @@ function runStreamingBash(
           `Use read_file(path="${fullOutputPath}", offset=N) to read more. The tail is shown above.]`;
         content = tail + footer;
       }
-      if (signal === "SIGTERM" || (code !== 0 && code !== null)) {
-        const prefix = signal === "SIGTERM" ? `Command timed out after ${timeoutSec}s\n` : "";
+      if (aborted || exitSignal === "SIGTERM" || (code !== 0 && code !== null)) {
+        const prefix = aborted ? "Command aborted\n" : exitSignal === "SIGTERM" ? `Command timed out after ${timeoutSec}s\n` : "";
         resolveResult({ content: prefix + (content || "(no output)"), isError: true });
       } else {
         resolveResult({ content: content || "(no output)", isError: false });
@@ -257,8 +275,9 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     return resolveLocalPath(inputPath, this.root);
   }
 
-  async readFile(args: Record<string, any>, opts: WorkspaceReadFileOptions = {}): Promise<{ content: string; isError: boolean }> {
+  async readFile(args: Record<string, any>, opts: WorkspaceReadFileOptions = {}, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     try {
+      signal?.throwIfAborted();
       const filePath = this.resolve(args.path);
       const content = await readFile(filePath, "utf-8");
       return { content: formatReadContent(content, args, opts), isError: false };
@@ -267,8 +286,9 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     }
   }
 
-  async writeFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     try {
+      signal?.throwIfAborted();
       const filePath = this.resolve(args.path);
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, args.content, "utf-8");
@@ -278,8 +298,9 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     }
   }
 
-  async editFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     try {
+      signal?.throwIfAborted();
       const filePath = this.resolve(args.path);
       const content = await readFile(filePath, "utf-8");
       const occurrences = content.split(args.old_string).length - 1;
@@ -292,8 +313,9 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     }
   }
 
-  async listFiles(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async listFiles(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     try {
+      signal?.throwIfAborted();
       const basePath = this.resolve(args.path || ".");
       if (args.pattern) {
         const matches: string[] = [];
@@ -311,9 +333,30 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     }
   }
 
-  async bash(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     const timeout = (args.timeout || 30);
-    return runStreamingBash(args.command, this.root, timeout);
+    return runStreamingBash(args.command, this.root, timeout, signal);
+  }
+
+  async runPython(args: Record<string, any>, signal?: AbortSignal, opts: WorkspacePythonOptions = {}): Promise<{ content: string; isError: boolean }> {
+    const timeout = Math.min(300, Math.max(1, args.timeout || 30));
+    return new Promise((resolveResult) => {
+      if (signal?.aborted) {
+        resolveResult({ content: "Python execution aborted", isError: true });
+        return;
+      }
+      const proc = execFile("python3", ["-", ...(args.argv ?? []).map(String)], {
+        cwd: this.root,
+        timeout: timeout * 1000,
+        maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
+        signal,
+        env: { ...process.env, HOME, PYTHONDONTWRITEBYTECODE: "1" },
+      }, (error, stdout, stderr) => {
+        const output = [stdout?.trimEnd(), stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n") || "(no output)";
+        resolveResult({ content: error ? (signal?.aborted ? `Python execution aborted\n${output}` : output || error.message) : output, isError: !!error });
+      });
+      proc.stdin?.end(String(args.code || ""));
+    });
   }
 
   async readAgentsMd(): Promise<string | null> {
@@ -574,7 +617,7 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
   }
 
   /** Execute a command over SSH, using the multiplexed connection. */
-  exec(remoteCommand: string, timeoutMs = 30000, stdin?: string): Promise<{ content: string; isError: boolean }> {
+  exec(remoteCommand: string, timeoutMs = 30000, stdin?: string, signal?: AbortSignal, maxBuffer = 1024 * 1024): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.enabled) {
       return Promise.resolve({ content: `SSH connection "${this.connection.name}" is disabled`, isError: true });
     }
@@ -589,7 +632,8 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
       return new Promise((resolveResult) => {
         const proc = execFile("ssh", args, {
           timeout: timeoutMs,
-          maxBuffer: 1024 * 1024,
+          maxBuffer,
+          signal,
         }, (error, stdout, stderr) => {
           const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
 
@@ -622,8 +666,8 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     return runWithMux();
   }
 
-  private inRoot(command: string, timeoutMs = 30000, stdin?: string): Promise<{ content: string; isError: boolean }> {
-    return this.exec(`cd -- ${shellQuote(this.root)} && ${command}`, timeoutMs, stdin);
+  private inRoot(command: string, timeoutMs = 30000, stdin?: string, signal?: AbortSignal, maxBuffer?: number): Promise<{ content: string; isError: boolean }> {
+    return this.exec(`cd -- ${shellQuote(this.root)} && ${command}`, timeoutMs, stdin, signal, maxBuffer);
   }
 
   /**
@@ -647,32 +691,38 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     return info?.path ?? "python3";
   }
 
-  private python(script: string, payload: unknown, timeoutMs = 30000): Promise<{ content: string; isError: boolean }> {
+  private python(script: string, payload: unknown, timeoutMs = 30000, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     // We can't await resolvePython here without changing the signature to
     // async, but inRoot/exec already return Promises — wrap the path lookup.
     const stdin = JSON.stringify(payload);
     return this.resolvePython().then((py) =>
-      this.inRoot(`${shellQuote(py)} -c ${shellQuote(script)}`, timeoutMs, stdin),
+      this.inRoot(`${shellQuote(py)} -c ${shellQuote(script)}`, timeoutMs, stdin, signal),
     );
   }
 
-  async readFile(args: Record<string, any>, opts: WorkspaceReadFileOptions = {}): Promise<{ content: string; isError: boolean }> {
+  async readFile(args: Record<string, any>, opts: WorkspaceReadFileOptions = {}, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     const script = `
 import json
 import os
 import tempfile
 from pathlib import Path
 data = json.loads(input())
-root = Path(${pythonLiteral(this.root)})
+root = Path(${pythonLiteral(this.root)}).expanduser().resolve()
 raw = data.get("path") or ""
 if raw.startswith("~"):
-    target = Path.home() / raw[2:].lstrip("/")
+    candidate = Path(raw).expanduser()
 elif raw.startswith("/"):
     if not data.get("allow_absolute"):
         raise SystemExit("Absolute paths are disabled for this SSH connection")
-    target = Path(raw)
+    candidate = Path(raw)
 else:
-    target = root / raw
+    candidate = root / raw
+target = candidate.resolve()
+if not data.get("allow_absolute"):
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise SystemExit("Path escapes the configured SSH workspace root")
 content = target.read_text(encoding="utf-8")
 lines = content.split("\\n")
 offset = max(1, int(data.get("offset") or 1))
@@ -706,11 +756,11 @@ print(numbered)
       default_lines: opts.defaultLines ?? 1000,
       max_bytes: opts.maxBytes ?? 256 * 1024,
       allow_absolute: this.connection.allowAbsolutePaths,
-    });
+    }, 30000, signal);
     return result.isError ? { content: `Error reading remote file: ${result.content}`, isError: true } : result;
   }
 
-  async writeFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.allowFileWrite) {
       return { content: "File writes are disabled for this SSH connection", isError: true };
     }
@@ -720,16 +770,22 @@ import os
 import tempfile
 from pathlib import Path
 data = json.loads(input())
-root = Path(${pythonLiteral(this.root)})
+root = Path(${pythonLiteral(this.root)}).expanduser().resolve()
 raw = data.get("path") or ""
 if raw.startswith("~"):
-    target = Path.home() / raw[2:].lstrip("/")
+    candidate = Path(raw).expanduser()
 elif raw.startswith("/"):
     if not data.get("allow_absolute"):
         raise SystemExit("Absolute paths are disabled for this SSH connection")
-    target = Path(raw)
+    candidate = Path(raw)
 else:
-    target = root / raw
+    candidate = root / raw
+target = candidate.resolve()
+if not data.get("allow_absolute"):
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise SystemExit("Path escapes the configured SSH workspace root")
 target.parent.mkdir(parents=True, exist_ok=True)
 fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
 try:
@@ -744,11 +800,11 @@ except Exception:
     raise
 print(f"Remote file written: {target}")
 `;
-    const result = await this.python(script, { path: args.path, content: args.content, allow_absolute: this.connection.allowAbsolutePaths });
+    const result = await this.python(script, { path: args.path, content: args.content, allow_absolute: this.connection.allowAbsolutePaths }, 30000, signal);
     return result.isError ? { content: `Error writing remote file: ${result.content}`, isError: true } : result;
   }
 
-  async editFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.allowFileWrite) {
       return { content: "File writes are disabled for this SSH connection", isError: true };
     }
@@ -758,16 +814,22 @@ import os
 import tempfile
 from pathlib import Path
 data = json.loads(input())
-root = Path(${pythonLiteral(this.root)})
+root = Path(${pythonLiteral(this.root)}).expanduser().resolve()
 raw = data.get("path") or ""
 if raw.startswith("~"):
-    target = Path.home() / raw[2:].lstrip("/")
+    candidate = Path(raw).expanduser()
 elif raw.startswith("/"):
     if not data.get("allow_absolute"):
         raise SystemExit("Absolute paths are disabled for this SSH connection")
-    target = Path(raw)
+    candidate = Path(raw)
 else:
-    target = root / raw
+    candidate = root / raw
+target = candidate.resolve()
+if not data.get("allow_absolute"):
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise SystemExit("Path escapes the configured SSH workspace root")
 content = target.read_text(encoding="utf-8")
 old = data.get("old_string") or ""
 new = data.get("new_string") or ""
@@ -794,11 +856,11 @@ print(f"Remote file edited: {target}")
       old_string: args.old_string,
       new_string: args.new_string,
       allow_absolute: this.connection.allowAbsolutePaths,
-    });
+    }, 30000, signal);
     return result.isError ? { content: `Error editing remote file: ${result.content}`, isError: true } : result;
   }
 
-  async listFiles(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async listFiles(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     const script = `
 import glob
 import json
@@ -806,16 +868,22 @@ import os
 import sys
 from pathlib import Path
 data = json.loads(input())
-root = Path(${pythonLiteral(this.root)})
+root = Path(${pythonLiteral(this.root)}).expanduser().resolve()
 raw = data.get("path") or "."
 if raw.startswith("~"):
-    base = Path.home() / raw[2:].lstrip("/")
+    candidate = Path(raw).expanduser()
 elif raw.startswith("/"):
     if not data.get("allow_absolute"):
         raise SystemExit("Absolute paths are disabled for this SSH connection")
-    base = Path(raw)
+    candidate = Path(raw)
 else:
-    base = root / raw
+    candidate = root / raw
+base = candidate.resolve()
+if not data.get("allow_absolute"):
+    try:
+        base.relative_to(root)
+    except ValueError:
+        raise SystemExit("Path escapes the configured SSH workspace root")
 pattern = data.get("pattern")
 if pattern:
     # glob.root_dir was added in Python 3.10; fall back to a manual join for
@@ -827,6 +895,13 @@ if pattern:
         raw_matches = glob.glob(full, recursive=True)[:200]
         prefix = str(base) + os.sep
         matches = [m[len(prefix):] if m.startswith(prefix) else m for m in raw_matches]
+    if not data.get("allow_absolute"):
+        for match in matches:
+            resolved_match = (base / match).resolve()
+            try:
+                resolved_match.relative_to(root)
+            except ValueError:
+                raise SystemExit("Glob pattern escapes the configured SSH workspace root")
     print("\\n".join(matches) if matches else "No files matched the pattern.")
 else:
     entries = []
@@ -834,16 +909,41 @@ else:
         entries.append(("d " if entry.is_dir() else "f ") + entry.name)
     print("\\n".join(entries))
 `;
-    const result = await this.python(script, { path: args.path || ".", pattern: args.pattern, allow_absolute: this.connection.allowAbsolutePaths });
+    const result = await this.python(script, { path: args.path || ".", pattern: args.pattern, allow_absolute: this.connection.allowAbsolutePaths }, 30000, signal);
     return result.isError ? { content: `Error listing remote files: ${result.content}`, isError: true } : result;
   }
 
-  async bash(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  async bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.allowBash) {
       return { content: "Bash is disabled for this SSH connection", isError: true };
     }
     const timeoutMs = (args.timeout || 30) * 1000;
-    return this.inRoot(`/bin/bash -lc ${shellQuote(args.command)}`, timeoutMs);
+    const outputPath = `.porrima-tool-output/bash-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.log`;
+    const wrapped = [
+      `mkdir -p -- ${shellQuote(dirname(outputPath))}`,
+      `/bin/bash -lc ${shellQuote(args.command)} > ${shellQuote(outputPath)} 2>&1`,
+      "status=$?",
+      `size=$(wc -c < ${shellQuote(outputPath)})`,
+      `if [ "$size" -gt ${BASH_OUTPUT_BYTE_CAP} ]; then`,
+      `  tail -c ${BASH_OUTPUT_WINDOW_BYTES} -- ${shellQuote(outputPath)}`,
+      `  printf '\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. Full output was saved in the remote workspace at: ${outputPath}\nUse read_file(path="${outputPath}", offset=N) to read more. The tail is shown above.]\n'`,
+      "else",
+      `  cat -- ${shellQuote(outputPath)}`,
+      `  rm -f -- ${shellQuote(outputPath)}`,
+      "fi",
+      "exit $status",
+    ].join("\n");
+    return this.inRoot(wrapped, timeoutMs, undefined, signal, BASH_OUTPUT_WINDOW_BYTES + 16 * 1024);
+  }
+
+  async runPython(args: Record<string, any>, signal?: AbortSignal, opts: WorkspacePythonOptions = {}): Promise<{ content: string; isError: boolean }> {
+    if (!opts.trusted && !this.connection.allowBash) {
+      return { content: "Python execution is disabled because Bash is disabled for this SSH connection", isError: true };
+    }
+    const timeoutMs = Math.min(300, Math.max(1, args.timeout || 30)) * 1000;
+    const py = await this.resolvePython();
+    const argv = (args.argv ?? []).map((value: unknown) => shellQuote(String(value))).join(" ");
+    return this.inRoot(`${shellQuote(py)} -${argv ? ` ${argv}` : ""}`, timeoutMs, String(args.code || ""), signal, opts.maxBuffer);
   }
 
   async readAgentsMd(): Promise<string | null> {

@@ -27,6 +27,7 @@ export function createAgentLoopConfig(options: CreateAgentLoopConfigOptions): Ag
     transformContext: options.transformContext,
     getSteeringMessages: options.getSteeringMessages,
     getFollowUpMessages: options.getFollowUpMessages,
+    toolExecution: "parallel",
   };
   if (options.keepAlive !== undefined) {
     (config as any).keepAlive = options.keepAlive;
