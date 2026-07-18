@@ -361,6 +361,7 @@ type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
 type AutomationDetailTab = "schedule" | "prompts" | "history";
 type TtsDetailTab = "voice" | "reading" | "engine";
 type ExtractionDetailTab = "capture" | "limits" | "prompt";
+type ImageSettingsTab = "backend" | "corpus";
 type SshConnectionDraft = Omit<SshConnection, "id" | "createdAt" | "lastModified">;
 
 const DEFAULT_SSH_DRAFT: SshConnectionDraft = {
@@ -567,6 +568,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [imageSandboxEnabled, setImageSandboxEnabled] = useState(settings.imageSandboxEnabled ?? true);
   const [sdcppUrl, setSdcppUrl] = useState(settings.sdcppUrl || "http://127.0.0.1:1234");
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const [imageSettingsTab, setImageSettingsTab] = useState<ImageSettingsTab>("backend");
   // llama.cpp server settings
   const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
@@ -973,7 +975,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       });
     };
   }, []);
-  const imageBackendDd = useDropdown();
   const webSearchProviderDd = useDropdown();
   const sshKnownHostsDd = useDropdown();
   const tocDd = useDropdown();
@@ -2920,6 +2921,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     ? defaultChatModelOptions.find((m) => m.id === defaultModelId && (!defaultModelScanDir || m.scanDir === defaultModelScanDir))
       || defaultChatModelOptions.find((m) => m.id === defaultModelId)
     : undefined;
+  const activeImageStatus = imageBackend === "sdcpp" ? sdcppStatus : comfyuiStatus;
+  const activeImageEndpoint = imageBackend === "sdcpp" ? sdcppUrl : comfyuiUrl;
+  const activeImageBackendLabel = imageBackend === "sdcpp" ? "stable-diffusion.cpp" : "ComfyUI";
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
@@ -5309,120 +5313,201 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
           {/* Image Generation */}
           <div id="images" className="space-y-3 pt-2 border-t border-white/10">
-            <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
-            <div className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3">
-              <div>
-                <label className="block text-sm font-medium text-white/60">Image Sandbox</label>
-                <p className="text-xs text-white/30 mt-0.5">Show the images workspace</p>
-              </div>
-              <ToggleSwitch
-                checked={imageSandboxEnabled}
-                onChange={() => setImageSandboxEnabled(!imageSandboxEnabled)}
-                accentColor="purple"
-                ariaLabel="Enable Image Sandbox"
-              />
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
+              <span className="text-[11px] text-white/30">Saved with Settings</span>
             </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">Backend</label>
-              <Dropdown
-                state={imageBackendDd}
-                panelClassName="left-0 right-0 top-full mt-1 overflow-hidden"
-                trigger={
-                  <span className="truncate flex-1 text-left">
-                    {imageBackend === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
-                  </span>
-                }
-              >
-                {(["comfyui", "sdcpp"] as const).map((b) => (
+
+            <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+              <div className="flex flex-col gap-2 border-b border-white/10 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-white/70">{activeImageBackendLabel}</span>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                      activeImageStatus === "connected"
+                        ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-300"
+                        : activeImageStatus === "unavailable"
+                          ? "border-red-400/25 bg-red-500/10 text-red-300"
+                          : "border-white/10 bg-white/5 text-white/40"
+                    }`}>
+                      {activeImageStatus === "checking"
+                        ? "Testing"
+                        : activeImageStatus === "connected"
+                          ? "Connected"
+                          : activeImageStatus === "unavailable"
+                            ? "Unavailable"
+                            : "Not tested"}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-white/35">{activeImageEndpoint || "No endpoint configured"}</p>
+                </div>
+                <span className="shrink-0 text-[11px] text-white/30">Active backend</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 px-3 py-3">
+                <div>
+                  <div className="text-sm font-medium text-white/60">Show Image Sandbox</div>
+                  <p className="mt-0.5 text-xs text-white/30">Controls workspace visibility; generation remains available to agents and other features.</p>
+                </div>
+                <ToggleSwitch
+                  checked={imageSandboxEnabled}
+                  onChange={() => setImageSandboxEnabled(!imageSandboxEnabled)}
+                  accentColor="purple"
+                  ariaLabel="Show Image Sandbox workspace"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 rounded-md border border-white/10 bg-black/10 p-1" role="tablist" aria-label="Image generation settings">
+              {(["backend", "corpus"] as ImageSettingsTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={imageSettingsTab === tab}
+                  onClick={() => setImageSettingsTab(tab)}
+                  className={`flex-1 rounded px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                    imageSettingsTab === tab
+                      ? "bg-white/10 text-white/80"
+                      : "text-white/40 hover:bg-white/5 hover:text-white/60"
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            {imageSettingsTab === "backend" && (
+              <div className="space-y-3">
+                <div className="grid gap-2 sm:grid-cols-2">
                   <button
-                    key={b}
-                    onClick={() => { setImageBackend(b); imageBackendDd.close(); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      imageBackend === b ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`} 
-                    style={{
-                      backgroundColor: imageBackend === b ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: imageBackend === b ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
+                    type="button"
+                    aria-pressed={imageBackend === "comfyui"}
+                    onClick={() => setImageBackend("comfyui")}
+                    className={`rounded-xl border p-3 text-left transition-colors ${
+                      imageBackend === "comfyui"
+                        ? "border-purple-400/35 bg-purple-500/10"
+                        : "border-white/10 bg-white/[0.025] hover:border-white/20 hover:bg-white/[0.045]"
+                    }`}
                   >
-                    {b === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-white/75">ComfyUI</span>
+                      {imageBackend === "comfyui" && <span className="text-[10px] font-medium uppercase tracking-wide text-purple-300">Active</span>}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-white/35">Workflow-based generation with models discovered from ComfyUI.</p>
                   </button>
-                ))}
-              </Dropdown>
-              <p className="text-white/30 text-xs">
-                Used by the Image Sandbox. sd-server loads one model at startup; configure via its launch command.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">ComfyUI URL</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={comfyuiUrl}
-                  onChange={(e) => setComfyuiUrl(e.target.value)}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
-                  placeholder="http://127.0.0.1:8188"
-                />
-                <button
-                  onClick={handleTestComfyUI}
-                  disabled={comfyuiStatus === "checking"}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
-                >
-                  {comfyuiStatus === "checking" ? "Testing..." : "Test"}
-                </button>
-              </div>
-              {comfyuiStatus && comfyuiStatus !== "checking" && (
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-2 h-2 rounded-full ${comfyuiStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                  <span className={`text-xs ${comfyuiStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                    {comfyuiStatus === "connected" ? "Connected" : "Not available"}
-                  </span>
+                  <button
+                    type="button"
+                    aria-pressed={imageBackend === "sdcpp"}
+                    onClick={() => setImageBackend("sdcpp")}
+                    className={`rounded-xl border p-3 text-left transition-colors ${
+                      imageBackend === "sdcpp"
+                        ? "border-purple-400/35 bg-purple-500/10"
+                        : "border-white/10 bg-white/[0.025] hover:border-white/20 hover:bg-white/[0.045]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-white/75">stable-diffusion.cpp</span>
+                      {imageBackend === "sdcpp" && <span className="text-[10px] font-medium uppercase tracking-wide text-purple-300">Active</span>}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-white/35">Direct sd-server generation using the model configured at startup.</p>
+                  </button>
                 </div>
-              )}
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">sd-server URL</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={sdcppUrl}
-                  onChange={(e) => setSdcppUrl(e.target.value)}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
-                  placeholder="http://127.0.0.1:1234"
-                />
-                <button
-                  onClick={handleTestSdcpp}
-                  disabled={sdcppStatus === "checking"}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
-                >
-                  {sdcppStatus === "checking" ? "Testing..." : "Test"}
-                </button>
-              </div>
-              {sdcppStatus && sdcppStatus !== "checking" && (
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-2 h-2 rounded-full ${sdcppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                  <span className={`text-xs ${sdcppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                    {sdcppStatus === "connected" ? "Connected" : "Not available"}
-                  </span>
+
+                <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">
+                      {imageBackend === "comfyui" ? "ComfyUI endpoint" : "sd-server endpoint"}
+                    </label>
+                    <p className="mt-0.5 text-xs text-white/30">Primary connection used for image generation throughout the app.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={imageBackend === "comfyui" ? comfyuiUrl : sdcppUrl}
+                      onChange={(event) => imageBackend === "comfyui" ? setComfyuiUrl(event.target.value) : setSdcppUrl(event.target.value)}
+                      className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 outline-none transition-all placeholder:text-white/30 focus:border-amber-400/30 focus:ring-1 focus:ring-amber-400/30"
+                      placeholder={imageBackend === "comfyui" ? "http://127.0.0.1:8188" : "http://127.0.0.1:1234"}
+                    />
+                    <button
+                      type="button"
+                      onClick={imageBackend === "comfyui" ? handleTestComfyUI : handleTestSdcpp}
+                      disabled={activeImageStatus === "checking"}
+                      className="shrink-0 rounded-lg border border-amber-400/20 bg-amber-500/15 px-3 py-2 text-sm font-medium text-amber-300 transition-all hover:bg-amber-500/25 disabled:opacity-40 pressable"
+                    >
+                      {activeImageStatus === "checking" ? "Testing..." : "Test"}
+                    </button>
+                  </div>
+                  {activeImageStatus && activeImageStatus !== "checking" && (
+                    <div className="flex items-center gap-1.5">
+                      <div className={`h-2 w-2 rounded-full ${activeImageStatus === "connected" ? "bg-emerald-400" : "bg-red-400"}`} />
+                      <span className={`text-xs ${activeImageStatus === "connected" ? "text-emerald-400/80" : "text-red-400/80"}`}>
+                        {activeImageStatus === "connected" ? "Connected" : "Not available"}
+                      </span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            <div className="space-y-2 pt-2 border-t border-white/10">
-              <div className="flex items-center justify-between">
-                <label className="block text-sm font-medium text-white/60">Enrichment batch size</label>
-                <span className="text-xs text-white/40">{enrichmentBatchSize} entries</span>
+
+                {imageBackend === "sdcpp" && (
+                  <div className="space-y-2 rounded-xl border border-blue-400/15 bg-blue-500/[0.055] p-3">
+                    <div>
+                      <label className="block text-sm font-medium text-white/60">GPU resource monitor</label>
+                      <p className="mt-0.5 text-xs leading-relaxed text-white/35">sd-server checks ComfyUI system stats while coordinating GPU resources before generation.</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={comfyuiUrl}
+                        onChange={(event) => setComfyuiUrl(event.target.value)}
+                        className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 outline-none transition-all placeholder:text-white/30 focus:border-blue-400/30 focus:ring-1 focus:ring-blue-400/30"
+                        placeholder="http://127.0.0.1:8188"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleTestComfyUI}
+                        disabled={comfyuiStatus === "checking"}
+                        className="shrink-0 rounded-lg border border-blue-400/20 bg-blue-500/15 px-3 py-2 text-sm font-medium text-blue-300 transition-all hover:bg-blue-500/25 disabled:opacity-40 pressable"
+                      >
+                        {comfyuiStatus === "checking" ? "Testing..." : "Test"}
+                      </button>
+                    </div>
+                    {comfyuiStatus && comfyuiStatus !== "checking" && (
+                      <div className="flex items-center gap-1.5">
+                        <div className={`h-2 w-2 rounded-full ${comfyuiStatus === "connected" ? "bg-emerald-400" : "bg-red-400"}`} />
+                        <span className={`text-xs ${comfyuiStatus === "connected" ? "text-emerald-400/80" : "text-red-400/80"}`}>
+                          {comfyuiStatus === "connected" ? "Connected" : "Not available"}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <input
-                type="range"
-                min={1}
-                max={20}
-                step={1}
-                value={enrichmentBatchSize}
-                onChange={(e) => setEnrichmentBatchSize(Number(e.target.value))}
-                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-              />
-              <p className="text-xs text-white/30">After generating images in the image sandboc, process this many for the corpus every 10 minutes</p>
-            </div>
+            )}
+
+            {imageSettingsTab === "corpus" && (
+              <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+                <div>
+                  <h4 className="text-sm font-medium text-white/60">Corpus processing</h4>
+                  <p className="mt-0.5 text-xs leading-relaxed text-white/35">Periodically enriches pending image corpus entries while the app is idle. Processing uses the extraction model, independently of the image generation backend.</p>
+                </div>
+                <div className="space-y-2 border-t border-white/10 pt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <label htmlFor="image-enrichment-batch-size" className="text-sm font-medium text-white/60">Enrichment batch size</label>
+                    <span className="text-xs text-white/40">{enrichmentBatchSize} {enrichmentBatchSize === 1 ? "entry" : "entries"}</span>
+                  </div>
+                  <input
+                    id="image-enrichment-batch-size"
+                    type="range"
+                    min={1}
+                    max={20}
+                    step={1}
+                    value={enrichmentBatchSize}
+                    onChange={(event) => setEnrichmentBatchSize(Number(event.target.value))}
+                    className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-white/10 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                  />
+                  <p className="text-xs text-white/30">Maximum pending entries processed in each scheduled enrichment pass.</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Skills Section */}
