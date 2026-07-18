@@ -8,6 +8,7 @@ import {
   deleteSshConnection,
   getSettings,
   getSshConnection,
+  listProjects,
   listSshConnections,
   saveSettings,
   updateSshConnection,
@@ -157,6 +158,14 @@ router.patch("/ssh-connections/:id", async (req, res) => {
 });
 
 router.delete("/ssh-connections/:id", async (req, res) => {
+  const projects = (await listProjects()).filter((project) => project.sshConnectionId === req.params.id);
+  if (projects.length > 0) {
+    const projectNames = projects.map((project) => `"${project.name}"`).join(", ");
+    return res.status(409).json({
+      error: `This host is used by ${projects.length === 1 ? "project" : "projects"} ${projectNames}. Reassign or delete ${projects.length === 1 ? "the project" : "those projects"} before removing the host.`,
+      projects: projects.map(({ id, name }) => ({ id, name })),
+    });
+  }
   const deleted = await deleteSshConnection(req.params.id);
   if (!deleted) return res.status(404).json({ error: "SSH connection not found" });
   res.status(204).end();

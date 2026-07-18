@@ -358,6 +358,35 @@ function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
 
 type LlamaSettingsView = "servers" | "models" | "binaries";
 type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
+type SshConnectionDraft = Omit<SshConnection, "id" | "createdAt" | "lastModified">;
+
+const DEFAULT_SSH_DRAFT: SshConnectionDraft = {
+  name: "",
+  host: "",
+  port: 22,
+  username: "",
+  identityFile: "",
+  knownHostsMode: "accept-new",
+  enabled: true,
+  allowBash: true,
+  allowFileWrite: true,
+  allowAbsolutePaths: false,
+};
+
+function sshDraftFromConnection(connection: SshConnection): SshConnectionDraft {
+  return {
+    name: connection.name,
+    host: connection.host,
+    port: connection.port,
+    username: connection.username || "",
+    identityFile: connection.identityFile || "",
+    knownHostsMode: connection.knownHostsMode,
+    enabled: connection.enabled,
+    allowBash: connection.allowBash,
+    allowFileWrite: connection.allowFileWrite,
+    allowAbsolutePaths: connection.allowAbsolutePaths,
+  };
+}
 
 function llamaDisplayStatus(server: LlamaServerStatus): { label: string; tone: string } {
   if (server.systemd.loadState === "not-found") {
@@ -689,18 +718,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [sshSaving, setSshSaving] = useState(false);
   const [sshTestingId, setSshTestingId] = useState<string | null>(null);
   const [sshMessage, setSshMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [sshDraft, setSshDraft] = useState({
-    name: "",
-    host: "",
-    port: 22,
-    username: "",
-    identityFile: "",
-    knownHostsMode: "accept-new" as SshKnownHostsMode,
-    enabled: true,
-    allowBash: true,
-    allowFileWrite: true,
-    allowAbsolutePaths: false,
-  });
+  const [sshDraft, setSshDraft] = useState<SshConnectionDraft>(DEFAULT_SSH_DRAFT);
+  const [sshEditorOpen, setSshEditorOpen] = useState(false);
+  const [sshEditingId, setSshEditingId] = useState<string | null>(null);
+  const [sshDeleteConfirmId, setSshDeleteConfirmId] = useState<string | null>(null);
+  const [sshTestResults, setSshTestResults] = useState<Record<string, { type: "ok" | "err"; text: string }>>({});
 
   useEffect(() => {
     setDeviceHighEfficiencyMode(highEfficiencyMode);
@@ -1797,7 +1819,47 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     refreshSshConnections();
   }, [refreshSshConnections]);
 
-  const handleCreateSshConnection = useCallback(async () => {
+  const openCreateSshConnection = useCallback(() => {
+    setSshDraft({ ...DEFAULT_SSH_DRAFT });
+    setSshEditingId(null);
+    setSshMessage(null);
+    setSshEditorOpen(true);
+  }, []);
+
+  const openEditSshConnection = useCallback((connection: SshConnection) => {
+    setSshDraft(sshDraftFromConnection(connection));
+    setSshEditingId(connection.id);
+    setSshMessage(null);
+    setSshDeleteConfirmId(null);
+    setSshEditorOpen(true);
+  }, []);
+
+  const closeSshEditor = useCallback(() => {
+    setSshEditorOpen(false);
+    setSshEditingId(null);
+    setSshDraft({ ...DEFAULT_SSH_DRAFT });
+  }, []);
+
+  const runSshConnectionTest = useCallback(async (id: string) => {
+    setSshTestingId(id);
+    setSshTestResults((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      await testSshConnection(id);
+      setSshTestResults((prev) => ({ ...prev, [id]: { type: "ok", text: "Connection succeeded." } }));
+      return true;
+    } catch (e: any) {
+      setSshTestResults((prev) => ({ ...prev, [id]: { type: "err", text: e?.message || "SSH connection test failed" } }));
+      return false;
+    } finally {
+      setSshTestingId(null);
+    }
+  }, []);
+
+  const handleSaveSshConnection = useCallback(async (testAfterSave = false) => {
     if (!sshDraft.name.trim() || !sshDraft.host.trim()) {
       setSshMessage({ type: "err", text: "Name and host are required." });
       return;
@@ -1805,27 +1867,41 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setSshSaving(true);
     setSshMessage(null);
     try {
-      await createSshConnection({
+      const input: SshConnectionDraft = {
         name: sshDraft.name.trim(),
         host: sshDraft.host.trim(),
         port: Number(sshDraft.port) || 22,
-        username: sshDraft.username.trim() || undefined,
-        identityFile: sshDraft.identityFile.trim() || undefined,
+        username: sshDraft.username?.trim() || undefined,
+        identityFile: sshDraft.identityFile?.trim() || undefined,
         knownHostsMode: sshDraft.knownHostsMode,
         enabled: sshDraft.enabled,
         allowBash: sshDraft.allowBash,
         allowFileWrite: sshDraft.allowFileWrite,
         allowAbsolutePaths: sshDraft.allowAbsolutePaths,
+      };
+      const saved = sshEditingId
+        ? await updateSshConnection(sshEditingId, input)
+        : await createSshConnection(input);
+      setSshConnections((prev) => {
+        const exists = prev.some((connection) => connection.id === saved.id);
+        return exists
+          ? prev.map((connection) => connection.id === saved.id ? saved : connection)
+          : [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
       });
-      setSshDraft((prev) => ({ ...prev, name: "", host: "", username: "", identityFile: "" }));
-      setSshMessage({ type: "ok", text: "SSH connection saved." });
-      await refreshSshConnections();
+      setSshTestResults((prev) => {
+        const next = { ...prev };
+        delete next[saved.id];
+        return next;
+      });
+      setSshMessage({ type: "ok", text: `${saved.name} saved.` });
+      closeSshEditor();
+      if (testAfterSave) await runSshConnectionTest(saved.id);
     } catch (e: any) {
       setSshMessage({ type: "err", text: e?.message || "Failed to save SSH connection" });
     } finally {
       setSshSaving(false);
     }
-  }, [refreshSshConnections, sshDraft]);
+  }, [closeSshEditor, runSshConnectionTest, sshDraft, sshEditingId]);
 
   const patchSshConnection = useCallback(async (id: string, patch: Partial<SshConnection>) => {
     setSshMessage(null);
@@ -1842,23 +1918,21 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     try {
       await deleteSshConnection(id);
       setSshConnections((prev) => prev.filter((connection) => connection.id !== id));
+      closeSshEditor();
+      setSshDeleteConfirmId(null);
+      setSshTestResults((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     } catch (e: any) {
       setSshMessage({ type: "err", text: e?.message || "Failed to delete SSH connection" });
     }
-  }, []);
+  }, [closeSshEditor]);
 
   const handleTestSshConnection = useCallback(async (id: string) => {
-    setSshTestingId(id);
-    setSshMessage(null);
-    try {
-      const result = await testSshConnection(id);
-      setSshMessage({ type: "ok", text: result.output || "SSH connection succeeded." });
-    } catch (e: any) {
-      setSshMessage({ type: "err", text: e?.message || "SSH connection test failed" });
-    } finally {
-      setSshTestingId(null);
-    }
-  }, []);
+    await runSshConnectionTest(id);
+  }, [runSshConnectionTest]);
 
   const handleSave = (): Settings => {
     const defaultPreset = presets.find((p) => p.isDefault);
@@ -4467,11 +4541,20 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
           {/* Remote Hosts */}
           <div id="ssh" className="space-y-4 pt-2 border-t border-white/10">
-            <div>
-              <h3 className="text-sm font-medium text-white/70">Remote Hosts</h3>
-              <p className="text-xs text-white/30 mt-1">
-                SSH hosts enable opening a project on a remote machine.
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium text-white/70">Remote Hosts</h3>
+                <p className="text-xs text-white/30 mt-1">
+                  SSH hosts enable opening a project on a remote machine.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openCreateSshConnection}
+                className="shrink-0 rounded-lg border border-emerald-400/25 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-all hover:bg-emerald-500/25 pressable"
+              >
+                Add host
+              </button>
             </div>
 
             {sshMessage && (
@@ -4484,148 +4567,180 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <input
-                type="text"
-                value={sshDraft.name}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, name: e.target.value }))}
-                placeholder="Name"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-              />
-              <input
-                type="text"
-                value={sshDraft.host}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, host: e.target.value }))}
-                placeholder="Host or Tailscale DNS name"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-              />
-              <input
-                type="text"
-                value={sshDraft.username}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, username: e.target.value }))}
-                placeholder="Username"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-              />
-              <input
-                type="number"
-                min={1}
-                max={65535}
-                value={sshDraft.port}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, port: Number(e.target.value) || 22 }))}
-                placeholder="Port"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-              />
-              <input
-                type="text"
-                value={sshDraft.identityFile}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, identityFile: e.target.value }))}
-                placeholder="Identity file, optional"
-                className="md:col-span-2 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-              />
-              <Dropdown
-                state={sshKnownHostsDd}
-                trigger={
-                  <span className="truncate flex-1 text-left">
-                    {sshDraft.knownHostsMode === "accept-new" ? "Accept new" : sshDraft.knownHostsMode === "strict" ? "Strict" : "Disabled"}
-                  </span>
-                }
-              >
-                {(["accept-new", "strict", "off"] as SshKnownHostsMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => { setSshDraft((prev) => ({ ...prev, knownHostsMode: mode })); sshKnownHostsDd.close(); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      mode === sshDraft.knownHostsMode ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`} 
-                    style={{
-                      backgroundColor: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
-                  >
-                    {mode === "accept-new" ? "Accept new host keys" : mode === "strict" ? "Strict known hosts" : "Disable host key checks"}
-                  </button>
-                ))}
-              </Dropdown>
-              <button
-                type="button"
-                onClick={handleCreateSshConnection}
-                disabled={sshSaving}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed pressable"
-              >
-                {sshSaving ? "Saving..." : "Add Host"}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-              <label className="flex items-center gap-2 text-white/50">
-                <input type="checkbox" checked={sshDraft.allowBash} onChange={(e) => setSshDraft((prev) => ({ ...prev, allowBash: e.target.checked }))} />
-                Bash
-              </label>
-              <label className="flex items-center gap-2 text-white/50">
-                <input type="checkbox" checked={sshDraft.allowFileWrite} onChange={(e) => setSshDraft((prev) => ({ ...prev, allowFileWrite: e.target.checked }))} />
-                File writes
-              </label>
-              <label className="flex items-center gap-2 text-white/50">
-                <input type="checkbox" checked={sshDraft.allowAbsolutePaths} onChange={(e) => setSshDraft((prev) => ({ ...prev, allowAbsolutePaths: e.target.checked }))} />
-                Absolute paths
-              </label>
-            </div>
-
             <div className="space-y-2">
               {sshLoading ? (
                 <p className="text-xs text-white/35">Loading remote hosts...</p>
               ) : sshConnections.length === 0 ? (
-                <p className="text-xs text-white/35">No remote hosts configured.</p>
+                <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-4 text-center">
+                  <p className="text-sm text-white/50">No remote hosts configured</p>
+                  <p className="mt-1 text-xs text-white/30">Add an SSH host to open projects and run agent tools remotely.</p>
+                </div>
               ) : (
                 sshConnections.map((connection) => (
-                  <div key={connection.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-3">
+                  <div key={connection.id} className={`rounded-lg border bg-white/[0.03] p-3 space-y-2 ${sshEditingId === connection.id && sshEditorOpen ? "border-emerald-400/25" : "border-white/10"}`}>
+                    <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm text-white/75 truncate">{connection.name}</p>
-                        <p className="text-xs text-white/35 font-mono truncate">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm text-white/75 truncate">{connection.name}</p>
+                          {!connection.enabled && <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-white/35">Disabled</span>}
+                        </div>
+                        <p className="mt-0.5 text-xs text-white/35 font-mono truncate">
                           {connection.username ? `${connection.username}@` : ""}{connection.host}:{connection.port}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex shrink-0 items-center gap-2">
+                        <ToggleSwitch
+                          checked={connection.enabled}
+                          onChange={() => {
+                            const enabled = !connection.enabled;
+                            void patchSshConnection(connection.id, { enabled });
+                            setSshTestResults((prev) => {
+                              const next = { ...prev };
+                              delete next[connection.id];
+                              return next;
+                            });
+                            if (sshEditingId === connection.id) setSshDraft((prev) => ({ ...prev, enabled }));
+                          }}
+                          accentColor="emerald"
+                          ariaLabel={`${connection.enabled ? "Disable" : "Enable"} ${connection.name}`}
+                        />
                         <button
                           type="button"
                           onClick={() => handleTestSshConnection(connection.id)}
-                          disabled={sshTestingId === connection.id}
+                          disabled={sshTestingId !== null || !connection.enabled}
                           className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-50 pressable"
                         >
                           {sshTestingId === connection.id ? "Testing..." : "Test"}
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteSshConnection(connection.id)}
-                          className="px-2 py-1 rounded-md text-[11px] bg-red-500/10 border border-red-400/15 text-red-300/70 hover:bg-red-500/20 transition-all pressable"
+                          onClick={() => openEditSshConnection(connection)}
+                          className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all pressable"
                         >
-                          Delete
+                          Manage
                         </button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                      <label className="flex items-center gap-2 text-white/50">
-                        <input type="checkbox" checked={connection.enabled} onChange={(e) => patchSshConnection(connection.id, { enabled: e.target.checked })} />
-                        Enabled
-                      </label>
-                      <label className="flex items-center gap-2 text-white/50">
-                        <input type="checkbox" checked={connection.allowBash} onChange={(e) => patchSshConnection(connection.id, { allowBash: e.target.checked })} />
-                        Bash
-                      </label>
-                      <label className="flex items-center gap-2 text-white/50">
-                        <input type="checkbox" checked={connection.allowFileWrite} onChange={(e) => patchSshConnection(connection.id, { allowFileWrite: e.target.checked })} />
-                        Writes
-                      </label>
-                      <label className="flex items-center gap-2 text-white/50">
-                        <input type="checkbox" checked={connection.allowAbsolutePaths} onChange={(e) => patchSshConnection(connection.id, { allowAbsolutePaths: e.target.checked })} />
-                        Absolute
-                      </label>
+                    <div className="flex flex-wrap gap-1.5 text-[10px] text-white/40">
+                      {connection.allowBash && <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5">Bash</span>}
+                      {connection.allowFileWrite && <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5">File writes</span>}
+                      {connection.allowAbsolutePaths && <span className="rounded border border-amber-400/15 bg-amber-500/5 px-1.5 py-0.5 text-amber-200/60">Absolute paths</span>}
+                      <span className={`rounded border px-1.5 py-0.5 ${connection.knownHostsMode === "off" ? "border-amber-400/15 bg-amber-500/5 text-amber-200/60" : "border-white/10 bg-white/5"}`}>{connection.knownHostsMode === "strict" ? "Strict host keys" : connection.knownHostsMode === "accept-new" ? "Accept new host keys" : "Host checks off"}</span>
                     </div>
+                    {sshTestResults[connection.id] && (
+                      <div className={`rounded-md border px-2 py-1.5 text-[11px] ${sshTestResults[connection.id].type === "ok" ? "border-green-400/15 bg-green-500/5 text-green-300/75" : "border-red-400/15 bg-red-500/5 text-red-300/75"}`}>
+                        {sshTestResults[connection.id].text}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
             </div>
+
+            {sshEditorOpen && (
+              <div className="space-y-4 rounded-lg border border-emerald-400/20 bg-black/15 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-medium text-white/75">{sshEditingId ? "Edit remote host" : "Add remote host"}</h4>
+                    <p className="mt-0.5 text-xs text-white/30">Connection details are stored locally and used for remote project workspaces.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 text-xs text-white/40">
+                      <span>Enabled</span>
+                      <ToggleSwitch checked={sshDraft.enabled} onChange={() => setSshDraft((prev) => ({ ...prev, enabled: !prev.enabled }))} accentColor="emerald" ariaLabel="Enable remote host" />
+                    </div>
+                    <button type="button" onClick={closeSshEditor} className="text-xs text-white/35 hover:text-white/65 pressable">Close</button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[10px] font-medium uppercase tracking-widest text-white/30">Connection</p>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="text-xs text-white/45">Name</span>
+                      <input type="text" value={sshDraft.name} onChange={(e) => setSshDraft((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder="Workstation" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-white/45">Host</span>
+                      <input type="text" value={sshDraft.host} onChange={(e) => setSshDraft((prev) => ({ ...prev, host: e.target.value }))}
+                        placeholder="Host or Tailscale DNS name" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-white/45">Username</span>
+                      <input type="text" value={sshDraft.username || ""} onChange={(e) => setSshDraft((prev) => ({ ...prev, username: e.target.value }))}
+                        placeholder="Optional" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-white/45">Port</span>
+                      <input type="number" min={1} max={65535} value={sshDraft.port} onChange={(e) => setSshDraft((prev) => ({ ...prev, port: Number(e.target.value) || 22 }))}
+                        className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <span className="text-xs text-white/45">Identity file</span>
+                      <input type="text" value={sshDraft.identityFile || ""} onChange={(e) => setSshDraft((prev) => ({ ...prev, identityFile: e.target.value }))}
+                        placeholder="Optional path to a private key" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-2 border-t border-white/5 pt-3">
+                  <p className="text-[10px] font-medium uppercase tracking-widest text-white/30">Host verification</p>
+                  <Dropdown state={sshKnownHostsDd} trigger={<span className="truncate flex-1 text-left">{sshDraft.knownHostsMode === "accept-new" ? "Accept new host keys" : sshDraft.knownHostsMode === "strict" ? "Strict known hosts" : "Host key checks disabled"}</span>}>
+                    {(["accept-new", "strict", "off"] as SshKnownHostsMode[]).map((mode) => (
+                      <button key={mode} type="button" onClick={() => { setSshDraft((prev) => ({ ...prev, knownHostsMode: mode })); sshKnownHostsDd.close(); }}
+                        className={`w-full px-3 py-2 text-left text-xs transition-all ${mode === sshDraft.knownHostsMode ? "bg-white/10 text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"}`}>
+                        <span className="block">{mode === "accept-new" ? "Accept new host keys" : mode === "strict" ? "Strict known hosts" : "Disable host key checks"}</span>
+                        <span className="mt-0.5 block text-[10px] text-white/30">{mode === "accept-new" ? "Trust a host on first connection, then require the same key." : mode === "strict" ? "Only connect to hosts already present in the local known-hosts file." : "Do not verify host identity. Not recommended."}</span>
+                      </button>
+                    ))}
+                  </Dropdown>
+                  {sshDraft.knownHostsMode === "off" && <p className="text-xs text-amber-300/70">Host identity will not be verified. This permits man-in-the-middle attacks.</p>}
+                </div>
+
+                <div className="space-y-2 border-t border-white/5 pt-3">
+                  <p className="text-[10px] font-medium uppercase tracking-widest text-white/30">Agent permissions</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {([
+                      ["allowBash", "Bash", "Run shell commands on this host."],
+                      ["allowFileWrite", "File writes", "Create and modify remote files."],
+                      ["allowAbsolutePaths", "Absolute paths", "Access paths outside the project root."],
+                    ] as const).map(([key, label, description]) => (
+                      <div key={key} className="flex items-start justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                        <div className="min-w-0">
+                          <p className="text-xs text-white/65">{label}</p>
+                          <p className="mt-0.5 text-[10px] leading-snug text-white/30">{description}</p>
+                        </div>
+                        <ToggleSwitch checked={sshDraft[key]} onChange={() => setSshDraft((prev) => ({ ...prev, [key]: !prev[key] }))} accentColor="emerald" ariaLabel={`Allow ${label.toLowerCase()}`} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                  <button type="button" onClick={closeSshEditor} disabled={sshSaving}
+                    className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/50 transition-all hover:bg-white/10 hover:text-white/70 disabled:opacity-40 pressable">Cancel</button>
+                  <button type="button" onClick={() => handleSaveSshConnection(false)} disabled={sshSaving || !sshDraft.name.trim() || !sshDraft.host.trim()}
+                    className="rounded-md border border-emerald-400/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-all hover:bg-emerald-500/20 disabled:opacity-40 pressable">{sshSaving ? "Saving…" : "Save"}</button>
+                  <button type="button" onClick={() => handleSaveSshConnection(true)} disabled={sshSaving || !sshDraft.name.trim() || !sshDraft.host.trim() || !sshDraft.enabled}
+                    className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60 transition-all hover:bg-white/10 hover:text-white/80 disabled:opacity-40 pressable">Save and test</button>
+
+                  {sshEditingId && (
+                    <div className="ml-auto">
+                      {sshDeleteConfirmId === sshEditingId ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-md border border-red-400/20 bg-red-500/10 px-2 py-1">
+                          <span className="text-[11px] text-red-200/75">Remove this host? Referenced projects will be protected.</span>
+                          <button type="button" onClick={() => handleDeleteSshConnection(sshEditingId)} className="rounded bg-red-500/20 px-2 py-0.5 text-[11px] text-red-200 hover:bg-red-500/30 pressable">Remove</button>
+                          <button type="button" onClick={() => setSshDeleteConfirmId(null)} className="px-2 py-0.5 text-[11px] text-white/45 hover:text-white/70 pressable">Cancel</button>
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => setSshDeleteConfirmId(sshEditingId)} className="rounded-md border border-red-400/15 bg-red-500/5 px-2.5 py-1 text-[11px] text-red-300/65 transition-all hover:bg-red-500/15 pressable">Remove host</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Agent Persona */}

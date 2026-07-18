@@ -1598,7 +1598,10 @@ export async function updateSshConnection(id: string, updates: Partial<SshConnec
 
 export async function deleteSshConnection(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/settings/ssh-connections/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete SSH connection");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || "Failed to delete SSH connection");
+  }
 }
 
 export async function testSshConnection(id: string): Promise<{ ok: boolean; output: string }> {
