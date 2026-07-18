@@ -359,6 +359,7 @@ function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
 type LlamaSettingsView = "servers" | "models" | "binaries";
 type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
 type AutomationDetailTab = "schedule" | "prompts" | "history";
+type TtsDetailTab = "voice" | "reading" | "engine";
 type SshConnectionDraft = Omit<SshConnection, "id" | "createdAt" | "lastModified">;
 
 const DEFAULT_SSH_DRAFT: SshConnectionDraft = {
@@ -856,6 +857,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [ttsBackendStatusLoading, setTtsBackendStatusLoading] = useState(false);
   const [ttsTestText, setTtsTestText] = useState("Hello! This is a test of the text-to-speech system.");
   const [ttsTesting, setTtsTesting] = useState(false);
+  const [ttsDetailTab, setTtsDetailTab] = useState<TtsDetailTab>("voice");
   const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const modelDd = useDropdown();
@@ -921,6 +923,45 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     ttsSliderSaveTimersRef.current[key] = window.setTimeout(() => {
       void saveTtsSliderSetting(key, value);
     }, 250);
+  }
+
+  async function handleTestTts() {
+    if (!ttsSettings || !ttsTestText.trim()) return;
+    setTtsTesting(true);
+    try {
+      const res = await fetch("/api/tts/generate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: ttsTestText,
+          voice: ttsSettings.voice,
+          speed: ttsSettings.speed,
+          pitch: ttsSettings.pitch,
+          backend: ttsSettings.backend,
+          supertonicPitchSemitones: ttsSettings.supertonicPitchSemitones,
+          supertonicLanguage: ttsSettings.supertonicLanguage,
+          supertonicSteps: ttsSettings.supertonicSteps,
+          supertonicMaxChunkLength: ttsSettings.supertonicMaxChunkLength,
+          supertonicSilenceDuration: ttsSettings.supertonicSilenceDuration,
+          supertonicTrailingSilence: ttsSettings.supertonicTrailingSilence,
+          kokoroPitchShiftProcessor: ttsSettings.kokoroPitchShiftProcessor,
+          supertonicPitchShiftProcessor: ttsSettings.supertonicPitchShiftProcessor,
+        }),
+      });
+      if (!res.ok) {
+        setTtsTesting(false);
+        return;
+      }
+      const data = await res.json();
+      const audio = new Audio(data.audioUrl);
+      audio.addEventListener("ended", () => setTtsTesting(false));
+      audio.addEventListener("error", () => setTtsTesting(false));
+      await audio.play();
+    } catch (err) {
+      console.error("Test failed:", err);
+      setTtsTesting(false);
+    }
   }
 
   useEffect(() => {
@@ -6890,7 +6931,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
           {/* TTS Section */}
           <div id="tts" className="space-y-3 pt-2 border-t border-white/10">
-            <h3 className="text-sm font-medium text-white/70">Text-to-Speech</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium text-white/70">Text-to-Speech</h3>
+              <span className="text-[10px] text-white/25">Changes save automatically</span>
+            </div>
             
             {ttsError ? (
               <div className="p-3 rounded-lg bg-red-500/10 border border-red-400/20">
@@ -6901,24 +6945,86 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               <p className="text-white/30 text-sm">Loading TTS settings...</p>
             ) : (
               <div className="space-y-3">
-                {/* Master toggle */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="block text-sm font-medium text-white/60">Enable TTS</label>
-                    <p className="text-xs text-white/30 mt-0.5">Show speaker buttons on messages</p>
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-medium text-white/75">Speech controls</h4>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          ttsBackendStatusLoading
+                            ? "border-white/10 bg-white/5 text-white/35"
+                            : ttsBackendStatus?.available
+                              ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200/80"
+                              : "border-amber-400/20 bg-amber-500/10 text-amber-100/80"
+                        }`}>
+                          {ttsBackendStatusLoading ? "Checking engine" : ttsBackendStatus?.available ? "Engine ready" : "Needs setup"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/35 mt-1 truncate">
+                        {ttsSettings.backend === "kokoro"
+                          ? "Kokoro"
+                          : ttsSettings.backend === "qwen3-tts"
+                            ? "Qwen3-TTS"
+                            : "Supertonic 3"}
+                        {` · ${ttsVoices.flatMap((category) => category.voices).find((voice) => voice.id === ttsSettings.voice)?.name || ttsSettings.voice}`}
+                      </p>
+                      <p className="text-xs text-white/25 mt-0.5">Enable speaker controls and spoken responses.</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={ttsSettings.enabled}
+                      onChange={async () => {
+                        const updated = await updateTTSSettings({ enabled: !ttsSettings.enabled });
+                        applyTtsSettingsUpdate(updated);
+                      }}
+                      accentColor="purple"
+                      ariaLabel="Enable text-to-speech"
+                    />
                   </div>
-                  <ToggleSwitch
-                    checked={ttsSettings.enabled}
-                    onChange={async () => {
-                      const updated = await updateTTSSettings({ enabled: !ttsSettings.enabled });
-                      applyTtsSettingsUpdate(updated);
-                    }}
-                    accentColor="purple"
-                  />
+
+                  <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+                    <div>
+                      <div className="text-xs font-medium text-white/55">Auto-read responses</div>
+                      <div className="text-[11px] text-white/25">Read new assistant messages as they arrive</div>
+                    </div>
+                    <ToggleSwitch
+                      checked={ttsSettings.autoReadEnabled}
+                      onChange={async () => {
+                        const updated = await updateTTSSettings({ autoReadEnabled: !ttsSettings.autoReadEnabled });
+                        applyTtsSettingsUpdate(updated);
+                      }}
+                      accentColor="blue"
+                      ariaLabel="Automatically read responses"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 rounded-md bg-black/10 border border-white/10 p-1" role="tablist" aria-label="Text-to-speech settings">
+                  {(["voice", "reading", "engine"] as TtsDetailTab[]).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={ttsDetailTab === tab}
+                      onClick={() => setTtsDetailTab(tab)}
+                      className={`flex-1 rounded px-2 py-1.5 text-[11px] font-medium capitalize transition-all pressable ${
+                        ttsDetailTab === tab
+                          ? "bg-purple-500/20 text-purple-100 border border-purple-400/20"
+                          : "text-white/40 border border-transparent hover:text-white/65 hover:bg-white/5"
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
                 </div>
 
                 {/* Backend selector */}
-                <div className="space-y-1">
+                {ttsDetailTab === "engine" && (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-medium text-white/65">Speech engine</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Choose the synthesis backend and verify its runtime dependencies.</p>
+                  </div>
+                  <div className="space-y-1">
                   <label className="block text-sm text-white/50">TTS Backend</label>
                   <Dropdown
                     state={backendDd}
@@ -7011,7 +7117,15 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     )}
                   </div>
                 </div>
+                </div>
+                )}
 
+                {ttsDetailTab === "reading" && (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
+                  <div>
+                    <h4 className="text-xs font-medium text-white/65">Reading behavior</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Balance response latency, phrasing, and the content included in spoken output.</p>
+                  </div>
                 {/* Live speech tuning */}
                 {(["kokoro", "qwen3-tts", "supertonic-3"] as const).includes(ttsSettings.backend) && (
                   <>
@@ -7155,79 +7269,15 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </Dropdown>
                   <p className="text-white/30 text-xs">Controls what markdown elements are included in TTS speech output</p>
                 </div>
+                </div>
+                )}
 
-                {/* Auto-read toggle */}
-                <div className="flex items-center justify-between">
+                {ttsDetailTab === "voice" && (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-white/60">Auto-read responses</label>
-                    <p className="text-xs text-white/30 mt-0.5">Automatically read new assistant messages aloud</p>
+                    <h4 className="text-xs font-medium text-white/65">Voice and preview</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Choose the default voice, adjust its pace, and hear the current configuration.</p>
                   </div>
-                  <ToggleSwitch
-                    checked={ttsSettings.autoReadEnabled}
-                    onChange={async () => {
-                      const updated = await updateTTSSettings({ autoReadEnabled: !ttsSettings.autoReadEnabled });
-                      applyTtsSettingsUpdate(updated);
-                    }}
-                    accentColor="blue"
-                  />
-                </div>
-
-                {/* Test TTS */}
-                <div className="pt-2 space-y-2">
-                  <label className="block text-sm font-medium text-white/60">Test TTS</label>
-                  <textarea
-                    value={ttsTestText}
-                    onChange={(e) => setTtsTestText(e.target.value)}
-                    rows={3}
-                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-400/50 resize-y"
-                    placeholder="Type something to hear it read aloud…"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!ttsTestText.trim()) return;
-                      setTtsTesting(true);
-                      try {
-                        const res = await fetch("/api/tts/generate", {
-                          method: "POST",
-                          credentials: "include",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            text: ttsTestText,
-                            voice: ttsSettings.voice,
-                            speed: ttsSettings.speed,
-                            pitch: ttsSettings.pitch,
-                            backend: ttsSettings.backend,
-                            supertonicPitchSemitones: ttsSettings.supertonicPitchSemitones,
-                            supertonicLanguage: ttsSettings.supertonicLanguage,
-                            supertonicSteps: ttsSettings.supertonicSteps,
-                            supertonicMaxChunkLength: ttsSettings.supertonicMaxChunkLength,
-                            supertonicSilenceDuration: ttsSettings.supertonicSilenceDuration,
-                            supertonicTrailingSilence: ttsSettings.supertonicTrailingSilence,
-                            kokoroPitchShiftProcessor: ttsSettings.kokoroPitchShiftProcessor,
-                            supertonicPitchShiftProcessor: ttsSettings.supertonicPitchShiftProcessor,
-                          }),
-                        });
-                        if (res.ok) {
-                          const data = await res.json();
-                          const audio = new Audio(data.audioUrl);
-                          audio.addEventListener("ended", () => setTtsTesting(false));
-                          audio.addEventListener("error", () => setTtsTesting(false));
-                          audio.play();
-                        } else {
-                          setTtsTesting(false);
-                        }
-                      } catch (err) {
-                        console.error("Test failed:", err);
-                        setTtsTesting(false);
-                      }
-                    }}
-                    disabled={ttsTesting || !ttsTestText.trim()}
-                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {ttsTesting ? "Playing…" : "Test Voice"}
-                  </button>
-                </div>
-
                 {/* Voice selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">Voice</label>
@@ -7299,6 +7349,37 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </div>
                 </div>
 
+                {/* Test TTS */}
+                <div className="pt-2 border-t border-white/10 space-y-2">
+                  <label className="block text-sm font-medium text-white/60">Preview current voice</label>
+                  <textarea
+                    value={ttsTestText}
+                    onChange={(e) => setTtsTestText(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-400/50 resize-y"
+                    placeholder="Type something to hear it read aloud…"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestTts}
+                    disabled={ttsTesting || !ttsTestText.trim()}
+                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {ttsTesting ? "Playing…" : "Test Voice"}
+                  </button>
+                </div>
+                </div>
+                )}
+
+                {ttsDetailTab === "engine" && (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
+                  <div>
+                    <h4 className="text-xs font-medium text-white/65">Engine tuning</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Backend-specific synthesis and chunking controls.</p>
+                  </div>
+                  {ttsSettings.backend === "qwen3-tts" && (
+                    <p className="text-xs text-white/35">Qwen3-TTS uses its managed streaming defaults and has no additional engine controls.</p>
+                  )}
                 {ttsSettings.backend === "kokoro" && (
                   <div className="space-y-3">
                     <div className="space-y-1">
@@ -7524,6 +7605,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       </div>
                     </div>
                   </div>
+                )}
+                </div>
                 )}
               </div>
             )}
