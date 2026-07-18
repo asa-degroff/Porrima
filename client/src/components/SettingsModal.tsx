@@ -358,6 +358,7 @@ function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
 
 type LlamaSettingsView = "servers" | "models" | "binaries";
 type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
+type AutomationDetailTab = "schedule" | "prompts" | "history";
 type SshConnectionDraft = Omit<SshConnection, "id" | "createdAt" | "lastModified">;
 
 const DEFAULT_SSH_DRAFT: SshConnectionDraft = {
@@ -758,10 +759,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [archivedAutomationsLoading, setArchivedAutomationsLoading] = useState(false);
   const [archivedSectionOpen, setArchivedSectionOpen] = useState(false);
   const [automationMessage, setAutomationMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [automationEditorTaskId, setAutomationEditorTaskId] = useState<string | null>(null);
+  const [automationDetailTab, setAutomationDetailTab] = useState<AutomationDetailTab>("schedule");
   const [automationHistoryOpenTaskId, setAutomationHistoryOpenTaskId] = useState<string | null>(null);
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
-  const [automationPromptExpandedTaskId, setAutomationPromptExpandedTaskId] = useState<string | null>(null);
   const [automationConfirmDeleteId, setAutomationConfirmDeleteId] = useState<string | null>(null);
   const automationTimeoutOriginalRef = useRef<number>(0);
   const automationMaxItersOriginalRef = useRef<number>(0);
@@ -2147,14 +2149,22 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     }
   };
 
-  const handleToggleAutomationHistory = async (id: string) => {
-    setAutomationMessage(null);
-    if (automationHistoryOpenTaskId === id) {
-      setAutomationHistoryOpenTaskId(null);
+  const handleToggleAutomationEditor = (id: string) => {
+    if (automationEditorTaskId === id) {
+      setAutomationEditorTaskId(null);
       return;
     }
-    setAutomationHistoryOpenTaskId(id);
-    await loadAutomationRuns(id);
+    setAutomationEditorTaskId(id);
+    setAutomationDetailTab("schedule");
+  };
+
+  const handleSelectAutomationDetailTab = async (id: string, tab: AutomationDetailTab) => {
+    setAutomationEditorTaskId(id);
+    setAutomationDetailTab(tab);
+    if (tab === "history") {
+      setAutomationHistoryOpenTaskId(id);
+      await loadAutomationRuns(id);
+    }
   };
 
   const handleAutomationScheduleTypeChange = async (
@@ -2244,7 +2254,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       },
     ];
     updateAutomationDraft(task.id, { promptSteps });
-    setAutomationPromptExpandedTaskId(task.id);
   };
 
   const handleRemoveAutomationPromptStep = async (task: AutomationTask, stepIndex: number) => {
@@ -2284,6 +2293,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         notifications: { enabled: false },
       });
       setAutomations((prev) => [...prev, task].sort((a, b) => a.orderIndex - b.orderIndex));
+      setAutomationEditorTaskId(task.id);
+      setAutomationDetailTab("schedule");
     } catch (err: any) {
       setAutomationMessage({ type: "err", text: err?.message || "Failed to create automation" });
     }
@@ -2299,6 +2310,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     try {
       await deleteAutomation(id);
       setAutomations((prev) => prev.filter((task) => task.id !== id));
+      if (automationEditorTaskId === id) {
+        setAutomationEditorTaskId(null);
+      }
       if (automationHistoryOpenTaskId === id) {
         setAutomationHistoryOpenTaskId(null);
       }
@@ -6222,9 +6236,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                    ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
 	                    : DEFAULT_AUTOMATION_DAILY_TIME;
 	                  const runAt = task.schedule.type === "once" ? task.schedule.runAt : undefined;
-	                  const isRunning = automationsRunningTaskId === task.id;
-		                  const historyOpen = automationHistoryOpenTaskId === task.id;
-		                  const historyLoading = automationRunsLoadingTaskId === task.id;
+		                  const isRunning = automationsRunningTaskId === task.id;
+		                  const editorOpen = automationEditorTaskId === task.id;
+			                  const historyLoading = automationRunsLoadingTaskId === task.id;
 		                  const historyRuns = automationRunsByTaskId[task.id] || [];
 		                  const promptDispatchMode = task.kind === "synthesis" ? "sequence" : task.promptDispatchMode ?? "sequence";
 		                  const canEditPromptList = task.kind !== "synthesis";
@@ -6245,12 +6259,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     ref: actRef,
                   };
                   return (
-	                    <div key={task.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-	                      <div className="flex items-start justify-between gap-3">
-	                        <div className="min-w-0 flex-1">
-	                          <div className="flex items-center gap-2">
-	                            {task.builtIn ? (
-	                              <h4 className="text-sm font-medium text-white/70 truncate">{task.title}</h4>
+		                    <div key={task.id} className={`rounded-lg border p-3 space-y-3 transition-colors ${editorOpen ? "border-purple-400/20 bg-purple-500/[0.035]" : "border-white/10 bg-white/[0.02]"}`}>
+		                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+		                        <div className="min-w-0 flex-1">
+		                          <div className="flex items-center gap-2">
+		                            {task.builtIn || !editorOpen ? (
+		                              <h4 className="text-sm font-medium text-white/70 truncate">{task.title}</h4>
 	                            ) : (
 	                              <input
 	                                value={task.title}
@@ -6270,17 +6284,53 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            {task.consecutiveFailures ? ` · ${task.consecutiveFailures} failures` : ""}
 	                          </p>
 	                        </div>
-	                        <ToggleSwitch
-	                          checked={task.enabled}
-	                          onChange={() => {
-	                            updateAutomationDraft(task.id, { enabled: !task.enabled });
-	                            saveAutomationPatch(task.id, { enabled: !task.enabled });
-	                          }}
-	                          accentColor="purple"
-	                        />
-	                      </div>
+		                        <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+		                          <button
+		                            type="button"
+		                            onClick={() => handleRunAutomation(task.id)}
+		                            disabled={!!automationsRunningTaskId}
+		                            className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all pressable"
+		                          >
+		                            {isRunning ? "Running" : "Run now"}
+		                          </button>
+		                          <button
+		                            type="button"
+		                            onClick={() => handleToggleAutomationEditor(task.id)}
+		                            className={`px-2 py-1 rounded-md text-xs border transition-all pressable ${editorOpen ? "bg-purple-500/15 border-purple-400/25 text-purple-100" : "bg-white/5 border-white/10 text-white/50 hover:text-white/75"}`}
+		                            aria-expanded={editorOpen}
+		                          >
+		                            {editorOpen ? "Close" : "Manage"}
+		                          </button>
+		                          <ToggleSwitch
+		                            checked={task.enabled}
+		                            onChange={() => {
+		                              updateAutomationDraft(task.id, { enabled: !task.enabled });
+		                              saveAutomationPatch(task.id, { enabled: !task.enabled });
+		                            }}
+		                            accentColor="purple"
+		                          />
+		                        </div>
+		                      </div>
 
-	                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+		                      {editorOpen && (
+		                        <div className="flex items-center gap-1 rounded-md bg-black/10 border border-white/10 p-1" role="tablist" aria-label={`${task.title} settings`}>
+		                          {(["schedule", "prompts", "history"] as AutomationDetailTab[]).map((tab) => (
+		                            <button
+		                              key={tab}
+		                              type="button"
+		                              role="tab"
+		                              aria-selected={automationDetailTab === tab}
+		                              onClick={() => handleSelectAutomationDetailTab(task.id, tab)}
+		                              className={`flex-1 rounded px-2 py-1.5 text-[11px] font-medium capitalize transition-all pressable ${automationDetailTab === tab ? "bg-purple-500/20 text-purple-100 border border-purple-400/20" : "text-white/40 border border-transparent hover:text-white/65 hover:bg-white/5"}`}
+		                            >
+		                              {tab}
+		                            </button>
+		                          ))}
+		                        </div>
+		                      )}
+
+		                      {editorOpen && automationDetailTab === "schedule" && (
+		                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
 	                        <label className="space-y-1">
 	                          <span className="block text-[11px] text-white/45">Schedule</span>
 	                          <Dropdown
@@ -6491,27 +6541,36 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                          />
 	                        </label>
-	                      </div>
+		                      </div>
+		                      )}
 
-		                      <div>
-		                        <div className="flex items-center justify-between gap-2 mb-1.5">
-		                          <button
-		                                onClick={() => setAutomationPromptExpandedTaskId(automationPromptExpandedTaskId === task.id ? null : task.id)}
-		                                className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors pressable"
-		                          >
-		                                <Chevron open={automationPromptExpandedTaskId === task.id} size={10} />
-		                                Prompts ({task.promptSteps.length}) · {formatAutomationPromptDispatch(task)}
-		                          </button>
-		                          {canEditPromptList && (
-		                            <button
+			                      {editorOpen && automationDetailTab === "prompts" && (
+			                      <div>
+			                        <div className="flex items-center justify-between gap-2 mb-2">
+			                          <h5 className="text-[11px] font-medium text-white/45">
+			                            Prompts ({task.promptSteps.length}) · {formatAutomationPromptDispatch(task)}
+			                          </h5>
+			                          <div className="flex items-center gap-2">
+			                          {task.builtIn && (
+			                            <button
+			                              type="button"
+			                              onClick={() => handleResetAutomationPrompts(task.id)}
+			                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable"
+			                            >
+			                              Reset prompts
+			                            </button>
+			                          )}
+			                          {canEditPromptList && (
+			                            <button
 		                              type="button"
 		                              onClick={() => handleAddAutomationPromptStep(task)}
 		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable"
 		                            >
-		                              Add prompt
-		                            </button>
-		                          )}
-		                        </div>
+			                              Add prompt
+			                            </button>
+			                          )}
+			                          </div>
+			                        </div>
 		                        {task.kind !== "synthesis" && (
 		                          <fieldset className="mb-2">
 		                            <legend className="text-[11px] text-white/45 mb-1">Send</legend>
@@ -6545,8 +6604,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                            )}
 		                          </fieldset>
 		                        )}
-		                        {automationPromptExpandedTaskId === task.id ? (
-		                              <div className="space-y-2">
+			                        <div className="space-y-2">
 		                                    {task.promptSteps.map((step, stepIndex) => (
 		                                          <div key={step.id} className="space-y-1 rounded-md border border-white/10 bg-white/[0.02] p-2">
 		                                                <div className="flex items-center gap-2">
@@ -6605,27 +6663,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                          </div>
 		                                    ))}
 		                              </div>
-		                        ) : (
-		                              <div className="space-y-1.5">
-		                                    {task.promptSteps.map((step) => (
-	                                          <div key={step.id} className="flex items-start gap-2">
-	                                                <span className="text-[11px] text-white/35 shrink-0 mt-px">{step.title}</span>
-		                                                <span className="text-[11px] text-white/20 truncate flex-1">
-		                                                      {step.prompt ? step.prompt.split("\n")[0]?.substring(0, 80) : "—"}
-		                                                </span>
-		                                          </div>
-		                                    ))}
-		                                    {promptDispatchMode === "cycle" && task.kind !== "synthesis" && (
-		                                      <div className="flex items-start gap-2">
-		                                        <span className="text-[11px] text-white/35 shrink-0 mt-px">Next</span>
-		                                        <span className="text-[11px] text-white/20 truncate flex-1">{getAutomationCyclePromptTitle(task)}</span>
-		                                      </div>
-		                                    )}
-		                              </div>
-		                        )}
-		                      </div>
+			                      </div>
+			                      )}
 
-	                      <div className="flex flex-wrap items-center gap-2">
+		                      {editorOpen && automationDetailTab === "schedule" && (
+		                      <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
 	                        <button
 	                          onClick={() => moveAutomation(task.id, -1)}
 	                          disabled={index === 0}
@@ -6640,28 +6682,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                        >
 	                          Down
 	                        </button>
-	                        <button
-	                          onClick={() => handleRunAutomation(task.id)}
-	                          disabled={!!automationsRunningTaskId}
-	                          className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all pressable"
-	                        >
-	                          {isRunning ? "Running" : "Run now"}
-	                        </button>
-	                        <button
-	                          onClick={() => handleToggleAutomationHistory(task.id)}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all pressable"
-	                        >
-	                          {historyOpen ? "Hide history" : "History"}
-	                        </button>
-	                        {task.builtIn && (
-	                          <button
-	                            onClick={() => handleResetAutomationPrompts(task.id)}
-	                            className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all pressable"
-	                          >
-	                            Reset prompts
-	                          </button>
-	                        )}
-	                        {!task.builtIn && (
+		                        {!task.builtIn && (
 	                          automationConfirmDeleteId === task.id ? (
 	                            <div className="ml-auto flex items-center gap-2 px-2 py-1 rounded-md bg-red-500/10 border border-red-400/20">
 	                              <span className="text-xs text-white/70 shrink-0">Delete this automation?</span>
@@ -6686,10 +6707,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              Delete
 	                            </button>
 	                          )
-	                        )}
-	                      </div>
+		                        )}
+		                      </div>
+		                      )}
 
-	                      {historyOpen && (
+		                      {editorOpen && automationDetailTab === "history" && (
 	                        <div className="border-t border-white/10 pt-3 space-y-2">
 	                          <div className="flex items-center justify-between gap-2">
 	                            <h5 className="text-xs font-medium text-white/60">Run history</h5>
