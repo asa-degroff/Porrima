@@ -360,6 +360,7 @@ type LlamaSettingsView = "servers" | "models" | "binaries";
 type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
 type AutomationDetailTab = "schedule" | "prompts" | "history";
 type TtsDetailTab = "voice" | "reading" | "engine";
+type ExtractionDetailTab = "capture" | "limits" | "prompt";
 type SshConnectionDraft = Omit<SshConnection, "id" | "createdAt" | "lastModified">;
 
 const DEFAULT_SSH_DRAFT: SshConnectionDraft = {
@@ -543,6 +544,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [extractionPromptContent, setExtractionPromptContent] = useState("");
   const [extractionPromptSaving, setExtractionPromptSaving] = useState(false);
   const [extractionPromptMessage, setExtractionPromptMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [extractionDetailTab, setExtractionDetailTab] = useState<ExtractionDetailTab>("capture");
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
   const [userDocEditing, setUserDocEditing] = useState(false);
   const [userDocContent, setUserDocContent] = useState("");
@@ -571,7 +573,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
-  // Extraction server settings
+  // Extraction runtime and request settings
   const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? DEFAULT_EXTRACTION_CTX_SIZE);
   const [extractionCtxSizeDraft, setExtractionCtxSizeDraft] = useState(String(settings.extractionCtxSize ?? DEFAULT_EXTRACTION_CTX_SIZE));
   const [extractionMaxTokens, setExtractionMaxTokens] = useState(settings.extractionMaxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS);
@@ -1524,8 +1526,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     );
     setExtractionMaxTokens(next);
     setExtractionMaxTokensDraft(String(next));
-    handleLlamaServerSettings("extraction", { maxTokens: next });
-  }, [extractionMaxTokens, extractionMaxTokensDraft, handleLlamaServerSettings]);
+  }, [extractionMaxTokens, extractionMaxTokensDraft]);
 
   const applyExtractionTimeoutDraft = useCallback(() => {
     const minutes = clampIntegerDraft(
@@ -1537,8 +1538,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     const next = minutes * 60000;
     setExtractionTimeoutMs(next);
     setExtractionTimeoutMinutesDraft(String(minutes));
-    handleLlamaServerSettings("extraction", { timeoutMs: next });
-  }, [extractionTimeoutMinutesDraft, extractionTimeoutMs, handleLlamaServerSettings]);
+  }, [extractionTimeoutMinutesDraft, extractionTimeoutMs]);
 
   const applyMidTurnExtractionThresholdDraft = useCallback(() => {
     const next = clampIntegerDraft(
@@ -4596,7 +4596,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
           {/* Remote Hosts */}
           <div id="ssh" className="space-y-4 pt-2 border-t border-white/10">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-medium text-white/70">Remote Hosts</h3>
                 <p className="text-xs text-white/30 mt-1">
@@ -5451,214 +5451,290 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             {skillsBrowserOpen && <SkillsBrowser onClose={() => setSkillsBrowserOpen(false)} projectId={undefined} />}
           </div>
 
-          {/* Delayed Extraction Settings */}
-          <div id="extraction" className="border-t border-white/10 pt-6">
-            <h3 className="text-sm font-semibold text-white/80 mb-4">Delayed Memory Extraction</h3>
-            
-            <div className="space-y-4">
-              {/* Enable toggle */}
-              <div className="flex items-center justify-between">
+          {/* Memory Extraction */}
+          <div id="extraction" className="border-t border-white/10 pt-6 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white/80">Memory Extraction</h3>
+                <p className="text-xs text-white/30 mt-0.5">Control when conversations are captured, how large extraction requests may be, and the prompt that guides memory creation.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLlamaSettingsView("servers");
+                  openLlamaServerDetail("extraction", "configuration");
+                  requestAnimationFrame(() => scrollToSection("inference"));
+                }}
+                className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/45 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+              >
+                Manage server
+              </button>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
+                <div className="text-[10px] uppercase tracking-wider text-white/30">After inactivity</div>
+                <div className="text-sm font-medium text-white/70 mt-1">
+                  {delayedExtractionEnabled ? `${delayedExtractionThreshold} min` : "Off"}
+                </div>
+                <div className="text-[11px] text-white/25 mt-0.5">
+                  {delayedExtractionEnabled ? `Up to ${delayedExtractionCap} messages` : "Scheduled capture disabled"}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
+                <div className="text-[10px] uppercase tracking-wider text-white/30">During long turns</div>
+                <div className="text-sm font-medium text-white/70 mt-1">{midTurnExtractionThreshold.toLocaleString()} tokens</div>
+                <div className="text-[11px] text-white/25 mt-0.5">{timeoutMsToSeconds(midTurnExtractionTimeoutMs)}s pulse limit</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
+                <div className="text-[10px] uppercase tracking-wider text-white/30">Request budget</div>
+                <div className="text-sm font-medium text-white/70 mt-1">{extractionMaxTokens.toLocaleString()} tokens</div>
+                <div className="text-[11px] text-white/25 mt-0.5">{timeoutMsToMinutes(extractionTimeoutMs)} min timeout</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 rounded-md bg-black/10 border border-white/10 p-1" role="tablist" aria-label="Memory extraction settings">
+              {(["capture", "limits", "prompt"] as ExtractionDetailTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={extractionDetailTab === tab}
+                  onClick={() => setExtractionDetailTab(tab)}
+                  className={`flex-1 rounded px-2 py-1.5 text-[11px] font-medium capitalize transition-all pressable ${
+                    extractionDetailTab === tab
+                      ? "bg-purple-500/20 text-purple-100 border border-purple-400/20"
+                      : "text-white/40 border border-transparent hover:text-white/65 hover:bg-white/5"
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            {extractionDetailTab === "capture" && (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs font-medium text-white/65">After inactivity</h4>
+                      <p className="text-[11px] text-white/30 mt-0.5">Review an inactive chat and reconcile similar memories after the conversation settles.</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={delayedExtractionEnabled}
+                      onChange={() => setDelayedExtractionEnabled(!delayedExtractionEnabled)}
+                      accentColor="purple"
+                      ariaLabel="Enable extraction after chat inactivity"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="text-sm text-white/50">Wait after inactivity</label>
+                        <span className="text-xs font-mono text-white/40">{delayedExtractionThreshold} min</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={15}
+                        max={60}
+                        step={5}
+                        value={delayedExtractionThreshold}
+                        onChange={(e) => setDelayedExtractionThreshold(Number(e.target.value))}
+                        disabled={!delayedExtractionEnabled}
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-40 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400"
+                      />
+                      <p className="text-[11px] text-white/25">Delay before scheduled extraction begins.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="text-sm text-white/50">Message cap</label>
+                        <span className="text-xs font-mono text-white/40">{delayedExtractionCap}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        step={5}
+                        value={delayedExtractionCap}
+                        onChange={(e) => setDelayedExtractionCap(Number(e.target.value))}
+                        disabled={!delayedExtractionEnabled}
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-40 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400"
+                      />
+                      <p className="text-[11px] text-white/25">Maximum messages included in the delayed extraction context.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
+                  <div>
+                    <h4 className="text-xs font-medium text-white/65">During long turns</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Capture completed portions of an active agent turn before the response becomes too large.</p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="block text-sm text-white/50">Signal token threshold</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={midTurnExtractionThresholdDraft}
+                          onChange={(e) => setMidTurnExtractionThresholdDraft(e.target.value)}
+                          onBlur={applyMidTurnExtractionThresholdDraft}
+                          min={MIN_MID_TURN_EXTRACTION_THRESHOLD}
+                          max={MAX_MID_TURN_EXTRACTION_THRESHOLD}
+                          step={500}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                        />
+                        <span className="text-xs text-white/30">tokens</span>
+                      </div>
+                      <span className="block text-[11px] text-white/25">Text, thinking, and tool activity accumulated before a pulse.</span>
+                    </label>
+
+                    <label className="space-y-1">
+                      <span className="block text-sm text-white/50">Pulse timeout</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={midTurnExtractionTimeoutSecondsDraft}
+                          onChange={(e) => setMidTurnExtractionTimeoutSecondsDraft(e.target.value)}
+                          onBlur={applyMidTurnExtractionTimeoutDraft}
+                          min={MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000}
+                          max={MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000}
+                          step={1}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                        />
+                        <span className="text-xs text-white/30">seconds</span>
+                      </div>
+                      <span className="block text-[11px] text-white/25">Maximum time one mid-turn extraction pulse may run.</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {extractionDetailTab === "limits" && (
+              <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-medium text-white/65">Request limits</h4>
+                    <p className="text-[11px] text-white/30 mt-0.5">Bound the output and total wait time for extraction requests. These changes are committed with the main Settings save.</p>
+                  </div>
+                  <span className="text-[10px] text-white/25 shrink-0">Saved with Settings</span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="space-y-1">
+                    <span className="block text-sm text-white/50">Max output tokens</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={extractionMaxTokensDraft}
+                        onChange={(e) => setExtractionMaxTokensDraft(e.target.value)}
+                        onBlur={applyExtractionMaxTokensDraft}
+                        min={MIN_EXTRACTION_MAX_TOKENS}
+                        max={MAX_EXTRACTION_MAX_TOKENS}
+                        step={100}
+                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                      />
+                      <span className="text-xs text-white/30">tokens</span>
+                    </div>
+                    <span className="block text-[11px] text-white/25">Maximum model output for one extraction call.</span>
+                  </label>
+
+                  <label className="space-y-1">
+                    <span className="block text-sm text-white/50">Request timeout</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={extractionTimeoutMinutesDraft}
+                        onChange={(e) => setExtractionTimeoutMinutesDraft(e.target.value)}
+                        onBlur={applyExtractionTimeoutDraft}
+                        min={MIN_EXTRACTION_TIMEOUT_MINUTES}
+                        max={MAX_EXTRACTION_TIMEOUT_MINUTES}
+                        step={1}
+                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                      />
+                      <span className="text-xs text-white/30">minutes</span>
+                    </div>
+                    <span className="block text-[11px] text-white/25">Abort an extraction request after this total wait time.</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {extractionDetailTab === "prompt" && (
+              <div id="extraction-prompt" className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
                 <div>
-                  <label className="block text-sm font-medium text-white/60">Enable delayed extraction</label>
-                  <p className="text-xs text-white/30 mt-0.5">Extract memories from the chat history and compare similar memories for supersession after a period inactivity in a chat</p>
+                  <h4 className="text-xs font-medium text-white/65">Memory extraction prompt</h4>
+                  <p className="text-[11px] text-white/30 mt-0.5">The policy prefix used by the extraction agent, stored in <code className="text-white/40">~/.porrima/extraction-prompt.md</code>.</p>
                 </div>
-                <ToggleSwitch
-                  checked={delayedExtractionEnabled}
-                  onChange={() => setDelayedExtractionEnabled(!delayedExtractionEnabled)}
-                  accentColor="purple"
-                />
+
+                {extractionPromptMessage && (
+                  <p className={`text-xs ${extractionPromptMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                    {extractionPromptMessage.text}
+                  </p>
+                )}
+
+                {extractionPromptEditing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={extractionPromptContent}
+                      onChange={(e) => setExtractionPromptContent(e.target.value)}
+                      rows={14}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                      placeholder="# Archival Mode..."
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveExtractionPrompt}
+                        disabled={extractionPromptSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
+                        style={{
+                          backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                          color: `rgba(var(--theme-primary-text))`,
+                        }}
+                      >
+                        {extractionPromptSaving ? "Saving..." : "Save prompt"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCancelExtractionPromptEdit}
+                        disabled={extractionPromptSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : extractionPrompt ? (
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-white/5 bg-black/10 p-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-white/55 truncate">
+                        {extractionPrompt.content.split("\n")[0]?.replace(/^#+\s*/, "") || "Extraction prompt"}
+                      </p>
+                      <p className="text-[10px] text-white/30 mt-0.5">
+                        {extractionPrompt.lastModified ? `Last modified ${new Date(extractionPrompt.lastModified).toLocaleDateString()}` : "Custom prompt loaded"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExtractionPromptEditing(true);
+                        setExtractionPromptContent(extractionPrompt.content);
+                      }}
+                      className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+                    >
+                      Edit prompt
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-white/30 text-xs">Loading extraction prompt...</p>
+                )}
               </div>
-
-              {/* Inactivity threshold slider */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-white/60">Inactivity threshold</label>
-                  <span className="text-xs text-white/40">{delayedExtractionThreshold} minutes</span>
-                </div>
-                <input
-                  type="range"
-                  min={15}
-                  max={60}
-                  step={5}
-                  value={delayedExtractionThreshold}
-                  onChange={(e) => setDelayedExtractionThreshold(Number(e.target.value))}
-                  disabled={!delayedExtractionEnabled}
-                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                />
-                <p className="text-xs text-white/30">How long to wait after chat inactivity before extracting</p>
-              </div>
-
-              {/* Message cap slider */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-white/60">Message cap</label>
-                  <span className="text-xs text-white/40">{delayedExtractionCap} messages</span>
-                </div>
-                <input
-                  type="range"
-                  min={20}
-                  max={100}
-                  step={5}
-                  value={delayedExtractionCap}
-                  onChange={(e) => setDelayedExtractionCap(Number(e.target.value))}
-                  disabled={!delayedExtractionEnabled}
-                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                />
-                <p className="text-xs text-white/30">Maximum messages to include in extraction context</p>
-              </div>
-
-	            </div>
-	          </div>
-
-	          {/* Extraction Server Settings */}
-	          <div className="border-t border-white/10 pt-6">
-	            <h3 className="text-sm font-semibold text-white/80 mb-4">Extraction Server Settings</h3>
-
-	            <div className="space-y-4">
-	              <div>
-	                <label className="block text-sm font-medium text-white/60">Max output tokens</label>
-	                <div className="flex items-center gap-3 mt-1">
-	                  <input
-	                    type="number"
-	                    value={extractionMaxTokensDraft}
-	                    onChange={(e) => setExtractionMaxTokensDraft(e.target.value)}
-	                    onBlur={applyExtractionMaxTokensDraft}
-	                    min={MIN_EXTRACTION_MAX_TOKENS} max={MAX_EXTRACTION_MAX_TOKENS} step={100}
-	                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                  />
-	                  <span className="text-xs text-white/30">tokens</span>
-	                </div>
-	                <p className="text-xs text-white/30 mt-1">Maximum output tokens per extraction call. Higher values allow more memories per call. The limit prevents runaway extraction model requests.</p>
-	              </div>
-
-	              <div>
-	                <label className="block text-sm font-medium text-white/60">Timeout</label>
-	                <div className="flex items-center gap-3 mt-1">
-	                  <input
-	                    type="number"
-	                    value={extractionTimeoutMinutesDraft}
-	                    onChange={(e) => setExtractionTimeoutMinutesDraft(e.target.value)}
-	                    onBlur={applyExtractionTimeoutDraft}
-	                    min={MIN_EXTRACTION_TIMEOUT_MINUTES} max={MAX_EXTRACTION_TIMEOUT_MINUTES} step={1}
-	                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                  />
-	                  <span className="text-xs text-white/30">minutes</span>
-	                </div>
-                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
-              </div>
-            </div>
+            )}
           </div>
-
-          {/* Mid-Turn Extraction */}
-          <div className="border-t border-white/10 pt-6">
-            <h3 className="text-sm font-semibold text-white/80 mb-1">Mid-Turn Extraction</h3>
-            <p className="text-xs text-white/40 mb-4">
-              Controls when an in-progress agent turn triggers an extraction run to capture memories before the turn ends.
-            </p>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-white/60">Signal token threshold</label>
-                <div className="flex items-center gap-3 mt-1">
-                  <input
-                    type="number"
-                    value={midTurnExtractionThresholdDraft}
-                    onChange={(e) => setMidTurnExtractionThresholdDraft(e.target.value)}
-                    onBlur={applyMidTurnExtractionThresholdDraft}
-                    min={MIN_MID_TURN_EXTRACTION_THRESHOLD} max={MAX_MID_TURN_EXTRACTION_THRESHOLD} step={500}
-                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-                  />
-                  <span className="text-xs text-white/30">tokens</span>
-                </div>
-                <p className="text-xs text-white/30 mt-1">Accumulated signal tokens (text, thinking, tool calls) that trigger a mid-turn pulse. Lower values extract more often; higher values batch more activity per pulse. Default: 6000</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-white/60">Pulse timeout</label>
-                <div className="flex items-center gap-3 mt-1">
-                  <input
-                    type="number"
-                    value={midTurnExtractionTimeoutSecondsDraft}
-                    onChange={(e) => setMidTurnExtractionTimeoutSecondsDraft(e.target.value)}
-                    onBlur={applyMidTurnExtractionTimeoutDraft}
-                    min={MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} max={MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000} step={1}
-                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-                  />
-                  <span className="text-xs text-white/30">seconds</span>
-                </div>
-                <p className="text-xs text-white/30 mt-1">How long a mid-turn pulse may run before aborting.</p>
-              </div>
-            </div>
-          </div>
-
-	          {/* Extraction Prompt */}
-	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
-	            <h3 className="text-sm font-semibold text-white/80 mb-1">Extraction Prompt Prefix</h3>
-	            <p className="text-xs text-white/40">
-	              The system prompt prefix that frames how the extraction agent thinks about memory — loaded from <code className="text-white/40">~/.porrima/extraction-prompt.md</code>.
-	            </p>
-
-	            {extractionPromptMessage && (
-	              <p className={`text-xs ${extractionPromptMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
-	                {extractionPromptMessage.text}
-	              </p>
-	            )}
-
-	            {extractionPromptEditing ? (
-	              <div className="space-y-2">
-	                <textarea
-	                  value={extractionPromptContent}
-	                  onChange={(e) => setExtractionPromptContent(e.target.value)}
-	                  rows={14}
-	                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-	                  placeholder="# Archival Mode..."
-	                />
-	                <div className="flex gap-2">
-	                  <button
-	                    onClick={handleSaveExtractionPrompt}
-	                    disabled={extractionPromptSaving}
-	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
-	                    style={{
-	                      backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
-	                      borderColor: `rgba(var(--theme-primary-border))`,
-	                      color: `rgba(var(--theme-primary-text))`,
-	                    }}
-	                  >
-	                    {extractionPromptSaving ? "Saving..." : "Save"}
-	                  </button>
-	                  <button
-	                    onClick={handleCancelExtractionPromptEdit}
-	                    disabled={extractionPromptSaving}
-	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
-	                  >
-	                    Cancel
-	                  </button>
-	                </div>
-	              </div>
-	            ) : extractionPrompt ? (
-	              <div className="flex items-center justify-between gap-2">
-	                <div className="flex-1 min-w-0">
-	                  <p className="text-xs text-white/50 truncate">
-	                    {extractionPrompt.content.split("\n")[0]?.replace(/^#+\s*/, "") || "Extraction prompt"}
-	                  </p>
-	                  <p className="text-[10px] text-white/30">
-	                    {extractionPrompt.lastModified ? `Last modified: ${new Date(extractionPrompt.lastModified).toLocaleDateString()}` : ""}
-	                  </p>
-	                </div>
-	                <button
-	                  onClick={() => {
-	                    setExtractionPromptEditing(true);
-	                    setExtractionPromptContent(extractionPrompt.content);
-	                  }}
-	                  className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
-	                >
-	                  Edit
-	                </button>
-	              </div>
-	            ) : (
-	              <p className="text-white/30 text-xs">Loading extraction prompt...</p>
-	            )}
-	          </div>
 
 	          {/* Backups */}
 	          <div id="backups" className="border-t border-white/10 pt-6 space-y-3">
