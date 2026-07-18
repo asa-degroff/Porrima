@@ -19,8 +19,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppUpdateStatus } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppUpdateStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
@@ -356,6 +356,31 @@ function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
   return "bg-white/5 text-white/45 border-white/10";
 }
 
+type LlamaSettingsView = "servers" | "models" | "binaries";
+type LlamaServerDetailTab = "overview" | "configuration" | "advanced" | "logs";
+
+function llamaDisplayStatus(server: LlamaServerStatus): { label: string; tone: string } {
+  if (server.systemd.loadState === "not-found") {
+    return { label: "Unit missing", tone: "bg-red-500/15 text-red-300 border-red-400/25" };
+  }
+  if (server.systemd.activeState === "activating" || server.systemd.activeState === "deactivating") {
+    return { label: server.systemd.activeState === "activating" ? "Starting" : "Stopping", tone: llamaSystemdTone(server.systemd.activeState) };
+  }
+  if (server.systemd.activeState === "failed") {
+    return { label: "Failed", tone: llamaSystemdTone(server.systemd.activeState) };
+  }
+  if (server.systemd.activeState !== "active") {
+    return { label: "Stopped", tone: llamaSystemdTone(server.systemd.activeState) };
+  }
+  if (server.http.status === "unavailable") {
+    return { label: "Running, unreachable", tone: llamaHealthTone(server.http.status) };
+  }
+  if (server.http.status === "ok") {
+    return { label: "Ready", tone: llamaHealthTone(server.http.status) };
+  }
+  return { label: "Checking", tone: llamaHealthTone(server.http.status) };
+}
+
 function formatSystemdTimestamp(value: string): string {
   if (!value || value === "n/a") return "n/a";
   return value.replace(/\s+UTC$/, "");
@@ -584,8 +609,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [confirmAgentSnapshotRestoreId, setConfirmAgentSnapshotRestoreId] = useState<string | null>(null);
   // Llama.cpp binary path management
   const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
-  // Aggregate HTTP-ping health for all five configured servers
-  const [serverHealth, setServerHealth] = useState<ServerHealthMap | null>(null);
   const [llamaPathUpdating, setLlamaPathUpdating] = useState(false);
   const [llamaPathMessage, setLlamaPathMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
@@ -593,7 +616,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamaServersLoading, setLlamaServersLoading] = useState(false);
   const [llamaServerActionInFlight, setLlamaServerActionInFlight] = useState<string | null>(null);
   const [llamaServerMessage, setLlamaServerMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [expandedLlamaServerId, setExpandedLlamaServerId] = useState<LlamaServerId | null>(null);
+  const [llamaSettingsView, setLlamaSettingsView] = useState<LlamaSettingsView>("servers");
+  const [selectedLlamaServerId, setSelectedLlamaServerId] = useState<LlamaServerId>("inference");
+  const [llamaServerDetailTab, setLlamaServerDetailTab] = useState<LlamaServerDetailTab>("overview");
   const [llamaServerLogs, setLlamaServerLogs] = useState<{
     id: LlamaServerId;
     unitName: string;
@@ -601,7 +626,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     loading: boolean;
     error?: string;
   } | null>(null);
-  const [llamaConfigureExpanded, setLlamaConfigureExpanded] = useState<LlamaServerId | null>(null);
   const [llamaServiceState, setLlamaServiceState] = useState<Record<LlamaServerId, {
     loading: boolean;
     saving: boolean;
@@ -1149,15 +1173,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     }
   }, []);
 
-  const toggleLlamaConfigurePanel = useCallback((id: LlamaServerId) => {
-    setLlamaConfigureExpanded((current) => {
-      const next = current === id ? null : id;
-      if (next && !llamaServiceState[next]?.data && !llamaServiceState[next]?.loading) {
-        void loadLlamaServiceConfig(next);
-      }
-      return next;
-    });
-  }, [llamaServiceState, loadLlamaServiceConfig]);
+  const openLlamaServerDetail = useCallback((id: LlamaServerId, tab: LlamaServerDetailTab) => {
+    setSelectedLlamaServerId(id);
+    setLlamaServerDetailTab(tab);
+    if ((tab === "configuration" || tab === "advanced") && !llamaServiceState[id]?.data && !llamaServiceState[id]?.loading) {
+      void loadLlamaServiceConfig(id);
+    }
+    if (tab === "logs") void handleLlamaServerLogs(id);
+  }, [handleLlamaServerLogs, llamaServiceState, loadLlamaServiceConfig]);
 
   const updateLlamaServiceDraft = useCallback((id: LlamaServerId, patch: Partial<LlamaServiceConfig>) => {
     setLlamaServiceState((prev) => {
@@ -1406,6 +1429,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to update settings" });
     }
   }, [refreshLlamaServers, refreshModels]);
+
+  const handleSaveLlamaConnection = useCallback((id: LlamaServerId) => {
+    if (id === "inference") return handleLlamaServerSettings(id, { url: llamacppUrl });
+    if (id === "extraction") return handleLlamaServerSettings(id, { url: extractionModelUrl });
+    if (id === "reranker") return handleLlamaServerSettings(id, { url: rerankerUrl });
+    if (id === "embedding") return handleLlamaServerSettings(id, { url: embeddingUrl, provider: embeddingProvider });
+    return handleLlamaServerSettings(id, { url: titleGenerationUrl });
+  }, [embeddingProvider, embeddingUrl, extractionModelUrl, handleLlamaServerSettings, llamacppUrl, rerankerUrl, titleGenerationUrl]);
 
   const applyExtractionCtxSizeDraft = useCallback(() => {
     const next = clampIntegerDraft(
@@ -1685,16 +1716,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   useEffect(() => {
     refreshScanPaths();
   }, [refreshScanPaths]);
-
-  // Aggregate health pings for all five configured servers. Re-runs when URL
-  // fields change so the dots update as the user edits settings.
-  useEffect(() => {
-    let cancelled = false;
-    getAllServerHealth()
-      .then((h) => { if (!cancelled) setServerHealth(h); })
-      .catch(() => { if (!cancelled) setServerHealth(null); });
-    return () => { cancelled = true; };
-  }, [llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl, titleGenerationUrl]);
 
   // Slot-keyed disk-model loader. Local GGUFs in ~/.local/share/llama-models/
   // are the source of truth for swappable models. listAvailableLlamaModels
@@ -2609,6 +2630,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const handleUpdateLlamaPath = useCallback(async (selectedPath: string) => {
     const path = selectedPath.trim();
     if (!path) return;
+    if (!window.confirm("Change the default llama.cpp binary and restart all five services? The inference prompt cache will be cleared.")) return;
     setLlamaPathUpdating(true);
     setLlamaPathMessage(null);
     setLlamaPathUpdateResult(null);
@@ -2963,36 +2985,33 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Each URL points to a separate instance.
+              Monitor and configure the five llama.cpp services used by Porrima.
             </p>
 
-            {/* Server health (HTTP pings against each configured URL) */}
-            <div className="space-y-2">
-              <h4 className="text-sm text-white/80">Server health</h4>
-              <div className="ml-2 flex items-center gap-3 text-xs">
-                {([
-                  ["inference", "Inference"],
-                  ["extraction", "Extraction"],
-                  ["reranker", "Reranker"],
-                  ["embedding", "Embedding"],
-                  ["titleGeneration", "Titles"],
-                ] as const).map(([key, label]) => {
-                  const status = serverHealth?.[key];
-                  const dotClass =
-                    status === "ok" ? "bg-green-400" :
-                    status === "unavailable" ? "bg-red-400" :
-                    "bg-white/20";
-                  const title = status ? `${label}: ${status}` : `${label}: checking…`;
-                  return (
-                    <div key={key} className="flex items-center gap-1" title={title}>
-                      <div className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
-                      <span className="text-[10px] text-white/50">{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="inline-flex w-full rounded-lg border border-white/10 bg-black/15 p-1" role="tablist" aria-label="Inference server settings">
+              {([
+                ["servers", "Servers"],
+                ["models", "Models"],
+                ["binaries", "Binaries"],
+              ] as const).map(([view, label]) => (
+                <button
+                  key={view}
+                  type="button"
+                  role="tab"
+                  aria-selected={llamaSettingsView === view}
+                  onClick={() => setLlamaSettingsView(view)}
+                  className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+                    llamaSettingsView === view
+                      ? "bg-purple-500/20 text-purple-200 shadow-sm"
+                      : "text-white/45 hover:bg-white/5 hover:text-white/70"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             {/* Binaries — discovered llama.cpp builds + global symlink management */}
+            {llamaSettingsView === "binaries" && (
             <div className="space-y-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -3126,10 +3145,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 </p>
               </div>
             </div>
+            )}
 
-	            {/* Managed llama.cpp instances — unified status + config */}
-	            <div className="space-y-2 border-t border-white/5 pt-3">
-	              <div className="flex items-center justify-between gap-3">
+		            {/* Managed llama.cpp instances — unified status + config */}
+		            <div className={llamaSettingsView === "servers" ? "space-y-2 border-t border-white/5 pt-3" : "space-y-2"}>
+		              {llamaSettingsView === "servers" && (
+		              <div className="flex items-center justify-between gap-3">
 	                <div>
 	                  <h4 className="text-sm text-white/80">Managed llama.cpp instances</h4>
 	                  <p className="text-xs text-white/30 mt-0.5">
@@ -3144,16 +3165,17 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                >
 	                  {llamaServersLoading ? "Refreshing..." : "Refresh"}
 	                </button>
-	              </div>
+		              </div>
+		              )}
 
-	              {llamaServerMessage && (
+		              {llamaSettingsView === "servers" && llamaServerMessage && (
 	                <div className={`p-2 rounded-lg text-xs ${llamaServerMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
 	                  {llamaServerMessage.text}
 	                </div>
 	              )}
 
 	              {/* Models-dir conflict dialog */}
-	              {modelsDirConflict && (
+		              {llamaSettingsView === "servers" && modelsDirConflict && (
 	                <div className="p-3 rounded-lg text-xs border border-amber-400/25 bg-amber-500/10 space-y-2">
 	                  <div className="flex items-start gap-2">
 	                    <span className="text-amber-300/90 text-sm shrink-0 mt-0.5">\u26A0\uFE0F</span>
@@ -3189,8 +3211,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                </div>
 	              )}
 
-	              {/* Model Scan Paths */}
-	              <div className="space-y-2">
+		              {/* Model Scan Paths */}
+		              {llamaSettingsView === "models" && (
+		              <div className="space-y-2">
 	                <div className="flex items-start justify-between gap-3">
 	                  <div className="min-w-0">
 	                    <h4 className="text-sm text-white/80">Model Scan Paths</h4>
@@ -3288,38 +3311,40 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                    </div>
 	                  )}
 	                </div>
-	              </div>
+		              </div>
+		              )}
 
-	              <div className="space-y-2">
+		              {llamaSettingsView === "servers" && (
+		              <div className="space-y-2">
 	                {llamaServers.length === 0 && (
 	                  <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-white/35">
 	                    {llamaServersLoading ? "Loading llama.cpp server status..." : "No llama.cpp server status available."}
 	                  </div>
 	                )}
-		                {llamaServers.map((server) => {
-		                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
-			                  const missingUnit = server.systemd.loadState === "not-found";
-			                  const detailsExpanded = expandedLlamaServerId === server.id;			                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
+			                {llamaServers.map((server) => {
+			                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
+				                  const missingUnit = server.systemd.loadState === "not-found";
+				                  const isSelected = selectedLlamaServerId === server.id;
+				                  const displayStatus = llamaDisplayStatus(server);
+				                  const currentModel = server.http.loadedModelId || server.expectedModel || server.http.modelIds[0] || "No model reported";
+				                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
 			                  const activeLogs = llamaServerLogs?.id === server.id ? llamaServerLogs : null;
 			                  const modelsPreview = server.http.modelIds.length > 0
 			                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
 			                    : "none reported";
 		                  return (
 		                    <div key={server.id} className="space-y-1.5">
-		                      <div className="rounded-lg border border-white/10 bg-white/[0.025]">
-		                        {/* Card header */}
-		                        <div className="p-3 space-y-3">
-		                          <div className="flex items-start justify-between gap-3">
-		                            <div className="min-w-0">
-		                              <div className="flex items-center gap-2 flex-wrap">
-		                                <span className="text-sm text-white/80 font-medium">{server.label}</span>
-		                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45 font-mono">
-		                                  {server.unitName}
-		                                </span>
-		                                {!server.appEnabled && (
-		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/35">
-		                                    not selected by app
-		                                  </span>
+			                      <div className={`rounded-lg border bg-white/[0.025] transition-colors ${isSelected ? "border-purple-400/25" : "border-white/10"}`}>
+			                        {/* Card header */}
+			                        <div className="p-3">
+			                          <div className="flex items-center gap-3">
+			                            <button type="button" onClick={() => openLlamaServerDetail(server.id, "overview")} className="min-w-0 flex-1 text-left">
+			                              <div className="flex items-center gap-2 flex-wrap">
+			                                <span className="text-sm text-white/80 font-medium">{server.label}</span>
+			                                {!server.appEnabled && (
+			                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/35">
+			                                    Disabled in Porrima
+			                                  </span>
 		                                )}
 		                                {server.override.active && (
 		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-500/15 text-purple-200" title={server.override.modelPath || server.override.path}>
@@ -3330,84 +3355,59 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/15 text-emerald-200" title="Slot multiplexes models via /v1/models — swaps go through /models/load (no restart)">
 		                                    router mode
 		                                  </span>
-		                                )}
-		                              </div>
-		                              <p className="text-xs text-white/35 mt-1">{server.description}</p>
-		                            </div>
-		                            <div className="flex items-center gap-1.5 shrink-0">
-		                              <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
-		                                {missingUnit ? "missing unit" : server.systemd.activeState}
-		                              </span>
-		                              <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaHealthTone(server.http.status)}`} title={server.http.error}>
-		                                HTTP {server.http.status}
-		                              </span>
-		                            </div>
-		                          </div>
+			                                )}
+			                              </div>
+			                              <p className="mt-1 truncate text-xs text-white/35" title={currentModel}>{currentModel}</p>
+			                            </button>
+			                            <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium ${displayStatus.tone}`} title={server.http.error}>
+			                              {displayStatus.label}
+			                            </span>
+			                            <button
+			                              type="button"
+			                              onClick={() => handleLlamaServerAction(server.id, server.systemd.activeState === "active" ? "restart" : "start")}
+			                              disabled={busy || missingUnit}
+			                              className={`shrink-0 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-all disabled:opacity-40 pressable ${server.systemd.activeState === "active" ? "bg-purple-500/15 border-purple-400/20 text-purple-300 hover:bg-purple-500/25" : "bg-green-500/10 border-green-400/20 text-green-300/80 hover:bg-green-500/20"}`}
+			                            >
+			                              {busy ? "Working…" : server.systemd.activeState === "active" ? "Restart" : "Start"}
+			                            </button>
+			                          </div>
+		                      </div>
 
-	                        {/* Action buttons */}
-	                        <div className="flex items-center gap-2 flex-wrap">
-	                          <button
-	                            type="button"
-	                            onClick={() => handleLlamaServerAction(server.id, "start")}
-	                            disabled={busy || missingUnit || server.systemd.activeState === "active"}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-green-500/10 border border-green-400/20 text-green-300/80 hover:bg-green-500/20 transition-all disabled:opacity-40 pressable"
-	                          >
-	                            Start
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => handleLlamaServerAction(server.id, "stop")}
-	                            disabled={busy || missingUnit || server.systemd.activeState === "inactive" || server.systemd.activeState === "unknown"}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable"
-	                          >
-	                            Stop
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => handleLlamaServerAction(server.id, "restart")}
-	                            disabled={busy || missingUnit}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 pressable"
-	                          >
-	                            {busy ? "Working..." : "Restart"}
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => toggleLlamaConfigurePanel(server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
-	                          >
-	                            {llamaConfigureExpanded === server.id ? "Hide config" : "Configure"}
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => setExpandedLlamaServerId(detailsExpanded ? null : server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
-	                          >
-	                            {detailsExpanded ? "Hide details" : "Details"}
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => handleLlamaServerLogs(server.id)}
-	                            disabled={missingUnit}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable"
-	                          >
-	                            Logs
-	                          </button>
-	                        </div>
-	                      </div>
+		                      {isSelected && (
+		                        <div className="flex gap-1 overflow-x-auto border-t border-white/5 bg-black/10 px-3 pt-2" role="tablist" aria-label={`${server.label} details`}>
+		                          {([
+		                            ["overview", "Overview"],
+		                            ["configuration", "Configuration"],
+		                            ["advanced", "Advanced"],
+		                            ["logs", "Logs"],
+		                          ] as const).map(([tab, label]) => (
+		                            <button key={tab} type="button" role="tab" aria-selected={llamaServerDetailTab === tab}
+		                              onClick={() => openLlamaServerDetail(server.id, tab)}
+		                              className={`whitespace-nowrap border-b-2 px-2 py-1.5 text-[11px] font-medium transition-colors ${llamaServerDetailTab === tab ? "border-purple-400 text-purple-200" : "border-transparent text-white/40 hover:text-white/65"}`}>
+		                              {label}
+		                            </button>
+		                          ))}
+		                        </div>
+		                      )}
 
-	                      {/* Inline config section */}
-            {llamaConfigureExpanded === server.id && (
-              <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
-	                          {server.id === "inference" && (
+		                      {/* Inline config section */}
+		            {isSelected && (llamaServerDetailTab === "configuration" || llamaServerDetailTab === "advanced") && (
+	              <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
+	                          {llamaServerDetailTab === "configuration" && (
+	                            <>
+	                              <div className="rounded-lg border border-blue-400/15 bg-blue-500/5 p-2">
+	                                <p className="text-xs font-medium text-blue-200/85">Application connection</p>
+	                                <p className="mt-0.5 text-[11px] text-white/40">These settings control how Porrima reaches this role. Managed launch options live under Advanced.</p>
+	                              </div>
+		                          {server.id === "inference" && (
 	                            <div className="space-y-2">
 	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
 	                                    <label className="block text-xs text-white/50 w-12">URL</label>
 	                                    <input
-	                                      type="text"
-	                                      value={llamacppUrl}
-	                                      onChange={(e) => setLlamacppUrl(e.target.value)}
-	                                      onBlur={() => handleLlamaServerSettings("inference", { url: llamacppUrl })}
+		                                      type="text"
+		                                      value={llamacppUrl}
+		                                      onChange={(e) => setLlamacppUrl(e.target.value)}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_INFERENCE_URL}
 	                                    />
@@ -3444,9 +3444,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                <label className="block text-xs text-white/50 w-12">URL</label>
 	                                <input
 	                                  type="text"
-	                                  value={extractionModelUrl}
-	                                  onChange={(e) => setExtractionModelUrl(e.target.value)}
-	                                  onBlur={() => handleLlamaServerSettings("extraction", { url: extractionModelUrl })}
+		                                  value={extractionModelUrl}
+		                                  onChange={(e) => setExtractionModelUrl(e.target.value)}
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                  placeholder={DEFAULT_EXTRACTION_URL}
 	                                />
@@ -3537,9 +3536,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            <div className="space-y-2">
 	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
-	                                    <label className="block text-xs text-white/50 w-12">URL</label>
-	                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
-	                                      onBlur={() => handleLlamaServerSettings("reranker", { url: rerankerUrl })}
+		                                    <label className="block text-xs text-white/50 w-12">URL</label>
+		                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_RERANKER_URL} />
 	                                  </div>
@@ -3623,9 +3621,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                <span className="text-xs text-white/70">llama.cpp</span>
 	                              </div>
 	                              <div className="flex gap-2">
-	                                <label className="block text-xs text-white/50 w-12">URL</label>
-	                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
-	                                  onBlur={() => handleLlamaServerSettings("embedding", { url: embeddingUrl })}
+		                                <label className="block text-xs text-white/50 w-12">URL</label>
+		                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                  placeholder={DEFAULT_EMBEDDING_URL} />
 	                              </div>
@@ -3716,9 +3713,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            <div className="space-y-2">
 	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
-	                                    <label className="block text-xs text-white/50 w-12">URL</label>
-	                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
-	                                      onBlur={() => handleLlamaServerSettings("title-generation", { url: titleGenerationUrl })}
+		                                    <label className="block text-xs text-white/50 w-12">URL</label>
+		                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_TITLE_GENERATION_URL} />
 	                                  </div>
@@ -3788,9 +3784,16 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                 })()}
                               </div>
                               <p className="text-xs text-white/30">Tiny model for generating short chat titles.</p>
-	                            </div>
-	                          )}
-	                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (
+		                            </div>
+		                          )}
+	                              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+	                                <p className="text-[11px] text-white/35">Saving the URL changes where Porrima connects; it does not reconfigure or restart the local service.</p>
+	                                <button type="button" onClick={() => handleSaveLlamaConnection(server.id)}
+	                                  className="shrink-0 rounded-md border border-blue-400/20 bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium text-blue-200/80 transition-all hover:bg-blue-500/20 pressable">
+	                                  Save connection
+	                                </button>
+	                              </div>
+		                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (
 	                            <>
 	                              {(applyingSlot === server.id || server.override.active) && (
 	                                <div className="flex items-start justify-between gap-2 rounded-lg border border-purple-400/15 bg-purple-500/5 p-2">
@@ -3831,8 +3834,16 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  </button>
 	                                </div>
 	                              )}
+		                            </>
+		                          )}
 	                            </>
 	                          )}
+	                          {llamaServerDetailTab === "advanced" && (
+	                            <>
+	                              <div className="rounded-lg border border-amber-400/15 bg-amber-500/5 p-2">
+	                                <p className="text-xs font-medium text-amber-200/85">Managed local service</p>
+	                                <p className="mt-0.5 text-[11px] text-white/40">Applying changes writes the systemd drop-in and restarts this service. Host, port, model, context, and binary are synchronized back to the application connection.</p>
+	                              </div>
                 <div className="flex items-center gap-3 my-1">
                   <div className="flex-1 h-px bg-white/10" />
                   <span className="text-[10px] uppercase tracking-widest text-white/30 font-medium">Service</span>
@@ -3893,10 +3904,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                              {mode === "single" ? "Single model" : "Router mode"}
 	                                            </button>
 	                                          ))}
-	                                        </Dropdown>
-	                                      );
-	                                    })()}
-	                                  </div>
+		                                        </Dropdown>
+		                                      );
+		                                    })()}
+		                            </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Binary path</label>
 	                                    <input
@@ -4023,17 +4034,34 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    </pre>
 	                                  </div>
 	                                )}
-	                              </div>
-	                            );
-	                          })()}
-              </div>
+		                              </div>
+		                            );
+		                          })()}
+	                            </>
+	                          )}
+	              </div>
             )}
 
 
-	                      {/* Details section */}
-	                      {detailsExpanded && (
-	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
-	                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+		                      {/* Details section */}
+		                      {isSelected && llamaServerDetailTab === "overview" && (
+		                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
+		                          <p className="text-xs text-white/50">{server.description}</p>
+		                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+		                            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
+		                              <span className="text-[10px] uppercase tracking-wide text-white/30">Service</span>
+		                              <p className={`mt-1 text-xs ${server.systemd.activeState === "active" ? "text-green-300/80" : "text-white/60"}`}>{missingUnit ? "Unit missing" : server.systemd.activeState}</p>
+		                            </div>
+		                            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
+		                              <span className="text-[10px] uppercase tracking-wide text-white/30">HTTP</span>
+		                              <p className={`mt-1 text-xs ${server.http.status === "ok" ? "text-green-300/80" : "text-red-300/80"}`}>{server.http.status}</p>
+		                            </div>
+		                            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2 min-w-0">
+		                              <span className="text-[10px] uppercase tracking-wide text-white/30">Connection</span>
+		                              <p className="mt-1 truncate font-mono text-xs text-white/60" title={server.url}>{server.url}</p>
+		                            </div>
+		                          </div>
+		                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
 	                            <div><span className="text-white/30">Role</span><p className="text-white/60">{server.role}</p></div>
 	                            <div><span className="text-white/30">PID</span><p className="text-white/60 font-mono">{server.systemd.mainPid ?? "n/a"}</p></div>
 	                            <div><span className="text-white/30">Unit file</span><p className="text-white/60 font-mono truncate" title={server.systemd.fragmentPath}>{server.systemd.fragmentPath || "n/a"}</p></div>
@@ -4045,29 +4073,37 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            <span className="text-xs text-white/30">Models from /v1/models</span>
 	                            <p className="text-xs text-white/60 font-mono truncate" title={server.http.modelIds.join(", ")}>{modelsPreview}</p>
 	                          </div>
-	                          <div>
-	                            <span className="text-xs text-white/30">ExecStart</span>
+		                          <div>
+		                            <span className="text-xs text-white/30">ExecStart</span>
 	                            <pre className="mt-1 max-h-28 overflow-auto rounded-md border border-white/10 bg-black/20 p-2 text-[10px] text-white/55 whitespace-pre-wrap break-words">
-	                              {server.systemd.execStart || server.systemd.error || "No launch command reported by systemd."}
-	                            </pre>
-	                          </div>
-	                        </div>
-		                        )}
-		                      </div>
-		                      {activeLogs && (
-		                        <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+		                              {server.systemd.execStart || server.systemd.error || "No launch command reported by systemd."}
+		                            </pre>
+		                          </div>
+		                          <div className="flex items-center justify-between gap-3 border-t border-white/5 pt-2">
+		                            <p className="text-[11px] text-white/30">Stopping a server makes its role unavailable until it is started again.</p>
+		                            <button type="button" onClick={() => handleLlamaServerAction(server.id, "stop")}
+		                              disabled={busy || missingUnit || server.systemd.activeState === "inactive" || server.systemd.activeState === "unknown"}
+		                              className="shrink-0 rounded-md border border-red-400/15 bg-red-500/5 px-2.5 py-1 text-[11px] font-medium text-red-300/70 transition-all hover:bg-red-500/15 disabled:opacity-40 pressable">
+		                              Stop service
+		                            </button>
+		                          </div>
+		                        </div>
+			                        )}
+			                      </div>
+			                      {isSelected && llamaServerDetailTab === "logs" && (
+			                        <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
 		                          <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
 		                            <div className="min-w-0">
 		                              <p className="text-xs text-white/70">Recent logs</p>
-		                              <p className="text-[11px] text-white/35 font-mono truncate">{activeLogs.unitName || activeLogs.id}</p>
+			                              <p className="text-[11px] text-white/35 font-mono truncate">{activeLogs?.unitName || activeLogs?.id || server.unitName}</p>
 		                            </div>
-		                            <button type="button" onClick={() => setLlamaServerLogs(null)}
-		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all pressable">
-		                              Close
-		                            </button>
-		                          </div>
-		                          <pre className="max-h-64 overflow-auto p-3 text-[10px] leading-relaxed text-white/55 whitespace-pre-wrap break-words">
-		                            {activeLogs.loading ? "Loading logs..." : activeLogs.error || activeLogs.logs}
+			                            <button type="button" onClick={() => handleLlamaServerLogs(server.id)} disabled={activeLogs?.loading}
+			                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all pressable">
+			                              Refresh
+			                            </button>
+			                          </div>
+			                          <pre className="max-h-64 overflow-auto p-3 text-[10px] leading-relaxed text-white/55 whitespace-pre-wrap break-words">
+			                            {!activeLogs || activeLogs.loading ? "Loading logs..." : activeLogs.error || activeLogs.logs}
 		                          </pre>
 		                        </div>
 		                      )}
@@ -4075,6 +4111,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                  );
 		                })}
 		              </div>
+		              )}
 		            </div>
 		          </div>
 
