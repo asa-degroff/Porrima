@@ -88,13 +88,52 @@ describe("llama.cpp model discovery cache", () => {
       if (url === "http://llama.test/props") {
         return jsonResponse({
           default_generation_settings: { n_ctx: 115200 },
+          modalities: { vision: true, audio: false },
+          model_alias: "Qwen3.6-27B.i1-Q6_K",
         });
       }
       throw new Error(`unexpected fetch: ${url}`);
     }) as any;
 
     await expect(discoverLlamaCppModels(settings)).resolves.toMatchObject([
-      { id: "Qwen3.6-27B.i1-Q6_K", contextWindow: 115200 },
+      { id: "Qwen3.6-27B.i1-Q6_K", contextWindow: 115200, supportsImages: true },
+    ]);
+  });
+
+  it("recognizes multimodal capabilities advertised by single-model servers", async () => {
+    const settings = {
+      llamacppEnabled: true,
+      llamacppUrl: "http://llama.test",
+    } as Settings;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "http://llama.test/v1/models") {
+        return jsonResponse({
+          models: [
+            {
+              name: "Qwen3.6-27B.i1-Q6_K",
+              model: "Qwen3.6-27B.i1-Q6_K",
+              capabilities: ["completion", "multimodal"],
+            },
+          ],
+          data: [
+            {
+              id: "Qwen3.6-27B.i1-Q6_K",
+              meta: { n_ctx: 115200 },
+            },
+          ],
+        });
+      }
+      if (url === "http://llama.test/props") {
+        return jsonResponse({
+          default_generation_settings: { n_ctx: 115200 },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as any;
+
+    await expect(discoverLlamaCppModels(settings)).resolves.toMatchObject([
+      { id: "Qwen3.6-27B.i1-Q6_K", supportsImages: true },
     ]);
   });
 });

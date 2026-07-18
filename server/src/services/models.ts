@@ -24,6 +24,11 @@ interface LlamaCppModelEntry {
 
 interface LlamaCppModelsResponse {
   data: LlamaCppModelEntry[];
+  models?: Array<{
+    name?: string;
+    model?: string;
+    capabilities?: string[];
+  }>;
 }
 
 interface LlamaCppPropsResponse {
@@ -34,6 +39,7 @@ interface LlamaCppPropsResponse {
     vision?: boolean;
     audio?: boolean;
   };
+  model_alias?: string;
 }
 
 // Cache for model discovery results (TTL-based)
@@ -64,10 +70,11 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Infer
     const modelsData = (await modelsRes.json()) as LlamaCppModelsResponse;
 
     // Get context window from /props if available
+    let propsData: LlamaCppPropsResponse | undefined;
     let propsContextWindow: number | undefined;
     if (propsRes?.ok) {
       try {
-        const propsData = (await propsRes.json()) as LlamaCppPropsResponse;
+        propsData = (await propsRes.json()) as LlamaCppPropsResponse;
         propsContextWindow = propsData.default_generation_settings?.n_ctx;
       } catch { /* ignore parse errors */ }
     }
@@ -93,7 +100,24 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Infer
       // --models-dir are the authoritative source.
       .filter((m) => !m.id.includes("/"))
       .map((m) => {
-        const modelProps = modelPropsMap.get(m.id);
+        // A single-model llama.cpp server omits router-only status metadata from
+        // /v1/models. In that mode the top-level /props response belongs to the
+        // sole model and is the authoritative source for runtime modalities.
+        const singleModelProps = modelsData.data.length === 1 &&
+          (!propsData?.model_alias || propsData.model_alias === m.id)
+          ? propsData
+          : undefined;
+        const modelProps = modelPropsMap.get(m.id) ?? singleModelProps;
+
+        // Newer llama.cpp versions also expose an Ollama-compatible model list
+        // whose capabilities include "multimodal" when an mmproj is loaded.
+        const advertisedModel = modelsData.models?.find((candidate) =>
+          candidate.model === m.id || candidate.name === m.id
+        );
+        const hasAdvertisedVision = advertisedModel?.capabilities?.some((capability) => {
+          const normalized = capability.toLowerCase();
+          return normalized === "multimodal" || normalized === "vision" || normalized === "image";
+        }) ?? false;
 
         // Model args and preset from the router status — available for all models,
         // not just loaded ones. Contains --ctx-size, --mmproj, etc.
@@ -113,10 +137,11 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Infer
           }
         }
 
-        // Vision detection — three signals in priority order:
+        // Vision detection — four signals in priority order:
         // 1. --mmproj flag in model args/preset (definitive — configured by the user)
-        // 2. /props modalities (only available for loaded models)
-        // 3. Name heuristic (fallback for models without mmproj data)
+        // 2. Advertised multimodal capability from /v1/models
+        // 3. /props modalities (per-model in router mode, top-level in single-model mode)
+        // 4. Name heuristic (fallback for models without runtime capability data)
         const hasMmproj = modelArgs.some(a => a === "--mmproj" || (typeof a === "string" && a.startsWith("--mmproj"))) ||
           /\nmmproj\s*=/.test(modelPreset) ||
           modelArgs.some(a => typeof a === "string" && a.includes("mmproj") && a.endsWith(".gguf"));
@@ -125,8 +150,11 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Infer
         if (hasMmproj) {
           // mmproj is configured — this model definitively supports vision
           supportsImages = true;
+        } else if (hasAdvertisedVision) {
+          // llama.cpp explicitly advertises a loaded multimodal projector
+          supportsImages = true;
         } else if (modelProps?.modalities?.vision) {
-          // Loaded model reports vision support via /props
+          // Runtime props report vision support
           supportsImages = true;
         } else {
           // Name heuristic — catches models whose names indicate vision capability
