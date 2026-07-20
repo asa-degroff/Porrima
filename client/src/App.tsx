@@ -594,6 +594,15 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     }
   }, [settings.flatBackground]);
 
+  // Apply opaque bubbles toggle
+  useEffect(() => {
+    if (settings.opaqueBubbles) {
+      document.documentElement.setAttribute('data-opaque-bubbles', '');
+    } else {
+      document.documentElement.removeAttribute('data-opaque-bubbles');
+    }
+  }, [settings.opaqueBubbles]);
+
   // Apply chromatic aberration toggle (default on when undefined)
   useEffect(() => {
     const enabled = settings.chromaticAberration ?? true;

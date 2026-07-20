@@ -569,11 +569,11 @@ export const MessageBubble = memo(function MessageBubble({
             } ${message.queued ? "opacity-60" : ""}`}
             style={{
               ...(isUser ? {
-                backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
-                border: `1px solid rgba(var(--theme-secondary), 0.15)`,
+                backgroundColor: 'var(--bubble-user-bg)',
+                border: `1px solid var(--bubble-user-border)`,
               } : {
-                backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backgroundColor: 'var(--bubble-agent-bg)',
+                border: `1px solid var(--bubble-agent-border)`,
               }),
               ...(editing && editMinWidth ? { minWidth: editMinWidth } : {}),
             }}

@@ -358,6 +358,7 @@ export interface Settings {
   customTheme?: CustomTheme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
+  opaqueBubbles?: boolean;
   chromaticAberration?: boolean;
   mouseWarp?: boolean;
   cornerRadius?: CornerRadius;

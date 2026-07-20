@@ -702,6 +702,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   );
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
+  const [opaqueBubbles, setOpaqueBubbles] = useState(settings.opaqueBubbles ?? false);
   const [deviceHighEfficiencyMode, setDeviceHighEfficiencyMode] = useState(highEfficiencyMode);
   const [chromaticAberration, setChromaticAberration] = useState(settings.chromaticAberration ?? true);
   const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
@@ -2051,6 +2052,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       customTheme,
       backgroundEffect,
       flatBackground,
+      opaqueBubbles,
       chromaticAberration,
       mouseWarp,
       cornerRadius,
@@ -4273,6 +4275,25 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               <ToggleSwitch
                 checked={flatBackground}
                 onChange={() => setFlatBackground(!flatBackground)}
+                accentColor="blue"
+              />
+            </div>
+          </div>
+
+          {/* Opaque Bubbles */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Opaque Bubbles</label>
+                <p className="text-white/30 text-xs mt-0.5">
+                  {opaqueBubbles
+                    ? "Message bubbles use solid surfaces."
+                    : "Message bubbles are semi-transparent."}
+                </p>
+              </div>
+              <ToggleSwitch
+                checked={opaqueBubbles}
+                onChange={() => setOpaqueBubbles(!opaqueBubbles)}
                 accentColor="blue"
               />
             </div>

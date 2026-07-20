@@ -26,6 +26,12 @@
   --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #181845 25%, #1c1a49 38%, #1e1b4b 50%, #1c1a49 62%, #181845 75%, #0f172a 100%);
   --theme-bg-flat: #1e1b4b;
   --theme-glow: rgba(162, 74, 255, 0.15);
+
+  /* Message bubble colors — transparent (default) */
+  --bubble-agent-bg: rgba(255, 255, 255, 0.05);
+  --bubble-agent-border: rgba(255, 255, 255, 0.1);
+  --bubble-user-bg: rgba(var(--theme-secondary), 0.1);
+  --bubble-user-border: rgba(var(--theme-secondary), 0.15);
 }
 
 [data-theme="ocean"] {
@@ -390,4 +396,12 @@
   border-color: rgba(var(--theme-accent), 0.5) !important;
   box-shadow: 0 0 0 2px rgba(var(--theme-accent), 0.3);
   background-color: rgba(var(--theme-accent), 0.1) !important;
+}
+
+/* Opaque bubbles — override bubble color variables with solid surfaces */
+[data-opaque-bubbles] {
+  --bubble-agent-bg: var(--theme-bg-flat);
+  --bubble-agent-border: rgba(255, 255, 255, 0.12);
+  --bubble-user-bg: rgb(var(--theme-accent));
+  --bubble-user-border: rgb(var(--theme-accent));
 }
