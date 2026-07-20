@@ -398,10 +398,13 @@
   background-color: rgba(var(--theme-accent), 0.1) !important;
 }
 
-/* Opaque bubbles — override bubble color variables with solid surfaces */
+/* Opaque bubbles — override bubble color variables with solid surfaces.
+   User bubbles clamp oklch lightness (0.6, keeps white text readable on
+   bright accents) and chroma (0.12, keeps colors from popping against
+   the background); darker/duller accents pass through unchanged. */
 [data-opaque-bubbles] {
   --bubble-agent-bg: var(--theme-bg-flat);
   --bubble-agent-border: rgba(255, 255, 255, 0.12);
-  --bubble-user-bg: rgb(var(--theme-accent));
-  --bubble-user-border: rgb(var(--theme-accent));
+  --bubble-user-bg: oklch(from rgb(var(--theme-accent)) min(l, 0.4) min(c, 0.08) h);
+  --bubble-user-border: oklch(from rgb(var(--theme-accent)) min(l, 0.4) min(c, 0.08) h);
 }
