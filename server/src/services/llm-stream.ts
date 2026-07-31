@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { beginStream as beginLLMStream, endStream as endLLMStream } from "./llm-activity.js";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";

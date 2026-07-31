@@ -1,5 +1,4 @@
 import {
-  streamSimple,
   type Context,
   type AssistantMessageEvent,
   type AssistantMessage,
@@ -9,6 +8,7 @@ import {
   type ToolResultMessage,
   type StopReason,
 } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import type { Model } from "@earendil-works/pi-ai";

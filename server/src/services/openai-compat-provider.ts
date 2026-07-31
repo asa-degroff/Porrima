@@ -1,5 +1,5 @@
+import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import {
-  registerApiProvider,
   createAssistantMessageEventStream,
   parseStreamingJson,
 } from "@earendil-works/pi-ai";

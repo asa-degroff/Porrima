@@ -82,9 +82,15 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
     logPrefix = "agent-loop",
   } = options;
 
+  // pi-agent-core 0.80+ requires streamFn to be non-optional.
+  // All Porrima callers always provide one; this is a safety fallback.
+  const effectiveStreamFn: StreamFn = streamFn || (() => {
+    throw new Error("streamFn not provided — all callers must provide a stream function");
+  });
+
   const stream = mode === "start"
-    ? agentLoop(prompts || [], context, config, signal, streamFn)
-    : agentLoopContinue(context, config, signal, streamFn);
+    ? agentLoop(prompts || [], context, config, signal, effectiveStreamFn)
+    : agentLoopContinue(context, config, signal, effectiveStreamFn);
 
   let events = 0;
   try {
