@@ -14,7 +14,7 @@
     "@earendil-works/pi-ai": "^0.83.0",
     "@mozilla/readability": "^0.6.0",
     "@simplewebauthn/server": "^13.2.3",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^13.0.2",
     "busboy": "^1.6.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
