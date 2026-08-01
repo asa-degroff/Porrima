@@ -91,11 +91,11 @@ const RUN_PYTHON_TOOL: Tool = {
 
 const READ_PDF_TOOL: Tool = {
   name: "read_pdf",
-  description: "Read a PDF and extract text, metadata, and embedded images. Supports workspace paths and URLs. When extractImages=true, images are included inline as visual content. Optional OCR for scanned PDFs. Use pages to limit scope — large PDFs with many images can be read in narrower page ranges.",
+  description: "Read a PDF and extract text, metadata, and figures. Uses layout-aware parsing to detect headings, tables, and picture regions. Supports workspace paths and URLs. When extractImages=true, detected figures (charts, diagrams, illustrations) are rendered and included inline as visual content. Hybrid OCR runs automatically on scanned pages. Use pages to limit scope — large PDFs can be read in narrower page ranges.",
   parameters: Type.Object({
     path: Type.String({ description: "PDF path (local file path or URL starting with http/https)" }),
-    extractImages: Type.Optional(Type.Boolean({ description: "Extract embedded images and include them inline (default false). Also renders pages as images when no extractable images or text are found." })),
-    ocr: Type.Optional(Type.Boolean({ description: "Use OCR for scanned PDFs (default false). Requires Tesseract installed." })),
+    extractImages: Type.Optional(Type.Boolean({ description: "Render detected figure regions and include them inline as images (default false). Captures charts, diagrams, and illustrations — not decorative icons or logos." })),
+    ocr: Type.Optional(Type.Boolean({ description: "Force full-page OCR on every page (default false). Hybrid OCR runs automatically regardless; this forces it even on pages with clean digital text." })),
     pages: Type.Optional(Type.String({ description: "Page range to process, e.g. '1-5' or 'all' (default 'all')" })),
   }),
 };
@@ -859,8 +859,8 @@ async function parsePdfExecutionResult(
   extractImages = false,
 ): Promise<{ content: string | any[]; isError: boolean }> {
   if (result.isError) {
-    if (stderr.includes("No module named") && stderr.includes("fitz")) {
-      return { content: "PyMuPDF (fitz) is not installed in the active workspace environment.", isError: true };
+    if (stderr.includes("No module named") && (stderr.includes("fitz") || stderr.includes("pymupdf4llm"))) {
+      return { content: "PyMuPDF or pymupdf4llm is not installed in the active workspace environment.", isError: true };
     }
     if (/timed out|aborted/i.test(stderr)) {
       return { content: stderr, isError: true };
@@ -930,16 +930,16 @@ function formatPdfResult(result: { text: string; pages: any[]; images: any[]; me
   
   // Images summary
   if (result.images.length > 0) {
-    parts.push("## Embedded Images");
+    parts.push("## Figures");
     if (extractImages) {
-      parts.push(`Found ${result.images.length} image(s) — included inline above.`);
+      parts.push(`Found ${result.images.length} figure region(s) — included inline above.`);
     } else {
-      parts.push(`Found ${result.images.length} image(s):`);
+      parts.push(`Found ${result.images.length} figure region(s):`);
       result.images.forEach((img) => {
         parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.byteLength / 1024).toFixed(1)} KB)`);
       });
       parts.push("");
-      parts.push("💡 Use extractImages=true to include images inline.");
+      parts.push("💡 Use extractImages=true to include figures inline.");
     }
     parts.push("");
   }

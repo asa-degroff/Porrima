@@ -7,6 +7,7 @@
 - A chat model loaded in llama.cpp (e.g., a Qwen3 GGUF model in the models directory)
 - An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 32103). Configurable in Settings → Inference Servers → Embedding server.
 - (Optional) ComfyUI for image generation
+- (Optional) Python packages for the `read_pdf` tool: `pip install pymupdf pymupdf4llm`
 - (Optional) TTS backends installed with `./scripts/install-tts-backend.sh kokoro|qwen3-tts|supertonic-3`
 
 ## Setup

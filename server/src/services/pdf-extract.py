@@ -1,20 +1,61 @@
 import fitz  # PyMuPDF
 import json
 import os
+import re
 import sys
 import tempfile
 import uuid
 
+
 def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
     if os.path.getsize(pdf_path) > 50 * 1024 * 1024:
         raise ValueError("PDF exceeds the 50MB size limit")
-    with open(pdf_path, "rb") as f:
-        pdf_bytes = f.read()
-    doc = fitz.open("pdf", pdf_bytes)
+
+    doc = fitz.open(pdf_path)
+    total_pages = len(doc)
+    metadata = doc.metadata
+    page_dims = {i: (doc[i].rect.width, doc[i].rect.height) for i in range(total_pages)}
+    doc.close()
+
+    page_list = None
+    if pages != "all":
+        if "-" in pages:
+            start, end = map(int, pages.split("-", 1))
+            if start < 1 or end < start or start > total_pages:
+                raise ValueError("Page range is outside the PDF or reversed")
+            page_list = list(range(start - 1, min(end, total_pages)))
+        else:
+            page_number = int(pages)
+            if page_number < 1 or page_number > total_pages:
+                raise ValueError("Page number is outside the PDF")
+            page_list = [page_number - 1]
 
     image_dir = None
     if extract_images:
         image_dir = tempfile.mkdtemp(prefix=f"porrima-pdf-{uuid.uuid4().hex[:8]}-")
+
+    import pymupdf4llm
+
+    saved_stdout = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    try:
+        chunks = pymupdf4llm.to_markdown(
+            pdf_path,
+            pages=page_list,
+            page_chunks=True,
+            write_images=extract_images,
+            image_path=image_dir or "",
+            image_format="png",
+            dpi=150,
+            force_text=True,
+            use_ocr=True,
+            force_ocr=ocr,
+        )
+    finally:
+        os.dup2(saved_stdout, 1)
+        os.close(saved_stdout)
+        os.close(devnull)
 
     result = {
         "text": "",
@@ -22,100 +63,61 @@ def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
         "images": [],
         "image_dir": image_dir,
         "metadata": {
-            "title": "",
-            "author": "",
-            "subject": "",
-            "pages": len(doc),
-        }
+            "title": metadata.get("title", ""),
+            "author": metadata.get("author", ""),
+            "subject": metadata.get("subject", ""),
+            "pages": total_pages,
+        },
     }
 
-    metadata = doc.metadata
-    result["metadata"]["title"] = metadata.get("title", "")
-    result["metadata"]["author"] = metadata.get("author", "")
-    result["metadata"]["subject"] = metadata.get("subject", "")
-
-    if pages == "all":
-        page_range = range(len(doc))
-    else:
-        if "-" in pages:
-            start, end = map(int, pages.split("-", 1))
-            if start < 1 or end < start or start > len(doc):
-                raise ValueError("Page range is outside the PDF or reversed")
-            page_range = range(start - 1, min(end, len(doc)))
-        else:
-            page_number = int(pages)
-            if page_number < 1 or page_number > len(doc):
-                raise ValueError("Page number is outside the PDF")
-            page_range = [page_number - 1]
-
-    for page_num in page_range:
-        if page_num >= len(doc):
-            continue
-
-        page = doc[page_num]
-
-        if ocr:
-            textpage = page.get_textpage_ocr(dpi=300, full=True)
-            text = page.get_text(textpage=textpage)
-        else:
-            text = page.get_text()
-
+    for chunk in chunks:
+        page_num = chunk["metadata"]["page_number"] - 1
+        text = chunk["text"]
         result["text"] += text + "\n\n"
+        w, h = page_dims.get(page_num, (0, 0))
         result["pages"].append({
             "page": page_num + 1,
             "text": text,
-            "width": page.rect.width,
-            "height": page.rect.height,
+            "width": w,
+            "height": h,
         })
 
-        if extract_images:
-            image_list = page.get_images(full=True)
-            for img_idx, img in enumerate(image_list):
-                xref = img[0]
-                try:
-                    base_image = doc.extract_image(xref)
-                    if base_image:
-                        img_bytes = base_image["image"]
-                        ext = base_image["ext"]
-                        img_path = os.path.join(image_dir, f"p{page_num + 1}_img{img_idx}.{ext}")
-                        with open(img_path, "wb") as f:
-                            f.write(img_bytes)
+    if extract_images and image_dir:
+        image_files = sorted(
+            f for f in os.listdir(image_dir)
+            if os.path.isfile(os.path.join(image_dir, f))
+        )
+        for img_idx, fname in enumerate(image_files):
+            img_path = os.path.join(image_dir, fname)
+            ext = os.path.splitext(fname)[1].lstrip(".") or "png"
+            byte_length = os.path.getsize(img_path)
 
-                        result["images"].append({
-                            "page": page_num + 1,
-                            "index": img_idx,
-                            "width": base_image["width"],
-                            "height": base_image["height"],
-                            "ext": ext,
-                            "byteLength": len(img_bytes),
-                            "path": img_path,
-                        })
-                except Exception:
-                    pass
+            w, h = 0, 0
+            try:
+                pix = fitz.Pixmap(img_path)
+                w, h = pix.width, pix.height
+                pix = None
+            except Exception:
+                pass
 
-            # Fallback: if no images found and text extraction is thin,
-            # render the full page as a pixmap to capture vector drawings,
-            # charts, or scanned content.
-            if len(result["images"]) == 0 and len(text.strip()) < 10:
-                try:
-                    pixmap = page.get_pixmap(dpi=150)
-                    page_img_path = os.path.join(image_dir, f"p{page_num + 1}_render.png")
-                    pixmap.save(page_img_path)
-                    result["images"].append({
-                        "page": page_num + 1,
-                        "index": -1,
-                        "width": pixmap.width,
-                        "height": pixmap.height,
-                        "ext": "png",
-                        "byteLength": pixmap.size,
-                        "path": page_img_path,
-                        "rendered": True,
-                    })
-                except Exception:
-                    pass
+            page_num = 1
+            m = re.search(r'-(\d{4})-\d+\.\w+$', fname)
+            if m:
+                page_num = int(m.group(1))
 
-    doc.close()
+            result["images"].append({
+                "page": page_num,
+                "index": img_idx,
+                "width": w,
+                "height": h,
+                "ext": ext,
+                "byteLength": byte_length,
+                "path": img_path,
+                "rendered": True,
+            })
+
     return result
+
 
 pdf_path = sys.argv[1]
 extract_images = len(sys.argv) > 2 and sys.argv[2] == "true"

@@ -25,6 +25,10 @@ bool_cmd() {
   if has_cmd "$1"; then printf true; else printf false; fi
 }
 
+bool_py_module() {
+  if has_cmd python3 && python3 -c "import $1" 2>/dev/null; then printf true; else printf false; fi
+}
+
 detect_gpu_json() {
   if has_cmd nvidia-smi; then
     local rows
@@ -98,6 +102,8 @@ cat <<JSON
     "npm": { "present": $(bool_cmd npm), "version": $(cmd_version npm --version | json_escape) },
     "python3": { "present": $(bool_cmd python3), "version": $(cmd_version python3 --version | json_escape) },
     "pip3": { "present": $(bool_cmd pip3), "version": $(cmd_version pip3 --version | json_escape) },
+    "pymupdf": { "present": $(bool_py_module fitz) },
+    "pymupdf4llm": { "present": $(bool_py_module pymupdf4llm) },
     "cmake": { "present": $(bool_cmd cmake), "version": $(cmd_version cmake --version | json_escape) },
     "ninja": { "present": $(bool_cmd ninja), "version": $(cmd_version ninja --version | json_escape) },
     "ffmpeg": { "present": $(bool_cmd ffmpeg), "version": $(cmd_version ffmpeg -version | json_escape) },
