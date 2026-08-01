@@ -166,6 +166,16 @@ body::before {
   background-color: color-mix(in srgb, rgb(var(--theme-primary)) 10%, rgb(8, 8, 12) 90%) !important;
 }
 
+[data-high-efficiency] .prompt-viewer-surface {
+  background: var(--theme-bg-flat);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+[data-high-efficiency] .prompt-viewer-surface .theme-accent-bg {
+  background-color: rgba(var(--theme-primary), 0.14);
+  border-color: rgba(var(--theme-primary), 0.25);
+}
+
 [data-high-efficiency] .app-modal-backdrop {
   background:
     linear-gradient(rgba(var(--theme-primary), 0.1), rgba(var(--theme-primary), 0.1)),
