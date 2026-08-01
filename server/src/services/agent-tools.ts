@@ -932,7 +932,7 @@ function formatPdfResult(result: { text: string; pages: any[]; images: any[]; me
   if (result.images.length > 0) {
     parts.push("## Figures");
     if (extractImages) {
-      parts.push(`Found ${result.images.length} figure region(s) — included inline above.`);
+      parts.push(`Found ${result.images.length} figure region(s) — included inline.`);
     } else {
       parts.push(`Found ${result.images.length} figure region(s):`);
       result.images.forEach((img) => {
@@ -944,9 +944,19 @@ function formatPdfResult(result: { text: string; pages: any[]; images: any[]; me
     parts.push("");
   }
   
-  // Text content
+  // Text content — clean up pymupdf4llm artifacts when images are inline
+  let text = result.text || "(no text extracted)";
+  if (extractImages) {
+    // Remove dead markdown image refs to temp paths
+    text = text.replace(/!\[.*?\]\(\/tmp\/porrima-pdf-[^)]*\)/g, "");
+    // Remove picture text blocks (OCR'd text from figure regions — usually garbled)
+    text = text.replace(/<!-- Start of picture text -->.*?<!-- End of picture text -->/gs, "");
+    // Clean up resulting blank lines
+    text = text.replace(/\n{3,}/g, "\n\n");
+  }
+  
   parts.push("## Text Content");
-  parts.push(result.text || "(no text extracted)");
+  parts.push(text);
   
   return parts.join("\n");
 }

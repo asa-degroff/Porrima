@@ -7,6 +7,25 @@ import tempfile
 import uuid
 
 
+def ensure_tessdata():
+    """Ensure Tesseract language data is available by checking TESSDATA_PREFIX."""
+    try:
+        tessdata = fitz.get_tessdata()
+        if tessdata and os.path.isdir(tessdata):
+            eng_file = os.path.join(tessdata, "eng.traineddata")
+            if os.path.isfile(eng_file):
+                return  # Already good
+    except Exception:
+        pass
+    # Try user-local tessdata
+    local = os.path.expanduser("~/.tesseract")
+    if os.path.isdir(local):
+        os.environ["TESSDATA_PREFIX"] = local
+
+
+ensure_tessdata()
+
+
 def process_pdf(pdf_path, extract_images=False, ocr=False, pages="all"):
     if os.path.getsize(pdf_path) > 50 * 1024 * 1024:
         raise ValueError("PDF exceeds the 50MB size limit")
