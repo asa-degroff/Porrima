@@ -347,21 +347,14 @@ export function useTTS() {
     const playbackSequence = ++audioPlaybackSequenceRef.current;
     currentAudioUrlRef.current = next.audioUrl;
     loadingRef.current = true;
-    // The global `ended` listener registered in the useEffect will also fire
-    // for this same `ended` event. In URL mode we want exactly one
-    // playQueuedChunk call per chunk, so let the per-chunk listener below
-    // own the handoff and neutralize the global dispatch for this chunk.
-    onAudioEndedRef.current = () => {};
-
-    // Attach a per-chunk `ended` listener with { once: true } so the recursive
-    // handoff to the next chunk fires exactly once per chunk. The global
-    // `ended` listener can fire more than once across a single chunk
-    // transition in some browsers when the audio src changes rapidly: the
-    // stale `ended` for the previous source can arrive after we've already
-    // started loading the next one, which would otherwise shift another
-    // chunk off the queue and cut the in-flight chunk off after a few hundred
-    // milliseconds of audio.
-    const handleChunkEnded = () => {
+// Route URL-mode completion through the persistent global `ended`
+    // listener. Browsers can deliver a stale `ended` event from the previous
+    // source after the next source has started loading. A `{ once: true }`
+    // listener is unsafe here: the stale event consumes it even when these
+    // guards reject the event, leaving the real completion with no handler.
+    // Keeping the guarded callback in the ref lets a stale event be ignored
+    // without losing the later, valid queue-advance event.
+    onAudioEndedRef.current = () => {
       if (
         playId !== playIdRef.current ||
         chunkModeRef.current !== "url" ||
@@ -370,7 +363,6 @@ export function useTTS() {
       ) return;
       void playQueuedChunk(playId);
     };
-    audio.addEventListener("ended", handleChunkEnded, { once: true });
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -414,7 +406,6 @@ export function useTTS() {
       const message = playbackError.message;
       setError(message);
       console.error("[TTS] Chunk playback error:", err);
-      audio.removeEventListener("ended", handleChunkEnded);
       loadingRef.current = false;
       chunkAudioActiveRef.current = false;
 
