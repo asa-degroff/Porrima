@@ -771,6 +771,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
   const [automationConfirmDeleteId, setAutomationConfirmDeleteId] = useState<string | null>(null);
+  const [automationIntervalDraft, setAutomationIntervalDraft] = useState<Record<string, string>>({});
   const automationTimeoutOriginalRef = useRef<number>(0);
   const automationMaxItersOriginalRef = useRef<number>(0);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
@@ -2196,6 +2197,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const handleToggleAutomationEditor = (id: string) => {
     if (automationEditorTaskId === id) {
       setAutomationEditorTaskId(null);
+      setAutomationIntervalDraft({});
       return;
     }
     setAutomationEditorTaskId(id);
@@ -2234,6 +2236,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   };
 
   const handleAutomationIntervalChange = (task: AutomationTask, value: string) => {
+    // Keep the raw text while typing so the field can be emptied (e.g. to
+    // replace "1440" with "3000"). Without this, an empty value gets clamped
+    // straight back to the minimum, making the last character undeletable.
+    setAutomationIntervalDraft((prev) => ({ ...prev, [task.id]: value }));
+    if (value.trim() === "") return; // allow transient empty state; commit on blur
     const current = task.schedule.type === "interval"
       ? clampAutomationIntervalMinutes(task.schedule.everyMinutes)
       : DEFAULT_AUTOMATION_INTERVAL_MINUTES;
@@ -2245,6 +2252,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   };
 
   const handleAutomationIntervalBlur = async (task: AutomationTask) => {
+    setAutomationIntervalDraft((prev) => {
+      const next = { ...prev };
+      delete next[task.id];
+      return next;
+    });
     const schedule = {
       type: "interval" as const,
       everyMinutes: task.schedule.type === "interval"
@@ -6627,7 +6639,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              min={AUTOMATION_INTERVAL_MINUTES_MIN}
 	                              max={AUTOMATION_INTERVAL_MINUTES_MAX}
 	                              step={5}
-	                              value={everyMinutes}
+	                              value={automationIntervalDraft[task.id] ?? everyMinutes}
 	                              onChange={(e) => handleAutomationIntervalChange(task, e.target.value)}
 	                              onBlur={() => handleAutomationIntervalBlur(task)}
 	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
