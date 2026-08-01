@@ -1,6 +1,6 @@
 import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { readFile } from "fs/promises";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
@@ -91,10 +91,10 @@ const RUN_PYTHON_TOOL: Tool = {
 
 const READ_PDF_TOOL: Tool = {
   name: "read_pdf",
-  description: "Read a PDF and extract text and metadata. Supports workspace paths and URLs, optional OCR, and embedded-image metadata.",
+  description: "Read a PDF and extract text, metadata, and embedded images. Supports workspace paths and URLs. When extractImages=true, images are included inline as visual content. Optional OCR for scanned PDFs. Use pages to limit scope — large PDFs with many images can be read in narrower page ranges.",
   parameters: Type.Object({
     path: Type.String({ description: "PDF path (local file path or URL starting with http/https)" }),
-    extractImages: Type.Optional(Type.Boolean({ description: "Report embedded image dimensions, format, and size (default false)" })),
+    extractImages: Type.Optional(Type.Boolean({ description: "Extract embedded images and include them inline (default false). Also renders pages as images when no extractable images or text are found." })),
     ocr: Type.Optional(Type.Boolean({ description: "Use OCR for scanned PDFs (default false). Requires Tesseract installed." })),
     pages: Type.Optional(Type.String({ description: "Page range to process, e.g. '1-5' or 'all' (default 'all')" })),
   }),
@@ -156,15 +156,35 @@ function getReadFileMaxBytes(settingsMaxBytes: number | undefined, contextWindow
 
 function createWrapResult(contextWindow: number) {
   const maxChars = getMaxToolResultChars(contextWindow);
-  return function wrapResult(result: { content: string; isError: boolean }, toolName?: string): AgentToolResult<{}> {
+  return function wrapResult(result: { content: string | any[]; isError: boolean }, toolName?: string): AgentToolResult<{}> {
     if (result.isError) {
       // Truncate error content too — a 1MB error message would blow up the context
-      let errText = result.content;
+      let errText = typeof result.content === "string" ? result.content : result.content[0]?.text || "";
       if (errText.length > maxChars) {
         errText = errText.slice(0, maxChars) + `\n\n[Error output truncated: ${(errText.length / 1024).toFixed(0)}KB → ${(maxChars / 1024).toFixed(0)}KB]`;
       }
       throw new Error(errText);
     }
+
+    // Handle multi-part content (e.g. text + images from read_pdf)
+    if (Array.isArray(result.content)) {
+      const content = result.content;
+      // Truncate the text part if needed
+      const textPart = content.find((c: any) => c.type === "text");
+      if (textPart && textPart.text.length > maxChars) {
+        const truncated = textPart.text.slice(0, maxChars);
+        const totalLines = textPart.text.split("\n").length;
+        const keptLines = truncated.split("\n").length;
+        const onlyToolsWithOffset = toolName === "read_file";
+        const footer = onlyToolsWithOffset
+          ? `[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(textPart.text.length / 1024).toFixed(0)}KB). Use offset/limit parameters to read specific sections.]`
+          : `[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(textPart.text.length / 1024).toFixed(0)}KB). If the tool result includes a saved file path, use read_file with offset/limit to read more.]`;
+        textPart.text = truncated + `\n\n${footer}`;
+      }
+      return { content, details: {} };
+    }
+
+    // String content — legacy path
     let text = result.content;
     if (text.length > maxChars) {
       const truncated = text.slice(0, maxChars);
@@ -729,7 +749,11 @@ async function fetchPdfFromUrl(url: string, signal?: AbortSignal, timeoutMs: num
  * Execute the read_pdf tool using PyMuPDF via Python sandbox.
  * The extraction script lives in pdf-extract.py alongside this module.
  */
-async function executeReadPdf(args: Record<string, any>, workspace: WorkspaceAdapter, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
+async function executeReadPdf(
+  args: Record<string, any>,
+  workspace: WorkspaceAdapter,
+  signal?: AbortSignal,
+): Promise<{ content: string | any[]; isError: boolean }> {
   const pathOrUrl = args.path;
   if (!pathOrUrl) {
     return { content: "Missing required parameter: path", isError: true };
@@ -743,6 +767,7 @@ async function executeReadPdf(args: Record<string, any>, workspace: WorkspaceAda
   }
 
   let pdfBuffer: Buffer | null = null;
+  let imageDir: string | undefined;
 
   try {
     // Handle URL vs local path
@@ -755,7 +780,7 @@ async function executeReadPdf(args: Record<string, any>, workspace: WorkspaceAda
         argv: [pathOrUrl, String(extractImages), String(ocr), pages],
         timeout: 30,
       }, signal, { trusted: true, maxBuffer: 10 * 1024 * 1024 });
-      return parsePdfExecutionResult(result, ocr);
+      return await parsePdfExecutionResult(result, ocr, result.content, "", extractImages);
     }
 
     // Write the PDF buffer to a temp file the script can read by path.
@@ -780,25 +805,59 @@ async function executeReadPdf(args: Record<string, any>, workspace: WorkspaceAda
           signal,
         },
       );
-      return parsePdfExecutionResult({
+
+      // Capture image_dir from parsed JSON for cleanup after hydration
+      if (result.exitCode === 0) {
+        try {
+          const parsed = JSON.parse(result.stdout);
+          imageDir = parsed.image_dir;
+        } catch { /* ignore parse errors */ }
+      }
+
+      return await parsePdfExecutionResult({
         content: [result.stdout.trimEnd(), result.stderr ? `[stderr] ${result.stderr.trimEnd()}` : ""].filter(Boolean).join("\n"),
         isError: result.exitCode !== 0,
-      }, ocr, result.stdout, result.stderr);
+      }, ocr, result.stdout, result.stderr, extractImages);
     } finally {
       rmTmp(pdfSandboxDir, { recursive: true, force: true }).catch(() => {});
+      // Clean up image dir after the result has been consumed
+      if (imageDir) {
+        rm(imageDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
 
   } catch (e: any) {
+    if (imageDir) {
+      rm(imageDir, { recursive: true, force: true }).catch(() => {});
+    }
     return { content: `PDF processing failed: ${e.message}`, isError: true };
   }
 }
 
-function parsePdfExecutionResult(
+/**
+ * MIME type from image file extension.
+ */
+function mimeTypeFromExt(ext: string): string {
+  switch (ext?.toLowerCase()) {
+    case "png": return "image/png";
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "bmp": return "image/bmp";
+    case "tiff":
+    case "tif": return "image/tiff";
+    case "webp": return "image/webp";
+    default: return "image/png";
+  }
+}
+
+async function parsePdfExecutionResult(
   result: { content: string; isError: boolean },
   ocr: boolean,
   stdout = result.content,
   stderr = result.isError ? result.content : "",
-): { content: string; isError: boolean } {
+  extractImages = false,
+): Promise<{ content: string | any[]; isError: boolean }> {
   if (result.isError) {
     if (stderr.includes("No module named") && stderr.includes("fitz")) {
       return { content: "PyMuPDF (fitz) is not installed in the active workspace environment.", isError: true };
@@ -810,10 +869,46 @@ function parsePdfExecutionResult(
   }
   try {
     const parsed = JSON.parse(stdout);
-    const formatted = formatPdfResult(parsed);
-    return !ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0
-      ? { content: `⚠️ This PDF appears to be scanned. Try again with ocr=true.\n\n${formatted}`, isError: false }
-      : { content: formatted, isError: false };
+    const formatted = formatPdfResult(parsed, extractImages);
+    const textContent = !ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0
+      ? `⚠️ This PDF appears to be scanned. Try again with ocr=true.\n\n${formatted}`
+      : formatted;
+
+    // Build multi-part content when images are available
+    if (extractImages && parsed.image_dir && parsed.images?.length > 0) {
+      const content: any[] = [{ type: "text", text: textContent }];
+      const maxImages = 5;
+      const images = parsed.images.slice(0, maxImages);
+
+      for (const img of images) {
+        if (img.path) {
+          try {
+            const imgBuffer = readFile(img.path);
+            content.push({
+              type: "image",
+              data: (await imgBuffer).toString("base64"),
+              mimeType: mimeTypeFromExt(img.ext),
+              name: `pdf-page${img.page}-img${img.index}`,
+            });
+          } catch {
+            // Skip unreadable images silently
+          }
+        }
+      }
+
+      if (parsed.images.length > maxImages) {
+        content[0].text += `\n\n[Note: ${parsed.images.length - maxImages} additional image(s) omitted from this call. Use a narrower page range to access them.]`;
+      }
+
+      // Clean up image directory — safe to do here since we've already read all image data
+      if (parsed.image_dir) {
+        rm(parsed.image_dir, { recursive: true, force: true }).catch(() => {});
+      }
+
+      return { content, isError: false };
+    }
+
+    return { content: textContent, isError: false };
   } catch (e: any) {
     return { content: `Failed to parse PDF result: ${e.message}\n${stdout.slice(0, 500)}`, isError: true };
   }
@@ -822,7 +917,7 @@ function parsePdfExecutionResult(
 /**
  * Format the PDF extraction result as markdown.
  */
-function formatPdfResult(result: { text: string; pages: any[]; images: any[]; metadata: any }): string {
+function formatPdfResult(result: { text: string; pages: any[]; images: any[]; metadata: any; image_dir?: string }, extractImages: boolean): string {
   const parts: string[] = [];
   
   // Metadata section
@@ -835,11 +930,17 @@ function formatPdfResult(result: { text: string; pages: any[]; images: any[]; me
   
   // Images summary
   if (result.images.length > 0) {
-    parts.push("## Embedded Image Metadata");
-    parts.push(`Found ${result.images.length} image(s):`);
-    result.images.forEach((img, i) => {
-      parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.byteLength / 1024).toFixed(1)} KB)`);
-    });
+    parts.push("## Embedded Images");
+    if (extractImages) {
+      parts.push(`Found ${result.images.length} image(s) — included inline above.`);
+    } else {
+      parts.push(`Found ${result.images.length} image(s):`);
+      result.images.forEach((img) => {
+        parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.byteLength / 1024).toFixed(1)} KB)`);
+      });
+      parts.push("");
+      parts.push("💡 Use extractImages=true to include images inline.");
+    }
     parts.push("");
   }
   
