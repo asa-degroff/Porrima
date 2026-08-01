@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata } from "../services/chat-storage.js";
-import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
+import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata } from "../services/chat-storage.js";
+import { getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
 import type { Chat } from "../types.js";
@@ -144,61 +144,42 @@ router.patch("/:id", async (req, res) => {
   res.json(updated);
 });
 
-// Get the rendered system prompt and tools for debugging
-// Uses cached prompt from last message send when available to avoid
-// a cold embedding call that can take seconds on first use.
+// Get the rendered system prompt and tools for debugging.
+// Returns the cached prompt from the last message send when available.
+// When the cache is cold (e.g. after a server restart), returns the base
+// system prompt with a cached=false flag instead of running a full memory
+// retrieval pipeline just for display.
 router.get("/:id/rendered-prompt", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  let systemPrompt = chat.systemPrompt || "You are an autonmous agent.";
-  if (chat.type === "agent") {
-    const cached = getCachedAugmentedPrompt(chat.id);
-    if (cached) {
-      systemPrompt = cached;
-    } else {
-      // Get project path for AGENTS.md loading
-      let projectPath: string | undefined;
-      if (chat.projectId) {
-        const project = await getProject(chat.projectId);
-        projectPath = project?.path;
-      }
-      systemPrompt = await buildMemoryAugmentedPrompt(
-        systemPrompt,
-        chat.messages,
-        chat.id,
-        chat.projectId,
-        chat.type,
-        projectPath
-      );
-    }
-  } else if (chat.type === "system") {
-    // Mirror runSystemSynthesis's composition: stable prefix (persona + user
-    // doc + memory blocks + zeitgeist) followed by the synthesis instructions
-    // addendum. No memory delta — synthesis uses importance anchors injected
-    // into each cycle's trigger message, not conversational retrieval.
-    const { buildStablePrefix } = await import("../services/memory-context.js");
-    const { SYNTHESIS_INSTRUCTIONS } = await import("../services/system-chat.js");
-    const { stablePrefix } = await buildStablePrefix(systemPrompt, chat.id);
-    systemPrompt = `${stablePrefix}\n\n${SYNTHESIS_INSTRUCTIONS}`;
-  }
+  const cached = getCachedAugmentedPrompt(chat.id);
+  let systemPrompt: string;
+  let cachedFlag: boolean;
 
-  // Inject active skills into the rendered prompt (matches chat.ts behavior)
-  if (chat.activeSkills?.length) {
-    const { buildSkillAugmentedPrompt, discoverSkills } = await import("../services/skills.js");
-    const skillsCache = new Map<string, import("../services/skills.js").Skill>();
-    const allSkills = await discoverSkills(chat.projectId);
-    for (const s of allSkills) {
-      skillsCache.set(s.name, s);
+  if (cached) {
+    systemPrompt = cached;
+    cachedFlag = true;
+  } else {
+    systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    cachedFlag = false;
+
+    if (chat.activeSkills?.length) {
+      const { buildSkillAugmentedPrompt, discoverSkills } = await import("../services/skills.js");
+      const skillsCache = new Map<string, import("../services/skills.js").Skill>();
+      const allSkills = await discoverSkills(chat.projectId);
+      for (const s of allSkills) {
+        skillsCache.set(s.name, s);
+      }
+      systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
     }
-    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
   }
 
   const tools = (chat.type === "agent" || chat.type === "system")
     ? getAgentToolDefinitions(chat.type)
     : [];
 
-  res.json({ systemPrompt, tools });
+  res.json({ systemPrompt, tools, cached: cachedFlag });
 });
 
 // Delete a chat

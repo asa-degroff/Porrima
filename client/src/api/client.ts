@@ -92,7 +92,7 @@ export async function updateChat(
   return res.json();
 }
 
-export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[] }> {
+export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[]; cached: boolean }> {
   const res = await apiFetch(`${BASE}/chats/${id}/rendered-prompt`);
   if (!res.ok) throw new Error("Failed to fetch rendered prompt");
   return res.json();

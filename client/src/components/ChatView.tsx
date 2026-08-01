@@ -377,7 +377,7 @@ export function ChatView({
   const loadingOlderRef = useRef(false);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
-  const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
+  const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[]; cached: boolean } | null>(null);
   const [promptLoading, setPromptLoading] = useState(false);
   const inputRef = useRef<HTMLDivElement | null>(null);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -464,7 +464,7 @@ export function ChatView({
       const data = await fetchRenderedPrompt(chatId);
       setPromptModal(data);
     } catch {
-      setPromptModal({ systemPrompt: "(Failed to load)", tools: [] });
+      setPromptModal({ systemPrompt: "(Failed to load)", tools: [], cached: false });
     } finally {
       setPromptLoading(false);
     }
@@ -1124,6 +1124,11 @@ export function ChatView({
                 </div>
               ) : promptModal && (
                 <>
+                  {!promptModal.cached && (
+                    <div className="text-xs theme-primary-text opacity-50 italic px-1">
+                      Augmented prompt not cached — showing base system prompt. Send a message to populate.
+                    </div>
+                  )}
                   <div>
                     <h4 className="text-xs font-medium theme-accent-text opacity-70 uppercase tracking-wider mb-2">System Prompt</h4>
                     <pre className="text-xs theme-primary-text opacity-90 font-mono whitespace-pre-wrap theme-accent-bg rounded-lg p-3 theme-accent-border max-h-[40vh] overflow-y-auto">
