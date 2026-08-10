@@ -1,5 +1,5 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
-import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, isSystemManagedMemoryBlock, type MemoryBlock } from "./memory-storage.js";
+import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, isSystemManagedMemoryBlock, buildMemoryIndexText, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
@@ -355,9 +355,10 @@ async function retrieveMemories(
     budget.memoryContext.rerankDocumentLimit,
     0.65,
   );
+  const rerankDocuments = rerankCandidates.map((r) => buildMemoryIndexText(r.memory.text, r.memory.subject));
   const rerankOutput: RerankOutput = await rerank(
     rerankQuery,
-    rerankCandidates.map((r) => r.memory.text),
+    rerankDocuments,
     instruction,
     Math.min(budget.memoryContext.rerankTopN, rerankCandidates.length)
   );
@@ -461,7 +462,7 @@ async function retrieveMemories(
       chatType: chatType || "agent",
       source: "memory-context",
       query: `Instruct: ${instruction}\nQuery: ${rerankQuery}`,
-      documents: rerankCandidates.map((r) => r.memory.text),
+      documents: rerankDocuments,
       selectedResults: finalMemories.map((r) => ({
         text: r.memory.text,
         score: r.score,

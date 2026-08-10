@@ -20,6 +20,7 @@ import {
   listMemoryBlocks,
   getBlockHistory,
   getMaxBlockChars,
+  buildMemoryIndexText,
 } from "../services/memory-storage.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
@@ -616,7 +617,7 @@ router.patch("/:id", async (req, res) => {
   if (text !== undefined && text !== existing.text) {
     let embedding: number[];
     try {
-      embedding = await embed(text);
+      embedding = await embed(buildMemoryIndexText(text, existing.subject));
     } catch (e: any) {
       return res.status(503).json({ error: `Embedding unavailable: ${e.message}` });
     }

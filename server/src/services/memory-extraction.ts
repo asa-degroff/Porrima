@@ -13,6 +13,7 @@ import {
   createSupersessionLink,
   getMemoriesByChatId,
   getMaxBlockChars,
+  buildMemoryIndexText,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { getProject } from "./chat-storage.js";
@@ -2539,7 +2540,7 @@ async function runImmediateBatch(input: {
     let embeddings: number[][];
     try {
       embeddings = await withRetry(
-        () => embedBatch(facts.map((f) => f.text)),
+        () => embedBatch(facts.map((f) => buildMemoryIndexText(f.text, f.subject))),
         `embedBatch for ${facts.length} immediate facts (chat ${input.chatId})`
       );
     } catch (e) {
@@ -2963,7 +2964,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
       try {
         timeoutController.signal.throwIfAborted();
         embeddings = await withRetry(
-          () => embedBatch(facts.map(f => f.text)),
+          () => embedBatch(facts.map(f => buildMemoryIndexText(f.text, f.subject))),
           `embedBatch for ${facts.length} mid-turn pulse facts (chat ${chatId})`,
         );
         timeoutController.signal.throwIfAborted();
@@ -3164,7 +3165,7 @@ export async function preCompactionFlush(
     let embeddings: number[][];
     try {
       embeddings = await withRetry(
-        () => embedBatch(facts.map((f) => f.text)),
+        () => embedBatch(facts.map((f) => buildMemoryIndexText(f.text, f.subject))),
         `embedBatch for ${facts.length} pre-compaction facts (chat ${chatId})`
       );
     } catch (e) {
@@ -3446,7 +3447,7 @@ export async function extractDelayedMemories(
     let embeddings: number[][];
     try {
       embeddings = await withRetry(
-        () => embedBatch(facts.map((f) => f.text)),
+        () => embedBatch(facts.map((f) => buildMemoryIndexText(f.text, f.subject))),
         `embedBatch for ${facts.length} delayed memories (chat ${chatId})`
       );
     } catch (e) {

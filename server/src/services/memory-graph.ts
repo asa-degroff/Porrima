@@ -403,7 +403,7 @@ function ftsSearchIds(
 
   try {
     let rows = db
-      .prepare("SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?")
+      .prepare("SELECT id FROM fts_memories WHERE fts_memories MATCH ? ORDER BY rank LIMIT ?")
       .all(`"${escaped}"`, limit) as Array<{ id: string }>;
 
     if (rows.length === 0) {
@@ -414,7 +414,7 @@ function ftsSearchIds(
         .join(" OR ");
       if (terms) {
         rows = db
-          .prepare("SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?")
+          .prepare("SELECT id FROM fts_memories WHERE fts_memories MATCH ? ORDER BY rank LIMIT ?")
           .all(terms, limit) as Array<{ id: string }>;
       }
     }

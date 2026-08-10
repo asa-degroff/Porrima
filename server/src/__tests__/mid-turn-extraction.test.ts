@@ -42,6 +42,8 @@ vi.mock("../services/memory-storage.js", () => ({
   createSupersessionLink: vi.fn(),
   getMemoriesByChatId: vi.fn(async () => []),
   getMaxBlockChars: vi.fn(() => 500),
+  buildMemoryIndexText: (text: string, subject?: string) =>
+    subject?.trim() ? `${subject.trim()}\n${text}` : text,
 }));
 
 vi.mock("../services/memory-extraction-observability.js", () => ({

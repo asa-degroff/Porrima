@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { embed } from "./embeddings.js";
-import { searchMemories, mmrRerank, updateMemory, type ScoredMemory } from "./memory-storage.js";
+import { searchMemories, mmrRerank, updateMemory, buildMemoryIndexText, type ScoredMemory } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import {
@@ -515,7 +515,7 @@ export class PassiveMemoryRecallController {
     if (rerankCandidates.length === 0) return;
 
     const instruction = RERANK_INSTRUCTIONS["passive-memory"];
-    const rerankDocuments = rerankCandidates.map((candidate) => clampText(candidate.memory.text, budget.passiveRecall.rerankDocumentChars));
+    const rerankDocuments = rerankCandidates.map((candidate) => clampText(buildMemoryIndexText(candidate.memory.text, candidate.memory.subject), budget.passiveRecall.rerankDocumentChars));
     const formattedQuery = `Instruct: ${instruction}\nQuery: ${rerankQuery}`;
     const output = await rerank(
       rerankQuery,

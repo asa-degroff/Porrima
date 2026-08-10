@@ -21,6 +21,7 @@ import {
   closeMemoryDb,
   getMemoryDbPath,
   rebuildVecMemoriesTable,
+  buildMemoryIndexText,
 } from "./memory-storage.js";
 import {
   getCorpusDb,
@@ -268,15 +269,16 @@ export async function migrate(
   }
   const dimension = probe[0].length;
 
-  // Gather all memory texts (preserving id)
+  // Gather all memory texts (preserving id). Embed the subject + text index
+  // form so subject-only keywords are retrievable after migration.
   const memoryDb = getMemoryDb();
   const memRows = memoryDb
-    .prepare("SELECT id, text FROM memories")
-    .all() as Array<{ id: string; text: string }>;
+    .prepare("SELECT id, text, subject FROM memories")
+    .all() as Array<{ id: string; text: string; subject: string }>;
 
   const memoryVectors = await embedInBatches(
     cfg,
-    memRows.map((r) => r.text),
+    memRows.map((r) => buildMemoryIndexText(r.text, r.subject)),
     (processed) =>
       wrapProgress({ phase: "memories", processed, total: memRows.length })
   );

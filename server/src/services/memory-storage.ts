@@ -31,6 +31,16 @@ export const DEFAULT_VEC_DIMENSION = 1024;
 const MEMORY_GRAPH_EDGE_VERSION = "vec0-cosine-v1";
 const MEMORY_GRAPH_EDGE_NEIGHBORS = 48;
 
+/**
+ * Search-facing representation of a memory for embedding and reranking.
+ * Prepends the subject (when present) so topic keywords that only appear in
+ * the subject line participate in vector search and cross-encoder scoring.
+ */
+export function buildMemoryIndexText(text: string, subject?: string): string {
+  const trimmedSubject = subject?.trim();
+  return trimmedSubject ? `${trimmedSubject}\n${text}` : text;
+}
+
 function readStoredVecDimension(db: Database.Database): number {
   try {
     const row = db.prepare("SELECT value FROM metadata WHERE key = 'vec_dimension'").get() as
@@ -104,38 +114,6 @@ export function getDb(): Database.Database {
       ON memory_graph_edges(similarity);
   `);
 
-  // FTS5 full-text index (content-sync'd with memories table)
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS fts_memories
-      USING fts5(id UNINDEXED, text, content=memories, content_rowid=rowid);
-  `);
-
-  // Triggers to keep FTS in sync with memories table
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO fts_memories(rowid, id, text) VALUES (new.rowid, new.id, new.text);
-    END;
-    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO fts_memories(fts_memories, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
-    END;
-    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-      INSERT INTO fts_memories(fts_memories, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
-      INSERT INTO fts_memories(rowid, id, text) VALUES (new.rowid, new.id, new.text);
-    END;
-  `);
-
-  // One-time FTS rebuild for existing data
-  const ftsInit = db
-    .prepare("SELECT value FROM metadata WHERE key = 'fts_initialized'")
-    .get() as { value: string } | undefined;
-  if (!ftsInit) {
-    db.exec(`INSERT INTO fts_memories(fts_memories) VALUES('rebuild')`);
-    db.prepare(
-      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('fts_initialized', '1')"
-    ).run();
-    console.log("[memory] Built FTS5 index for existing memories");
-  }
-
   // Migration: add project_id column if missing
   const cols = db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "project_id")) {
@@ -183,6 +161,58 @@ export function getDb(): Database.Database {
   if (!cols.some((c) => c.name === "subject")) {
     db.exec(`ALTER TABLE memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''`);
     console.log("[memory] Added subject column for extraction context framing");
+  }
+
+  // FTS5 full-text index (content-sync'd with memories table). Includes the
+  // subject column so topic keywords that only appear in the subject line are
+  // searchable. Created after the subject column migration above because the
+  // sync triggers reference new.subject / old.subject.
+  const ftsCols = db.prepare("PRAGMA table_info(fts_memories)").all() as Array<{ name: string }>;
+  const ftsNeedsSubjectMigration = ftsCols.length > 0 && !ftsCols.some((c) => c.name === "subject");
+  if (ftsNeedsSubjectMigration) {
+    db.exec(`
+      DROP TRIGGER IF EXISTS memories_ai;
+      DROP TRIGGER IF EXISTS memories_ad;
+      DROP TRIGGER IF EXISTS memories_au;
+      DROP TABLE fts_memories;
+    `);
+    console.log("[memory] Recreating FTS5 index to include subject column");
+  }
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS fts_memories
+      USING fts5(id UNINDEXED, text, subject, content=memories, content_rowid=rowid);
+  `);
+
+  // Triggers to keep FTS in sync with memories table. Always recreated so the
+  // bodies match the current schema.
+  db.exec(`
+    DROP TRIGGER IF EXISTS memories_ai;
+    DROP TRIGGER IF EXISTS memories_ad;
+    DROP TRIGGER IF EXISTS memories_au;
+    CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO fts_memories(rowid, id, text, subject) VALUES (new.rowid, new.id, new.text, new.subject);
+    END;
+    CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO fts_memories(fts_memories, rowid, id, text, subject) VALUES('delete', old.rowid, old.id, old.text, old.subject);
+    END;
+    CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO fts_memories(fts_memories, rowid, id, text, subject) VALUES('delete', old.rowid, old.id, old.text, old.subject);
+      INSERT INTO fts_memories(rowid, id, text, subject) VALUES (new.rowid, new.id, new.text, new.subject);
+    END;
+  `);
+
+  // One-time FTS rebuild for existing data. Also required after the
+  // subject-column recreation above, which starts with an empty index.
+  const ftsInit = db
+    .prepare("SELECT value FROM metadata WHERE key = 'fts_initialized'")
+    .get() as { value: string } | undefined;
+  if (!ftsInit || ftsNeedsSubjectMigration) {
+    db.exec(`INSERT INTO fts_memories(fts_memories) VALUES('rebuild')`);
+    db.prepare(
+      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('fts_initialized', '1')"
+    ).run();
+    console.log("[memory] Built FTS5 index for existing memories");
   }
 
   db.exec(`
@@ -1026,10 +1056,11 @@ function ftsSearch(query: string, limit: number): string[] {
   // Escape double quotes for FTS5 syntax
   const escaped = trimmed.replace(/"/g, '""');
 
-  // Try phrase match first (exact sequence)
+  // Try phrase match first (exact sequence). Matching on the table (not a
+  // single column) searches both text and subject.
   let rows = db
     .prepare(
-      `SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?`
+      `SELECT id FROM fts_memories WHERE fts_memories MATCH ? ORDER BY rank LIMIT ?`
     )
     .all(`"${escaped}"`, limit) as Array<{ id: string }>;
 
@@ -1044,7 +1075,7 @@ function ftsSearch(query: string, limit: number): string[] {
     if (terms) {
       rows = db
         .prepare(
-          `SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?`
+          `SELECT id FROM fts_memories WHERE fts_memories MATCH ? ORDER BY rank LIMIT ?`
         )
         .all(terms, limit) as Array<{ id: string }>;
     }

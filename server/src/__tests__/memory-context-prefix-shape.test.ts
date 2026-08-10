@@ -68,6 +68,8 @@ function mockMemoryContextDeps(options: {
       return [];
     }),
     isSystemManagedMemoryBlock: vi.fn((b: MemoryBlock) => b.blockType !== "note" || b.scope === "archived"),
+    buildMemoryIndexText: (text: string, subject?: string) =>
+      subject?.trim() ? `${subject.trim()}\n${text}` : text,
   }));
   vi.doMock("../services/reranker.js", () => ({
     RERANK_INSTRUCTIONS: {
