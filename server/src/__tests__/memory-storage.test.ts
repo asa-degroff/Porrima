@@ -51,6 +51,51 @@ describe("memory block storage", () => {
     }
   });
 
+  it("snapshots the pre-supersede state into history when a block is superseded", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const { createMemoryBlock, supersedeBlock, getBlockHistory } = await loadMemoryStorage(homeDir);
+      const now = new Date().toISOString();
+
+      createMemoryBlock({
+        id: "blk-sup-old",
+        name: "Superseded Test",
+        description: "Supersede versioning",
+        content: "Original state.",
+        scope: "global",
+        projectId: "",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+
+      supersedeBlock("blk-sup-old", {
+        id: "blk-sup-new",
+        name: "Superseded Test",
+        description: "Supersede versioning",
+        content: "New state.",
+        scope: "global",
+        projectId: "",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+
+      // The supersede UPDATE changes only supersededBy — the pre-supersede
+      // state must still be snapshotted so the lineage stays recoverable.
+      const history = getBlockHistory("blk-sup-old");
+      const snapshots = history.filter((h) => h.id !== "blk-sup-old");
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0].content).toBe("Original state.");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists blocks by query tokens across punctuation and content", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
     try {

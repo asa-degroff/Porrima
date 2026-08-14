@@ -131,4 +131,40 @@ describe("memory tools", () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects update_memory_block content over the limit without mutating", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-tools-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      const now = new Date().toISOString();
+
+      memoryStorage.createMemoryBlock({
+        id: "blk-limit-test",
+        name: "Limit Test",
+        description: "Overflow rejection behavior",
+        content: "Original content.",
+        scope: "global",
+        projectId: "",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: "blk-limit-test", content: "x".repeat(7000) },
+      } as any, "chat-1");
+
+      // Rejected with the exact overage — no truncation, no superseding block.
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("character limit");
+      expect(result.content).toContain("1000 over");
+      expect(memoryStorage.getMemoryBlock("blk-limit-test")?.content).toBe("Original content.");
+      expect(memoryStorage.listMemoryBlocks({ includeInternal: true }).map((b) => b.id)).toEqual(["blk-limit-test"]);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });

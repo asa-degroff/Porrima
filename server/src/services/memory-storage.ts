@@ -322,15 +322,20 @@ export function getDb(): Database.Database {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_blocks_history_blockId ON memory_blocks_history(blockId)`);
 
-  // Trigger: snapshot old state on every content/name/description change.
-  // NOTE: If you alter the trigger body, you must DROP it first —
-  // CREATE TRIGGER IF NOT EXISTS won't update an existing trigger.
+  // Trigger: snapshot old state on every content/name/description change, and
+  // when a block is superseded (the supersede UPDATE changes only supersededBy,
+  // so without the extra clause the superseded row's final state would never
+  // be versioned).
+  // Drop-and-recreate on every startup so source changes to the trigger body
+  // propagate — CREATE TRIGGER IF NOT EXISTS won't update an existing trigger.
   db.exec(`
-    CREATE TRIGGER IF NOT EXISTS memory_blocks_history_trigger
+    DROP TRIGGER IF EXISTS memory_blocks_history_trigger;
+    CREATE TRIGGER memory_blocks_history_trigger
     AFTER UPDATE ON memory_blocks
     WHEN old.content != new.content
        OR old.name != new.name
        OR old.description != new.description
+       OR (old.supersededBy IS NULL AND new.supersededBy IS NOT NULL)
     BEGIN
       INSERT INTO memory_blocks_history (
         blockId, name, description, content, scope, projectId,

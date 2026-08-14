@@ -8,7 +8,6 @@ import {
   updateMemoryBlock,
   getMemoryBlock,
   searchBlocks,
-  supersedeBlock,
   listMemoryBlocks,
   getBlockHistory,
   getMaxBlockChars,
@@ -90,7 +89,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "update_memory_block",
     description:
-      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. If the block would exceed the configured character limit, consider splitting into a new block.",
+      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. Updates exceeding the configured character limit are rejected with the exact overage — split into multiple blocks if the content is too large.",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
@@ -167,26 +166,6 @@ async function resolveNewBlockIdentity(chatId: string): Promise<{ id: string; bl
   const { NOTEBOOK_CYCLE_CHAT_ID, generateNotebookBlockId } = await import("./notebook-storage.js");
   if (chatId === NOTEBOOK_CYCLE_CHAT_ID) {
     return { id: generateNotebookBlockId("notebook"), blockType: "notebook" };
-  }
-  return { id: `blk-${uuid()}`, blockType: "note" };
-}
-
-/**
- * Resolve the block identity for a superseding block, preserving the original's
- * category so the replacement inherits the same system-block exclusion. Falls
- * back to a plain `blk-<uuid>` when the original has no special prefix.
- */
-async function resolveSupersedingBlockIdentity(existing: {
-  id: string;
-  blockType?: string;
-}): Promise<{ id: string; blockType: BlockType }> {
-  const { v4: uuid } = await import("uuid");
-  const { generateNotebookBlockId } = await import("./notebook-storage.js");
-  if (existing.blockType === "notebook" || existing.id.startsWith("blk-notebook-")) {
-    return { id: generateNotebookBlockId("notebook"), blockType: "notebook" };
-  }
-  if (existing.blockType === "synthesis" || existing.id.startsWith("blk-synth-")) {
-    return { id: generateNotebookBlockId("synthesis"), blockType: "synthesis" };
   }
   return { id: `blk-${uuid()}`, blockType: "note" };
 }
@@ -432,7 +411,7 @@ export async function executeMemoryTool(
         supersededBy: undefined,
         supersedes: undefined,
       });
-      return { content: `Created memory block: [${block.id}] "${block.name}" (${block.scope}, ${block.tokenEstimate} tokens)`, isError: false };
+      return { content: `Created memory block: [${block.id}] "${block.name}" (${content.length}/${maxChars} chars, ${block.tokenEstimate} tokens)`, isError: false };
     }
 
     case "update_memory_block": {
@@ -453,27 +432,12 @@ export async function executeMemoryTool(
       const finalContent = newContent ?? existing.content;
       const maxChars = await getMaxBlockChars();
       if (finalContent.length > maxChars) {
-        // Content too large — create a superseding block instead.
-        // Preserve notebook/synthesis prefix so the replacement inherits the
-        // same system-block exclusion as the original.
-        const { id: newId } = await resolveSupersedingBlockIdentity(existing);
-        const now = new Date().toISOString();
-        const newBlock = supersedeBlock(existing.id, {
-          id: newId,
-          name: existing.name,
-          description: newDesc ?? existing.description,
-          content: finalContent.slice(0, maxChars),
-          scope: newScope ?? existing.scope,
-          projectId: projectIdVal !== undefined ? projectIdVal : (existing.projectId || ""),
-          createdAt: now,
-          updatedAt: now,
-          updatedBy: "agent",
-          supersededBy: undefined,
-          supersedes: existing.id,
-        });
+        // Reject rather than truncate: silent truncation destroys the tail of
+        // the document and orphans the old row. The agent sees the exact
+        // overage and decides how to split or trim.
         return {
-          content: `Block exceeded ${maxChars} char limit — created new version [${newBlock.id}] superseding [${existing.id}]. Content was truncated to fit.`,
-          isError: false,
+          content: `Content exceeds ${maxChars} character limit (${finalContent.length} chars, ${finalContent.length - maxChars} over). Shorten or split into multiple blocks.`,
+          isError: true,
         };
       }
 
@@ -487,7 +451,7 @@ export async function executeMemoryTool(
       const scopeNote = scopeChanged ? ` scope: ${existing.scope} → ${newScope}` : "";
       const projectNote = projectIdVal !== undefined && projectIdVal !== existing.projectId
         ? ` projectId: ${existing.projectId || "(none)"} → ${projectIdVal || "(none)"}` : "";
-      return { content: `Updated block [${block_id}] "${existing.name}"${scopeNote}${projectNote}`, isError: false };
+      return { content: `Updated block [${block_id}] "${existing.name}" (${finalContent.length}/${maxChars} chars)${scopeNote}${projectNote}`, isError: false };
     }
 
     case "read_memory_block": {
