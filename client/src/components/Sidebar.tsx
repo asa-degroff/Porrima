@@ -1212,9 +1212,12 @@ export function Sidebar({
           }}
         />
       )}
-      {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
+      {/* Sidebar container — desktop is static, mobile is fixed with gesture support.
+          Keeps z-30 on desktop (do not re-add md:z-auto): backdrop-filter makes the
+          sidebar a stacking context, and its popovers must paint above the chat
+          column's z-10/z-20 layers. As a flex item, z-index applies even while static. */}
       <div
-        className={`w-72 h-full flex flex-col app-glass-surface border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
+        className={`w-72 h-full flex flex-col app-glass-surface border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
         ref={gestureRef}
         onTouchStart={gestureHandlers.onTouchStart}
         onTouchMove={gestureHandlers.onTouchMove}

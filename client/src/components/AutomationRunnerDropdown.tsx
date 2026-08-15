@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import { fetchAutomations, runAutomationNow } from "../api/client";
 import type { AutomationTask, SystemPauseStatus } from "../types";
@@ -65,6 +65,23 @@ export function AutomationRunnerDropdown({
   const [pauseActionId, setPauseActionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loadedRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Clamp the panel inside the viewport. The trigger sits near the left
+  // screen edge, so a centered panel sized to the longest title would run
+  // off-screen; slide it right (8px gutter) until it fits. Runs before
+  // paint, and again when the task list loads and the width changes.
+  useLayoutEffect(() => {
+    if (!dropdown.open) return;
+    const anchor = dropdown.ref.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+    const a = anchor.getBoundingClientRect();
+    const w = panel.getBoundingClientRect().width;
+    const margin = 8;
+    const centered = a.left + a.width / 2 - w / 2;
+    panel.style.left = `${Math.min(Math.max(centered, margin), window.innerWidth - w - margin)}px`;
+  }, [dropdown.open, tasks]);
 
   // Close dropdown when streaming starts — prevents user being stuck with an open menu
   useEffect(() => {
@@ -187,7 +204,8 @@ export function AutomationRunnerDropdown({
         {trigger}
         {dropdown.open && (
           <div
-            className="absolute z-30 top-full mt-1 -translate-x-1/2 left-1/2 animate-dropdown-enter app-solid-popover border rounded-xl shadow-2xl py-1 overflow-hidden min-w-[180px]"
+            ref={panelRef}
+            className="absolute z-30 top-full mt-1 animate-dropdown-enter app-solid-popover border rounded-xl shadow-2xl py-1 overflow-hidden min-w-[180px] max-w-[280px]"
             style={{
               backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
               borderColor: `rgba(var(--theme-primary-border))`,
@@ -224,7 +242,7 @@ export function AutomationRunnerDropdown({
                         <rect x="14" y="4" width="4" height="16" rx="1" />
                       </svg>
                     </span>
-                    <span className="truncate flex-1">{option.label}</span>
+                    <span className="truncate flex-1 min-w-0">{option.label}</span>
                     {busy && <span className="text-white/30 text-[10px]">...</span>}
                   </button>
                 );
@@ -242,7 +260,7 @@ export function AutomationRunnerDropdown({
                       <polygon points="7 4 19 12 7 20 7 4" />
                     </svg>
                   </span>
-                  <span className="truncate flex-1">Resume</span>
+                  <span className="truncate flex-1 min-w-0">Resume</span>
                   {pauseActionId === "resume" && <span className="text-white/30 text-[10px]">...</span>}
                 </button>
               )}
@@ -271,7 +289,7 @@ export function AutomationRunnerDropdown({
                       type="button"
                       onClick={() => !disabled && handleRun(task)}
                       disabled={disabled}
-                      title={statusText}
+                      title={statusText ?? getDisplayTitle(task)}
                       className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors text-left ${
                         disabled
                           ? "text-white/25 cursor-not-allowed"
@@ -281,7 +299,7 @@ export function AutomationRunnerDropdown({
                       <span className={isRunning ? "animate-spin" : ""}>
                         {getIconForKind(task.kind)}
                       </span>
-                      <span className="truncate flex-1">{getDisplayTitle(task)}</span>
+                      <span className="truncate flex-1 min-w-0">{getDisplayTitle(task)}</span>
                       {isRunning && (
                         <span className="text-white/30 text-[10px]">…</span>
                       )}
