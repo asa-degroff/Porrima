@@ -1901,6 +1901,12 @@ export interface DedupAndSaveOutcome {
   skippedDuplicates: number;
   /** Preserved for compatibility; delayed extraction owns LLM supersession comparison. */
   ambiguousCandidates: DedupAndSaveAmbiguousCandidate[];
+  /** IDs of memories inserted by this call. */
+  savedIds: string[];
+  /** Near-duplicates that were skipped (existing memory kept, importance bumped). */
+  skippedAsDuplicates: Array<{ memoryId: string; text: string; similarity: number }>;
+  /** Requested supersession links that were rejected (cycle or self-link). */
+  supersedeLinkErrors: string[];
 }
 
 interface MemorySourceSpan {
@@ -2027,6 +2033,14 @@ export async function dedupAndSave(
     sourceId?: string;
     sourceSpan?: MemorySourceSpan;
     turnId?: string;
+    /**
+     * ID of an existing memory that the first fact replaces (agent-initiated
+     * supersession via the save_memory tool). After the new memory is saved,
+     * a supersession link is created: the old row is kept and marked
+     * superseded, preserving lineage. Confidence is 1.0 — the agent made the
+     * judgment explicitly; no LLM comparison gate applies.
+     */
+    supersedeMemoryId?: string;
   },
 ): Promise<DedupAndSaveOutcome> {
   const projectId = opts?.projectId;
@@ -2041,12 +2055,19 @@ export async function dedupAndSave(
     const chatExists = await getChat(chatId).catch(() => null);
     if (!chatExists) {
       console.log(`[memory] Chat ${chatId} no longer exists, skipping ${facts.length} memory save`);
-      return { added: 0, superseded: 0, skippedDuplicates: 0, ambiguousCandidates: [] };
+      return { added: 0, superseded: 0, skippedDuplicates: 0, ambiguousCandidates: [], savedIds: [], skippedAsDuplicates: [], supersedeLinkErrors: [] };
     }
   }
 
   let added = 0;
   let skippedDuplicates = 0;
+  let superseded = 0;
+  const savedIds: string[] = [];
+  const skippedAsDuplicates: Array<{ memoryId: string; text: string; similarity: number }> = [];
+  const supersedeLinkErrors: string[] = [];
+  // A single supersede target applies to the first fact only — linking a
+  // second fact to the same target would silently overwrite the first link.
+  const supersedeTargetId = facts.length === 1 ? opts?.supersedeMemoryId : undefined;
 
   for (let i = 0; i < facts.length; i++) {
     const fact = facts[i];
@@ -2054,6 +2075,9 @@ export async function dedupAndSave(
 
     const duplicateCandidates = await findSimilarMemoryCandidates(factEmbedding, EXACT_DUPLICATE_THRESHOLD, 3);
     const duplicate = duplicateCandidates.find((candidate) =>
+      // The explicit supersession target is intentionally similar to the new
+      // text — never treat it as a blocking duplicate.
+      candidate.memory.id !== supersedeTargetId &&
       isNearDuplicate(fact.text, candidate.memory.text, candidate.similarity)
     );
 
@@ -2066,15 +2090,30 @@ export async function dedupAndSave(
         lastAccessed: new Date().toISOString(),
       });
       skippedDuplicates++;
+      skippedAsDuplicates.push({
+        memoryId: duplicate.memory.id,
+        text: duplicate.memory.text,
+        similarity: duplicate.similarity,
+      });
       continue;
     }
 
     console.log(`[memory] New memory: "${fact.text}"`);
-    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, { sourceSpan, turnId });
+    const newMemoryId = await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, { sourceSpan, turnId });
     added++;
+    savedIds.push(newMemoryId);
+
+    if (supersedeTargetId) {
+      const linked = await createSupersessionLink(newMemoryId, supersedeTargetId, 1.0);
+      if (linked) {
+        superseded++;
+      } else {
+        supersedeLinkErrors.push(`${supersedeTargetId} -> ${newMemoryId} (cycle or self-link rejected)`);
+      }
+    }
   }
 
-  return { added, superseded: 0, skippedDuplicates, ambiguousCandidates: [] };
+  return { added, superseded, skippedDuplicates, ambiguousCandidates: [], savedIds, skippedAsDuplicates, supersedeLinkErrors };
 }
 
 const IMMEDIATE_SESSION_HISTORY_PAIR_LIMIT = 8;

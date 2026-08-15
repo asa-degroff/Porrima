@@ -21,7 +21,10 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "save_memory",
     description:
-      "Save an important fact. Use whenever you want to remember something.",
+      "Save an important fact. Use whenever you want to remember something. " +
+      "If the fact corrects or updates an existing memory, pass supersedeMemoryId — " +
+      "the old memory is kept but marked superseded, preserving lineage instead of " +
+      "leaving two conflicting facts in circulation.",
     parameters: Type.Object({
       text: Type.String({ description: "The fact to remember" }),
       category: StringEnum(
@@ -33,6 +36,14 @@ export const MEMORY_TOOLS: Tool[] = [
         minimum: 1,
         maximum: 10,
       }),
+      supersedeMemoryId: Type.Optional(
+        Type.String({
+          description:
+            "ID of an existing memory that this new memory replaces (it is stale or wrong). " +
+            "The old memory is kept but marked superseded, not deleted. " +
+            "Find IDs via search_memory. Omit when the fact is genuinely new.",
+        })
+      ),
     }),
   },
   {
@@ -195,8 +206,27 @@ export async function executeMemoryTool(
 ): Promise<ToolResult> {
   switch (toolCall.name) {
     case "save_memory": {
-      const { text, category, importance } = toolCall.arguments;
+      const { text, category, importance, supersedeMemoryId } = toolCall.arguments;
       if (!text) return { content: "Missing text", isError: true };
+
+      // Validate the supersession target before spending an embedding call.
+      let supersedeTargetId: string | undefined;
+      if (supersedeMemoryId) {
+        const target = await getMemoryById(supersedeMemoryId);
+        if (!target) {
+          return {
+            content: `Cannot supersede: memory not found: ${supersedeMemoryId}. Use search_memory to find the correct ID.`,
+            isError: true,
+          };
+        }
+        if (target.supersededBy) {
+          return {
+            content: `Cannot supersede: ${supersedeMemoryId} is already superseded by ${target.supersededBy}. Supersede the current version instead.`,
+            isError: true,
+          };
+        }
+        supersedeTargetId = target.id;
+      }
 
       let embedding: number[];
       try {
@@ -212,8 +242,32 @@ export async function executeMemoryTool(
         subject: '',
       };
 
-      await dedupAndSave([fact], [embedding], chatId, { sourceType: 'explicit' });
-      return { content: `Saved memory: "${text}"`, isError: false };
+      const outcome = await dedupAndSave([fact], [embedding], chatId, { sourceType: 'explicit', supersedeMemoryId: supersedeTargetId });
+
+      if (outcome.added === 0 && outcome.skippedDuplicates === 0) {
+        return { content: "Memory was not saved — source chat no longer exists.", isError: true };
+      }
+
+      if (outcome.skippedAsDuplicates.length > 0) {
+        const dup = outcome.skippedAsDuplicates[0];
+        return {
+          content: `Not saved — near-duplicate of existing memory [${dup.memoryId}]: "${dup.text}" (similarity ${dup.similarity.toFixed(3)}); importance bumped. If that memory is stale and this text is the correction, re-save with supersedeMemoryId: ${dup.memoryId}`,
+          isError: false,
+        };
+      }
+
+      if (supersedeTargetId) {
+        const newId = outcome.savedIds[0];
+        if (outcome.superseded > 0) {
+          return { content: `Superseded [${supersedeTargetId}] with [${newId}]: "${text}"`, isError: false };
+        }
+        return {
+          content: `Saved [${newId}]: "${text}", but the supersession link was rejected: ${outcome.supersedeLinkErrors[0] ?? "unknown reason"}. The old memory is unchanged.`,
+          isError: true,
+        };
+      }
+
+      return { content: `Saved memory [${outcome.savedIds[0]}]: "${text}"`, isError: false };
     }
 
     case "search_memory": {

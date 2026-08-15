@@ -499,7 +499,9 @@ export function formatRetrievedMemoryForContext(r: RetrievalResult, projectId?: 
   const subjectLine = r.memory.subject
     ? `(subject: ${r.memory.subject})\n`
     : "";
-  return `${subjectLine}- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
+  // The memory ID is rendered so the agent can address this memory directly
+  // (supersede via save_memory, trace its source via search_conversation).
+  return `${subjectLine}- [${r.memory.id}] ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
 }
 
 function updateAccessMetadata(memories: RetrievalResult[], skipIds?: Set<string>): void {

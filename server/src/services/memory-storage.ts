@@ -1253,7 +1253,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   const db = getDb();
   const row = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject FROM memories WHERE id = ?"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, subject, superseded_by, supersedes FROM memories WHERE id = ?"
     )
     .get(id) as {
     id: string;
@@ -1266,6 +1266,8 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     source_chat_id: string;
     project_id: string;
     subject: string;
+    superseded_by: string | null;
+    supersedes: string | null;
   } | undefined;
 
   if (!row) return null;
@@ -1281,6 +1283,8 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     accessCount: row.access_count,
     sourceChatId: row.source_chat_id,
     ...(row.project_id ? { projectId: row.project_id } : {}),
+    supersededBy: row.superseded_by || undefined,
+    supersedes: row.supersedes || undefined,
     subject: row.subject || "",
   };
 }
@@ -1685,9 +1689,12 @@ export async function findSimilarMemoryCandidates(
 
   const ids = vecRows.map((r) => r.id);
   const placeholders = ids.map(() => "?").join(",");
+  // Superseded (tombstoned) memories are never duplicate candidates: matching
+  // them would bump a dead row's importance or shadow the live memory that
+  // replaced it.
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE id IN (${placeholders})`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes, subject FROM memories WHERE id IN (${placeholders}) AND superseded_by IS NULL`
     )
     .all(...ids) as Array<{
     id: string;
