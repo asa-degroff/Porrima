@@ -22,7 +22,7 @@ import {
   triggerCompaction,
   hasStrandedToolCall,
 } from "../services/compaction.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
@@ -656,19 +656,54 @@ function truncateTitle(text: string, maxChars: number = 50): string {
 function buildUserPiMessage(
   message: string,
   images?: ImageAttachment[],
-  systemContext?: string | string[]
+  systemContext?: string | string[],
+  timeAnchor?: string,
 ): Message {
   const contentWithSystemContext = mergeSystemContextWithUserContent(systemContext, message);
+  const contentWithAnchor = timeAnchor
+    ? `${contentWithSystemContext}${timeAnchor}`
+    : contentWithSystemContext;
   if (images?.length) {
     const content: any[] = [];
-    if (contentWithSystemContext) content.push({ type: "text", text: contentWithSystemContext });
+    if (contentWithAnchor) content.push({ type: "text", text: contentWithAnchor });
     for (const img of images) {
       if (!img.data) continue;
       content.push({ type: "image", data: img.data, mimeType: img.mimeType });
     }
     return { role: "user", content, timestamp: Date.now() };
   }
-  return { role: "user", content: contentWithSystemContext, timestamp: Date.now() };
+  return { role: "user", content: contentWithAnchor, timestamp: Date.now() };
+}
+
+/**
+ * Append the `[time:]` anchor to the LAST message in a reconstructed context
+ * array. Used by continue-mode paths (follow-ups, resume) where the trailing
+ * user message comes out of chat history rather than buildUserPiMessage, so
+ * the changing timestamp stays at the trailing position instead of breaking
+ * the system-prompt LCP.
+ */
+function appendTimeAnchorToTrailingUserMessage(
+  messages: Message[],
+  recentMessages: ChatMessage[],
+): void {
+  const anchor = buildTimeAnchor(recentMessages);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "user") continue;
+    if (typeof msg.content === "string") {
+      messages[i] = { ...msg, content: `${msg.content}${anchor}` };
+    } else if (Array.isArray(msg.content)) {
+      const content: any[] = msg.content.map((c) => ({ ...c }));
+      const textIdx = content.findIndex((c: any) => c.type === "text");
+      if (textIdx >= 0) {
+        content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
+      } else {
+        content.push({ type: "text" as const, text: anchor.trimStart() });
+      }
+      messages[i] = { ...msg, content };
+    }
+    break;
+  }
 }
 
 function isPendingNextUserContextMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -3309,6 +3344,11 @@ async function handleChatStream(
       // Build new context for follow-up (all messages including the queued one)
       const followUpContextMessages = await chatMessagesToHydratedPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
 
+      // The follow-up message is already in chat history, so it doesn't flow
+      // through buildUserPiMessage. Append the time anchor to the trailing
+      // user message so the changing timestamp stays at the prompt's tail.
+      appendTimeAnchorToTrailingUserMessage(followUpContextMessages, chat.messages);
+
       // Safety check: ensure context is not empty
       if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
@@ -3963,7 +4003,7 @@ router.post("/", async (req, res) => {
       role: "toolResult",
       toolCallId: pendingState.askToolCallId,
       toolName: "ask_user",
-      content: [{ type: "text", text: message }],
+      content: [{ type: "text", text: `${message}${buildTimeAnchor(chat.messages)}` }],
       isError: false,
       timestamp: Date.now(),
     };
@@ -4358,7 +4398,7 @@ router.post("/", async (req, res) => {
     });
 
     const userImagesForModel = await hydrateUserImageAttachments(images?.length ? images : persistedImages);
-    const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts);
+    const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, buildTimeAnchor(chat.messages));
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
@@ -4569,7 +4609,7 @@ router.post("/artifact-error", async (req, res) => {
     chat.modelId,
     repairReplayIdentity,
   );
-  const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt));
+  const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt), buildTimeAnchor(chat.messages));
 
   console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
   await handleChatStream(chat, repairPrompt, contextMessages, systemPrompt, userPiMessage, req, res, {
@@ -4958,7 +4998,7 @@ router.post("/edit", async (req, res) => {
   }
 
   const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
-  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext);
+  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext, buildTimeAnchor(chat.messages));
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });

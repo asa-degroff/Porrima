@@ -716,16 +716,18 @@ export async function buildStablePrefix(
 // ---- Time anchor ----
 
 /**
- * The system prompt's tail carries a `[time:]` anchor: the current UTC time,
+ * The trailing user message carries a `[time:]` anchor: the current UTC time,
  * and — when the chat has been idle beyond a threshold — how long it was idle.
- * The anchor is refreshed on every prompt build, so its staleness is bounded
- * to the current turn.
+ * The anchor is refreshed on every turn, so its staleness is bounded to the
+ * current turn.
  *
- * Cache note: because the anchor is the FINAL line of the augmented system
- * prompt, refreshing it invalidates only the anchor's own ~15 tokens — the
- * longest common prefix extends to just before the changed digits. The
- * stablePrefixCache itself stays byte-stable; the anchor is appended at the
- * build boundary, never inside buildStablePrefix.
+ * Cache note: the anchor MUST be appended AFTER the conversation (to the last
+ * user message), never to the system prompt. The system prompt is the first
+ * block of the token stream; appending a changing timestamp there breaks the
+ * longest common prefix at the anchor's position, forcing the entire
+ * conversation after it to be re-evaluated. Appended to the trailing user
+ * message instead, the LCP extends through the whole history and only the
+ * anchor's own ~15 tokens are re-processed per turn.
  */
 const TIME_ANCHOR_GAP_THRESHOLD_MS = 60 * 60 * 1000; // "resumed after" clause beyond 1h
 const TIME_ANCHOR_CURRENT_TURN_MS = 60 * 1000;       // skip rows created in the last minute
@@ -810,7 +812,7 @@ export async function buildMemoryAugmentedPrompt(
   const prompt = await buildMemoryAugmentedPromptInner(
     baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
   );
-  return `${prompt}${buildTimeAnchor(recentMessages)}`;
+  return prompt;
 }
 
 async function buildMemoryAugmentedPromptInner(
@@ -872,10 +874,10 @@ async function buildMemoryAugmentedPromptInner(
  * Delta-aware prompt builder for the main chat path.
  *
  * Returns:
- * - systemPrompt: frozen system prompt + trailing `[time:]` anchor (see
- *   buildTimeAnchor). The frozen portion is byte-identical between turns; the
- *   anchor is the only intentional exception — it's the final line, so
- *   refreshing it invalidates only its own ~15 tokens of KV prefix.
+ * - systemPrompt: frozen system prompt. The frozen portion is byte-identical
+ *   between turns — the `[time:]` anchor is NOT included here. Append it to
+ *   the trailing user message via buildTimeAnchor() so the changing timestamp
+ *   only re-processes its own ~15 tokens instead of the whole conversation.
  * - memoriesMessage: delta of NEW memories not already in context (may be empty)
  *
  * Flow:
@@ -897,7 +899,7 @@ export async function buildSplitAugmentedPrompt(
   const result = await buildSplitAugmentedPromptInner(
     baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
   );
-  const systemPrompt = `${result.systemPrompt}${buildTimeAnchor(recentMessages)}`;
+  const systemPrompt = result.systemPrompt;
   return {
     ...result,
     systemPrompt,

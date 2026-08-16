@@ -270,6 +270,28 @@ export async function runHeadlessChatTurn(
     model: model.id,
   };
   const contextMessages = await chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
+  // Keep the `[time:]` anchor at the trailing position (last user message)
+  // rather than the system prompt, so the changing timestamp only re-processes
+  // its own tokens and the stable prefix stays reusable across runs.
+  const { buildTimeAnchor } = await import("./memory-context.js");
+  for (let i = contextMessages.length - 1; i >= 0; i--) {
+    const msg = contextMessages[i];
+    if (msg.role !== "user") continue;
+    const anchor = buildTimeAnchor(chat.messages);
+    if (typeof msg.content === "string") {
+      contextMessages[i] = { ...msg, content: `${msg.content}${anchor}` };
+    } else if (Array.isArray(msg.content)) {
+      const content: any[] = msg.content.map((c) => ({ ...c }));
+      const textIdx = content.findIndex((c: any) => c.type === "text");
+      if (textIdx >= 0) {
+        content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
+      } else {
+        content.push({ type: "text" as const, text: anchor.trimStart() });
+      }
+      contextMessages[i] = { ...msg, content };
+    }
+    break;
+  }
   const context: AgentContext = {
     systemPrompt,
     messages: [...contextMessages],
