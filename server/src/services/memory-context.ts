@@ -713,6 +713,74 @@ export async function buildStablePrefix(
   return { stablePrefix, blocksSection: combinedBlocksSection };
 }
 
+// ---- Time anchor ----
+
+/**
+ * The system prompt's tail carries a `[time:]` anchor: the current UTC time,
+ * and — when the chat has been idle beyond a threshold — how long it was idle.
+ * The anchor is refreshed on every prompt build, so its staleness is bounded
+ * to the current turn.
+ *
+ * Cache note: because the anchor is the FINAL line of the augmented system
+ * prompt, refreshing it invalidates only the anchor's own ~15 tokens — the
+ * longest common prefix extends to just before the changed digits. The
+ * stablePrefixCache itself stays byte-stable; the anchor is appended at the
+ * build boundary, never inside buildStablePrefix.
+ */
+const TIME_ANCHOR_GAP_THRESHOLD_MS = 60 * 60 * 1000; // "resumed after" clause beyond 1h
+const TIME_ANCHOR_CURRENT_TURN_MS = 60 * 1000;       // skip rows created in the last minute
+
+function formatUtcTimestamp(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+  );
+}
+
+function formatGap(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
+/**
+ * Build the `[time:]` anchor line appended to the tail of the system prompt.
+ *
+ * The gap clause reports the time since the last persisted message BEFORE the
+ * current turn: recentMessages is scanned backwards, skipping rows created
+ * within the last minute (the current turn's own rows — the user message is
+ * pushed to chat.messages before the prompt is built). A fresh chat with no
+ * prior rows gets the bare timestamp, which is exactly when the model has no
+ * other temporal reference point.
+ */
+export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
+  const nowMs = Date.now();
+  let line = `[time: ${formatUtcTimestamp(new Date(nowMs))}]`;
+
+  let prevTs: number | null = null;
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const ts = messageTimestamp(recentMessages[i]);
+    if (ts === null) continue;
+    if (nowMs - ts <= TIME_ANCHOR_CURRENT_TURN_MS) continue;
+    prevTs = ts;
+    break;
+  }
+
+  if (prevTs !== null) {
+    const gap = nowMs - prevTs;
+    if (gap >= TIME_ANCHOR_GAP_THRESHOLD_MS) {
+      line = `[time: ${formatUtcTimestamp(new Date(nowMs))} — resumed after ${formatGap(gap)}]`;
+    }
+  }
+
+  return `\n\n${line}`;
+}
+
 // ---- Public API ----
 
 /**
@@ -731,6 +799,21 @@ export interface MemoryAugmentationOptions {
 }
 
 export async function buildMemoryAugmentedPrompt(
+  baseSystemPrompt: string,
+  recentMessages: ChatMessage[],
+  chatId?: string,
+  projectId?: string,
+  chatType?: string,
+  projectPath?: string,
+  options?: MemoryAugmentationOptions
+): Promise<string> {
+  const prompt = await buildMemoryAugmentedPromptInner(
+    baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
+  );
+  return `${prompt}${buildTimeAnchor(recentMessages)}`;
+}
+
+async function buildMemoryAugmentedPromptInner(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,
@@ -789,7 +872,10 @@ export async function buildMemoryAugmentedPrompt(
  * Delta-aware prompt builder for the main chat path.
  *
  * Returns:
- * - systemPrompt: frozen system prompt (byte-identical between turns)
+ * - systemPrompt: frozen system prompt + trailing `[time:]` anchor (see
+ *   buildTimeAnchor). The frozen portion is byte-identical between turns; the
+ *   anchor is the only intentional exception — it's the final line, so
+ *   refreshing it invalidates only its own ~15 tokens of KV prefix.
  * - memoriesMessage: delta of NEW memories not already in context (may be empty)
  *
  * Flow:
@@ -800,6 +886,26 @@ export async function buildMemoryAugmentedPrompt(
  *    frozenIds ∪ deltaIds, return only new memories as memoriesMessage.
  */
 export async function buildSplitAugmentedPrompt(
+  baseSystemPrompt: string,
+  recentMessages: ChatMessage[],
+  chatId?: string,
+  projectId?: string,
+  chatType?: string,
+  projectPath?: string,
+  options?: MemoryAugmentationOptions
+): Promise<AugmentedPromptResult> {
+  const result = await buildSplitAugmentedPromptInner(
+    baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
+  );
+  const systemPrompt = `${result.systemPrompt}${buildTimeAnchor(recentMessages)}`;
+  return {
+    ...result,
+    systemPrompt,
+    combined: result.memoriesMessage ? `${systemPrompt}\n\n${result.memoriesMessage}` : systemPrompt,
+  };
+}
+
+async function buildSplitAugmentedPromptInner(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,

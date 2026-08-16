@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Memory } from "../types.js";
+import type { ChatMessage, Memory } from "../types.js";
 import type { MemoryBlock } from "../services/memory-storage.js";
 
 function block(overrides: Partial<MemoryBlock>): MemoryBlock {
@@ -221,5 +221,72 @@ describe("memory context stable prefix shape", () => {
     expect(split.systemPrompt).toContain("## Available Project Memory Blocks");
     expect(split.systemPrompt).toContain("Additional context may be available in memory blocks listed above");
     expect(split.systemPrompt).toContain("The current project uses a special setup.");
+  });
+});
+
+describe("time anchor", () => {
+  const ANCHOR_TAIL_RE = /\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]$/;
+
+  it("appends a bare [time:] anchor at the tail for recent chats", async () => {
+    mockMemoryContextDeps({});
+    const { buildSplitAugmentedPrompt, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
+    resetAllMemoryContextCaches();
+    const now = Date.now();
+
+    const split = await buildSplitAugmentedPrompt(
+      "Base prompt.",
+      [
+        { role: "user", content: "earlier", timestamp: now - 5 * 60_000 },
+        { role: "user", content: "current", timestamp: now - 30_000 },
+      ],
+      "recent-chat",
+      undefined,
+      "agent",
+    );
+
+    // Anchor is the final line of the system prompt…
+    expect(split.systemPrompt).toMatch(ANCHOR_TAIL_RE);
+    // …with no gap clause when the last exchange was recent (< 1h).
+    expect(split.systemPrompt).not.toContain("resumed after");
+  });
+
+  it("reports the idle gap when the chat was resumed after more than an hour", async () => {
+    mockMemoryContextDeps({});
+    const { buildSplitAugmentedPrompt, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
+    resetAllMemoryContextCaches();
+    const now = Date.now();
+
+    const split = await buildSplitAugmentedPrompt(
+      "Base prompt.",
+      [
+        // Last real exchange: 3d 4h ago.
+        { role: "user", content: "old", timestamp: now - (3 * 24 + 4) * 60 * 60_000 },
+        { role: "assistant", content: "old reply", timestamp: now - (3 * 24 + 4) * 60 * 60_000 },
+        // Current turn's row (pushed before the build) — must be skipped.
+        { role: "user", content: "current", timestamp: now - 10_000 },
+      ],
+      "resumed-chat",
+      undefined,
+      "agent",
+    );
+
+    expect(split.systemPrompt).toMatch(/resumed after 3d 4h\]$/);
+  });
+
+  it("keeps the frozen prefix byte-identical between turns (anchor is the only drift)", async () => {
+    mockMemoryContextDeps({});
+    const { buildSplitAugmentedPrompt, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
+    resetAllMemoryContextCaches();
+    const now = Date.now();
+    const messages: ChatMessage[] = [{ role: "user", content: "hi", timestamp: now - 5 * 60_000 }];
+
+    const first = await buildSplitAugmentedPrompt("Base prompt.", messages, "stable-chat", undefined, "agent");
+    const second = await buildSplitAugmentedPrompt("Base prompt.", messages, "stable-chat", undefined, "agent");
+
+    // Everything before the anchor line is byte-identical; only the anchor drifts.
+    const anchorStart = (p: string) => p.lastIndexOf("\n\n[time: ");
+    expect(first.systemPrompt.slice(0, anchorStart(first.systemPrompt)))
+      .toBe(second.systemPrompt.slice(0, anchorStart(second.systemPrompt)));
+    expect(anchorStart(first.systemPrompt)).toBeGreaterThan(0);
   });
 });
