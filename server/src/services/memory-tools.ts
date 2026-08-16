@@ -476,7 +476,7 @@ export async function executeMemoryTool(
         const similar = suggestSimilarBlocks([newDesc, newContent].filter(Boolean).join(" "));
         const hint = similar.length
           ? `\n\nSimilar active blocks:\n${similar}`
-          : "\n\nUse list_memory_blocks with a short topic query to find the current block ID, then retry the update.";
+          : "\n\nUse search_memory to find the current block ID, then retry the update.";
         return { content: `Block not found: ${block_id}${hint}`, isError: false };
       }
 
@@ -514,15 +514,17 @@ export async function executeMemoryTool(
       const block = getMemoryBlock(block_id);
       if (!block) {
         return {
-          content: `Block not found: ${block_id}\n\nUse list_memory_blocks with a short topic query to find the current block ID.`,
+          content: `Block not found: ${block_id}\n\nUse search_memory to find the current block ID, or list_memory_blocks to browse.`,
           isError: false,
         };
       }
 
+      const maxChars = await getMaxBlockChars();
       const lines = [
         `Memory Block: ${block.name} [${block.id}]`,
         `Scope: ${block.scope}${block.projectId ? ` (project: ${block.projectId})` : ""}`,
         `Updated: ${block.updatedAt.slice(0, 10)} by ${block.updatedBy}`,
+        `Length: ${block.content.length}/${maxChars} chars (${block.tokenEstimate} tokens)`,
         `---`,
         block.content,
       ];
@@ -536,6 +538,7 @@ export async function executeMemoryTool(
       const effectiveLimit = maxResults ?? 15;
       
       // Fetch all matching blocks (no limit at DB level — we cap in output)
+      const maxChars = await getMaxBlockChars();
       const blocks = listMemoryBlocks({ scope, projectId: project_id, includeInternal: true });
       
       // Apply recency filter if requested
@@ -551,7 +554,7 @@ export async function executeMemoryTool(
       }
       
       const lines = filteredBlocks.map((b) => 
-        `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.tokenEstimate} tokens, updated ${b.updatedAt.slice(0,10)}]`
+        `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.content.length}/${maxChars} chars, ${b.tokenEstimate} tok, updated ${b.updatedAt.slice(0,10)}]`
       );
       
       const shown = Math.min(effectiveLimit, filteredBlocks.length);
