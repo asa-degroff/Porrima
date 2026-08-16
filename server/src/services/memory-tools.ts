@@ -120,11 +120,10 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "list_memory_blocks",
     description:
-      "List available memory blocks by scope or search. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated non-archived blocks. Use scope='archived' to see archived-only blocks.",
+      "List available memory blocks by scope. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated non-archived blocks. Use scope='archived' to see archived-only blocks. To find blocks by content, use search_memory.",
     parameters: Type.Object({
       scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope. Default excludes 'archived' blocks — use scope='archived' to see archived-only, or scope='global'/'project' to restrict." })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
-      query: Type.Optional(Type.String({ description: "Optional search query to filter blocks by name/description" })),
       recent_days: Type.Optional(Type.Number({ description: "Only return blocks updated within the last N days. Omit for no recency filter." })),
       limit: Type.Optional(Type.Number({ description: "Maximum number of blocks to return (default 15). Set higher to see more results." })),
     }),
@@ -531,13 +530,13 @@ export async function executeMemoryTool(
     }
 
     case "list_memory_blocks": {
-      const { scope, project_id, query, recent_days, limit: maxResults } = toolCall.arguments;
+      const { scope, project_id, recent_days, limit: maxResults } = toolCall.arguments;
       
       // Default: exclude archived (handled by backend), cap at 15
       const effectiveLimit = maxResults ?? 15;
       
       // Fetch all matching blocks (no limit at DB level — we cap in output)
-      const blocks = listMemoryBlocks({ scope, projectId: project_id, query, includeInternal: true });
+      const blocks = listMemoryBlocks({ scope, projectId: project_id, includeInternal: true });
       
       // Apply recency filter if requested
       let filteredBlocks = blocks;

@@ -331,7 +331,7 @@ const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
   ...SKILL_TOOLS.map((tool) => tool.name),
 ]);
 const SEQUENTIAL_TOOL_NAMES = new Set([
-  "save_memory", "create_memory_block", "update_memory_block", "create_notebook",
+  "save_memory", "create_memory_block", "update_memory_block", "create_notebook_entry",
   "write_file", "edit_file", "bash", "run_python", "web_fetch",
   "create_artifact", "update_artifact", "ask_user",
   "schedule_reminder", "update_automation", "install_skill", "remove_skill",
