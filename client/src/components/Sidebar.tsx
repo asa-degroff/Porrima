@@ -59,6 +59,7 @@ interface Props {
   lastActiveChatId?: string | null;
   isSynthesizing?: boolean;
   isAutomationRunning?: boolean;
+  activeAutomationTaskId?: string | null;
   synthesisComplete?: boolean;
   sleepModeActive?: boolean;
   sleepCycleActive?: boolean;
@@ -872,6 +873,7 @@ export function Sidebar({
   lastActiveChatId = null,
   isSynthesizing = false,
   isAutomationRunning = false,
+  activeAutomationTaskId = null,
   synthesisComplete = false,
   sleepModeActive = false,
   sleepCycleActive = false,
@@ -1366,6 +1368,7 @@ export function Sidebar({
                 isSynthesizing={isSynthesizing}
                 isWakeCycleRunning={isWakeCycleRunning}
                 isAutomationRunning={isAutomationRunning}
+                activeAutomationTaskId={activeAutomationTaskId}
                 isStreaming={isStreaming}
                 systemPause={systemPause}
                 onPauseSystem={onPauseSystem}

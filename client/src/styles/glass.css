@@ -511,6 +511,36 @@ body::before {
   transform-origin: top;
 }
 
+/* Automation icon trace — replaces the old animate-spin on "run now" rows.
+   The icon's own outline draws itself in and stays lit while the task is
+   starting or running. Every shape carries pathLength=1 (see TaskIcon in
+   AutomationRunnerDropdown.tsx) so one dash pair covers any icon; the
+   gradient stroke is defined per-icon in the component. */
+@keyframes icon-trace-ignite {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes icon-trace-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.7; }
+}
+
+.icon-trace {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation:
+    icon-trace-ignite 0.7s cubic-bezier(0.3, 0, 0.2, 1) both,
+    icon-trace-breathe 2.8s ease-in-out 0.7s infinite;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, rgb(var(--theme-primary)) 55%, transparent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-trace {
+    animation: none;
+  }
+}
+
 /* Trash can lid animation — swings open on hover */
 .trash-lid {
   transition: transform 0.2s ease;

@@ -1,12 +1,16 @@
-import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useId } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import { fetchAutomations, runAutomationNow } from "../api/client";
-import type { AutomationTask, SystemPauseStatus } from "../types";
+import type { AutomationKind, AutomationTask, SystemPauseStatus } from "../types";
 
 interface Props {
   isSynthesizing?: boolean;
   isWakeCycleRunning?: boolean;
   isAutomationRunning?: boolean;
+  // Id of the task currently holding the automation lock (null when idle).
+  // Built-ins report "builtin:synthesis" / "builtin:wake"; custom tasks
+  // report their own id, so the exact running row can be highlighted.
+  activeAutomationTaskId?: string | null;
   isStreaming?: boolean;
   systemPause?: SystemPauseStatus | null;
   onPauseSystem?: (durationMs: number | null) => Promise<void> | void;
@@ -26,33 +30,53 @@ function getDisplayTitle(task: AutomationTask): string {
   return task.title;
 }
 
-function getIconForKind(kind: AutomationTask["kind"]) {
-  switch (kind) {
-    case "synthesis":
-      return (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      );
-    case "wake":
-      return (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-        </svg>
-      );
-    default:
-      return (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="5 3 19 12 5 21 5 3" />
-        </svg>
-      );
-  }
+// Automation row icons (24×24 stroke shapes). With `traced`, the same outline
+// is rendered as an animated "trace" layer: pathLength=1 normalizes every
+// shape to a one-unit perimeter, so the .icon-trace dash animation draws the
+// outline in and holds it lit with a gradient stroke + glow (see glass.css).
+// The dim base icon stays underneath, so the shape reads at all times.
+function TaskIcon({ kind, traced = false }: { kind: AutomationKind; traced?: boolean }) {
+  const gradId = "autoTrace" + useId().replace(/[^a-zA-Z0-9]/g, "");
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={traced ? "icon-trace" : undefined}
+      style={traced ? { stroke: `url(#${gradId})` } : undefined}
+    >
+      {traced && (
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" style={{ stopColor: "rgb(var(--theme-primary))" }} />
+            <stop offset="1" style={{ stopColor: "color-mix(in srgb, rgb(var(--theme-primary)) 30%, white)" }} />
+          </linearGradient>
+        </defs>
+      )}
+      {kind === "synthesis" && (
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" pathLength={traced ? 1 : undefined} />
+      )}
+      {kind === "wake" && (
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" pathLength={traced ? 1 : undefined} />
+      )}
+      {kind === "custom" && (
+        <polygon points="5 3 19 12 5 21 5 3" pathLength={traced ? 1 : undefined} />
+      )}
+    </svg>
+  );
 }
 
 export function AutomationRunnerDropdown({
   isSynthesizing = false,
   isWakeCycleRunning = false,
   isAutomationRunning = false,
+  activeAutomationTaskId = null,
   isStreaming = false,
   systemPause = null,
   onPauseSystem,
@@ -281,7 +305,15 @@ export function AutomationRunnerDropdown({
                 {tasks.filter(t => t.enabled && !t.archived).map((task) => {
                   const disabled = isTaskDisabled(task);
                   const statusText = getTaskStatusText(task);
-                  const isRunning = runningId === task.id;
+                  // Trace while the run request is in flight, and keep it lit
+                  // while the task is actually running. Built-ins use their
+                  // dedicated flags; custom tasks match the lock's task id so
+                  // only the one live row stays lit.
+                  const traced =
+                    runningId === task.id ||
+                    (task.kind === "synthesis" && isSynthesizing) ||
+                    (task.kind === "wake" && isWakeCycleRunning) ||
+                    (task.kind === "custom" && task.id === activeAutomationTaskId);
 
                   return (
                     <button
@@ -296,13 +328,15 @@ export function AutomationRunnerDropdown({
                           : "text-white/80 hover:bg-white/5 hover:text-white"
                       }`}
                     >
-                      <span className={isRunning ? "animate-spin" : ""}>
-                        {getIconForKind(task.kind)}
+                      <span className="relative inline-flex shrink-0">
+                        <TaskIcon kind={task.kind} />
+                        {traced && (
+                          <span className="absolute inset-0" aria-hidden="true">
+                            <TaskIcon kind={task.kind} traced />
+                          </span>
+                        )}
                       </span>
                       <span className="truncate flex-1 min-w-0">{getDisplayTitle(task)}</span>
-                      {isRunning && (
-                        <span className="text-white/30 text-[10px]">…</span>
-                      )}
                     </button>
                   );
                 })}

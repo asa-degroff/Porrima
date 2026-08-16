@@ -229,6 +229,9 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   const [sleepCycleActive, setSleepCycleActive] = useState(false);
   const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
+  // Which automation task currently holds the global lock (null when idle).
+  // Lets the UI pinpoint the exact running task instead of a global flag.
+  const [activeAutomationTaskId, setActiveAutomationTaskId] = useState<string | null>(null);
   const [systemPause, setSystemPause] = useState<import("./types").SystemPauseStatus | null>(null);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
   const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
@@ -388,14 +391,15 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         setSystemPause(status.systemPause);
         setSleepCycleActive(status.sleepCycleActive);
         setIsWakeCycleRunning(status.isWakeCycleRunning);
-        const activeAutomationTaskId = status.activeAutomationTaskId ?? null;
+        const rawActiveTaskId = status.activeAutomationTaskId ?? null;
+        setActiveAutomationTaskId(rawActiveTaskId);
         const genericAutomationTaskId =
           status.isAutomationRunning &&
           !status.isSynthesizing &&
           !status.isWakeCycleRunning &&
-          activeAutomationTaskId &&
-          !BUILT_IN_AUTOMATION_IDS.has(activeAutomationTaskId)
-            ? activeAutomationTaskId
+          rawActiveTaskId &&
+          !BUILT_IN_AUTOMATION_IDS.has(rawActiveTaskId)
+            ? rawActiveTaskId
             : null;
         const wasGenericAutomationRunning = genericAutomationRunningRef.current;
         genericAutomationRunningRef.current = Boolean(genericAutomationTaskId);
@@ -1615,6 +1619,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         newChatBaselineResidency={newChatBaselineResidency}
         isSynthesizing={isSynthesizing}
         isAutomationRunning={isAutomationRunning}
+        activeAutomationTaskId={activeAutomationTaskId}
         synthesisComplete={synthesisComplete}
         sleepModeActive={sleepModeActive}
         sleepCycleActive={sleepCycleActive}
