@@ -159,6 +159,21 @@ function speedColor(tokPerSec: number | null, isDecode = true): string {
   return "text-red-300/80";
 }
 
+/**
+ * Signed difference between the server-reported cached count and the
+ * canonical (cross-validated) count, or null when they agree within ±1 or
+ * either value is missing. Non-null means the canary fired for this run —
+ * the reported field was stubbed/rewritten and the delta was used instead.
+ */
+function cacheDivergence(run: {
+  reportedCachedTokens?: number;
+  inferredCachedTokens?: number;
+}): number | null {
+  if (run.reportedCachedTokens == null || run.inferredCachedTokens == null) return null;
+  const diff = run.reportedCachedTokens - run.inferredCachedTokens;
+  return Math.abs(diff) > 1 ? diff : null;
+}
+
 // --- Collapsible Section ---
 
 function Section({
@@ -327,10 +342,10 @@ function ActiveModelCard({
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/30 mt-2 pt-2 border-t border-white/5">
             <span>last: {formatTimeAgo(last.timestamp)}</span>
             <span>
-              {last.promptTokens}p / {last.predictedTokens}d
+              {formatNumber(last.reportedPromptTokens ?? last.promptTokens)} in / {last.predictedTokens} out
             </span>
             <span>
-              cache: {formatNumber(last.inferredCachedTokens)}
+              cache: {formatNumber(last.inferredCachedTokens)} ({formatPercent(last.inferredCacheHitRatio)})
             </span>
           </div>
         )}
@@ -390,6 +405,7 @@ function ActiveModelCard({
                       "Total time": formatDuration(detail.summary.lastRun.totalMs),
                       "Prompt eval tokens": detail.summary.lastRun.promptTokens,
                       "Reported prompt tokens": formatNumber(detail.summary.lastRun.reportedPromptTokens),
+                      "Reported cached tokens": formatNumber(detail.summary.lastRun.reportedCachedTokens),
                       "Inferred cached tokens": formatNumber(detail.summary.lastRun.inferredCachedTokens),
                       "Inferred cache hit": formatPercent(detail.summary.lastRun.inferredCacheHitRatio),
                       "Cache prompt": detail.summary.lastRun.cachePrompt ? "enabled" : "disabled/not recorded",
@@ -402,6 +418,14 @@ function ActiveModelCard({
                         <span className="text-white/70 font-mono">{v}</span>
                       </div>
                     ))}
+                    {cacheDivergence(detail.summary.lastRun) !== null && (
+                      <div className="flex justify-between gap-2 text-amber-300/80 pt-1">
+                        <span>⚠ cache count divergence</span>
+                        <span className="font-mono text-right">
+                          reported {formatNumber(detail.summary.lastRun.reportedCachedTokens)} vs cross-check {formatNumber(detail.summary.lastRun.inferredCachedTokens)}
+                        </span>
+                      </div>
+                    )}
                     <div className="text-white/30 pt-1">Run: {formatTimeAgo(detail.summary.lastRun.timestamp)}</div>
                   </div>
                 ) : (
@@ -414,28 +438,43 @@ function ActiveModelCard({
                   <div className="text-white/30 text-xs">No runs recorded</div>
                 ) : (
                   <div className="space-y-1">
-                    {detail.runs.map((run) => (
-                      <div
-                        key={run.id}
-                        className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-white/5"
-                      >
-                        <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
-                        <span className={`w-20 shrink-0 font-mono ${speedColor(run.predictedTokensPerSec)}`}>
-                          {run.predictedTokensPerSec.toFixed(1)} t/s
-                        </span>
-                        <span className={`w-20 shrink-0 font-mono ${speedColor(run.promptTokensPerSec, false)}`}>
-                          {run.promptTokensPerSec.toFixed(1)} t/s
-                        </span>
-                        <span className="text-white/30 w-14 shrink-0">{formatDuration(run.predictedMs)}</span>
-                        <span className="text-white/30 w-14 shrink-0">{formatDuration(run.promptMs)}</span>
-                        <span className="text-white/30 shrink-0">
-                          {run.promptTokens}p / {run.predictedTokens}d
-                        </span>
-                        <span className="text-cyan-200/60 shrink-0">
-                          {formatNumber(run.inferredCachedTokens)} cached
-                        </span>
-                      </div>
-                    ))}
+                    {detail.runs.map((run) => {
+                      const divergence = cacheDivergence(run);
+                      return (
+                        <div key={run.id} className="py-1 px-2 rounded hover:bg-white/5">
+                          {/* Line 1: time · tokens in/out · cached + hit · divergence canary */}
+                          <div className="flex items-center gap-2 text-[10px]">
+                            <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
+                            <span className="text-white/50 font-mono shrink-0">
+                              {formatNumber(run.reportedPromptTokens ?? run.promptTokens)} in / {run.predictedTokens} out
+                            </span>
+                            <span className="text-cyan-200/60 font-mono ml-auto shrink-0">
+                              {formatPercent(run.inferredCacheHitRatio)} · {formatNumber(run.inferredCachedTokens)}
+                            </span>
+                            {divergence !== null && (
+                              <span
+                                className="text-amber-300/90 shrink-0"
+                                title={`Server reported ${run.reportedCachedTokens} cached, cross-check said ${run.inferredCachedTokens} — using the cross-check`}
+                              >
+                                ⚠
+                              </span>
+                            )}
+                          </div>
+                          {/* Line 2: timing metrics */}
+                          <div className="flex items-center gap-2 text-[9px] mt-0.5 pl-14">
+                            <span className={`font-mono ${speedColor(run.predictedTokensPerSec)}`}>
+                              {run.predictedTokensPerSec.toFixed(1)} dec
+                            </span>
+                            <span className={`font-mono ${speedColor(run.promptTokensPerSec, false)}`}>
+                              {run.promptTokensPerSec.toFixed(1)} pre
+                            </span>
+                            <span className="text-white/25">
+                              {formatDuration(run.predictedMs)} / {formatDuration(run.promptMs)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </Section>
