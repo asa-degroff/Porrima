@@ -21,6 +21,7 @@ import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
+import { resolveCanonicalCachedTokens } from "./model-stats.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -113,6 +114,10 @@ interface OpenAIChatChunk {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_write_tokens?: number;
+    };
   };
   timings?: {
     prompt_n: number;
@@ -125,6 +130,8 @@ interface OpenAIChatChunk {
     predicted_per_second: number;
     load_ms?: number;
     sample_ms?: number;
+    /** llama.cpp (b10164+): prompt tokens served from the KV cache. */
+    cache_n?: number;
   };
 }
 
@@ -138,12 +145,22 @@ export interface LlamaCacheMetadata {
   containsImages: boolean;
   slotId?: number;
   reportedPromptTokens?: number;
+  /** Server-reported cached tokens: OpenAI-standard
+   *  `usage.prompt_tokens_details.cached_tokens`, or `timings.cache_n` on
+   *  builds that lack usage details. Raw, unvalidated — see
+   *  resolveCanonicalCachedTokens for how it becomes the canonical value. */
+  reportedCachedTokens?: number;
   promptEvalTokens?: number;
   inferredCachedTokens?: number;
   inferredCacheHitRatio?: number;
 }
 
 const IMAGE_PROMPT_TOKEN_ESTIMATE = 256;
+
+// Models whose server-reported cached_tokens disagreed with the delta at
+// least once (warned once per model — a stubbed/rewritten field would fire
+// on every warm request, so per-request warnings would be spam).
+const warnedCacheCountDivergence = new Set<string>();
 
 function estimateRequestChars(messages: any[], tools: any[] | undefined): number {
   try {
@@ -1758,10 +1775,14 @@ export const streamOpenAICompat = (
         // Extract usage from final chunk
         if (chunk.usage) {
           cacheMetadata.reportedPromptTokens = chunk.usage.prompt_tokens || 0;
+          const reportedCached = chunk.usage.prompt_tokens_details?.cached_tokens;
+          if (typeof reportedCached === "number" && Number.isFinite(reportedCached)) {
+            cacheMetadata.reportedCachedTokens = reportedCached;
+          }
           output.usage = {
             input: chunk.usage.prompt_tokens || 0,
             output: chunk.usage.completion_tokens || 0,
-            cacheRead: 0,
+            cacheRead: 0, // resolved after the loop once timings are observed
             cacheWrite: 0,
             totalTokens: chunk.usage.total_tokens || 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -1771,12 +1792,11 @@ export const streamOpenAICompat = (
         if (chunk.timings) {
           llamaTimings = chunk.timings;
           cacheMetadata.promptEvalTokens = chunk.timings.prompt_n;
-          if (cacheMetadata.reportedPromptTokens !== undefined) {
-            const inferredCached = Math.max(0, cacheMetadata.reportedPromptTokens - chunk.timings.prompt_n);
-            cacheMetadata.inferredCachedTokens = inferredCached;
-            cacheMetadata.inferredCacheHitRatio = cacheMetadata.reportedPromptTokens > 0
-              ? inferredCached / cacheMetadata.reportedPromptTokens
-              : 0;
+          // Builds without usage details may still carry llama.cpp's own
+          // cached-token counter.
+          if (cacheMetadata.reportedCachedTokens === undefined &&
+              typeof chunk.timings.cache_n === "number" && Number.isFinite(chunk.timings.cache_n)) {
+            cacheMetadata.reportedCachedTokens = chunk.timings.cache_n;
           }
         }
 
@@ -1928,11 +1948,43 @@ export const streamOpenAICompat = (
       }
 
       output.stopReason = stopReason;
+      // Resolve the canonical cached-token count now that both usage and
+      // timings of the final chunk have been observed. The server-reported
+      // value wins when consistent with the delta (prompt_tokens − prompt_n);
+      // the delta wins when the reported value is a stub or otherwise
+      // rewritten (divergence is flagged once per model below).
+      const resolvedCached = resolveCanonicalCachedTokens(
+        cacheMetadata.reportedPromptTokens,
+        cacheMetadata.promptEvalTokens,
+        cacheMetadata.reportedCachedTokens,
+      );
+      if (resolvedCached.cachedTokens !== undefined) {
+        cacheMetadata.inferredCachedTokens = resolvedCached.cachedTokens;
+        cacheMetadata.inferredCacheHitRatio = cacheMetadata.reportedPromptTokens && cacheMetadata.reportedPromptTokens > 0
+          ? resolvedCached.cachedTokens / cacheMetadata.reportedPromptTokens
+          : 0;
+      }
+      if (resolvedCached.diverged && !warnedCacheCountDivergence.has(model.id)) {
+        warnedCacheCountDivergence.add(model.id);
+        console.warn(
+          `[openai-compat] cache count divergence for model=${model.id}: server reported cached_tokens=` +
+          `${cacheMetadata.reportedCachedTokens} but delta (prompt_tokens − prompt_n) = ` +
+          `${Math.max(0, (cacheMetadata.reportedPromptTokens ?? 0) - (cacheMetadata.promptEvalTokens ?? 0))}; ` +
+          `using the delta — the server's reported field appears stubbed or rewritten`,
+        );
+      }
       // Attach llama.cpp timings so downstream consumers (model-stats, etc.) can record them.
       if (llamaTimings) {
         (output as any).llamaTimings = llamaTimings;
       }
       (output as any).llamaCache = cacheMetadata;
+      // `input` is the full prompt the model saw (llama.cpp `prompt_tokens`,
+      // cached or not) and `cacheRead` is the subset of it served from the KV
+      // cache, so totalTokens = input + output. This deliberately deviates
+      // from pi-ai's OpenAI normalization (input = prompt − cacheRead):
+      // `msg.usage.input` calibrates the context token estimator against full
+      // prompt size, and per-request "tokens in" should read as the full prompt.
+      output.usage.cacheRead = resolvedCached.cachedTokens ?? output.usage.cacheRead;
 
       if (options?.signal?.aborted) {
         throw new Error("Request was aborted");

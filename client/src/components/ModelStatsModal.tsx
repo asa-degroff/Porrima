@@ -33,6 +33,7 @@ interface LlamaTimingsEntry {
   cachePrompt: boolean;
   cacheMode?: string;
   reportedPromptTokens?: number;
+  reportedCachedTokens?: number;
   inferredCachedTokens?: number;
   inferredCacheHitRatio?: number;
   requestMessageCount?: number;

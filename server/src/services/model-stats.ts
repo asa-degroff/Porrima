@@ -18,6 +18,8 @@ export interface LlamaTimings {
   predicted_per_second: number;
   load_ms?: number;
   sample_ms?: number;
+  /** llama.cpp (b10164+): prompt tokens served from the KV cache. */
+  cache_n?: number;
 }
 
 export interface ModelStatsEntry {
@@ -36,6 +38,7 @@ export interface ModelStatsEntry {
   cachePrompt: boolean;
   cacheMode?: string;
   reportedPromptTokens?: number;
+  reportedCachedTokens?: number;
   inferredCachedTokens?: number;
   inferredCacheHitRatio?: number;
   requestMessageCount?: number;
@@ -61,15 +64,74 @@ export interface CacheMetrics {
   requestCharCount?: number;
   requestDigest?: string;
   reportedPromptTokens?: number;
+  /** Server-reported cached tokens: OpenAI-standard
+   *  `usage.prompt_tokens_details.cached_tokens`, or `timings.cache_n` on
+   *  llama.cpp builds that lack usage details. Raw, unvalidated. */
+  reportedCachedTokens?: number;
   promptEvalTokens?: number;
   inferredCachedTokens?: number;
   inferredCacheHitRatio?: number;
+}
+
+export interface CanonicalCacheResolution {
+  /** Canonical cached-token count (see resolveCanonicalCachedTokens). */
+  cachedTokens?: number;
+  /** Which source produced the canonical value. */
+  source: "reported" | "delta" | "none";
+  /** True when both sources were present and disagreed beyond tolerance. */
+  diverged: boolean;
+}
+
+/**
+ * Resolve the canonical cached-token count for a completed LLM request.
+ *
+ * Two independent sources exist:
+ *  - reported: the server's own count — OpenAI-standard
+ *    `usage.prompt_tokens_details.cached_tokens`, or `timings.cache_n` on
+ *    llama.cpp builds that lack usage details.
+ *  - delta: `reportedPromptTokens − promptEvalTokens`, where
+ *    promptEvalTokens (`timings.prompt_n`) counts only the tokens actually
+ *    processed, i.e. not served from the KV cache.
+ *
+ * The delta is computed from two counters on the same final chunk and is
+ * reliable across builds. The reported value is authoritative when present
+ * and consistent (±1). Some servers may disagree — a stubbed or rewritten
+ * `cached_tokens` (observed once on the ik-llama fork Aug 18, not
+ * reproducible on the running instance as of Aug 19) — where the delta
+ * shows the real hit. In that case the delta wins and `diverged` is true so
+ * callers can flag the regression loudly.
+ */
+export function resolveCanonicalCachedTokens(
+  reportedPromptTokens: number | undefined,
+  promptEvalTokens: number | undefined,
+  reportedCachedTokens: number | undefined,
+): CanonicalCacheResolution {
+  const delta = typeof reportedPromptTokens === "number" && typeof promptEvalTokens === "number"
+    ? Math.max(0, reportedPromptTokens - promptEvalTokens)
+    : undefined;
+  const reported = typeof reportedCachedTokens === "number" && Number.isFinite(reportedCachedTokens)
+    ? Math.max(0, Math.round(reportedCachedTokens))
+    : undefined;
+
+  if (delta !== undefined && reported !== undefined) {
+    if (Math.abs(reported - delta) <= 1) {
+      return { cachedTokens: reported, source: "reported", diverged: false };
+    }
+    return { cachedTokens: delta, source: "delta", diverged: true };
+  }
+  if (reported !== undefined) return { cachedTokens: reported, source: "reported", diverged: false };
+  if (delta !== undefined) return { cachedTokens: delta, source: "delta", diverged: false };
+  return { source: "none", diverged: false };
 }
 
 type Row = Record<string, unknown>;
 
 let db: Database.Database | null = null;
 let runSequence = 0;
+// Models whose cache counts diverged at least once (warned once per model to
+// avoid log spam — a stubbed/rewritten reported field would fire on every
+// warm request; the divergence canary exists to make such regressions loud).
+const warnedCacheDivergence = new Set<string>();
 
 function getDb(): Database.Database {
   if (!db) {
@@ -115,6 +177,7 @@ function initSchema() {
   addColumn("cachePrompt", "cachePrompt INTEGER NOT NULL DEFAULT 0");
   addColumn("cacheMode", "cacheMode TEXT");
   addColumn("reportedPromptTokens", "reportedPromptTokens INTEGER");
+  addColumn("reportedCachedTokens", "reportedCachedTokens INTEGER");
   addColumn("inferredCachedTokens", "inferredCachedTokens INTEGER");
   addColumn("inferredCacheHitRatio", "inferredCacheHitRatio REAL");
   addColumn("requestMessageCount", "requestMessageCount INTEGER");
@@ -143,24 +206,41 @@ export function recordModelStats(
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
-      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      cachePrompt, cacheMode, reportedPromptTokens, reportedCachedTokens, inferredCachedTokens,
       inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     ) VALUES (@id, @modelId, @provider, @timestamp,
       @promptTokens, @predictedTokens,
       @promptMs, @predictedMs, @sampleMs,
       @promptTokensPerSec, @predictedTokensPerSec,
-      @cachePrompt, @cacheMode, @reportedPromptTokens, @inferredCachedTokens,
+      @cachePrompt, @cacheMode, @reportedPromptTokens, @reportedCachedTokens, @inferredCachedTokens,
       @inferredCacheHitRatio, @requestMessageCount, @requestCharCount, @requestDigest)
   `);
 
   const reportedPromptTokens = cacheMetrics?.reportedPromptTokens;
   const promptEvalTokens = cacheMetrics?.promptEvalTokens ?? timings.prompt_n;
-  const inferredCachedTokens = cacheMetrics?.inferredCachedTokens ??
-    (typeof reportedPromptTokens === "number" ? Math.max(0, reportedPromptTokens - promptEvalTokens) : undefined);
-  const inferredCacheHitRatio = cacheMetrics?.inferredCacheHitRatio ??
-    (typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
-      ? inferredCachedTokens / reportedPromptTokens
-      : undefined);
+  // Canonical cached count: server-reported value when consistent with the
+  // delta, delta otherwise (see resolveCanonicalCachedTokens). Callers that
+  // precomputed inferredCachedTokens without raw inputs still work.
+  const resolved = resolveCanonicalCachedTokens(
+    reportedPromptTokens,
+    promptEvalTokens,
+    cacheMetrics?.reportedCachedTokens,
+  );
+  if (resolved.diverged && !warnedCacheDivergence.has(modelId)) {
+    warnedCacheDivergence.add(modelId);
+    console.warn(
+      `[model-stats] cache count divergence for ${modelId}: server reported cached_tokens=` +
+      `${cacheMetrics?.reportedCachedTokens} but delta (reportedPromptTokens − promptEvalTokens) = ` +
+      `${Math.max(0, (reportedPromptTokens ?? 0) - (promptEvalTokens ?? 0))}; using the delta. ` +
+      `The server's reported field appears stubbed or rewritten.`,
+    );
+  }
+  const reportedCachedTokens = cacheMetrics?.reportedCachedTokens;
+  const inferredCachedTokens = resolved.cachedTokens ?? cacheMetrics?.inferredCachedTokens;
+  const inferredCacheHitRatio = typeof inferredCachedTokens === "number" &&
+    typeof reportedPromptTokens === "number" && reportedPromptTokens > 0
+    ? inferredCachedTokens / reportedPromptTokens
+    : cacheMetrics?.inferredCacheHitRatio;
 
   const entry: ModelStatsEntry = {
     id,
@@ -178,6 +258,7 @@ export function recordModelStats(
     cachePrompt: !!cacheMetrics?.cachePrompt,
     cacheMode: cacheMetrics?.cacheMode,
     reportedPromptTokens,
+    reportedCachedTokens,
     inferredCachedTokens,
     inferredCacheHitRatio,
     requestMessageCount: cacheMetrics?.requestMessageCount,
@@ -200,6 +281,7 @@ export function recordModelStats(
     cachePrompt: cacheMetrics?.cachePrompt ? 1 : 0,
     cacheMode: cacheMetrics?.cacheMode ?? null,
     reportedPromptTokens: reportedPromptTokens ?? null,
+    reportedCachedTokens: reportedCachedTokens ?? null,
     inferredCachedTokens: inferredCachedTokens ?? null,
     inferredCacheHitRatio: inferredCacheHitRatio ?? null,
     requestMessageCount: cacheMetrics?.requestMessageCount ?? null,
@@ -235,7 +317,7 @@ export function getModelRuns(modelId: string, limit = 20, provider?: string): Mo
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
-      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      cachePrompt, cacheMode, reportedPromptTokens, reportedCachedTokens, inferredCachedTokens,
       inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
   `;
@@ -259,6 +341,7 @@ export function getModelRuns(modelId: string, limit = 20, provider?: string): Mo
     cachePrompt: !!r.cachePrompt,
     cacheMode: r.cacheMode != null ? r.cacheMode as string : undefined,
     reportedPromptTokens: r.reportedPromptTokens != null ? r.reportedPromptTokens as number : undefined,
+    reportedCachedTokens: r.reportedCachedTokens != null ? r.reportedCachedTokens as number : undefined,
     inferredCachedTokens: r.inferredCachedTokens != null ? r.inferredCachedTokens as number : undefined,
     inferredCacheHitRatio: r.inferredCacheHitRatio != null ? r.inferredCacheHitRatio as number : undefined,
     requestMessageCount: r.requestMessageCount != null ? r.requestMessageCount as number : undefined,
@@ -278,7 +361,7 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
-      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      cachePrompt, cacheMode, reportedPromptTokens, reportedCachedTokens, inferredCachedTokens,
       inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
   `;
@@ -302,6 +385,7 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
     cachePrompt: !!lastRow.cachePrompt,
     cacheMode: lastRow.cacheMode != null ? lastRow.cacheMode as string : undefined,
     reportedPromptTokens: lastRow.reportedPromptTokens != null ? lastRow.reportedPromptTokens as number : undefined,
+    reportedCachedTokens: lastRow.reportedCachedTokens != null ? lastRow.reportedCachedTokens as number : undefined,
     inferredCachedTokens: lastRow.inferredCachedTokens != null ? lastRow.inferredCachedTokens as number : undefined,
     inferredCacheHitRatio: lastRow.inferredCacheHitRatio != null ? lastRow.inferredCacheHitRatio as number : undefined,
     requestMessageCount: lastRow.requestMessageCount != null ? lastRow.requestMessageCount as number : undefined,

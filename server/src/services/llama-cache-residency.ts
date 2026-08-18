@@ -279,9 +279,13 @@ export function recordLlamaCacheResidencyRun(input: CacheContext & {
   const promptEvalTokens = input.cache?.promptEvalTokens ?? input.timings.prompt_n;
   const hitRatio = inferHitRatio(input.cache, promptEvalTokens);
   const reportedPromptTokens = input.cache?.reportedPromptTokens;
-  const inferredCachedTokens = typeof reportedPromptTokens === "number" && typeof promptEvalTokens === "number"
-    ? Math.max(0, reportedPromptTokens - promptEvalTokens)
-    : input.cache?.inferredCachedTokens;
+  // Prefer the upstream-validated canonical value (the provider resolves
+  // reported-vs-delta divergence before attaching cacheMetadata); fall back
+  // to the raw delta only for callers that don't provide one.
+  const inferredCachedTokens = input.cache?.inferredCachedTokens ??
+    (typeof reportedPromptTokens === "number" && typeof promptEvalTokens === "number"
+      ? Math.max(0, reportedPromptTokens - promptEvalTokens)
+      : undefined);
 
   records.set(key, {
     chatId: input.chatId,

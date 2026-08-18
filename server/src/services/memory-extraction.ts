@@ -148,13 +148,14 @@ export function computeExtractionInputBudget(
 export async function readOpenAIContentStream(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal
-): Promise<{ content: string; timings?: LlamaTimings; usagePromptTokens?: number }> {
+): Promise<{ content: string; timings?: LlamaTimings; usagePromptTokens?: number; usageCachedTokens?: number }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
   let timings: LlamaTimings | undefined;
   let usagePromptTokens: number | undefined;
+  let usageCachedTokens: number | undefined;
   let thinkingOpen = false;
 
   const appendReasoning = (delta: string): void => {
@@ -200,8 +201,18 @@ export async function readOpenAIContentStream(
       if (chunk.timings) {
         timings = chunk.timings as LlamaTimings;
       }
-      if (typeof chunk.usage?.prompt_tokens === "number") {
-        usagePromptTokens = chunk.usage.prompt_tokens;
+      if (chunk.usage) {
+        if (typeof chunk.usage.prompt_tokens === "number") {
+          usagePromptTokens = chunk.usage.prompt_tokens;
+        }
+        const cached = chunk.usage.prompt_tokens_details?.cached_tokens;
+        if (typeof cached === "number" && Number.isFinite(cached)) {
+          usageCachedTokens = cached;
+        }
+      }
+      // Builds without usage details may still carry llama.cpp's own counter.
+      if (usageCachedTokens === undefined && typeof chunk.timings?.cache_n === "number") {
+        usageCachedTokens = chunk.timings.cache_n;
       }
     } catch {
       // Ignore malformed SSE fragments; the final extraction parser validates output.
@@ -222,7 +233,7 @@ export async function readOpenAIContentStream(
       for (const line of lines) {
         if (handleLine(line)) {
           closeReasoning();
-          return { content: content.trim(), timings, usagePromptTokens };
+          return { content: content.trim(), timings, usagePromptTokens, usageCachedTokens };
         }
       }
     }
@@ -231,7 +242,7 @@ export async function readOpenAIContentStream(
       handleLine(buffer);
     }
     closeReasoning();
-    return { content: content.trim(), timings, usagePromptTokens };
+    return { content: content.trim(), timings, usagePromptTokens, usageCachedTokens };
   } finally {
     signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
@@ -354,17 +365,12 @@ async function callDedicatedExtractionLLMWithMessages(
 
   const streamResult = await readOpenAIContentStream(res.body, requestSignal);
 
-  // Record model stats from extraction timings (same structure as chat model)
+  // Record model stats from extraction timings (same structure as chat model).
+  // Canonical cached-token resolution happens inside recordModelStats.
   if (streamResult.timings) {
     const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
     const reportedPromptTokens = streamResult.usagePromptTokens;
     const promptEvalTokens = streamResult.timings.prompt_n;
-    const inferredCachedTokens = (typeof reportedPromptTokens === "number"
-      ? Math.max(0, reportedPromptTokens - promptEvalTokens)
-      : undefined);
-    const inferredCacheHitRatio = (typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
-      ? inferredCachedTokens / reportedPromptTokens
-      : undefined);
 
     try {
       recordModelStats(
@@ -376,8 +382,7 @@ async function callDedicatedExtractionLLMWithMessages(
           cacheMode: "cache_prompt",
           reportedPromptTokens,
           promptEvalTokens,
-          inferredCachedTokens,
-          inferredCacheHitRatio,
+          reportedCachedTokens: streamResult.usageCachedTokens,
         } : undefined,
       );
     } catch (e) {

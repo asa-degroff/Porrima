@@ -1491,14 +1491,9 @@ async function runIndexGeneration(
         if (res.ok && res.body) {
           const streamResult = await readOpenAIContentStream(res.body, requestSignal);
           if (streamResult.timings) {
+            // Canonical cached-token resolution happens inside recordModelStats.
             const reportedPromptTokens = streamResult.usagePromptTokens;
             const promptEvalTokens = streamResult.timings.prompt_n;
-            const inferredCachedTokens = typeof reportedPromptTokens === "number"
-              ? Math.max(0, reportedPromptTokens - promptEvalTokens)
-              : undefined;
-            const inferredCacheHitRatio = typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
-              ? inferredCachedTokens / reportedPromptTokens
-              : undefined;
             try {
               recordModelStats(
                 extractionModelId,
@@ -1509,8 +1504,7 @@ async function runIndexGeneration(
                   cacheMode: "cache_prompt",
                   reportedPromptTokens,
                   promptEvalTokens,
-                  inferredCachedTokens,
-                  inferredCacheHitRatio,
+                  reportedCachedTokens: streamResult.usageCachedTokens,
                 } : undefined,
               );
             } catch (e) {
