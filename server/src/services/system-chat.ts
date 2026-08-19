@@ -857,7 +857,7 @@ export async function runSystemSynthesis(options?: {
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
-  const { truncateBeforeSend } = await import("./compaction.js");
+  const { truncateBeforeSend, truncateChatHistory, estimateContextTokens, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireSynthesisLock();
@@ -1135,6 +1135,32 @@ export async function runSystemSynthesis(options?: {
       return makeErrorResult(phaseError);
     }
 
+    // --- End-of-turn compaction: if the model hit the context limit, compact ---
+    // --- before the next run so it doesn't immediately fail again.         ---
+    const needsCompaction = stopReason === "length" ||
+      (() => {
+        const estimated = estimateContextTokens(chat.messages, synthesisPrompt, tools);
+        const ratio = estimated / contextWindow;
+        return ratio > COMPACTION_TRIGGER_RATIO;
+      })();
+    if (needsCompaction) {
+      console.log(
+        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, synthesisPrompt, tools)}/${contextWindow}`,
+      );
+      try {
+        const cResult = await truncateChatHistory(
+          chat, contextWindow, stopReason === "length",
+          undefined, undefined, undefined, synthesisPrompt, tools,
+        );
+        if (cResult.truncated) {
+          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
+          await saveChat(chat);
+        }
+      } catch (e: any) {
+        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
+      }
+    }
+
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
     try {
       invalidateAllStablePrefixCaches();
@@ -1187,7 +1213,7 @@ export async function runWakeCycle(options?: {
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
-  const { truncateBeforeSend } = await import("./compaction.js");
+  const { truncateBeforeSend, truncateChatHistory, estimateContextTokens, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireWakeCycleLock();
@@ -1364,6 +1390,32 @@ export async function runWakeCycle(options?: {
       saveChat,
       (title) => emitter.emitTitleUpdate(title),
     );
+
+    // --- End-of-turn compaction: if the model hit the context limit, compact ---
+    // --- before the next run so it doesn't immediately fail again.           ---
+    const needsCompaction = stopReason === "length" ||
+      (() => {
+        const estimated = estimateContextTokens(chat.messages, wakePrompt, tools);
+        const ratio = estimated / contextWindow;
+        return ratio > COMPACTION_TRIGGER_RATIO;
+      })();
+    if (needsCompaction) {
+      console.log(
+        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, wakePrompt, tools)}/${contextWindow}`,
+      );
+      try {
+        const cResult = await truncateChatHistory(
+          chat, contextWindow, stopReason === "length",
+          undefined, undefined, undefined, wakePrompt, tools,
+        );
+        if (cResult.truncated) {
+          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
+          await saveChat(chat);
+        }
+      } catch (e: any) {
+        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
+      }
+    }
 
     // Invalidate caches and gate future ticks
     try {
