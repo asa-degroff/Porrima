@@ -2065,6 +2065,23 @@ export async function truncateChatHistory(
     console.log(`[compaction] Marked ${strippedDeltas} stale system-delta message(s) out-of-context in kept tail`);
   }
 
+  // Clear stale usage data on all kept agent messages. After compaction
+  // the context is smaller, so usage.totalTokens from pre-compaction LLM calls
+  // no longer reflects the current context size. If left intact, these stale
+  // anchors inflate the Path A estimate in estimateContextBreakdown, triggering
+  // an immediate second compaction on the very next turn.
+  let clearedUsageCount = 0;
+  for (const m of messages) {
+    if (m._outOfContext) continue;
+    if (m.role === "assistant" && m.usage) {
+      m.usage = undefined;
+      clearedUsageCount++;
+    }
+  }
+  if (clearedUsageCount > 0) {
+    console.log(`[compaction] Cleared stale usage on ${clearedUsageCount} kept assistant message(s)`);
+  }
+
   // Calculate estimated token count for logging
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => sum + estimateMessageContentTokens(m), 0);
 
