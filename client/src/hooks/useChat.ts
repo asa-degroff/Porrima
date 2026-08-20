@@ -500,6 +500,11 @@ export function useChat(chatId: string | null) {
         bg.streaming = false;
         bg.modelProgress = null;
         bg.inferenceActivityPhase = null;
+        // A finished turn is never still compacting. Clears the header state
+        // even when the `compaction` event was lost (SSE drop during a long
+        // compaction window + silent reconnect skips buffered events).
+        bg.compacting = false;
+        bg.compaction = null;
 
         // The persisted server row is authoritative. This also corrects any
         // live-only over-append caused by reconnect replay before the user has
@@ -600,6 +605,8 @@ export function useChat(chatId: string | null) {
           setStreamingEstimate(null);
           setModelProgress(null);
           setInferenceActivityPhase(null);
+          setCompacting(false);
+          setCompaction(null);
           setMessageTotal((prev) => Math.max(prev, messageOffsetRef.current + finalMsgs.length));
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
@@ -627,6 +634,13 @@ export function useChat(chatId: string | null) {
       onToolStatus: (status) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+
+        // Tool activity proves the agent is past any compaction — clear a
+        // stuck indicator when the `compaction` event was lost.
+        if (bg.compacting) {
+          bg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
 
         // Pause thinking timer on tool execution
         if (bg.thinkingActive) {
@@ -663,6 +677,11 @@ export function useChat(chatId: string | null) {
       onSegment: (segment) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+
+        if (bg.compacting) {
+          bg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
 
         // For tool_result, insert immediately after its matching tool_call
         // so visual/artifact segments stay in the right position
@@ -730,6 +749,13 @@ export function useChat(chatId: string | null) {
       },
       onIteration: (info) => {
         console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"} displayEst=${info.displayEstimatedTokens ?? "?"}`);
+        // An iteration completing proves the agent is past any compaction —
+        // clear a stuck indicator when the `compaction` event was lost.
+        const iterBg = bgStreams.get(streamChatId);
+        if (iterBg?.compacting) {
+          iterBg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
         // Update live usage from iteration events so token indicator stays current during tool loops
         if (activeChatIdRef.current === streamChatId) {
           if (info.usage) setStreamingUsage(info.usage);
@@ -804,7 +830,47 @@ export function useChat(chatId: string | null) {
             }
           }
 
-          if (phase === "pre_send" || phase === "end_turn" || (phase === "manual" && streamContinues)) {
+          if (phase === "mid_turn") {
+            // Mid-turn: no full reload — the in-flight fragment is still
+            // streaming into the live placeholder and a reload would duplicate
+            // it. The server committed that fragment as a row before
+            // compacting (without a message_complete event), so mirror that
+            // here: freeze the live fragment, reset the accumulators (as
+            // onMessageComplete would), then append the summary and a fresh
+            // placeholder so resumed deltas stream into the right row and the
+            // token indicator sees the compaction boundary — showing the
+            // provisional post-compaction estimate instead of stale
+            // pre-compaction usage.
+            if (info.summaryMessage && !bg.doneCalled) {
+              bg.content = "";
+              bg.thinking = "";
+              bg.thinkingActive = false;
+              bg.thinkingAccumulatedMs = 0;
+              bg.thinkingLastStart = 0;
+              bg.tools = [];
+              bg.artifacts = [];
+              bg.visuals = [];
+              bg.generatedImages = [];
+              bg.segments = [];
+              bg.seqCounter = 0;
+              bg.messages = [
+                ...bg.messages,
+                info.summaryMessage,
+                { role: "assistant", content: "", timestamp: Date.now() },
+              ];
+              if (activeChatIdRef.current === streamChatId) {
+                streamingContentRef.current = "";
+                setStreamingThinking("");
+                setStreamingThinkingActive(false);
+                setStreamingThinkingAccumulatedMs(0);
+                streamingThinkingLastStartRef.current = 0;
+                setActiveTools([]);
+                setArtifacts([]);
+                setGeneratedImages([]);
+                setMessages([...bg.messages]);
+              }
+            }
+          } else if (phase === "pre_send" || phase === "end_turn" || phase === "manual") {
             // Reload messages from server to ensure correct ordering.
             // The server has the authoritative message order after compaction —
             // manual index splicing is fragile and causes ordering bugs. For
@@ -873,6 +939,11 @@ export function useChat(chatId: string | null) {
       onMessageComplete: (message, meta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+
+        if (bg.compacting) {
+          bg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
 
         // Finalize the assistant message that just completed on the server.
         // Prefer an exact content match, but skip steering placeholders — when a
@@ -1086,11 +1157,15 @@ export function useChat(chatId: string | null) {
                 bg.streaming = false;
                 bg.modelProgress = null;
                 bg.inferenceActivityPhase = null;
+                bg.compacting = false;
+                bg.compaction = null;
                 if (activeChatIdRef.current === streamChatId) {
                   setStreaming(false);
                   setReconnecting(false);
                   setModelProgress(null);
                   setInferenceActivityPhase(null);
+                  setCompacting(false);
+                  setCompaction(null);
                 }
                 bgStreams.delete(streamChatId);
                 return;
@@ -1112,6 +1187,8 @@ export function useChat(chatId: string | null) {
                 bg.streaming = false;
                 bg.modelProgress = null;
                 bg.inferenceActivityPhase = null;
+                bg.compacting = false;
+                bg.compaction = null;
                 bgStreams.delete(streamChatId);
               }
               if (activeChatIdRef.current === streamChatId) {
@@ -1121,6 +1198,8 @@ export function useChat(chatId: string | null) {
                   : "Connection lost — your message was saved on the server");
                 setModelProgress(null);
                 setInferenceActivityPhase(null);
+                setCompacting(false);
+                setCompaction(null);
               }
             }
           })();
