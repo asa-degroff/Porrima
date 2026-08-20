@@ -37,6 +37,56 @@ import { sendPushTest } from "../api/push";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
 import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme } from "../utils/custom-theme";
 
+/**
+ * Working-copy shape of a llama service config. The only difference from the
+ * API type: `extraArgs` is the raw textarea text (whitespace is free while
+ * typing) instead of a parsed argv array. Parsing happens at the boundary —
+ * `toServiceConfigWire` on preview/apply, `toServiceConfigDraft` when server
+ * data is loaded back into the draft.
+ */
+type LlamaServiceConfigDraft = Omit<LlamaServiceConfig, "extraArgs"> & { extraArgs: string };
+
+function toServiceConfigDraft(config: LlamaServiceConfig): LlamaServiceConfigDraft {
+  return { ...config, extraArgs: config.extraArgs.join(" ") };
+}
+
+function toServiceConfigWire(draft: LlamaServiceConfigDraft): LlamaServiceConfig {
+  return { ...draft, extraArgs: parseExtraArgsText(draft.extraArgs) };
+}
+
+/**
+ * Split a raw extra-args line into argv elements. Whitespace separates tokens;
+ * single or double quotes preserve literal spaces (no escape sequences, so the
+ * rules are exactly what a user can see in the text). An unmatched quote runs
+ * to the next whitespace or end of input — lenient, never throws.
+ */
+function parseExtraArgsText(text: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let tokenOpen = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      tokenOpen = true;
+    } else if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+      if (tokenOpen || current) {
+        args.push(current);
+        current = "";
+        tokenOpen = false;
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (tokenOpen || current) args.push(current);
+  return args;
+}
+
 const SECTIONS = [
   { id: 'models', label: 'Models' },
   { id: 'inference', label: 'Inference Servers' },
@@ -665,7 +715,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     loading: boolean;
     saving: boolean;
     data?: LlamaServiceConfigResponse;
-    draft?: LlamaServiceConfig;
+    draft?: LlamaServiceConfigDraft;
     previewOpen?: boolean;
     unitOpen?: boolean;
     error?: string;
@@ -673,7 +723,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     loading: boolean;
     saving: boolean;
     data?: LlamaServiceConfigResponse;
-    draft?: LlamaServiceConfig;
+    draft?: LlamaServiceConfigDraft;
     previewOpen?: boolean;
     unitOpen?: boolean;
     error?: string;
@@ -1233,7 +1283,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       }
       setLlamaServiceState((prev) => ({
         ...prev,
-        [id]: { ...(prev[id] || {}), loading: false, saving: false, data, draft: data.config, previewOpen: false, unitOpen: false },
+        [id]: { ...(prev[id] || {}), loading: false, saving: false, data, draft: toServiceConfigDraft(data.config), previewOpen: false, unitOpen: false },
       }));
     } catch (e: any) {
       setLlamaServiceState((prev) => ({
@@ -1252,7 +1302,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     if (tab === "logs") void handleLlamaServerLogs(id);
   }, [handleLlamaServerLogs, llamaServiceState, loadLlamaServiceConfig]);
 
-  const updateLlamaServiceDraft = useCallback((id: LlamaServerId, patch: Partial<LlamaServiceConfig>) => {
+  const updateLlamaServiceDraft = useCallback((id: LlamaServerId, patch: Partial<LlamaServiceConfigDraft>) => {
     setLlamaServiceState((prev) => {
       const current = prev[id];
       if (!current?.draft) return prev;
@@ -1268,11 +1318,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     if (!draft) return;
     setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
     try {
-      const result = await previewLlamaServiceConfig(id, draft);
+      const result = await previewLlamaServiceConfig(id, toServiceConfigWire(draft));
       setLlamaServiceState((prev) => {
         const current = prev[id] || { loading: false, saving: false };
         const data = current.data ? { ...current.data, config: result.config, preview: result.preview } : undefined;
-        return { ...prev, [id]: { ...current, saving: false, draft: result.config, data, previewOpen: true } };
+        return { ...prev, [id]: { ...current, saving: false, draft: toServiceConfigDraft(result.config), data, previewOpen: true } };
       });
     } catch (e: any) {
       setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to preview service config" } }));
@@ -1285,12 +1335,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
     setLlamaServerMessage(null);
     try {
-      const result = await applyLlamaServiceConfig(id, draft);
+      const result = await applyLlamaServiceConfig(id, toServiceConfigWire(draft));
       setLlamaServers((prev) => prev.map((server) => server.id === id ? result.server : server));
       setLlamaServiceState((prev) => {
         const current = prev[id] || { loading: false, saving: false };
         const data = current.data ? { ...current.data, config: result.config, preview: result.preview } : undefined;
-        return { ...prev, [id]: { ...current, saving: false, draft: result.config, data, previewOpen: true } };
+        return { ...prev, [id]: { ...current, saving: false, draft: toServiceConfigDraft(result.config), data, previewOpen: true } };
       });
       if (id === "extraction") {
         setExtractionModelUrl(result.server.url);
@@ -4005,7 +4055,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              return <div className="text-xs text-white/35">{state?.error || "Loading service config..."}</div>;
 	                            }
 	                            const updateNumber = (key: keyof LlamaServiceConfig, value: string) => {
-	                              updateLlamaServiceDraft(server.id, { [key]: Number.parseInt(value, 10) || 0 } as Partial<LlamaServiceConfig>);
+	                              updateLlamaServiceDraft(server.id, { [key]: Number.parseInt(value, 10) || 0 } as Partial<LlamaServiceConfigDraft>);
 	                            };
 	                            return (
 	                              <div className="space-y-3">
@@ -4139,8 +4189,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  </div>
 	                                  <div className="sm:col-span-2">
 	                                    <label className="block text-xs text-white/50 mb-1">Extra args</label>
-	                                    <textarea value={draft.extraArgs.join(" ")} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value.trim() ? e.target.value.trim().split(/\s+/) : [] })}
+	                                    <textarea value={draft.extraArgs} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value })}
 	                                      rows={5} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                    <p className="text-[10px] text-white/30 mt-1">Space-separated arguments; quote values that contain spaces (parsed when you preview or apply).</p>
 	                                  </div>
 	                                </div>
 	                                <div className="flex items-center gap-2 flex-wrap">
