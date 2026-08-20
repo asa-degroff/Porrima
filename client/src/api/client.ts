@@ -274,6 +274,7 @@ export interface StreamCallbacks {
   }) => void;
   onAgentOutputComplete?: () => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
+  onModelFallback?: (info: { chatId: string; modelId: string; modelName?: string; previousModelId: string }) => void;
   onMessageComplete?: (message: any, meta?: { continues?: boolean; queuedMessageId?: string }) => void;
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
@@ -659,6 +660,9 @@ function processSSEEvent(
       break;
     case "title_update":
       callbacks.onTitleUpdate?.(data.chatId, data.title);
+      break;
+    case "model_fallback":
+      callbacks.onModelFallback?.(data);
       break;
     case "message_complete":
       callbacks.onMessageComplete?.(data.message, {

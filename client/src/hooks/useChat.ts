@@ -198,6 +198,7 @@ export function useChat(chatId: string | null) {
   const [postCompactionEstimate, setPostCompactionEstimate] = useState<number | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
+  const [modelFallback, setModelFallback] = useState<{ chatId: string; modelId: string; modelName?: string; previousModelId: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
   // Separate from streamingUsage because the server-side display estimate
@@ -995,6 +996,19 @@ export function useChat(chatId: string | null) {
       onTitleUpdate: (chatId, title) => {
         setTitleUpdate({ chatId, title });
       },
+      onModelFallback: (info) => {
+        console.log(`[chat] model fallback for ${streamChatId}: ${info.previousModelId} → ${info.modelId}`);
+        const w: StreamWarning = {
+          type: "model_fallback",
+          message: `Model "${info.previousModelId}" is no longer available — switched to "${info.modelName || info.modelId}"`,
+        };
+        const bg = bgStreams.get(streamChatId);
+        if (bg) bg.warning = w;
+        if (activeChatIdRef.current === streamChatId) {
+          setWarning(w);
+        }
+        setModelFallback(info);
+      },
       onError: (err) => {
         const isOfflineError = err.startsWith("__OFFLINE__:");
         const isConnectionError = err.startsWith("Connection error:");
@@ -1702,6 +1716,7 @@ export function useChat(chatId: string | null) {
     processQueue,
     queueProcessing,
     titleUpdate,
+    modelFallback,
     hasCompactionSummary,
     markRecentlyStreaming,
   };

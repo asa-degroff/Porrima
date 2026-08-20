@@ -501,6 +501,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     processQueue,
     queueProcessing,
     titleUpdate,
+    modelFallback,
     hasCompactionSummary,
     reconnecting,
   } = useChat(activeChatId);
@@ -1117,6 +1118,19 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     // Optimistic sidebar update — no need to wait for debounced API re-fetch
     updateChatTitle(titleUpdate.chatId, titleUpdate.title);
   }, [titleUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Adopt the server's fallback model when the chat's model became unavailable.
+  // The server already persisted the new modelId; sync local state and drop the
+  // stale IndexedDB copy so a reload can't resurrect the old model.
+  useEffect(() => {
+    if (!modelFallback) return;
+    if (modelFallback.chatId === activeChatId) {
+      setActiveChat((prev) =>
+        prev ? { ...prev, modelId: modelFallback.modelId, contextWindow: undefined } : prev
+      );
+    }
+    clearCachedChat(modelFallback.chatId).catch(() => {});
+  }, [modelFallback]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Find context window for active model

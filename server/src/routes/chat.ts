@@ -1546,7 +1546,33 @@ async function handleChatStream(
     try {
       allModels = await discoverAllModels();
       inferenceModel = allModels.find(m => m.id === chat.modelId);
-      if (!inferenceModel) throw new Error(`Model not found: ${chat.modelId}`);
+      if (!inferenceModel) {
+        // The chat's model is no longer available (removed from the models
+        // dir, renamed, or the inference slot was switched). Fall back to the
+        // currently selected default model — same priority as
+        // getSynthesisModelId — and adopt it for this chat so the session
+        // keeps working instead of erroring out.
+        const settings = await getSettings();
+        inferenceModel =
+          (settings.defaultModelId && allModels.find(m => m.id === settings.defaultModelId)) ||
+          allModels[0];
+        if (!inferenceModel) throw new Error(`Model not found: ${chat.modelId}`);
+        const previousModelId = chat.modelId;
+        chat.modelId = inferenceModel.id;
+        // The per-chat context-window override belonged to the old model —
+        // clear it, mirroring PATCH /api/chats/:id model-change semantics.
+        chat.contextWindow = undefined;
+        await saveChat(chat);
+        console.warn(
+          `[chat] Model "${previousModelId}" unavailable for chat ${chat.id}; switched to "${inferenceModel.id}"`,
+        );
+        res.write(`event: model_fallback\ndata: ${JSON.stringify({
+          chatId: chat.id,
+          modelId: inferenceModel.id,
+          modelName: inferenceModel.name,
+          previousModelId,
+        })}\n\n`);
+      }
       piModel = await createPiModelFromProvider(inferenceModel);
       // Override contextWindow with effective value so the context window size sent to llama.cpp
       // respects per-chat and per-model settings. Without this, llama.cpp receives
