@@ -1084,6 +1084,25 @@ export async function truncateBeforeSend(
     console.log(`[compaction] Marked ${strippedDeltas} stale system-delta message(s) out-of-context in kept tail`);
   }
 
+  // Clear stale usage data on all kept agent messages — same rationale as in
+  // truncateChatHistory. The turn about to run normally records fresh usage,
+  // but if it fails before reporting any (error/abort), a stale anchor left
+  // here would inflate the Path A estimate in estimateContextBreakdown and
+  // trigger a spurious compaction on the next turn. Must run before
+  // hardCapSafetyPass, whose own estimate would otherwise anchor on the same
+  // stale usage.
+  let clearedUsageCount = 0;
+  for (const m of messages) {
+    if (m._outOfContext) continue;
+    if (m.role === "assistant" && m.usage) {
+      m.usage = undefined;
+      clearedUsageCount++;
+    }
+  }
+  if (clearedUsageCount > 0) {
+    console.log(`[compaction] Cleared stale usage on ${clearedUsageCount} kept assistant message(s)`);
+  }
+
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => sum + estimateMessageContentTokens(m), 0);
 
   const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
