@@ -61,6 +61,11 @@ export interface ChatMessage {
   _isCompactionSummary?: boolean;
   /** Message is preserved for UI display but excluded from the LLM context */
   _outOfContext?: boolean;
+  /** Synthesized archive head peeled off a kept assistant message during a
+   *  mid-message split. Carries _outOfContext (it never enters the context)
+   *  but — unlike re-archived predecessors — its content is fresh and must
+   *  still go through pre-compaction memory extraction. */
+  _isSplitHead?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
   /**

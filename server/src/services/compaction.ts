@@ -533,6 +533,7 @@ function trySplitAssistantMessage(
     toolResults: archivedResults,
     timestamp: msg.timestamp,
     _outOfContext: true,
+    _isSplitHead: true,
   };
 
   // Mutate in place.
@@ -586,6 +587,7 @@ function tryStripAssistantToolPayloadForTextRetention(
     toolResults: archivedResults,
     timestamp: msg.timestamp,
     _outOfContext: true,
+    _isSplitHead: true,
   };
 
   msg.toolCalls = undefined;
@@ -668,6 +670,7 @@ function tryReplaceToolPayloadWithPlaceholder(
     toolResults: archivedResults,
     timestamp: msg.timestamp,
     _outOfContext: true,
+    _isSplitHead: true,
   };
 
   msg.content = placeholder;

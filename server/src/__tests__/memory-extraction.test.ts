@@ -193,6 +193,10 @@ describe("isSubstantiveForPreCompactionExtraction", () => {
     expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true }))).toBe(false);
     expect(isSubstantiveForPreCompactionExtraction(base({ role: "system" }))).toBe(false);
   });
+
+  it("treats split heads as substantive despite _outOfContext so peeled tool payloads still get extracted", () => {
+    expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true, _isSplitHead: true }))).toBe(true);
+  });
 });
 
 describe("formatToolArgumentsForExtraction", () => {

@@ -3103,7 +3103,11 @@ async function buildPreCompactionSystemPrompt(): Promise<string> {
 export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): boolean {
   return (
     !message._isCompactionSummary &&
-    !message._outOfContext &&
+    // Split heads are _outOfContext by construction (archived the moment they
+    // are peeled off a kept message) but their content has never been
+    // extracted — unlike re-archived predecessors, which were already flushed
+    // and stripped by an earlier compaction. Only the latter are skipped.
+    (!message._outOfContext || message._isSplitHead === true) &&
     !message._isSynthesisMessage &&
     message.role !== "system"
   );
@@ -3142,7 +3146,7 @@ export async function preCompactionFlush(
   }
 
   const skippedCompaction = removedMessages.filter((m) => m._isCompactionSummary).length;
-  const skippedOutOfContext = removedMessages.filter((m) => m._outOfContext).length;
+  const skippedOutOfContext = removedMessages.filter((m) => m._outOfContext && !m._isSplitHead).length;
   const skippedSynthesis = removedMessages.filter((m) => m._isSynthesisMessage).length;
   const skippedSystem = removedMessages.filter((m) => m.role === "system").length;
   console.log(
