@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   AgentLoopConfig,
   AgentMessage,
+  ShouldStopAfterTurnContext,
   StreamFn,
 } from "@earendil-works/pi-agent-core";
 import { agentLoop, agentLoopContinue } from "@earendil-works/pi-agent-core";
@@ -16,6 +17,7 @@ export interface CreateAgentLoopConfigOptions {
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
 }
 
 export function createAgentLoopConfig(options: CreateAgentLoopConfigOptions): AgentLoopConfig {
@@ -27,6 +29,7 @@ export function createAgentLoopConfig(options: CreateAgentLoopConfigOptions): Ag
     transformContext: options.transformContext,
     getSteeringMessages: options.getSteeringMessages,
     getFollowUpMessages: options.getFollowUpMessages,
+    shouldStopAfterTurn: options.shouldStopAfterTurn,
     toolExecution: "parallel",
   };
   if (options.keepAlive !== undefined) {

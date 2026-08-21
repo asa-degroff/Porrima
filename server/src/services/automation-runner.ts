@@ -252,6 +252,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       systemPrompt,
       tools,
       emitter,
+      contextWindow,
       maxIterations: task.maxIterations,
       timeoutMs: task.timeoutMs,
       keepAlive: `${Math.max(1, Math.ceil(task.timeoutMs / 60_000))}m`,

@@ -1,9 +1,19 @@
-import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type {
+  AgentContext,
+  AgentMessage,
+  AgentTool,
+  ShouldStopAfterTurnContext,
+} from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToHydratedPiMessages, type ReplayModelIdentity } from "./agent.js";
-import { estimateContextTokens } from "./compaction.js";
+import {
+  COMPACTION_HARD_CAP_RATIO,
+  COMPACTION_TRIGGER_RATIO,
+  estimateContextTokens,
+  truncateChatHistory,
+} from "./compaction.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
@@ -40,6 +50,12 @@ export interface HeadlessChatTurnOptions {
   keepAlive?: string | number;
   logPrefix: string;
   saveChat: (chat: Chat) => Promise<void>;
+  /** Model context window in tokens. When set, the runner guards long
+   * multi-iteration turns against context overflow: once usage crosses the
+   * compaction trigger ratio (or the model reports stopReason="length"), the
+   * loop stops, compacts the persisted history, and resumes with a handoff
+   * message. Without this, turns can run past the window and get truncated. */
+  contextWindow?: number;
   getFollowUp?: (state: HeadlessTurnState) => Promise<HeadlessFollowUp | null>;
   summarize?: (state: HeadlessTurnState) => string;
   decorateAssistantMessage?: (message: ChatMessage, state: HeadlessTurnState) => ChatMessage;
@@ -269,32 +285,35 @@ export async function runHeadlessChatTurn(
     provider: String(model.provider),
     model: model.id,
   };
-  const contextMessages = await chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
-  // Keep the `[time:]` anchor at the trailing position (last user message)
-  // rather than the system prompt, so the changing timestamp only re-processes
-  // its own tokens and the stable prefix stays reusable across runs.
   const { buildTimeAnchor } = await import("./memory-context.js");
-  for (let i = contextMessages.length - 1; i >= 0; i--) {
-    const msg = contextMessages[i];
-    if (msg.role !== "user") continue;
-    const anchor = buildTimeAnchor(chat.messages);
-    if (typeof msg.content === "string") {
-      contextMessages[i] = { ...msg, content: `${msg.content}${anchor}` };
-    } else if (Array.isArray(msg.content)) {
-      const content: any[] = msg.content.map((c) => ({ ...c }));
-      const textIdx = content.findIndex((c: any) => c.type === "text");
-      if (textIdx >= 0) {
-        content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
-      } else {
-        content.push({ type: "text" as const, text: anchor.trimStart() });
+  const buildContextMessages = async (): Promise<AgentMessage[]> => {
+    const messages = await chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
+    // Keep the `[time:]` anchor at the trailing position (last user message)
+    // rather than the system prompt, so the changing timestamp only re-processes
+    // its own tokens and the stable prefix stays reusable across runs.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== "user") continue;
+      const anchor = buildTimeAnchor(chat.messages);
+      if (typeof msg.content === "string") {
+        messages[i] = { ...msg, content: `${msg.content}${anchor}` };
+      } else if (Array.isArray(msg.content)) {
+        const content: any[] = msg.content.map((c) => ({ ...c }));
+        const textIdx = content.findIndex((c: any) => c.type === "text");
+        if (textIdx >= 0) {
+          content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
+        } else {
+          content.push({ type: "text" as const, text: anchor.trimStart() });
+        }
+        messages[i] = { ...msg, content };
       }
-      contextMessages[i] = { ...msg, content };
+      break;
     }
-    break;
-  }
+    return messages;
+  };
   const context: AgentContext = {
     systemPrompt,
-    messages: [...contextMessages],
+    messages: await buildContextMessages(),
     tools,
   };
   const controller = new AbortController();
@@ -314,6 +333,8 @@ export async function runHeadlessChatTurn(
   const memoryUpdates: string[] = [];
   let stopReason: StopReason = "stop";
   let iterations = 0;
+  let needsMidTurnCompaction = false;
+  let midTurnCompactionOccurred = false;
   let duplicateToolCallStreak = 0;
   let lastToolCallSignature: string | null = null;
   let lastPersistedAssistantBoundary = {
@@ -559,10 +580,103 @@ export async function runHeadlessChatTurn(
     return messages;
   };
 
+  // Mid-turn context guard. Long multi-iteration turns (synthesis phases,
+  // automation steps) accumulate assistant output and tool results faster than
+  // the pre-send compaction can see — the chat.rows only catch up at phase
+  // boundaries. The usage anchor from the last provider response tracks the
+  // live context accurately, so stop the loop once it crosses the trigger
+  // ratio; the outer loop below compacts and resumes with a handoff message.
+  const shouldStopForMidTurnCompaction = async ({
+    message,
+    toolResults,
+  }: ShouldStopAfterTurnContext): Promise<boolean> => {
+    if (!options.contextWindow || controller.signal.aborted) return false;
+    try {
+      const cw = options.contextWindow;
+      if (message.stopReason === "length") {
+        needsMidTurnCompaction = true;
+        console.warn(
+          `[${logPrefix}] model hit context limit (stopReason=length) at iteration ${iterations} — stopping for mid-turn compaction`,
+        );
+        emitter.emitWarning({
+          type: "context_length",
+          message: "Context window full — compacting and continuing",
+        });
+        return true;
+      }
+      const willContinue =
+        message.stopReason === "toolUse" ||
+        (message.stopReason === "stop" && Boolean(options.getFollowUp));
+      if (!willContinue) return false;
+      const usageTotal = message.usage?.totalTokens ?? 0;
+      let estimate: number;
+      let threshold = COMPACTION_TRIGGER_RATIO;
+      if (usageTotal > 0) {
+        // usage covers the request that just completed; this turn's tool
+        // results are appended to the next prompt, so add them on top.
+        let postUsageChars = 0;
+        for (const tr of toolResults) {
+          for (const block of tr.content) {
+            if (block.type === "text" && block.text) postUsageChars += block.text.length;
+          }
+        }
+        estimate = usageTotal + Math.ceil(postUsageChars / 4);
+      } else {
+        // No usage anchor: the rows-based char estimate lags the live context
+        // mid-phase, so only fire on the conservative hard-cap ratio.
+        estimate = estimateContextTokens(chat.messages, systemPrompt, tools);
+        threshold = COMPACTION_HARD_CAP_RATIO;
+      }
+      const ratio = estimate / cw;
+      if (ratio > threshold) {
+        needsMidTurnCompaction = true;
+        console.warn(
+          `[${logPrefix}] mid-turn context overflow: ~${estimate}/${cw} (${Math.round(ratio * 100)}%) ` +
+          `at iteration ${iterations} — stopping for compaction`,
+        );
+        emitter.emitWarning({
+          type: "context_length",
+          message: "Context nearly full — compacting and continuing",
+        });
+        return true;
+      }
+    } catch (err) {
+      console.warn(
+        `[${logPrefix}] mid-turn context check failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return false;
+  };
+
+  const buildMidTurnHandoffText = (removedCount: number): string => {
+    const parts: string[] = [];
+    parts.push(
+      `[System: Context was compacted mid-turn (${removedCount} older messages archived). ` +
+        `Here is a summary of your progress so far — continue from where you left off.]`,
+    );
+    const text = joinChunks(textChunks);
+    if (text) parts.push(`Your progress so far:\n${text.slice(-5000)}`);
+    if (allToolCalls.length > 0) {
+      const toolSummary = allToolCalls
+        .slice(-15)
+        .map((tc) => {
+          const result = allToolResults.find((r) => r.toolCallId === tc.id);
+          const resultPreview = result ? result.content.slice(0, 200) : "no result";
+          return `- ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)}) → ${resultPreview}`;
+        })
+        .join("\n");
+      parts.push(`Recent tool calls (${allToolCalls.length} total):\n${toolSummary}`);
+    }
+    parts.push("You're now ready to pick up where you left off.");
+    return parts.join("\n\n");
+  };
+
   const config = createAgentLoopConfig({
     model,
     keepAlive,
     transformContext: passiveRecall ? applyPassiveMemoryRecall : undefined,
+    shouldStopAfterTurn: options.contextWindow ? shouldStopForMidTurnCompaction : undefined,
     getFollowUpMessages: async () => {
       if (controller.signal.aborted || iterations >= maxIterations) return [];
       const followUp = await options.getFollowUp?.(currentState());
@@ -585,122 +699,193 @@ export async function runHeadlessChatTurn(
     },
   });
 
+  const MAX_MID_TURN_COMPACTION_CYCLES = 3;
+  let compactionCycle = 0;
+  let activeContext = context;
+
   try {
-    await runAgentLoop({
-      mode: "continue",
-      context,
-      config,
-      signal: controller.signal,
-      streamFn: createSafeStreamFn(),
-      logPrefix,
-      onEvent: async (event) => {
-        if (event.type === "message_update") {
-          const update = event.assistantMessageEvent;
-          if (update.type === "text_delta") {
-            emitter.emitTextDelta(update.delta);
-          } else if (update.type === "thinking_delta") {
-            emitter.emitThinkingDelta(update.delta);
-          }
-        } else if (event.type === "tool_execution_start") {
-          const toolCall: ToolCall = {
-            type: "toolCall",
-            id: event.toolCallId,
-            name: event.toolName,
-            arguments: event.args,
-          };
-          allToolCalls.push(toolCall);
-          emitter.emitToolCall({
-            id: toolCall.id,
-            name: toolCall.name,
-            arguments: toolCall.arguments,
-          });
-        } else if (event.type === "tool_execution_end") {
-          const content = resultText(event.result);
-          if (content.toLowerCase().includes("memory saved")) {
-            memoryUpdates.push(content.slice(0, 200));
-          }
-          const toolResult: ChatToolResult = {
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            content,
-            isError: event.isError,
-            images: await resultImages(event.result, event.toolCallId),
-          };
-          allToolResults.push(toolResult);
-          emitter.emitToolResult(toolResult);
-        } else if (event.type === "turn_end") {
-          const msg = event.message as AssistantMessage;
-          stopReason = msg.stopReason || "stop";
-          iterations++;
+    for (;;) {
+      needsMidTurnCompaction = false;
+      await runAgentLoop({
+        mode: "continue",
+        context: activeContext,
+        config,
+        signal: controller.signal,
+        streamFn: createSafeStreamFn(),
+        logPrefix,
+        onEvent: async (event) => {
+          if (event.type === "message_update") {
+            const update = event.assistantMessageEvent;
+            if (update.type === "text_delta") {
+              emitter.emitTextDelta(update.delta);
+            } else if (update.type === "thinking_delta") {
+              emitter.emitThinkingDelta(update.delta);
+            }
+          } else if (event.type === "tool_execution_start") {
+            const toolCall: ToolCall = {
+              type: "toolCall",
+              id: event.toolCallId,
+              name: event.toolName,
+              arguments: event.args,
+            };
+            allToolCalls.push(toolCall);
+            emitter.emitToolCall({
+              id: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            });
+          } else if (event.type === "tool_execution_end") {
+            const content = resultText(event.result);
+            if (content.toLowerCase().includes("memory saved")) {
+              memoryUpdates.push(content.slice(0, 200));
+            }
+            const toolResult: ChatToolResult = {
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              content,
+              isError: event.isError,
+              images: await resultImages(event.result, event.toolCallId),
+            };
+            allToolResults.push(toolResult);
+            emitter.emitToolResult(toolResult);
+          } else if (event.type === "turn_end") {
+            const msg = event.message as AssistantMessage;
+            stopReason = msg.stopReason || "stop";
+            iterations++;
 
-          const text = extractTextFromAssistantMessage(msg);
-          const thinking = extractThinkingFromAssistantMessage(msg);
-          const turnToolCalls = extractToolCallsFromAssistantMessage(msg);
-          if (text) {
-            textChunks.push(text);
-            emitter.emitTextDelta("\n\n");
-          }
-          if (thinking) thinkingChunks.push(thinking);
-          emitter.setUsage(usageFromAssistantMessage(msg));
+            const text = extractTextFromAssistantMessage(msg);
+            const thinking = extractThinkingFromAssistantMessage(msg);
+            const turnToolCalls = extractToolCallsFromAssistantMessage(msg);
+            if (text) {
+              textChunks.push(text);
+              emitter.emitTextDelta("\n\n");
+            }
+            if (thinking) thinkingChunks.push(thinking);
+            emitter.setUsage(usageFromAssistantMessage(msg));
 
-          const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, tools);
-          emitter.emitIteration({
-            iteration: iterations,
-            stopReason,
-            toolCount: event.toolResults?.length || 0,
-            usage: emitter.state.finalUsage,
-            estimatedTokens,
-          });
+            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, tools);
+            emitter.emitIteration({
+              iteration: iterations,
+              stopReason,
+              toolCount: event.toolResults?.length || 0,
+              usage: emitter.state.finalUsage,
+              estimatedTokens,
+            });
 
-          passiveRecall?.schedule({
-            iteration: iterations,
-            stopReason,
-            chatMessages: buildPassiveRecallSearchMessages(),
-            chatType: options.passiveMemoryRecall?.chatType || "system",
-            projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
-          });
+            passiveRecall?.schedule({
+              iteration: iterations,
+              stopReason,
+              chatMessages: buildPassiveRecallSearchMessages(),
+              chatType: options.passiveMemoryRecall?.chatType || "system",
+              projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
+            });
 
-          if (turnToolCalls.length > 0) {
-            const sig = JSON.stringify(turnToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
-            duplicateToolCallStreak = sig === lastToolCallSignature ? duplicateToolCallStreak + 1 : 1;
-            lastToolCallSignature = sig;
-            if (duplicateToolCallStreak >= 3) {
-              const names = turnToolCalls.map((c) => c.name).join(", ");
-              console.warn(`[${logPrefix}] duplicate tool call streak hit ${duplicateToolCallStreak}: ${names}`);
+            if (turnToolCalls.length > 0) {
+              const sig = JSON.stringify(turnToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
+              duplicateToolCallStreak = sig === lastToolCallSignature ? duplicateToolCallStreak + 1 : 1;
+              lastToolCallSignature = sig;
+              if (duplicateToolCallStreak >= 3) {
+                const names = turnToolCalls.map((c) => c.name).join(", ");
+                console.warn(`[${logPrefix}] duplicate tool call streak hit ${duplicateToolCallStreak}: ${names}`);
+                emitter.emitWarning({
+                  type: "duplicate_tool_call",
+                  message: `Stopped - model called the same tool ${duplicateToolCallStreak} times in a row (${names})`,
+                });
+                controller.abort();
+              }
+            } else {
+              duplicateToolCallStreak = 0;
+              lastToolCallSignature = null;
+            }
+
+            if (iterations >= maxIterations) {
+              console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
               emitter.emitWarning({
-                type: "duplicate_tool_call",
-                message: `Stopped - model called the same tool ${duplicateToolCallStreak} times in a row (${names})`,
+                type: "iteration_limit",
+                message: `Stopped - reached ${maxIterations} iteration limit`,
+              });
+              controller.abort();
+            } else if (
+              options.maxIterationsPerAssistantSegment &&
+              iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
+            ) {
+              console.warn(
+                `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
+              );
+              emitter.emitWarning({
+                type: "iteration_limit",
+                message: `Stopped - reached ${options.maxIterationsPerAssistantSegment} iteration limit for this phase`,
               });
               controller.abort();
             }
-          } else {
-            duplicateToolCallStreak = 0;
-            lastToolCallSignature = null;
           }
+        },
+      });
 
-          if (iterations >= maxIterations) {
-            console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
-            emitter.emitWarning({
-              type: "iteration_limit",
-              message: `Stopped - reached ${maxIterations} iteration limit`,
-            });
-            controller.abort();
-          } else if (
-            options.maxIterationsPerAssistantSegment &&
-            iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
-          ) {
-            console.warn(
-              `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
-            );
-            emitter.emitWarning({
-              type: "iteration_limit",
-              message: `Stopped - reached ${options.maxIterationsPerAssistantSegment} iteration limit for this phase`,
-            });
-            controller.abort();
-          }
+      if (
+        !needsMidTurnCompaction ||
+        timedOut ||
+        controller.signal.aborted ||
+        compactionCycle >= MAX_MID_TURN_COMPACTION_CYCLES
+      ) break;
+      compactionCycle++;
+      console.log(
+        `[${logPrefix}] mid-turn compaction cycle ${compactionCycle}: persisting progress and compacting`,
+      );
+
+      try {
+        // Persist in-progress work so compaction can archive/retain it —
+        // without this the live context rows only exist in the loop arrays.
+        await persistAssistantSinceLastBoundary();
+
+        const compaction = await truncateChatHistory(
+          chat,
+          options.contextWindow!,
+          true,
+          undefined,
+          undefined,
+          emitter.state.finalUsage?.totalTokens,
+          systemPrompt,
+          tools,
+        );
+        if (!compaction?.truncated) {
+          console.warn(
+            `[${logPrefix}] mid-turn compaction cycle ${compactionCycle} removed nothing — ending turn`,
+          );
+          break;
         }
-      },
-    });
+        console.log(
+          `[${logPrefix}] mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, ` +
+            `estimated ${compaction.estimatedTokenCount ?? 0} tokens removed`,
+        );
+
+        // Persist the handoff so future replays reconstruct the same token
+        // sequence the resumed call sees (mirrors the HTTP route's pattern).
+        chat.messages.push({
+          role: "user",
+          content: buildMidTurnHandoffText(compaction.removedCount),
+          timestamp: Date.now(),
+          _isSystemMessage: true,
+          _isMidTurnCompaction: true,
+          _compactionRemovedCount: compaction.removedCount,
+          _compactionCycle: compactionCycle,
+        });
+        await saveChat(chat);
+
+        midTurnCompactionOccurred = true;
+        activeContext = {
+          systemPrompt,
+          messages: await buildContextMessages(),
+          tools,
+        };
+        console.log(
+          `[${logPrefix}] mid-turn compaction cycle ${compactionCycle}: resuming agent loop with ${activeContext.messages.length} messages`,
+        );
+      } catch (compErr) {
+        console.error(`[${logPrefix}] mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
+        break;
+      }
+    }
   } catch (e: any) {
     console.error(`[${logPrefix}] agent loop failed:`, e?.message || e);
     stopReason = "error";
@@ -713,7 +898,11 @@ export async function runHeadlessChatTurn(
   const finalBoundaryToolResults = allToolResults.slice(lastPersistedAssistantBoundary.toolResults);
   const summary = (options.summarize || defaultSummary)(state);
   let assistantMessage: ChatMessage;
-  if (options.persistIntermediateAssistantMessages) {
+  // Mid-turn compaction persists progress rows mid-loop, so the turn must end
+  // through the persist path even for callers that normally aggregate into a
+  // single final row — otherwise the compacted history would be duplicated.
+  const usePersistPath = options.persistIntermediateAssistantMessages || midTurnCompactionOccurred;
+  if (usePersistPath) {
     assistantMessage = await persistAssistantSinceLastBoundary() ?? finalAssistantMessage ??
       buildAssistantMessageForState(stateSinceLastPersistedBoundary(), [], {
         artifacts: [],
@@ -774,13 +963,13 @@ export async function runHeadlessChatTurn(
   }
 
   const stopReasonText = String(stopReason);
-  const failureState = options.persistIntermediateAssistantMessages ? finalBoundaryState : state;
+  const failureState = usePersistPath ? finalBoundaryState : state;
   const producedNothing =
     (stopReasonText === "error" || stopReasonText === "aborted") &&
     failureState.textSummary.length === 0 &&
     failureState.thinking.length === 0 &&
     failureState.toolCalls.length === 0 &&
-    (!options.persistIntermediateAssistantMessages || finalBoundaryToolResults.length === 0);
+    (!usePersistPath || finalBoundaryToolResults.length === 0);
 
   return {
     ...state,
