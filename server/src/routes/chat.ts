@@ -41,6 +41,7 @@ import { getCurrentTTSSettings } from "./tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
+import { recordModelStats } from "../services/model-stats.js";
 import { PassiveMemoryRecallController } from "../services/passive-memory-recall.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
 import type { ModelProgressEvent } from "../services/model-progress.js";
@@ -1474,6 +1475,9 @@ async function handleChatStream(
   let titleGenerationPromise: Promise<void> | null = null;
   let currentTurnIsHidden = options.hiddenUserMessage === true;
   let activeAssistantIdentity: ReplayModelIdentity | undefined;
+  // Hoisted above the model-discovery try so captureLlamaRun (defined
+  // earlier in the handler) can record stats per-iteration.
+  let inferenceModel: InferenceModel | undefined;
   let firstTurnBaselineWarm = false;
   let newChatBaselineConsumed = false;
 
@@ -1523,6 +1527,28 @@ async function handleChatStream(
       `messages=${cache?.requestMessageCount ?? "?"} chars=${cache?.requestCharCount ?? "?"}`,
     );
 
+    // Record per-iteration: each model call's timings are final when its
+    // stream ends, so the row is complete data. Recording here instead of
+    // after the turn keeps model stats live mid-turn — a long tool loop no
+    // longer hides its own runs from the stats display until completion.
+    // This also covers ask_user/error paths, whose runs were previously
+    // dropped because the post-turn flush never ran for them.
+    if (inferenceModel?.provider === "llamacpp") {
+      try {
+        const stats = recordModelStats(inferenceModel.id, "llamacpp", timings, cache ?? undefined);
+        const cacheText = stats.inferredCachedTokens !== undefined
+          ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
+          : "";
+        const digestText = stats.requestDigest ? ` digest=${stats.requestDigest}` : "";
+        console.log(
+          `[model-stats] recorded: ${inferenceModel.id} chat=${chat.id} iter=${iterationLabel} ` +
+          `run=${state.llamaRuns.length} decode=${timings.predicted_per_second.toFixed(1)} tok/s${cacheText}${digestText}`,
+        );
+      } catch (err) {
+        console.warn("[model-stats] recording failed:", err);
+      }
+    }
+
     if (llamaCacheContext) {
       recordLlamaCacheResidencyRun({
         chatId: chat.id,
@@ -1540,7 +1566,6 @@ async function handleChatStream(
   try {
     // Discover model with timeout protection
     let allModels: InferenceModel[];
-    let inferenceModel: InferenceModel | undefined;
     let piModel: Model<string>;
 
     try {
@@ -3575,27 +3600,11 @@ async function handleChatStream(
           .catch((err) => console.warn("[title] post-stream generation failed:", err));
       }
 
-      // Record model performance stats for every llama.cpp provider call in
-      // this visible turn. A tool loop can make multiple model calls, and a
-      // slow first prefill must not be hidden by a later tiny follow-up call.
-      if (inferenceModel?.provider === "llamacpp" && state.llamaRuns.length > 0) {
-        try {
-          const { recordModelStats } = await import("../services/model-stats.js");
-          state.llamaRuns.forEach((run, idx) => {
-            const stats = recordModelStats(inferenceModel.id, "llamacpp", run.timings, run.cache ?? undefined);
-            const cacheText = stats.inferredCachedTokens !== undefined
-              ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
-              : "";
-            const digestText = stats.requestDigest ? ` digest=${stats.requestDigest}` : "";
-            console.log(
-              `[model-stats] recorded: ${inferenceModel.id} run=${idx + 1}/${state.llamaRuns.length} ` +
-              `decode=${run.timings.predicted_per_second.toFixed(1)} tok/s${cacheText}${digestText}`,
-            );
-          });
-        } catch (err) {
-          console.warn("[model-stats] recording failed:", err);
-        }
-      }
+      // Model stats are recorded per-iteration in captureLlamaRun — each
+      // model call's row lands as soon as its stream ends, so the stats
+      // display is live mid-turn. (Previously flushed here at turn end,
+      // which left long tool loops invisible until completion and dropped
+      // runs from ask_user/error turns.)
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if (!currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {

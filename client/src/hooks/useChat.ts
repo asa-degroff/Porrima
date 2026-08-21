@@ -201,6 +201,11 @@ export function useChat(chatId: string | null) {
   const [modelFallback, setModelFallback] = useState<{ chatId: string; modelId: string; modelName?: string; previousModelId: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
+  // Monotonic counter bumped on every completed model iteration (and turn
+  // end). The server records model stats per-iteration, so each bump
+  // corresponds to a fresh stats row — consumers (ModelStatsModal) use the
+  // change as a "re-fetch" trigger so the display tracks a long turn live.
+  const [modelStatsVersion, setModelStatsVersion] = useState(0);
   // Separate from streamingUsage because the server-side display estimate
   // reflects the NEXT call's input (includes accumulated tool results), not the
   // last call's reported usage. When it exceeds reported usage, we show it as a
@@ -500,6 +505,9 @@ export function useChat(chatId: string | null) {
         bg.streaming = false;
         bg.modelProgress = null;
         bg.inferenceActivityPhase = null;
+        // Safety net for turn ends that produced no `iteration` event
+        // (error/abort paths) — guarantees a final stats re-fetch.
+        setModelStatsVersion((v) => v + 1);
         // A finished turn is never still compacting. Clears the header state
         // even when the `compaction` event was lost (SSE drop during a long
         // compaction window + silent reconnect skips buffered events).
@@ -749,6 +757,11 @@ export function useChat(chatId: string | null) {
       },
       onIteration: (info) => {
         console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"} displayEst=${info.displayEstimatedTokens ?? "?"}`);
+        // This iteration's model call just finished and the server recorded
+        // its stats row — bump so the stats display can re-fetch mid-turn.
+        // Unconditional on the active chat: background streams' runs matter
+        // to the stats modal too.
+        setModelStatsVersion((v) => v + 1);
         // An iteration completing proves the agent is past any compaction —
         // clear a stuck indicator when the `compaction` event was lost.
         const iterBg = bgStreams.get(streamChatId);
@@ -1783,6 +1796,7 @@ export function useChat(chatId: string | null) {
     warning,
     streamingSegmentIndex,
     hasBackgroundActivity,
+    modelStatsVersion,
     reconnecting,
     send,
     reportArtifactRuntimeError,

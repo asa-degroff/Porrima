@@ -490,6 +490,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     warning,
     streamingSegmentIndex,
     hasBackgroundActivity,
+    modelStatsVersion,
     send,
     reportArtifactRuntimeError,
     editMessage,
@@ -1766,7 +1767,11 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         />
       )}
       <MemoryDebugPanel isOpen={memoryDebugOpen} onClose={() => setMemoryDebugOpen(false)} />
-      <ModelStatsModal isOpen={modelStatsOpen} onClose={() => setModelStatsOpen(false)} />
+      <ModelStatsModal
+        isOpen={modelStatsOpen}
+        onClose={() => setModelStatsOpen(false)}
+        statsVersion={modelStatsVersion}
+      />
       {setupModalOpen && !settingsLoading && (
         <SetupModal
           settings={settings}

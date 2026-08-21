@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { getCacheResidency, type CacheResidency } from "../api/client";
 
 /** Check if we're in a layout wide enough for side-by-side model cards. */
@@ -109,6 +109,10 @@ interface RerankerStatsData {
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  /** Monotonic counter that bumps on every completed model iteration (see
+   *  useChat). While the modal is open, a change triggers a silent re-fetch
+   *  so the stats track a long, in-flight turn instead of freezing at open. */
+  statsVersion?: number;
 }
 
 // --- Helpers ---
@@ -711,7 +715,7 @@ interface ActiveModelsResponse {
   extractionModel: ActiveModelData | null;
 }
 
-export function ModelStatsModal({ isOpen, onClose }: Props) {
+export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
   const [activeModels, setActiveModels] = useState<ActiveModelsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [cacheResidency, setCacheResidency] = useState<CacheResidency[]>([]);
@@ -740,8 +744,11 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     if (isDesktop) setMainExpanded((prev) => !prev);
   }, [isDesktop]);
 
-  const fetchActiveModels = useCallback(async () => {
-    setLoading(true);
+  // silent=true skips the loading indicator for mid-turn refreshes — the
+  // card already shows data, and a spinner flashing on every iteration would
+  // read as a reload rather than a live update.
+  const fetchActiveModels = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch("/api/model-stats?active=true", { credentials: "include" });
       if (res.ok) {
@@ -751,7 +758,7 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     } catch (err) {
       console.error("[model-stats] fetch active failed:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -782,6 +789,10 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     }
   }, []);
 
+  // Latches the last statsVersion the modal has seen. null = not latched
+  // (fresh open) — the version effect will latch without fetching, since
+  // the open effect already pulled fresh data.
+  const lastStatsVersionRef = useRef<number | null>(null);
   useEffect(() => {
     if (isOpen) {
       fetchActiveModels();
@@ -789,8 +800,31 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
       fetchRerankerStats();
       setMainExpanded(false);
       setExtExpanded(false);
+    } else {
+      // Drop the latch so the next open re-latches without a redundant
+      // silent fetch.
+      lastStatsVersionRef.current = null;
     }
   }, [isOpen, fetchActiveModels, fetchCacheResidency, fetchRerankerStats]);
+
+  // Live tracking: the server records model stats per-iteration, and
+  // useChat bumps statsVersion on each completed model call. While open,
+  // re-fetch on every bump so a long turn's numbers update as they happen.
+  useEffect(() => {
+    if (!isOpen || statsVersion === undefined) return;
+    // On open (or first observation), latch the current version without
+    // double-fetching — the open effect already pulled fresh data.
+    if (lastStatsVersionRef.current === null) {
+      lastStatsVersionRef.current = statsVersion;
+      return;
+    }
+    if (statsVersion === lastStatsVersionRef.current) return;
+    lastStatsVersionRef.current = statsVersion;
+    fetchActiveModels(true);
+    // Cache residency tracks the same runs — refresh it alongside so the
+    // two views never disagree mid-turn.
+    fetchCacheResidency();
+  }, [statsVersion, isOpen, fetchActiveModels, fetchCacheResidency]);
 
   if (!isOpen) return null;
 
