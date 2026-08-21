@@ -322,6 +322,16 @@ export interface CustomTheme {
   /** Canonical accent color used by the existing theme token system. */
   accent: string;
 }
+/** A user-saved custom theme. Loading one copies its colors into the working
+ *  customTheme (the active "custom" theme) and records it via
+ *  Settings.activeThemePresetId — it is a bookmark, not a new theme mode. */
+export interface ThemePreset {
+  id: string;
+  /** Display name, unique case-insensitively. */
+  name: string;
+  background: string;
+  accent: string;
+}
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper";
 export type CornerRadius = "tiny" | "small" | "default";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
@@ -356,6 +366,10 @@ export interface Settings {
   imageSandboxEnabled?: boolean;
   theme?: Theme;
   customTheme?: CustomTheme;
+  /** User-saved custom themes (named bookmarks of the custom mode). */
+  themePresets?: ThemePreset[];
+  /** Id of the last theme preset loaded into the custom editor, if any. */
+  activeThemePresetId?: string;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
   opaqueBubbles?: boolean;

@@ -25,7 +25,7 @@ import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from 
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, SystemPromptPreset, Theme, ThemePreset, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -35,7 +35,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
-import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme } from "../utils/custom-theme";
+import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme, normalizeThemePresetName, saveThemePreset } from "../utils/custom-theme";
 
 /**
  * Working-copy shape of a llama service config. The only difference from the
@@ -750,6 +750,47 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [customTheme, setCustomTheme] = useState<CustomTheme>(
     normalizeCustomTheme(settings.customTheme) || DEFAULT_CUSTOM_THEME
   );
+  const [themePresets, setThemePresets] = useState<ThemePreset[]>(settings.themePresets || []);
+  const [activeThemePresetId, setActiveThemePresetId] = useState<string | undefined>(
+    settings.activeThemePresetId
+  );
+  const [themePresetError, setThemePresetError] = useState<string | null>(null);
+  const handleThemePresetLoad = (preset: ThemePreset) => {
+    setTheme("custom");
+    setCustomTheme({ background: preset.background, accent: preset.accent });
+    setActiveThemePresetId(preset.id);
+    setThemePresetError(null);
+  };
+  const handleThemePresetSave = (name: string) => {
+    // A loaded preset is edited in place (the name field renames it); without
+    // a binding the save creates a new preset.
+    const result = saveThemePreset(themePresets, activeThemePresetId, name, customTheme);
+    if (!result.ok) {
+      setThemePresetError(result.error);
+      return;
+    }
+    setThemePresetError(null);
+    setThemePresets(result.presets);
+    setActiveThemePresetId(result.id);
+  };
+  const handleThemePresetNameChange = (draft: string) => {
+    setThemePresetError(null);
+    // An empty name detaches from the loaded preset, so saving creates a new one.
+    if (!normalizeThemePresetName(draft)) setActiveThemePresetId(undefined);
+  };
+  const handleThemePresetDelete = () => {
+    const id = activeThemePresetId;
+    if (!id) return;
+    setThemePresets((prev) => prev.filter((preset) => preset.id !== id));
+    setActiveThemePresetId(undefined);
+    setThemePresetError(null);
+  };
+  const handleThemeChange = (next: Theme) => {
+    setTheme(next);
+    // A non-custom preset selection detaches from any loaded theme preset.
+    if (next !== "custom") setActiveThemePresetId(undefined);
+    setThemePresetError(null);
+  };
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
   const [opaqueBubbles, setOpaqueBubbles] = useState(settings.opaqueBubbles ?? false);
@@ -2101,6 +2142,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       embeddingModel: embeddingModel.trim() || undefined,
       theme,
       customTheme,
+      themePresets: themePresets.length > 0 ? themePresets : undefined,
+      activeThemePresetId,
       backgroundEffect,
       flatBackground,
       opaqueBubbles,
@@ -4319,8 +4362,15 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <ThemePicker
               theme={theme}
               customTheme={customTheme}
-              onThemeChange={setTheme}
+              onThemeChange={handleThemeChange}
               onCustomThemeChange={setCustomTheme}
+              themePresets={themePresets}
+              activeThemePresetId={activeThemePresetId}
+              onLoadPreset={handleThemePresetLoad}
+              onSavePreset={handleThemePresetSave}
+              onDeletePreset={handleThemePresetDelete}
+              onPresetNameChange={handleThemePresetNameChange}
+              presetError={themePresetError}
             />
           </div>
 

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import os from "os";
 import { join } from "path";
-import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection, ThemePreset } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
 import {
   DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
@@ -1154,16 +1154,24 @@ const DEFAULT_SETTINGS: Settings = {
   llamaBinaryScanDir: `${os.homedir()}/bin`,
 };
 
-function normalizeSettings(settings: Settings): Settings {
+export function normalizeSettings(settings: Settings): Settings {
   const extraction = normalizeExtractionRequestSettings(settings);
   const clamp = (value: unknown, fallback: number, min: number, max: number): number => {
     const parsed = typeof value === "number" ? value : Number(value);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.min(max, Math.max(min, Math.round(parsed)));
   };
+  const themePresets = normalizeThemePresets(settings.themePresets);
+  const activeThemePresetId =
+    typeof settings.activeThemePresetId === "string" &&
+    themePresets.some((preset) => preset.id === settings.activeThemePresetId)
+      ? settings.activeThemePresetId
+      : undefined;
   return {
     ...settings,
     customTheme: normalizeCustomTheme(settings.customTheme),
+    themePresets: themePresets.length > 0 ? themePresets : undefined,
+    activeThemePresetId,
     extractionCtxSize: extraction.ctxSize,
     extractionMaxTokens: extraction.maxTokens,
     extractionTimeoutMs: extraction.timeoutMs,
@@ -1185,21 +1193,17 @@ function normalizeSettings(settings: Settings): Settings {
   };
 }
 
-function normalizeCustomTheme(value: Settings["customTheme"]): Settings["customTheme"] {
-  if (!value || typeof value !== "object") return undefined;
+const THEME_PRESET_MAX_BACKGROUND_LUMINANCE = 0.183;
 
-  const normalizeHex = (color: unknown): string | null => {
-    if (typeof color !== "string") return null;
-    const raw = color.trim().toLowerCase();
-    const short = /^#([0-9a-f]{3})$/.exec(raw);
-    if (short) return `#${short[1].split("").map((part) => `${part}${part}`).join("")}`;
-    return /^#[0-9a-f]{6}$/.test(raw) ? raw : null;
-  };
+function normalizeThemeHex(color: unknown): string | null {
+  if (typeof color !== "string") return null;
+  const raw = color.trim().toLowerCase();
+  const short = /^#([0-9a-f]{3})$/.exec(raw);
+  if (short) return `#${short[1].split("").map((part) => `${part}${part}`).join("")}`;
+  return /^#[0-9a-f]{6}$/.test(raw) ? raw : null;
+}
 
-  const background = normalizeHex(value.background);
-  const accent = normalizeHex(value.accent);
-  if (!background || !accent) return undefined;
-
+function hexRelativeLuminance(background: string): number {
   const luminance = (channel: number): number => {
     const normalized = channel / 255;
     return normalized <= 0.03928
@@ -1209,10 +1213,53 @@ function normalizeCustomTheme(value: Settings["customTheme"]): Settings["customT
   const red = Number.parseInt(background.slice(1, 3), 16);
   const green = Number.parseInt(background.slice(3, 5), 16);
   const blue = Number.parseInt(background.slice(5, 7), 16);
-  const relativeLuminance = 0.2126 * luminance(red) + 0.7152 * luminance(green) + 0.0722 * luminance(blue);
-  if (relativeLuminance > 0.183) return undefined;
+  return 0.2126 * luminance(red) + 0.7152 * luminance(green) + 0.0722 * luminance(blue);
+}
+
+function normalizeCustomTheme(
+  value: { background?: unknown; accent?: unknown } | null | undefined,
+): Settings["customTheme"] {
+  if (!value || typeof value !== "object") return undefined;
+
+  const background = normalizeThemeHex(value.background);
+  const accent = normalizeThemeHex(value.accent);
+  if (!background || !accent) return undefined;
+  if (hexRelativeLuminance(background) > THEME_PRESET_MAX_BACKGROUND_LUMINANCE) return undefined;
 
   return { background, accent };
+}
+
+export const THEME_PRESET_MAX_COUNT = 50;
+export const THEME_PRESET_MAX_NAME_LENGTH = 32;
+
+export function normalizeThemePresetName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  return name.length > THEME_PRESET_MAX_NAME_LENGTH
+    ? name.slice(0, THEME_PRESET_MAX_NAME_LENGTH).trim()
+    : name;
+}
+
+export function normalizeThemePresets(value: unknown): ThemePreset[] {
+  if (!Array.isArray(value)) return [];
+
+  const presets: ThemePreset[] = [];
+  const seenNames = new Set<string>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Partial<ThemePreset>;
+    const id = typeof candidate.id === "string" && candidate.id.trim() ? candidate.id.trim() : null;
+    const name = normalizeThemePresetName(candidate.name);
+    const colors = normalizeCustomTheme(candidate);
+    if (!id || !name || !colors) continue;
+    const key = name.toLowerCase();
+    if (seenNames.has(key)) continue;
+    seenNames.add(key);
+    presets.push({ id, name, background: colors.background, accent: colors.accent });
+    if (presets.length >= THEME_PRESET_MAX_COUNT) break;
+  }
+  return presets;
 }
 
 export async function getSettings(): Promise<Settings> {

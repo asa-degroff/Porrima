@@ -1,9 +1,69 @@
-import type { CustomTheme } from "../types";
+import type { CustomTheme, ThemePreset } from "../types";
 
 export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   background: "#1e1b4b",
   accent: "#fbbf24",
 };
+
+export const THEME_PRESET_MAX_NAME_LENGTH = 32;
+
+/** Client-side mirror of the server's name rules (trim, collapse whitespace,
+ *  length cap) — same contract as normalizeThemePresetName in chat-storage.ts. */
+export function normalizeThemePresetName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  return name.length > THEME_PRESET_MAX_NAME_LENGTH
+    ? name.slice(0, THEME_PRESET_MAX_NAME_LENGTH).trim()
+    : name;
+}
+
+export type ThemePresetSaveResult =
+  | { ok: true; presets: ThemePreset[]; id: string }
+  | { ok: false; error: string };
+
+/**
+ * Save the current custom colors as a theme preset. When `boundId` names an
+ * existing preset, the save applies to it in place — editing the name renames
+ * it, changing the colors recolors it, and the id is preserved. Without a
+ * binding the save creates a new entry. Names are unique
+ * case-insensitively; a collision returns an error instead of writing.
+ */
+export function saveThemePreset(
+  presets: ThemePreset[],
+  boundId: string | undefined,
+  name: string,
+  colors: CustomTheme,
+): ThemePresetSaveResult {
+  const normalized = normalizeThemePresetName(name);
+  if (!normalized) return { ok: false, error: "Enter a name to save this theme." };
+  const collides = (skipId?: string) =>
+    presets.some((preset) => preset.id !== skipId && preset.name.toLowerCase() === normalized.toLowerCase());
+  const bound = boundId ? presets.find((preset) => preset.id === boundId) : undefined;
+  if (bound) {
+    if (collides(bound.id)) {
+      return { ok: false, error: `A theme named “${normalized}” already exists.` };
+    }
+    return {
+      ok: true,
+      id: bound.id,
+      presets: presets.map((preset) =>
+        preset.id === bound.id
+          ? { ...preset, name: normalized, background: colors.background, accent: colors.accent }
+          : preset,
+      ),
+    };
+  }
+  if (collides()) {
+    return { ok: false, error: `A theme named “${normalized}” already exists.` };
+  }
+  const id = crypto.randomUUID();
+  return {
+    ok: true,
+    id,
+    presets: [...presets, { id, name: normalized, background: colors.background, accent: colors.accent }],
+  };
+}
 
 // The application uses light text and translucent white surfaces throughout.
 // This threshold is approximately the maximum luminance that still gives

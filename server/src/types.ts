@@ -291,6 +291,13 @@ export interface CustomTheme {
   background: string;
   accent: string;
 }
+/** A user-saved custom theme (bookmark over the "custom" theme mode). */
+export interface ThemePreset {
+  id: string;
+  name: string;
+  background: string;
+  accent: string;
+}
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
@@ -323,6 +330,10 @@ export interface Settings {
   imageSandboxEnabled?: boolean;        // default true — shows the Image Sandbox launcher
   theme?: Theme;
   customTheme?: CustomTheme;
+  /** User-saved custom themes (named bookmarks of the custom mode). */
+  themePresets?: ThemePreset[];
+  /** Id of the last theme preset loaded into the custom editor, if any. */
+  activeThemePresetId?: string;
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;
