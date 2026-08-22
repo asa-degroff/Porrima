@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { MessageUsage, ContextBreakdown, ContextBreakdownGroup } from "../types";
 import { fetchContextBreakdown } from "../api/client";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -39,11 +39,26 @@ const GROUP_ORDER: ContextBreakdownGroup[] = ["system", "memory", "tools", "conv
 // Module-level cache keyed by chatId so repeated hover/open doesn't refetch.
 const breakdownCache = new Map<string, { data: ContextBreakdown; timestamp: number }>();
 const CACHE_TTL_MS = 15_000;
+const CACHE_MAX_ENTRIES = 32;
 
-function BreakdownPopover({ breakdown, loading, contextWindow }: {
+function rememberBreakdown(id: string, data: ContextBreakdown): void {
+  // Delete-then-set refreshes recency; evict the oldest past the cap so the
+  // map can't grow unboundedly across a long session.
+  breakdownCache.delete(id);
+  breakdownCache.set(id, { data, timestamp: Date.now() });
+  while (breakdownCache.size > CACHE_MAX_ENTRIES) {
+    const oldest = breakdownCache.keys().next().value;
+    if (oldest === undefined) break;
+    breakdownCache.delete(oldest);
+  }
+}
+
+function BreakdownPopover({ breakdown, loading, contextWindow, rescaled }: {
   breakdown: ContextBreakdown | null;
   loading: boolean;
   contextWindow: number;
+  /** True when the client rescaled estimates to the indicator's provisional total. */
+  rescaled?: boolean;
 }) {
   return (
     <div
@@ -133,9 +148,11 @@ function BreakdownPopover({ breakdown, loading, contextWindow }: {
             <div className="border-t border-white/10 pt-1.5 text-[9px] text-white/30 leading-relaxed">
               {!breakdown.promptCached
                 ? "System prompt cache is cold — system sections are approximate until the next message."
-                : breakdown.estimated
-                  ? "No model usage yet — figures are estimates until the first response."
-                  : ""}
+                : rescaled
+                  ? "Estimates scaled to the provisional post-compaction total — a real usage anchor lands with the next response."
+                  : breakdown.estimated
+                    ? "No model usage yet — figures are estimates until the first response."
+                    : ""}
             </div>
           )}
         </div>
@@ -161,6 +178,9 @@ export function TokenIndicator({
   const [loading, setLoading] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<number | null>(null);
+  // Tracks the current chat across async fetches so a response that lands
+  // after a chat switch can't paint stale data onto the new chat's popover.
+  const chatIdRef = useRef(chatId);
 
   // We have a usable count as long as totalTokens > 0 — whether it came from
   // the LLM's real usage or the server's post-compaction estimate. The
@@ -179,6 +199,7 @@ export function TokenIndicator({
 
   // Reset popover state when switching chats so stale data doesn't leak across.
   useEffect(() => {
+    chatIdRef.current = chatId;
     setVisible(false);
     setPinned(false);
     setBreakdown(null);
@@ -195,12 +216,15 @@ export function TokenIndicator({
     setLoading(true);
     try {
       const data = await fetchContextBreakdown(id);
-      breakdownCache.set(id, { data, timestamp: Date.now() });
+      rememberBreakdown(id, data);
+      // The data is valid for that chat — just not for the one on screen.
+      if (id !== chatIdRef.current) return;
       setBreakdown(data);
     } catch {
+      if (id !== chatIdRef.current) return;
       setBreakdown(null);
     } finally {
-      setLoading(false);
+      if (id === chatIdRef.current) setLoading(false);
     }
   }, []);
 
@@ -256,6 +280,34 @@ export function TokenIndicator({
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
   }, []);
 
+  // Between compaction and the next reply the server has no usage anchor for
+  // the shrunken context (usage at or before the summary is stale by design).
+  // The indicator's provisional total is the best number available, so
+  // rescale the input rows to it — the same principle as the server's anchor
+  // scaling — keeping the popover's total in agreement with the indicator.
+  const rescaledToIndicator =
+    !!breakdown && breakdown.estimated && !!isEstimated && usage.input > 0 && breakdown.inputTokens > 0;
+
+  const displayBreakdown = useMemo<ContextBreakdown | null>(() => {
+    if (!breakdown || !rescaledToIndicator) return breakdown;
+    const scale = usage.input / breakdown.inputTokens;
+    const rows = breakdown.rows.map((r) =>
+      r.group === "output" ? r : { ...r, tokens: Math.max(0, Math.round(r.tokens * scale)) }
+    );
+    const groups = breakdown.groups.map((g) =>
+      g.key === "output"
+        ? g
+        : { ...g, tokens: rows.filter((r) => r.group === g.key).reduce((sum, r) => sum + r.tokens, 0) }
+    );
+    return {
+      ...breakdown,
+      rows,
+      groups,
+      inputTokens: usage.input,
+      totalTokens: usage.input + breakdown.outputTokens,
+    };
+  }, [breakdown, rescaledToIndicator, usage.input]);
+
   return (
     <div
       ref={wrapRef}
@@ -264,7 +316,7 @@ export function TokenIndicator({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       style={{ cursor: (onClick || breakdownEnabled) ? 'pointer' : 'default' }}
-      title={onClick ? "Click to edit context window" : breakdownEnabled ? "Context usage — hover or click for breakdown" : undefined}
+      title={onClick ? "Click to edit context window" : undefined}
     >
       <div className="flex items-center gap-1.5">
         {hasUsageNumber ? (
@@ -324,7 +376,7 @@ export function TokenIndicator({
       ) : null}
 
       {breakdownEnabled && visible && (
-        <BreakdownPopover breakdown={breakdown} loading={loading} contextWindow={contextWindow} />
+        <BreakdownPopover breakdown={displayBreakdown} loading={loading} contextWindow={contextWindow} rescaled={rescaledToIndicator} />
       )}
     </div>
   );

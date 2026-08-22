@@ -68,10 +68,9 @@ const GROUP_ORDER: BreakdownGroup[] = ["system", "memory", "tools", "conversatio
 /** Per-message framing overhead (role headers, separators). Mirrors compaction.ts. */
 const MESSAGE_FRAMING_TOKENS = 8;
 
-function toolSchemaTokens(chat: Chat): number {
+function toolSchemaTokens(chat: Chat, contextWindow: number): number {
   if (chat.type === "quick") return 0;
   try {
-    const contextWindow = chat.contextWindow || 32768;
     const tools = getAgentTools(chat.id, NOOP_EFFECTS, contextWindow, chat.projectId, chat.type);
     if (!tools.length) return 0;
     return estimateTextTokens(JSON.stringify(tools), "structured");
@@ -191,7 +190,10 @@ export function computeContextBreakdown(chat: Chat, contextWindow: number): Cont
   }
 
   // ---- Tools + conversation ----
-  const tools = toolSchemaTokens(chat);
+  // The same resolved window the bar is rendered against — not a second
+  // resolution of chat.contextWindow, which could diverge from the model's
+  // default when the chat has no override.
+  const tools = toolSchemaTokens(chat, contextWindow);
   const conv = conversationTokens(chat.messages);
   // Memory deltas / passive recall live in chat history as hidden "system" rows;
   // the conversation sweep already counted them, so use that as the source of
