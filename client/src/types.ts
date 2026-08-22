@@ -4,6 +4,36 @@ export interface MessageUsage {
   totalTokens: number;
 }
 
+export type ContextBreakdownGroup = "system" | "memory" | "tools" | "conversation" | "output";
+
+export interface ContextBreakdownRow {
+  key: string;
+  label: string;
+  group: ContextBreakdownGroup;
+  tokens: number;
+}
+
+export interface ContextBreakdownGroupTotal {
+  key: ContextBreakdownGroup;
+  label: string;
+  tokens: number;
+}
+
+export interface ContextBreakdown {
+  chatId: string;
+  contextWindow: number;
+  usage: MessageUsage | null;
+  /** True when no real usage anchor exists and figures are pure estimates. */
+  estimated: boolean;
+  /** True when the rendered-prompt cache was cold (e.g. after a restart). */
+  promptCached: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  rows: ContextBreakdownRow[];
+  groups: ContextBreakdownGroupTotal[];
+}
+
 export interface ReadAloudOptions {
   /**
    * The user clicked the currently streaming assistant bubble, so read-aloud

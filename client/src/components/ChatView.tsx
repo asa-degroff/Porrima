@@ -763,6 +763,7 @@ export function ChatView({
               <ModelProgressIndicator progress={modelProgress} />
             ) : (
               <TokenIndicator
+                chatId={chatId}
                 usage={totalUsage}
                 isEstimated={isUsageEstimated}
                 contextWindow={contextWindow}

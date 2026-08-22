@@ -4,6 +4,8 @@ import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessage
 import { getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
+import { computeContextBreakdown } from "../services/context-breakdown.js";
+import { discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { Chat } from "../types.js";
 import type { ChatMetadataUpdate } from "../services/chat-storage.js";
 
@@ -180,6 +182,26 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     : [];
 
   res.json({ systemPrompt, tools, cached: cachedFlag });
+});
+
+// Attribute the current context across system prompt, memory, tools,
+// conversation, and output. Lazy-loaded by the token indicator's detail view.
+// Input-side categories are estimates scaled to the real LLM-reported input
+// count when one exists; see services/context-breakdown.ts.
+router.get("/:id/context-breakdown", async (req, res) => {
+  const chat = await getChat(req.params.id);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  let model;
+  try {
+    const all = await discoverAllModels();
+    model = all.find((m) => m.id === chat.modelId);
+  } catch {
+    model = undefined;
+  }
+  const contextWindow = getEffectiveContextWindow(chat, model);
+
+  res.json(computeContextBreakdown(chat, contextWindow));
 });
 
 // Delete a chat

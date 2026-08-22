@@ -1,4 +1,5 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
+import { estimateTextTokens } from "./token-count.js";
 import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, isSystemManagedMemoryBlock, buildMemoryIndexText, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
@@ -36,6 +37,17 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
   promptCache.set(chatId, prompt);
 }
 
+/** Estimated token cost of each section assembled into the stable prefix. */
+export interface StablePrefixSectionTokens {
+  basePrompt: number;
+  persona: number;
+  userDocument: number;
+  /** Global + project memory-block sections combined. */
+  memoryBlocks: number;
+  zeitgeist: number;
+  projectContext: number;
+}
+
 // Cache the stable prefix per chat. The globally shareable portion is kept
 // before project-only context so new-chat baseline warms can match project chats
 // through global blocks and zeitgeist.
@@ -44,7 +56,37 @@ const stablePrefixCache = new Map<string, {
   prefix: string;
   blocksSection: string;
   hasIndexedBlocks: boolean;
+  sectionTokens: StablePrefixSectionTokens;
 }>();
+
+/**
+ * Per-section token estimates captured the last time a chat's augmented prompt
+ * was built. Consumed by the context breakdown endpoint to attribute system
+ * prompt tokens without re-running retrieval. Mirrors `promptCache` semantics:
+ * describes the last built prompt, not necessarily the current on-disk state.
+ */
+export interface PromptSectionBreakdown {
+  basePrompt: number;
+  persona: number;
+  userDocument: number;
+  memoryBlocks: number;
+  zeitgeist: number;
+  projectContext: number;
+  /** Frozen retrieved-memories section baked into the system prompt. */
+  retrievedMemories: number;
+  /** Memory delta message appended to history (0 when none). */
+  memoryDelta: number;
+  /** Char length of the returned system prompt (before skills). Lets the
+   *  breakdown endpoint isolate the skills block appended by the caller. */
+  systemPromptChars: number;
+  updatedAt: number;
+}
+
+const promptBreakdownCache = new Map<string, PromptSectionBreakdown>();
+
+export function getCachedPromptBreakdown(chatId: string): PromptSectionBreakdown | undefined {
+  return promptBreakdownCache.get(chatId);
+}
 
 async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ label: string; agentsMd: string | null } | null> {
   if (!projectId) return null;
@@ -155,6 +197,7 @@ export function invalidateAllCaches(chatId: string): void {
   contextState.delete(chatId);
   stablePrefixCache.delete(chatId);
   promptCache.delete(chatId);
+  promptBreakdownCache.delete(chatId);
 }
 
 /**
@@ -708,6 +751,14 @@ export async function buildStablePrefix(
     prefix: stablePrefix,
     blocksSection: combinedBlocksSection,
     hasIndexedBlocks,
+    sectionTokens: {
+      basePrompt: estimateTextTokens(baseSystemPrompt),
+      persona: estimateTextTokens(personaSection),
+      userDocument: estimateTextTokens(userSection),
+      memoryBlocks: estimateTextTokens(globalBlocksSection) + estimateTextTokens(projectBlocksSection),
+      zeitgeist: estimateTextTokens(zeitgeistSection),
+      projectContext: estimateTextTokens(projectSection),
+    },
   });
 
   return { stablePrefix, blocksSection: combinedBlocksSection };
@@ -900,6 +951,21 @@ export async function buildSplitAugmentedPrompt(
     baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
   );
   const systemPrompt = result.systemPrompt;
+
+  // Record per-section token estimates for the context breakdown endpoint. The
+  // frozen memories section is whatever trails the stable prefix in the prompt.
+  const cacheKey = chatId || "_default";
+  const prefixEntry = stablePrefixCache.get(cacheKey);
+  if (chatId && prefixEntry && systemPrompt.startsWith(prefixEntry.prefix)) {
+    promptBreakdownCache.set(chatId, {
+      ...prefixEntry.sectionTokens,
+      retrievedMemories: estimateTextTokens(systemPrompt.slice(prefixEntry.prefix.length)),
+      memoryDelta: estimateTextTokens(result.memoriesMessage),
+      systemPromptChars: systemPrompt.length,
+      updatedAt: Date.now(),
+    });
+  }
+
   return {
     ...result,
     systemPrompt,

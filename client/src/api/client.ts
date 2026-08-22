@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, ContextBreakdown, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -95,6 +95,12 @@ export async function updateChat(
 export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[]; cached: boolean }> {
   const res = await apiFetch(`${BASE}/chats/${id}/rendered-prompt`);
   if (!res.ok) throw new Error("Failed to fetch rendered prompt");
+  return res.json();
+}
+
+export async function fetchContextBreakdown(id: string): Promise<ContextBreakdown> {
+  const res = await apiFetch(`${BASE}/chats/${id}/context-breakdown`);
+  if (!res.ok) throw new Error("Failed to fetch context breakdown");
   return res.json();
 }
 
