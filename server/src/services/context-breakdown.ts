@@ -138,12 +138,24 @@ function conversationTokens(messages: ChatMessage[]): Record<string, number> {
   return acc;
 }
 
-/** Find the latest in-context agent usage to anchor the real input total. */
+/**
+ * Find the latest in-context assistant usage to anchor the real input total.
+ * Mirrors the client's compaction-aware scan (useChat totalUsage): usage at or
+ * before the last compaction summary reflects the pre-compaction context size
+ * and is stale, so only replies strictly after the latest summary anchor.
+ */
 function latestUsage(messages: ChatMessage[]): { input: number; output: number; totalTokens: number } | null {
+  let lastCompactionIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]._isCompactionSummary) {
+      lastCompactionIdx = i;
+      break;
+    }
+  }
+  for (let i = messages.length - 1; i > lastCompactionIdx; i--) {
     const m = messages[i];
     if (m._outOfContext) continue;
-    if (m.role === "assistant" && m.usage && m.usage.input > 0) {
+    if (m.role === "assistant" && !m._isCompactionSummary && m.usage && m.usage.input > 0) {
       return { input: m.usage.input, output: m.usage.output, totalTokens: m.usage.totalTokens };
     }
   }
@@ -155,7 +167,12 @@ export function computeContextBreakdown(chat: Chat, contextWindow: number): Cont
   const section = getCachedPromptBreakdown(chat.id);
   // Quick chats have no memory-augmented prompt to be "cold" — the base system
   // prompt is read directly from the chat, so treat it as fully resolved.
-  const promptCached = cachedPrompt != null || chat.type === "quick";
+  // For other chat types the sections are only resolved when the breakdown
+  // capture ran: a resumed prompt re-cached after a restart, or the
+  // stable-prefix fallback, can leave the rendered-prompt cache warm while
+  // `section` is null (all memory sections read 0, and scaling would inflate
+  // the base-prompt row to absorb them) — so the cold-cache footnote must fire.
+  const promptCached = chat.type === "quick" || (cachedPrompt != null && section != null);
 
   // ---- System prompt sections (from the captured stable-prefix breakdown) ----
   const basePrompt = section?.basePrompt ?? estimateTextTokens(chat.systemPrompt || "");

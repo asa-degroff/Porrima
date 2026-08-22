@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Chat, ChatMessage } from "../types.js";
 import { computeContextBreakdown } from "../services/context-breakdown.js";
+import { setCachedAugmentedPrompt } from "../services/memory-context.js";
 
 function quickChat(messages: ChatMessage[], contextWindow = 32768): Chat {
   return {
@@ -104,6 +105,77 @@ describe("computeContextBreakdown", () => {
     expect(result.estimated).toBe(true);
     expect(result.outputTokens).toBe(0);
     expect(result.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("ignores usage at or before the last compaction summary when anchoring", () => {
+    // The pre-compaction reply's usage reflects the pre-compaction context
+    // size — anchoring on it would inflate every row against the shrunken
+    // current context. The summary itself carries usage too (defensive: it is
+    // an assistant message) and must not anchor either.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "lots of work happened here", timestamp: 1 },
+      {
+        role: "assistant",
+        content: "pre-compaction reply",
+        usage: { input: 95_000, output: 500, totalTokens: 95_500 },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: "Summary of earlier compacted work.",
+        _isCompactionSummary: true,
+        usage: { input: 95_000, output: 300, totalTokens: 95_300 },
+        timestamp: 3,
+      },
+      { role: "user", content: "continue", timestamp: 4 },
+    ];
+
+    const result = computeContextBreakdown(quickChat(messages), 32768);
+
+    expect(result.usage).toBeNull();
+    expect(result.estimated).toBe(true);
+    expect(result.inputTokens).toBeLessThan(95_000);
+  });
+
+  it("anchors on the latest reply strictly after the last compaction summary", () => {
+    const realInput = 40_000;
+    const realOutput = 120;
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "pre-compaction reply",
+        usage: { input: 95_000, output: 500, totalTokens: 95_500 },
+        timestamp: 1,
+      },
+      { role: "assistant", content: "Summary of earlier compacted work.", _isCompactionSummary: true, timestamp: 2 },
+      { role: "user", content: "continue", timestamp: 3 },
+      {
+        role: "assistant",
+        content: "post-compaction reply",
+        usage: { input: realInput, output: realOutput, totalTokens: realInput + realOutput },
+        timestamp: 4,
+      },
+    ];
+
+    const result = computeContextBreakdown(quickChat(messages), 32768);
+
+    expect(result.estimated).toBe(false);
+    expect(result.inputTokens).toBe(realInput);
+    expect(result.outputTokens).toBe(realOutput);
+  });
+
+  it("reports cold sections when the rendered prompt is cached but no section breakdown was captured", () => {
+    // Simulates a resumed prompt re-cached after a restart (or a
+    // stable-prefix fallback): rendered-prompt cache warm, breakdown cache
+    // empty. The cold-cache footnote must fire instead of silently inflating
+    // the base-prompt row.
+    const chatId = "chat-cold-sections";
+    setCachedAugmentedPrompt(chatId, "a warm cached prompt without sections");
+    const chat: Chat = { ...quickChat([]), id: chatId, type: "agent" };
+
+    const result = computeContextBreakdown(chat, 32768);
+
+    expect(result.promptCached).toBe(false);
   });
 
   it("counts compaction summaries separately from normal assistant text", () => {
