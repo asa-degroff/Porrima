@@ -286,31 +286,10 @@ export async function runHeadlessChatTurn(
     model: model.id,
   };
   const { buildTimeAnchor } = await import("./memory-context.js");
-  const buildContextMessages = async (): Promise<AgentMessage[]> => {
-    const messages = await chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
-    // Keep the `[time:]` anchor at the trailing position (last user message)
-    // rather than the system prompt, so the changing timestamp only re-processes
-    // its own tokens and the stable prefix stays reusable across runs.
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== "user") continue;
-      const anchor = buildTimeAnchor(chat.messages);
-      if (typeof msg.content === "string") {
-        messages[i] = { ...msg, content: `${msg.content}${anchor}` };
-      } else if (Array.isArray(msg.content)) {
-        const content: any[] = msg.content.map((c) => ({ ...c }));
-        const textIdx = content.findIndex((c: any) => c.type === "text");
-        if (textIdx >= 0) {
-          content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
-        } else {
-          content.push({ type: "text" as const, text: anchor.trimStart() });
-        }
-        messages[i] = { ...msg, content };
-      }
-      break;
-    }
-    return messages;
-  };
+  // Replayed history carries each row's frozen `[time:]` anchor via
+  // chatMessagesToPiMessages — no live anchor injection needed here.
+  const buildContextMessages = async (): Promise<AgentMessage[]> =>
+    chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
   const context: AgentContext = {
     systemPrompt,
     messages: await buildContextMessages(),
@@ -684,18 +663,30 @@ export async function runHeadlessChatTurn(
       if (options.persistIntermediateAssistantMessages) {
         await persistAssistantSinceLastBoundary();
       }
+      if (followUp.message.role === "user" && !followUp.message.timeAnchor) {
+        // Freeze the anchor on the persisted row and mirror it into the wire
+        // message so this turn's prompt is a prefix of later replays.
+        followUp.message.timeAnchor = buildTimeAnchor(chat.messages);
+      }
       chat.messages.push(followUp.message);
       await saveChat(chat);
       if (followUp.label) {
         console.log(`[${logPrefix}] follow-up injected: ${followUp.label}`);
       }
-      return [
-        followUp.llmMessage || {
-          role: "user" as const,
-          content: followUp.message.content,
-          timestamp: followUp.message.timestamp,
-        },
-      ];
+      const llmMessage = followUp.llmMessage || {
+        role: "user" as const,
+        content: followUp.message.content,
+        timestamp: followUp.message.timestamp,
+      };
+      const anchor = followUp.message.role === "user" ? followUp.message.timeAnchor : undefined;
+      if (
+        anchor &&
+        llmMessage.role === "user" &&
+        typeof (llmMessage as { content?: unknown }).content === "string"
+      ) {
+        return [{ ...llmMessage, content: `${llmMessage.content}${anchor}` } as AgentMessage];
+      }
+      return [llmMessage];
     },
   });
 

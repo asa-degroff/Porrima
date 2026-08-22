@@ -55,6 +55,14 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   segments?: MessageSegment[];
   timestamp: number;
+  /**
+   * Frozen `[time:]` anchor appended after this row's content in LLM prompts.
+   * Computed once when the row is created and never refreshed: replay must
+   * reproduce the exact tokens that were cached on this row's turn, so the
+   * longest-common-prefix extends through the whole history. Kept out of
+   * `content` so UI, search, and extraction don't see it.
+   */
+  timeAnchor?: string;
   /** Transient flag: message is still being generated (mid-tool-loop). Stripped on completion. */
   _inProgress?: boolean;
   /** Marks this message as a compaction summary (inserted when messages are removed due to context limits) */

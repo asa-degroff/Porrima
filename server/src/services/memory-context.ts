@@ -718,16 +718,16 @@ export async function buildStablePrefix(
 /**
  * The trailing user message carries a `[time:]` anchor: the current UTC time,
  * and — when the chat has been idle beyond a threshold — how long it was idle.
- * The anchor is refreshed on every turn, so its staleness is bounded to the
- * current turn.
+ * The anchor is computed once per turn and frozen on the persisted row
+ * (`ChatMessage.timeAnchor`); later turns replay that exact string, so its
+ * staleness is bounded to the turn it was created in.
  *
- * Cache note: the anchor MUST be appended AFTER the conversation (to the last
- * user message), never to the system prompt. The system prompt is the first
- * block of the token stream; appending a changing timestamp there breaks the
- * longest common prefix at the anchor's position, forcing the entire
- * conversation after it to be re-evaluated. Appended to the trailing user
- * message instead, the LCP extends through the whole history and only the
- * anchor's own ~15 tokens are re-processed per turn.
+ * Cache note: the anchor MUST live at the tail of a user message, never in
+ * the system prompt (the first block of the token stream — a changing
+ * timestamp there breaks the longest common prefix for the whole
+ * conversation). Freezing it on the row makes each turn's wire prompt a
+ * strict byte-prefix of the next turn's: replay re-appends the stored
+ * anchor verbatim, so only genuinely new tokens are ever re-processed.
  */
 const TIME_ANCHOR_GAP_THRESHOLD_MS = 60 * 60 * 1000; // "resumed after" clause beyond 1h
 const TIME_ANCHOR_CURRENT_TURN_MS = 60 * 1000;       // skip rows created in the last minute
@@ -875,9 +875,9 @@ async function buildMemoryAugmentedPromptInner(
  *
  * Returns:
  * - systemPrompt: frozen system prompt. The frozen portion is byte-identical
- *   between turns — the `[time:]` anchor is NOT included here. Append it to
- *   the trailing user message via buildTimeAnchor() so the changing timestamp
- *   only re-processes its own ~15 tokens instead of the whole conversation.
+ *   between turns — the `[time:]` anchor is NOT included here. It is computed
+ *   once per turn, frozen on the user row (ChatMessage.timeAnchor), and
+ *   replayed verbatim by later turns so only new tokens are re-processed.
  * - memoriesMessage: delta of NEW memories not already in context (may be empty)
  *
  * Flow:

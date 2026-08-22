@@ -919,10 +919,12 @@ export async function runSystemSynthesis(options?: {
       archivedCount,
       newlyArchivedIds: archivedChatIds,
     }, phasePrompts.synthesis);
+    const { buildTimeAnchor } = await import("./memory-context.js");
     const phase1Msg: ChatMessage = {
       role: "user",
       content: phase1Content,
       timestamp: Date.now(),
+      timeAnchor: buildTimeAnchor(chat.messages),
       _isSystemMessage: true,
       _isSynthesisMessage: true,
       _isAutomationMessage: true,
@@ -1263,10 +1265,12 @@ export async function runWakeCycle(options?: {
       hour: "2-digit", minute: "2-digit",
     });
     const triggerContent = `# Wake Cycle — ${stamp}\n\n${wakePromptFromSteps(options?.promptSteps)}`;
+    const { buildSplitAugmentedPrompt, resetMemoryContext, buildTimeAnchor } = await import("./memory-context.js");
     const triggerMsg: ChatMessage = {
       role: "user",
       content: triggerContent,
       timestamp: Date.now(),
+      timeAnchor: buildTimeAnchor(chat.messages),
       _isSystemMessage: true,
       _isAutomationMessage: true,
       ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
@@ -1281,7 +1285,6 @@ export async function runWakeCycle(options?: {
     // Skip memory retrieval — the wake trigger is not a conversational query,
     // and passive recall during the run will supply relevant memories based
     // on the agent's own output.
-    const { buildSplitAugmentedPrompt, resetMemoryContext } = await import("./memory-context.js");
     resetMemoryContext(SYSTEM_CHAT_ID);
     const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",

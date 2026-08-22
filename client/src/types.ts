@@ -92,6 +92,8 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   queued?: boolean;
   timestamp: number;
+  /** Frozen `[time:]` anchor appended to this row in LLM prompts (server-managed; not rendered). */
+  timeAnchor?: string;
   /** Ordered segments for interleaved display - replaces toolCalls/toolResults/artifacts order */
   segments?: MessageSegment[];
   /** Marks this message as a compaction summary (inserted when messages are removed due to context limits) */

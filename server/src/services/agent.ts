@@ -307,10 +307,16 @@ export function chatMessagesToPiMessages(
       const pending = pendingSystemContexts.length > 0
         ? takePendingSystemContext()
         : { content: [], timestamp: undefined };
-      const contentWithSystemContext = mergeSystemContextWithUserContent(
+      let contentWithSystemContext = mergeSystemContextWithUserContent(
         pending.content,
         m.content
       );
+      // Re-append the row's frozen `[time:]` anchor so replayed history is
+      // byte-identical to the prompt that was sent (and KV-cached) on this
+      // row's turn — see ChatMessage.timeAnchor.
+      if (m.timeAnchor) {
+        contentWithSystemContext = `${contentWithSystemContext}${m.timeAnchor}`;
+      }
 
       if (m.images?.length) {
         const content: any[] = [];

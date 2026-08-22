@@ -676,37 +676,6 @@ function buildUserPiMessage(
   return { role: "user", content: contentWithAnchor, timestamp: Date.now() };
 }
 
-/**
- * Append the `[time:]` anchor to the LAST message in a reconstructed context
- * array. Used by continue-mode paths (follow-ups, resume) where the trailing
- * user message comes out of chat history rather than buildUserPiMessage, so
- * the changing timestamp stays at the trailing position instead of breaking
- * the system-prompt LCP.
- */
-function appendTimeAnchorToTrailingUserMessage(
-  messages: Message[],
-  recentMessages: ChatMessage[],
-): void {
-  const anchor = buildTimeAnchor(recentMessages);
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-    if (typeof msg.content === "string") {
-      messages[i] = { ...msg, content: `${msg.content}${anchor}` };
-    } else if (Array.isArray(msg.content)) {
-      const content: any[] = msg.content.map((c) => ({ ...c }));
-      const textIdx = content.findIndex((c: any) => c.type === "text");
-      if (textIdx >= 0) {
-        content[textIdx] = { ...content[textIdx], text: `${content[textIdx].text}${anchor}` };
-      } else {
-        content.push({ type: "text" as const, text: anchor.trimStart() });
-      }
-      messages[i] = { ...msg, content };
-    }
-    break;
-  }
-}
-
 function isPendingNextUserContextMessage(message: ChatMessage | undefined): message is ChatMessage {
   return (
     !!message &&
@@ -1797,7 +1766,11 @@ async function handleChatStream(
         // Save any uncommitted assistant row and the steering user message.
         // Tool-use fragments may already have been committed at turn_end.
         const assistantMsg = finalizeUncommittedAssistantMessage();
-        chat.messages.push(queuedMessageToChatMessage(queued));
+        const steeringRow = queuedMessageToChatMessage(queued);
+        if (steeringRow.role === "user") {
+          steeringRow.timeAnchor = buildTimeAnchor(chat.messages);
+        }
+        chat.messages.push(steeringRow);
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start the steered turn
@@ -1818,7 +1791,11 @@ async function handleChatStream(
 
         console.log(`[chat] steering: injecting queued message ${queued.id} mid-loop`);
 
-        return [{ role: "user" as const, content: queued.message, timestamp: queued.timestamp }];
+        return [{
+          role: "user" as const,
+          content: `${queued.message}${steeringRow.timeAnchor ?? ""}`,
+          timestamp: queued.timestamp,
+        }];
       },
       getFollowUpMessages: async () => {
         const queued = await messageQueue.drainOne(chat.id);
@@ -1826,7 +1803,11 @@ async function handleChatStream(
 
         // Save any uncommitted assistant row and the queued user message.
         const assistantMsg = finalizeUncommittedAssistantMessage();
-        chat.messages.push(queuedMessageToChatMessage(queued));
+        const followUpRow = queuedMessageToChatMessage(queued);
+        if (followUpRow.role === "user") {
+          followUpRow.timeAnchor = buildTimeAnchor(chat.messages);
+        }
+        chat.messages.push(followUpRow);
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start next
@@ -1861,7 +1842,11 @@ async function handleChatStream(
 
         console.log(`[chat] follow-up: draining queued message ${queued.id}`);
 
-        return [{ role: "user" as const, content: queued.message, timestamp: queued.timestamp }];
+        return [{
+          role: "user" as const,
+          content: `${queued.message}${followUpRow.timeAnchor ?? ""}`,
+          timestamp: queued.timestamp,
+        }];
       },
     });
 
@@ -3359,7 +3344,13 @@ async function handleChatStream(
       // committed; only persist an uncommitted final/partial row if present.
       const currentAssistantMsg = finalizeUncommittedAssistantMessage();
 
-      chat.messages.push(queuedMessageToChatMessage(queuedFollowUp));
+      const postLoopFollowUpRow = queuedMessageToChatMessage(queuedFollowUp);
+      if (postLoopFollowUpRow.role === "user") {
+        // Freeze this turn's anchor on the row; the replay-based context
+        // reconstruction below appends it, keeping wire and history identical.
+        postLoopFollowUpRow.timeAnchor = buildTimeAnchor(chat.messages);
+      }
+      chat.messages.push(postLoopFollowUpRow);
       await saveChat(chat);
 
       // Emit events to finalize current and start follow-up
@@ -3392,13 +3383,10 @@ async function handleChatStream(
       currentTurnIsHidden = queuedFollowUp.hidden === true;
       lastUserMessage = queuedFollowUp.message;
 
-      // Build new context for follow-up (all messages including the queued one)
+      // Build new context for follow-up (all messages including the queued one).
+      // The trailing row's frozen timeAnchor is appended by the replay
+      // conversion itself, so no live anchor injection is needed here.
       const followUpContextMessages = await chatMessagesToHydratedPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
-
-      // The follow-up message is already in chat history, so it doesn't flow
-      // through buildUserPiMessage. Append the time anchor to the trailing
-      // user message so the changing timestamp stays at the prompt's tail.
-      appendTimeAnchorToTrailingUserMessage(followUpContextMessages, chat.messages);
 
       // Safety check: ensure context is not empty
       if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
@@ -4034,11 +4022,13 @@ router.post("/", async (req, res) => {
     }
 
     // Inject the user's answer as a ToolResultMessage for the pending ask_user call
+    // One anchor instance shared by the wire prompt and the persisted row.
+    const resumeTimeAnchor = buildTimeAnchor(chat.messages);
     const toolResultMsg: ToolResultMessage = {
       role: "toolResult",
       toolCallId: pendingState.askToolCallId,
       toolName: "ask_user",
-      content: [{ type: "text", text: `${message}${buildTimeAnchor(chat.messages)}` }],
+      content: [{ type: "text", text: `${message}${resumeTimeAnchor}` }],
       isError: false,
       timestamp: Date.now(),
     };
@@ -4050,6 +4040,7 @@ router.post("/", async (req, res) => {
       content: message,
       images: persistedImages?.length ? persistedImages : undefined,
       timestamp: Date.now(),
+      timeAnchor: resumeTimeAnchor,
     });
     await saveChat(chat);
 
@@ -4185,11 +4176,16 @@ router.post("/", async (req, res) => {
         return;
       }
     } else {
+      // Freeze this turn's `[time:]` anchor on the row: the same string is
+      // appended to the wire prompt below and replayed verbatim on later
+      // turns, keeping the KV-cache prefix stable across turns.
+      const timeAnchor = buildTimeAnchor(chat.messages);
       const userMsg: ChatMessage = {
         role: "user",
         content: message,
         images: persistedImages?.length ? persistedImages : (images?.length ? images : undefined),
         timestamp: Date.now(),
+        timeAnchor,
       };
       chat.messages.push(userMsg);
     }
@@ -4433,7 +4429,11 @@ router.post("/", async (req, res) => {
     });
 
     const userImagesForModel = await hydrateUserImageAttachments(images?.length ? images : persistedImages);
-    const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, buildTimeAnchor(chat.messages));
+    // Reuse the anchor frozen on the just-pushed row (never rebuild it) so the
+    // wire prompt and the persisted history stay byte-identical.
+    const trailingRow = chat.messages[chat.messages.length - 1];
+    const sendTimeAnchor = trailingRow?.role === "user" ? trailingRow.timeAnchor : undefined;
+    const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, sendTimeAnchor);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
@@ -4838,11 +4838,15 @@ router.post("/edit", async (req, res) => {
   const editImages = images?.length
     ? await persistImages(images)
     : (originalMessage.images?.length ? originalMessage.images : undefined);
+  // Freeze this turn's `[time:]` anchor on the edited row so replays of the
+  // rewritten history carry the exact tokens this turn's prompt contains.
+  const editTimeAnchor = buildTimeAnchor(chat.messages);
   const userMsg: ChatMessage = {
     role: "user",
     content: message,
     images: editImages,
     timestamp: Date.now(),
+    timeAnchor: editTimeAnchor,
   };
   chat.messages.push(userMsg);
 
@@ -5033,7 +5037,7 @@ router.post("/edit", async (req, res) => {
   }
 
   const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
-  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext, buildTimeAnchor(chat.messages));
+  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext, editTimeAnchor);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });

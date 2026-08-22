@@ -198,7 +198,12 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     }
 
     const firstTrigger = formatAutomationTrigger(task, steps[0]);
-    chat.messages.push(makeTriggerMessage(task, run, firstTrigger));
+    const firstTriggerRow = makeTriggerMessage(task, run, firstTrigger);
+    // Freeze this run's `[time:]` anchor on the trigger row so replays of the
+    // automation chat match the tokens this run's prompt contains.
+    const { buildTimeAnchor } = await import("./memory-context.js");
+    firstTriggerRow.timeAnchor = buildTimeAnchor(chat.messages);
+    chat.messages.push(firstTriggerRow);
     triggerMessageIndex = chat.messages.length - 1;
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);

@@ -292,3 +292,105 @@ describe("time anchor", () => {
     expect(anchor).toMatch(SPLIT_ANCHOR_RE);
   });
 });
+
+describe("persisted time anchors in replay", () => {
+  function mockAgentDeps(): void {
+    vi.resetModules();
+    vi.doMock("../services/models.js", () => ({
+      createPiModelFromProvider: vi.fn(),
+      discoverAllModels: vi.fn(async () => []),
+      getExtractionRoute: vi.fn(),
+      streamSimple: vi.fn(),
+    }));
+    vi.doMock("@earendil-works/pi-ai/compat", () => ({
+      streamSimple: vi.fn(),
+    }));
+    vi.doMock("../services/llama-router-client.js", () => ({
+      normalizeRouterModelId: vi.fn((id: string) => id),
+    }));
+    vi.doMock("../services/user-image-storage.js", () => ({
+      hydrateUserImageAttachments: vi.fn(async (images: unknown[]) => images),
+    }));
+    vi.doMock("../services/tool-result-image-storage.js", () => ({
+      hydrateToolResultImageAttachments: vi.fn(async (results: unknown[]) => results),
+    }));
+  }
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("re-appends each user row's frozen time anchor during replay", async () => {
+    mockAgentDeps();
+    const { chatMessagesToPiMessages } = await import("../services/agent.js");
+    const anchorA = "\n\n[time: 2026-08-20 10:00 UTC]";
+    const anchorB = "\n\n[time: 2026-08-21 11:30 UTC]";
+
+    const pi = chatMessagesToPiMessages(
+      [
+        { role: "user", content: "first question", timestamp: 1000, timeAnchor: anchorA },
+        { role: "assistant", content: "first answer", timestamp: 2000 },
+        { role: "user", content: "second question", timestamp: 3000, timeAnchor: anchorB },
+      ],
+      "test-model",
+    );
+
+    expect(pi).toHaveLength(3);
+    expect(pi[0].role).toBe("user");
+    expect(pi[0].content).toBe(`first question${anchorA}`);
+    expect(pi[2].content).toBe(`second question${anchorB}`);
+  });
+
+  it("keeps turn N's replayed history a byte-prefix of turn N+1's", async () => {
+    mockAgentDeps();
+    const { chatMessagesToPiMessages } = await import("../services/agent.js");
+    const anchorA = "\n\n[time: 2026-08-20 10:00 UTC]";
+
+    // Turn N wire prompt ended with: u1 + frozen anchor.
+    const turnN = chatMessagesToPiMessages(
+      [{ role: "user", content: "u1", timestamp: 1000, timeAnchor: anchorA }],
+      "test-model",
+    );
+    // Turn N+1 replays the same row from storage — identical bytes.
+    const turnNPlusOne = chatMessagesToPiMessages(
+      [
+        { role: "user", content: "u1", timestamp: 1000, timeAnchor: anchorA },
+        { role: "assistant", content: "r1", timestamp: 2000 },
+        { role: "user", content: "u2", timestamp: 3000, timeAnchor: "\n\n[time: 2026-08-20 10:05 UTC]" },
+      ],
+      "test-model",
+    );
+
+    expect(JSON.stringify(turnNPlusOne[0])).toBe(JSON.stringify(turnN[0]));
+  });
+
+  it("leaves rows without a stored anchor untouched (legacy chats)", async () => {
+    mockAgentDeps();
+    const { chatMessagesToPiMessages } = await import("../services/agent.js");
+
+    const pi = chatMessagesToPiMessages(
+      [{ role: "user", content: "legacy row", timestamp: 1000 }],
+      "test-model",
+    );
+
+    expect(pi[0].content).toBe("legacy row");
+  });
+
+  it("appends the anchor after merged system contexts, matching live prompt shape", async () => {
+    mockAgentDeps();
+    const { chatMessagesToPiMessages } = await import("../services/agent.js");
+    const anchor = "\n\n[time: 2026-08-21 12:00 UTC]";
+
+    const pi = chatMessagesToPiMessages(
+      [
+        { role: "system", content: "[System context — updated memories]\nNew memory text.", timestamp: 900 },
+        { role: "user", content: "question", timestamp: 1000, timeAnchor: anchor },
+      ],
+      "test-model",
+    );
+
+    expect(pi).toHaveLength(1);
+    expect(pi[0].content).toBe(`[System context — updated memories]\nNew memory text.\n\nquestion${anchor}`);
+  });
+});
