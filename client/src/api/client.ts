@@ -499,12 +499,13 @@ export async function getChatStatus(
  * ends. Returns the AbortController the caller can use to disconnect early.
  *
  * 404 responses (no active stream) are silent — the caller should check
- * getChatStatus first, but races are expected.
+ * getChatStatus first, but races are expected. Pass onNoActiveStream to be
+ * notified when that race happens so the caller can sync authoritative state.
  */
 export function reconnectChat(
   chatId: string,
   callbacks: StreamCallbacks,
-  options?: { replay?: boolean }
+  options?: { replay?: boolean; onNoActiveStream?: () => void }
 ): AbortController {
   const controller = new AbortController();
   const replayParam = options?.replay === false ? "?replay=0" : "";
@@ -522,7 +523,8 @@ export function reconnectChat(
       }
       if (res.status === 404) {
         // No active stream — normal case when the turn ended between status
-        // check and reconnect. Silent no-op.
+        // check and reconnect. Silent unless the caller registered a handler.
+        options?.onNoActiveStream?.();
         return;
       }
       if (!res.ok) {

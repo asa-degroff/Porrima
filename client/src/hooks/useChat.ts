@@ -67,6 +67,47 @@ interface CompactionInfo {
 const drafts = new Map<string, Draft>();
 const MESSAGE_PAGE_SIZE = 200;
 
+// ---------------------------------------------------------------------------
+// Recently-streaming markers
+//
+// Marks chats that had a stream started from this client recently, so chat
+// switches and tab visibility changes can cheaply decide whether to probe
+// /chat/status for an in-flight server stream. The marker set is backed by
+// sessionStorage: a page refresh mid-turn wipes all in-memory state, and the
+// refresh case is precisely when the server-side stream is still live — so
+// the markers must survive the reload or reconnect-on-refresh never fires.
+// ---------------------------------------------------------------------------
+
+const RECENTLY_STREAMING_KEY = "porrima.recentlyStreaming";
+const RECENTLY_STREAMING_TTL_MS = 5 * 60_000;
+
+function loadRecentlyStreaming(): Map<string, number> {
+  try {
+    const raw = sessionStorage.getItem(RECENTLY_STREAMING_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const now = Date.now();
+    const map = new Map<string, number>();
+    for (const [id, expiresAt] of Object.entries(parsed)) {
+      if (typeof expiresAt === "number" && expiresAt > now) map.set(id, expiresAt);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+function saveRecentlyStreaming(map: Map<string, number>): void {
+  try {
+    sessionStorage.setItem(RECENTLY_STREAMING_KEY, JSON.stringify(Object.fromEntries(map)));
+  } catch {
+    // Storage unavailable (private mode/quota) — markers stay memory-only.
+  }
+}
+
+/** Module-level singleton so all hook instances share marker state. */
+const recentlyStreamingExpiries = loadRecentlyStreaming();
+
 /** Check if a chat has an active or completed background stream */
 export function hasBackgroundStream(chatId: string): boolean {
   return bgStreams.has(chatId);
@@ -279,9 +320,12 @@ export function useChat(chatId: string | null) {
         setStreamingSegmentIndex(null);
       }
     } else {
-      // No background stream — fresh reset for new chat
-      // In-progress state from persistence is handled by App.tsx selectChat logic
-      // which checks for _inProgress flag before calling loadMessages
+      // No background stream — fresh reset for new chat.
+      // If the server still holds an in-flight stream for this chat (page
+      // refresh mid-turn, or another device/tab started it), the reconnect
+      // effect below reattaches via /chat/status + /chat/reconnect. Until it
+      // attaches, persisted rows render statically; _inProgress flags in the
+      // loaded messages are display hints only and do NOT drive reconnect.
       setStreaming(false);
       setReconnecting(false);
       setOlderMessagesLoading(false);
@@ -464,6 +508,9 @@ export function useChat(chatId: string | null) {
       onGeneratedImage: (image) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Replay-safe: generation ids are unique — drop re-delivered events
+        // from reconnect buffer replay instead of duplicating the segment.
+        if (bg.generatedImages.some((img) => img.id === image.id)) return;
         bg.generatedImages.push(image);
 
         // Add generated image segment
@@ -483,6 +530,9 @@ export function useChat(chatId: string | null) {
       onVisual: (visual) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Replay-safe upsert — same id+version contract as onArtifact above.
+        const existingIdx = bg.visuals.findIndex((v) => v.id === visual.id);
+        if (existingIdx >= 0 && (bg.visuals[existingIdx].version ?? 1) === (visual.version ?? 1)) return;
         bg.visuals.push(visual);
 
         // Add visual segment
@@ -691,6 +741,19 @@ export function useChat(chatId: string | null) {
           if (activeChatIdRef.current === streamChatId) setCompacting(false);
         }
 
+        // Replay-safe: reconnect buffer replay re-delivers events onto state
+        // that may already hold them. Tool calls/results have exactly one
+        // segment per id, so a repeat is always a duplicate.
+        const isDuplicateToolCall =
+          segment.type === "tool_call" &&
+          !!segment.toolCall &&
+          bg.segments.some((s) => s.type === "tool_call" && s.toolCall?.id === segment.toolCall!.id);
+        const isDuplicateToolResult =
+          segment.type === "tool_result" &&
+          !!segment.toolResult &&
+          bg.segments.some((s) => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolResult!.toolCallId);
+        if (isDuplicateToolCall || isDuplicateToolResult) return;
+
         // For tool_result, insert immediately after its matching tool_call
         // so visual/artifact segments stay in the right position
         if (segment.type === "tool_result" && segment.toolResult) {
@@ -739,6 +802,11 @@ export function useChat(chatId: string | null) {
       onArtifact: (artifact) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Replay-safe upsert: update_artifact re-emits the same id with a
+        // newer version, so only skip when this exact id+version already
+        // arrived (buffer replay duplicate); newer versions flow through.
+        const existingIdx = bg.artifacts.findIndex((a) => a.id === artifact.id);
+        if (existingIdx >= 0 && (bg.artifacts[existingIdx].version ?? 1) === (artifact.version ?? 1)) return;
         bg.artifacts.push(artifact);
 
         // Add artifact segment
@@ -1359,7 +1427,49 @@ export function useChat(chatId: string | null) {
     if (serverChat) setActiveChatData(serverChat);
 
     const callbacks = makeStreamCallbacks(chatIdToConnect);
-    const controller = reconnectChat(chatIdToConnect, callbacks);
+    const controller = reconnectChat(chatIdToConnect, callbacks, {
+      onNoActiveStream: () => {
+        // The turn ended between the status probe and attach (404 race).
+        // Sync authoritative persisted state instead of leaving a stuck
+        // streaming placeholder until the next poll or chat switch.
+        if (bgStreams.get(chatIdToConnect) !== bg || bg.doneCalled) return;
+        apiFetchChat(chatIdToConnect)
+          .then((chat) => {
+            if (bgStreams.get(chatIdToConnect) !== bg || bg.doneCalled) return;
+            if (chat) {
+              setActiveChatData(chat);
+              bg.messages = cloneMessages(chat.messages);
+              bg.messageOffset = chat.messageOffset ?? 0;
+              bg.messageTotal = chat.messageTotal ?? chat.messages.length;
+              if (activeChatIdRef.current === chatIdToConnect) {
+                setMessages([...bg.messages]);
+                setMessageOffset(bg.messageOffset);
+                setMessageTotal(bg.messageTotal);
+              }
+            }
+            bg.streaming = false;
+            bg.modelProgress = null;
+            bg.inferenceActivityPhase = null;
+            bg.compacting = false;
+            bg.compaction = null;
+            bgStreams.delete(chatIdToConnect);
+            if (activeChatIdRef.current === chatIdToConnect) {
+              setStreaming(false);
+              setReconnecting(false);
+              setModelProgress(null);
+              setInferenceActivityPhase(null);
+              setCompacting(false);
+              setCompaction(null);
+            }
+          })
+          .catch(() => {
+            // Can't sync — at least stop the spinner so the UI isn't wedged.
+            bg.streaming = false;
+            bgStreams.delete(chatIdToConnect);
+            if (activeChatIdRef.current === chatIdToConnect) setStreaming(false);
+          });
+      },
+    });
     bg.abortController = controller;
     abortRef.current = controller;
 
@@ -1368,26 +1478,44 @@ export function useChat(chatId: string | null) {
 
   // ---------- Stale-content detection ----------
   // Track which chats have recently been streaming so we can skip the
-  // getChatStatus round-trip for non-streaming switches.
-  const recentlyStreamingRef = useRef<Set<string>>(new Set());
+  // getChatStatus round-trip for non-streaming switches. Backed by
+  // sessionStorage — see the module-level comment for why.
+  const recentlyStreamingRef = useRef<Map<string, number>>(recentlyStreamingExpiries);
+
+  const isRecentlyStreaming = useCallback((id: string): boolean => {
+    const expiresAt = recentlyStreamingRef.current.get(id);
+    if (expiresAt == null) return false;
+    if (expiresAt <= Date.now()) {
+      recentlyStreamingRef.current.delete(id);
+      saveRecentlyStreaming(recentlyStreamingRef.current);
+      return false;
+    }
+    return true;
+  }, []);
 
   // Mark a chat as recently streaming when the user sends a message,
   // and auto-expire the marker after a few minutes.
   const markRecentlyStreaming = useCallback((id: string) => {
-    recentlyStreamingRef.current.add(id);
-    setTimeout(() => recentlyStreamingRef.current.delete(id), 5 * 60_000);
+    recentlyStreamingRef.current.set(id, Date.now() + RECENTLY_STREAMING_TTL_MS);
+    saveRecentlyStreaming(recentlyStreamingRef.current);
   }, []);
 
-  // Reconnect to a server-side in-flight stream. Only called when we have
-  // reason to believe a stream is active (recently streaming, or visibility
-  // change while streaming).
+  // One-shot probe flag: the first chat opened in a session gets a status
+  // check even without a marker. This covers refresh-mid-turn (markers help,
+  // but only for streams this client started) and streams this client never
+  // initiated at all (headless automation/synthesis turns viewed in the
+  // system chat). Exactly one extra GET per session, on page load.
+  const initialStreamProbeDoneRef = useRef(false);
+
+  // Reconnect to a server-side in-flight stream. Runs on chat switch when the
+  // chat was recently streaming, and once per session for the first opened
+  // chat regardless of markers — the page-refresh-mid-turn case.
   useEffect(() => {
     if (!chatId) return;
     if (bgStreams.has(chatId)) return;
-    // Only attempt reconnect if this chat was recently streaming.
-    // This avoids a network round-trip on every chat switch for the
-    // common case where no stream is in progress.
-    if (!recentlyStreamingRef.current.has(chatId)) return;
+    const isInitialProbe = !initialStreamProbeDoneRef.current;
+    if (!isInitialProbe && !isRecentlyStreaming(chatId)) return;
+    initialStreamProbeDoneRef.current = true;
 
     let cancelled = false;
     (async () => {
@@ -1399,7 +1527,7 @@ export function useChat(chatId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [chatId, tryReconnect]);
+  }, [chatId, tryReconnect, isRecentlyStreaming]);
 
   // When the tab returns from the background, the browser may have killed the
   // SSE connection during backgrounding (common with fetch-based streams).
@@ -1413,7 +1541,7 @@ export function useChat(chatId: string | null) {
       if (!activeChatId) return;
 
       // Only attempt reconnection if the chat was recently streaming.
-      if (!recentlyStreamingRef.current.has(activeChatId)) return;
+      if (!isRecentlyStreaming(activeChatId)) return;
 
       (async () => {
         const status = await getChatStatus(activeChatId);
@@ -1432,7 +1560,7 @@ export function useChat(chatId: string | null) {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [tryReconnect]);
+  }, [tryReconnect, isRecentlyStreaming]);
 
   const send = useCallback(
     (text: string, images?: ImageAttachment[]) => {
