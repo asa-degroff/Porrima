@@ -33,6 +33,7 @@ import {
   DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
   resolveExtractionRequestSettings,
 } from "./extraction-settings.js";
+import { estimateTextTokens } from "./token-count.js";
 
 const LOG_DIR = appDataPath("logs");
 
@@ -110,12 +111,14 @@ export function hasActiveChats(): boolean {
 }
 
 /**
- * Conservative char->token estimate. Natural language is often closer to
- * 4 chars/token, but code/HTML/JSON can be much denser. Use 2 chars/token for
- * extraction budgeting so large structured payloads fail closed.
+ * Density-aware char->token estimate shared with compaction budgeting
+ * (token-count.ts). Prose lands near 4 chars/token while code/HTML/JSON/SVG
+ * drop toward ~1.75-2.25 chars/token, tracking tokenizer behavior far better
+ * than a fixed ratio. The char-based budgeting downstream still converts at
+ * a conservative 2 chars/token so unknown dense content fails closed.
  */
-function estimateTokensConservative(text: string): number {
-  return Math.ceil(text.length / 2);
+function estimateExtractionTextTokens(text: string): number {
+  return estimateTextTokens(text, "default");
 }
 
 /**
@@ -132,7 +135,7 @@ export function computeExtractionInputBudget(
   ctxSize: number,
   opts?: { chunkOverheadChars?: number; maxTokens?: number },
 ): { maxInputChars: number; sysPromptTokens: number; inputBudgetTokens: number } {
-  const sysPromptTokens = estimateTokensConservative(systemPrompt);
+  const sysPromptTokens = estimateExtractionTextTokens(systemPrompt);
   const outputTokens = opts?.maxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS;
   const safetyMargin = 512;    // absorbs small under-estimation
   const overheadChars = opts?.chunkOverheadChars ?? 0;
@@ -1174,47 +1177,59 @@ function formatMessageForExtraction(message: ChatMessage, messageIndex: number):
 // ---------------------------------------------------------------------------
 // Mid-turn extraction: signal token estimator
 // ---------------------------------------------------------------------------
-// Lightweight estimate of how many "extraction tokens" a turn's content
-// will actually produce after truncation. Mirrors the rules in
-// formatMessageContentForExtraction so the trigger fires at meaningful
-// intervals (every ~3000 extraction tokens ≈ ~1500 actual tokens), not
-// on data movement.
+// Density-aware estimate of how many tokens the uncovered mid-turn window
+// will contribute to an extraction prompt. Mirrors the formatting rules in
+// formatMessageContentForExtraction / buildMidTurnAssistantContent so the
+// trigger fires at meaningful intervals of actual extraction content.
+
+/** Per-item framing overhead (labels + separators) in the extraction format. */
+const SIGNAL_FRAMING_TOKENS = 4;
+
+export interface MidTurnSignalWindow {
+  /** Assistant text emitted since the last pulse cursor */
+  text: string;
+  /** Thinking/reasoning text since the last pulse cursor */
+  thinking: string;
+  /** Tool calls since the last pulse cursor */
+  toolCalls: Array<{ name: string; arguments?: Record<string, any> }>;
+  /** Tool results since the last pulse cursor */
+  toolResults: Array<{ toolName: string; content: string }>;
+}
 
 /**
- * Estimate the number of extraction-signal tokens that will be processed
- * for a given set of content. Mirrors the truncation rules applied by
- * formatMessageContentForExtraction.
+ * Estimate the number of extraction-signal tokens in the uncovered window.
+ * Mirrors the truncation rules applied by formatMessageContentForExtraction:
  *
- * - Text/thinking content: full count (~2 chars/token)
- * - Tool calls: fixed ~150 chars each (name + truncated args)
+ * - Text/thinking content: density-aware token estimate of the raw text
+ *   (the old flat chars/2 ratio over-counted prose ~2x and under-counted
+ *   dense structured content)
+ * - Tool calls: rendered through the same capped arg formatting the
+ *   extraction prompt uses
  * - Tool results: bulk tools capped at EXTRACT_TOOL_RESULT_MAX (500),
  *   non-bulk tools full length
  */
-export function estimateExtractionSignalTokens(
-  thinkingChars: number,
-  textChars: number,
-  toolCallCount: number,
-  toolResults: Array<{ toolName: string; contentLength: number }>
-): number {
-  let chars = 0;
+export function estimateMidTurnSignalTokens(window: MidTurnSignalWindow): number {
+  let tokens = 0;
 
   // Text and thinking — full signal value
-  chars += thinkingChars + textChars;
+  if (window.thinking) tokens += estimateTextTokens(window.thinking, "default");
+  if (window.text) tokens += estimateTextTokens(window.text, "default");
 
-  // Tool calls — fixed cost (name + truncated args, typically ~150 chars each)
-  chars += toolCallCount * 150;
-
-  // Tool results — bulk tools are truncated to EXTRACT_TOOL_RESULT_MAX
-  for (const tr of toolResults) {
-    if (BULK_TOOL_NAMES.has(tr.toolName)) {
-      chars += Math.min(tr.contentLength, EXTRACT_TOOL_RESULT_MAX);
-    } else {
-      chars += tr.contentLength;
-    }
+  // Tool calls — rendered as "- name: <capped args>" in the extraction prompt
+  for (const tc of window.toolCalls) {
+    const rendered = formatToolArgumentsForExtraction(tc.arguments);
+    tokens += estimateTextTokens(`${tc.name}: ${rendered}`, "structured") + SIGNAL_FRAMING_TOKENS;
   }
 
-  // ~2 chars per token average
-  return Math.ceil(chars / 2);
+  // Tool results — bulk tools are truncated to EXTRACT_TOOL_RESULT_MAX
+  for (const tr of window.toolResults) {
+    const content = BULK_TOOL_NAMES.has(tr.toolName)
+      ? tr.content.slice(0, EXTRACT_TOOL_RESULT_MAX)
+      : tr.content;
+    tokens += estimateTextTokens(`${tr.toolName}: ${content}`, "tool_result") + SIGNAL_FRAMING_TOKENS;
+  }
+
+  return tokens;
 }
 
 interface ExtractChunkedOptions {
@@ -2133,6 +2148,13 @@ interface ImmediateExtractionJob {
   enqueuedAt: number;
   resolve: () => void;
   reject: (err: unknown) => void;
+  /**
+   * Set for pre-compaction flush jobs. The flush runs as a continuation of
+   * the chat's extraction session (same system prompt, appended user turns)
+   * so it reuses the cached KV prefix from mid-turn pulses and turn-end
+   * extractions instead of starting cold. `userMsg`/`assistantMsg` are unused.
+   */
+  preCompaction?: { removedMessages: ChatMessage[] };
 }
 
 interface ImmediateExtractionSession {
@@ -2367,7 +2389,7 @@ function buildImmediateRunMetadata(input: {
     batchedExchangeCount: input.batch.length,
     sessionMessageCount: input.messages.length,
     promptChars,
-    estimatedPromptTokens: estimateTokensConservative(input.systemPrompt) + estimateTokensConservative(input.messages.map((m) => m.content).join("\n\n")),
+    estimatedPromptTokens: estimateExtractionTextTokens(input.systemPrompt) + estimateExtractionTextTokens(input.messages.map((m) => m.content).join("\n\n")),
     prunedPriorMessages: input.prunedPriorMessages,
     freshSessionReason: input.freshSessionReason,
     chunkedFallback: input.chunkedFallback || undefined,
@@ -2710,36 +2732,39 @@ async function drainImmediateExtractionQueue(chatId: string): Promise<void> {
       const settings = await getSettings();
       const extractionSettings = await resolveExtractionRequestSettings(settings);
 
-      if (settings.extractionModelUrl) {
-        await withExtractionMutex(async () => {
-          const jobs = state.jobs.splice(0);
-          try {
+      // Pre-compaction flush jobs run alone: they continue the session with
+      // different framing and must not be batched with exchange jobs. Take
+      // either everything up to the first flush job, or the flush job itself.
+      const firstFlushIdx = state.jobs.findIndex((job) => job.preCompaction);
+      const takeCount = firstFlushIdx === -1
+        ? state.jobs.length
+        : firstFlushIdx === 0 ? 1 : firstFlushIdx;
+      const jobs = state.jobs.splice(0, takeCount);
+
+      const runBatch = async () => {
+        if (jobs.length === 0) return; // queue cancelled while waiting on the mutex
+        try {
+          if (jobs[0].preCompaction) {
+            await processPreCompactionJob(state, jobs[0], { settings, extractionSettings });
+          } else {
             await processImmediateExtractionJobs(state, jobs, {
               settings,
               extractionSettings,
-              assumeMutexHeld: true,
+              assumeMutexHeld: Boolean(settings.extractionModelUrl),
             });
-          } catch (e) {
-            extractionMetrics.failedExtractions += jobs.length;
-            extractionMetrics.lastFailureAt = new Date().toISOString();
-            jobs.forEach((job) => job.reject(e));
-            throw e;
           }
-        });
-      } else {
-        const jobs = state.jobs.splice(0);
-        try {
-          await processImmediateExtractionJobs(state, jobs, {
-            settings,
-            extractionSettings,
-            assumeMutexHeld: false,
-          });
         } catch (e) {
           extractionMetrics.failedExtractions += jobs.length;
           extractionMetrics.lastFailureAt = new Date().toISOString();
           jobs.forEach((job) => job.reject(e));
           throw e;
         }
+      };
+
+      if (settings.extractionModelUrl) {
+        await withExtractionMutex(runBatch);
+      } else {
+        await runBatch();
       }
     }
   } catch (e) {
@@ -2962,7 +2987,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         batchedExchangeCount: 1,
         sessionMessageCount: messages.length,
         promptChars: systemPrompt.length + estimateDialogueChars(messages),
-        estimatedPromptTokens: estimateTokensConservative(systemPrompt) + estimateTokensConservative(messages.map(m => m.content).join("\n\n")),
+        estimatedPromptTokens: estimateExtractionTextTokens(systemPrompt) + estimateExtractionTextTokens(messages.map(m => m.content).join("\n\n")),
         prunedPriorMessages: pruned,
         freshSessionReason,
       },
@@ -3072,11 +3097,16 @@ export async function triggerMidTurnExtractionPulse(opts: {
   }
 }
 
-const PRE_COMPACTION_INSTRUCTIONS = `---
+/**
+ * User-message framing for the pre-compaction flush. This deliberately lives
+ * in the user turn (not the system prompt): the flush continues the chat's
+ * immediate-extraction session with the SAME system prompt, so the cached KV
+ * prefix from earlier pulses/extractions is fully reused and only the removed
+ * messages are newly evaluated.
+ */
+const PRE_COMPACTION_USER_HEADER = `[PRE-COMPACTION] This conversation is approaching its context limit and the messages below are about to be removed from my context. Review them and extract everything needed to continue effectively after they're gone — write each memory in my own voice.
 
-## Memory Preservation Task
-
-This conversation is approaching its context limit and messages will be removed. Review the messages below and extract everything you need to continue effectively — write each memory in your own voice.
+Memories I already extracted earlier in this session are visible in my own responses above — do not duplicate them. Focus on what the messages below add.
 
 Focus on:
 1. Task state — what is being worked on, what's done, what's pending, what decisions were made
@@ -3084,7 +3114,7 @@ Focus on:
 3. User context — preferences, instructions, corrections, expertise revealed
 4. Decisions & rationale — why approaches were chosen, tradeoffs considered, alternatives rejected
 
-Each atomic memory should be self-contained and meaningful (2-5 sentences).
+Each memory should be self-contained and meaningful (2-5 sentences).
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing what this conversation segment was about. Be specific.
@@ -3093,12 +3123,7 @@ Output a JSON object with two fields:
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10
 
-Output ONLY the JSON object.`;
-
-async function buildPreCompactionSystemPrompt(): Promise<string> {
-  const prefix = await loadExtractionPrefix();
-  return `${prefix}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
-}
+If nothing is significant, output: {"subject": "", "memories": []}`;
 
 export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): boolean {
   return (
@@ -3117,16 +3142,18 @@ export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): b
  * Pre-compaction flush: extract memories from messages that are about to be removed.
  * Only sends the removed messages (not full conversation) to avoid hitting context limits.
  * Captures both user facts AND task/goal state for agent continuity.
+ *
+ * The flush is routed through the chat's immediate-extraction queue so it
+ * continues the existing extraction session: same system prompt as mid-turn
+ * pulses and turn-completion extractions, appended as new user turns. The
+ * extraction server's cached KV prefix is reused instead of re-evaluating a
+ * cold prompt, and the flush serializes cleanly with other extraction work.
  */
 export async function preCompactionFlush(
   modelId: string,
   chatId: string,
   removedMessages: ChatMessage[],
-  opts?: {
-    projectId?: string;
-    /** Deprecated: pulse count is not a safe proxy for message-index coverage. */
-    lastPulseIndex?: number;
-  }
+  opts?: { projectId?: string }
 ): Promise<void> {
   const projectId = opts?.projectId;
 
@@ -3154,112 +3181,374 @@ export async function preCompactionFlush(
     `(skipped: compaction=${skippedCompaction}, outOfContext=${skippedOutOfContext}, synthesis=${skippedSynthesis}, system=${skippedSystem})`
   );
 
-  // Only send the messages being removed, not the full conversation
-  const removedText = substantiveMessages
-    .map((m, i) => formatMessageForExtraction(m, i))
-    .join("\n\n---\n\n");
+  const state = getImmediateQueueState(chatId);
+  let resolve!: () => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
 
-  const systemPrompt = await buildPreCompactionSystemPrompt();
-  const chat = await getChat(chatId).catch(() => null);
-  const effectiveModelId = await getEffectiveExtractionModelId(modelId);
+  state.jobs.push({
+    jobId: uuid(),
+    modelId,
+    chatId,
+    userMsg: "",
+    assistantMsg: "",
+    projectId,
+    enqueuedAt: Date.now(),
+    resolve,
+    reject,
+    preCompaction: { removedMessages: substantiveMessages },
+  });
+
+  void drainImmediateExtractionQueue(chatId);
+  return promise;
+}
+
+/** Per-chunk marker overhead reserved when packing pre-compaction continuation chunks. */
+const PRE_COMPACTION_CHUNK_MARKER_CHARS = 200;
+
+interface PreCompactionSessionResult {
+  facts: ExtractedFact[];
+  subjects: string[];
+  rawOutput: string;
+  chunkCount: number;
+  chunkTimingsMs: number[];
+  chunkFailures: number;
+  /** User/assistant pairs appended during the run, for session history. */
+  exchanges: ExtractionDialogueMessage[];
+}
+
+/**
+ * Run the pre-compaction flush as a continuation of the chat's extraction
+ * session. Each chunk is appended as a new user turn on top of the existing
+ * session history + prior chunk exchanges, so every call reuses the full
+ * cached KV prefix of the previous one. Earlier chunks (and the facts they
+ * produced) stay visible in the dialogue, so no overlap/prior-facts preamble
+ * is needed between chunks.
+ *
+ * If the accumulated dialogue outgrows the input budget mid-run, the
+ * remaining segments degrade to independent calls (system prompt prefix still
+ * cached) rather than pruning history and breaking the prefix.
+ */
+async function runPreCompactionSession(opts: {
+  modelId: string;
+  session: ImmediateExtractionSession;
+  systemPrompt: string;
+  header: string;
+  segments: ExtractSegment[];
+  maxInputChars: number;
+  settings: Settings;
+  extractionSettings: ResolvedExtractionSettings;
+  assumeMutexHeld: boolean;
+  contextLabel: string;
+}): Promise<PreCompactionSessionResult> {
+  const { session, systemPrompt, header, segments, maxInputChars, settings, extractionSettings, assumeMutexHeld, contextLabel } = opts;
+
+  const body = segments.map(renderSegment).join("\n\n");
+  const singleUser = `${header}\n\n${body}`;
+
+  // Prune existing history so the full window fits in one call if possible.
+  pruneImmediateSessionForBudget(session, singleUser, maxInputChars);
+
+  const callLLM = (messages: ExtractionDialogueMessage[], retryContext: string) =>
+    callImmediateSessionLLMWithRetry({
+      modelId: opts.modelId,
+      messages,
+      systemPrompt,
+      retryContext,
+      settings,
+      extractionSettings,
+      assumeMutexHeld,
+    });
+
+  // Fast path: the whole removed window fits alongside the pruned history.
+  const singleMessages: ExtractionDialogueMessage[] = [...session.history, { role: "user", content: singleUser }];
+  if (estimateDialogueChars(singleMessages) <= maxInputChars) {
+    const t0 = Date.now();
+    const raw = await callLLM(singleMessages, contextLabel);
+    const parsed = parseExtractionResponse(raw);
+    return {
+      facts: parsed.facts,
+      subjects: parsed.subject ? [parsed.subject] : [],
+      rawOutput: raw,
+      chunkCount: 1,
+      chunkTimingsMs: [Date.now() - t0],
+      chunkFailures: 0,
+      exchanges: [{ role: "user", content: singleUser }, { role: "assistant", content: raw || "[]" }],
+    };
+  }
+
+  // Chunked continuation. Continuation chunks carry no overlap/prior-facts
+  // preamble, so only a small marker overhead is reserved.
+  const { maxInputChars: chunkedBudget } = computeExtractionInputBudget(
+    systemPrompt,
+    extractionSettings.ctxSize,
+    { chunkOverheadChars: PRE_COMPACTION_CHUNK_MARKER_CHARS + header.length, maxTokens: extractionSettings.maxTokens },
+  );
+  const maxChunkChars = Math.max(1000, chunkedBudget);
+  const chunks = packSegmentsIntoChunks(segments, maxChunkChars);
+  if (chunks.length === 0) {
+    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0, exchanges: [] };
+  }
+
+  console.log(
+    `[memory-chunk] ${contextLabel}: continuing extraction session with ${chunks.length} chunk(s) ` +
+    `(budget=${maxChunkChars} chars/chunk, history=${session.history.length} messages)`
+  );
+
+  let messages: ExtractionDialogueMessage[] = [...session.history];
+  const exchanges: ExtractionDialogueMessage[] = [];
+  const allFacts: ExtractedFact[] = [];
+  const allSubjects: string[] = [];
+  const rawOutputs: string[] = [];
+  const chunkTimingsMs: number[] = [];
+  let chunkFailures = 0;
+  let attempted = 0;
+
+  let i = 0;
+  for (; i < chunks.length; i++) {
+    const userContent = chunks.length > 1
+      ? `${header}\n\nCHUNK ${i + 1} OF ${chunks.length}:\n${chunks[i]}`
+      : `${header}\n\n${chunks[i]}`;
+    const nextMessages: ExtractionDialogueMessage[] = [...messages, { role: "user", content: userContent }];
+
+    if (estimateDialogueChars(nextMessages) > maxInputChars) {
+      // Accumulated dialogue no longer fits. Finish the remaining segments
+      // with independent calls — the system prompt prefix stays cached, and
+      // the independent path carries overlap/prior-facts context of its own.
+      console.log(
+        `[memory-chunk] ${contextLabel}: dialogue outgrew budget at chunk ${i + 1}/${chunks.length}, ` +
+        `degrading ${chunks.length - i} remaining chunk(s) to independent calls`
+      );
+      break;
+    }
+
+    attempted++;
+    const chunkT0 = Date.now();
+    let raw = "";
+    try {
+      raw = await callLLM(nextMessages, `${contextLabel} [chunk ${i + 1}/${chunks.length}]`);
+      chunkTimingsMs.push(Date.now() - chunkT0);
+    } catch (e) {
+      chunkTimingsMs.push(Date.now() - chunkT0);
+      chunkFailures++;
+      console.error(
+        `[memory-chunk] ${contextLabel}: continuation chunk ${i + 1}/${chunks.length} failed after retries:`,
+        e,
+      );
+      i++; // the failed chunk is consumed; degrade everything after it
+      break;
+    }
+
+    rawOutputs.push(raw);
+    const parsed = parseExtractionResponse(raw);
+    if (parsed.facts.length > 0) {
+      allFacts.push(...parsed.facts);
+      if (parsed.subject) allSubjects.push(parsed.subject);
+    }
+    const assistantContent = raw || "[]";
+    messages = [...nextMessages, { role: "assistant", content: assistantContent }];
+    exchanges.push({ role: "user", content: userContent }, { role: "assistant", content: assistantContent });
+  }
+
+  // Degraded remainder: independent calls sharing the system prompt prefix.
+  // The already-packed chunks are reused as atomic segments.
+  let callCount = attempted;
+  const remaining = chunks.slice(i);
+  if (remaining.length > 0) {
+    const remainderResult = await extractInChunks({
+      modelId: opts.modelId,
+      systemPrompt,
+      segments: remaining.map((text) => ({ text, splittable: false })),
+      userPromptHeader: header,
+      contextLabel: `${contextLabel} [degraded remainder]`,
+      assumeMutexHeld,
+    });
+    allFacts.push(...remainderResult.facts);
+    allSubjects.push(...remainderResult.subjects);
+    if (remainderResult.rawOutput) rawOutputs.push(remainderResult.rawOutput);
+    chunkTimingsMs.push(...remainderResult.chunkTimingsMs);
+    chunkFailures += remainderResult.chunkFailures;
+    callCount += remainderResult.chunkCount;
+  }
+
+  const rawOutput = rawOutputs.length <= 1
+    ? rawOutputs[0] ?? ""
+    : rawOutputs.map((r, idx) => `=== part ${idx + 1}/${rawOutputs.length} ===\n${r}`).join("\n\n");
+
+  return {
+    facts: allFacts,
+    subjects: allSubjects,
+    rawOutput,
+    chunkCount: callCount,
+    chunkTimingsMs,
+    chunkFailures,
+    exchanges,
+  };
+}
+
+/**
+ * Append the flush's exchanges to the session history so subsequent
+ * turn-completion extractions keep riding the same cached prefix. Only
+ * touches the session object that is actually current on the queue state —
+ * if a concurrent pulse swapped the session (identity change), the exchanges
+ * are dropped rather than resurrecting a stale session.
+ */
+function appendFlushExchangesToSession(
+  state: ImmediateExtractionQueueState,
+  session: ImmediateExtractionSession,
+  exchanges: ExtractionDialogueMessage[],
+  maxInputChars: number,
+): void {
+  if (exchanges.length === 0) return;
+  if (state.session !== session) return;
+  session.history.push(...exchanges);
+  pruneImmediateSessionForBudget(session, "", maxInputChars);
+}
+
+/**
+ * Process a pre-compaction flush job inside the immediate extraction queue.
+ * Runs with the queue's serialization (and the extraction mutex when a
+ * dedicated server is configured), continuing the chat's extraction session.
+ */
+async function processPreCompactionJob(
+  state: ImmediateExtractionQueueState,
+  job: ImmediateExtractionJob,
+  opts: { settings: Settings; extractionSettings: ResolvedExtractionSettings },
+): Promise<void> {
+  const removedMessages = job.preCompaction!.removedMessages;
+  const projectId = job.projectId;
+  const settings = opts.settings;
+  const extractionSettings = opts.extractionSettings;
+  const contextLabel = `preCompactionFlush chat=${job.chatId}`;
+
+  // Same system prompt as immediate/mid-turn extraction — identical identity
+  // key, so the flush continues the existing session and its cached prefix.
+  const systemPrompt = await buildExtractionSystemPrompt(projectId);
+  const effectiveModelId = resolveEffectiveExtractionModelId(job.modelId, settings);
+  const identityKey = buildImmediateSessionIdentityKey({
+    projectId,
+    effectiveModelId,
+    extractionUrl: settings.extractionModelUrl,
+    ctxSize: extractionSettings.ctxSize,
+    maxTokens: extractionSettings.maxTokens,
+    systemPrompt,
+  });
+  const { session } = ensureImmediateSession(state, job.chatId, identityKey, systemPrompt);
+
+  const chat = await getChat(job.chatId).catch(() => null);
+  if (!chat) {
+    console.log(`[memory] Pre-compaction flush: chat ${job.chatId} no longer exists, skipping`);
+    job.resolve();
+    return;
+  }
+
+  const { maxInputChars } = computeExtractionInputBudget(
+    systemPrompt,
+    extractionSettings.ctxSize,
+    { maxTokens: extractionSettings.maxTokens },
+  );
+  const projectHeader = await resolveProjectHeader(projectId);
+  const header = `${projectHeader}${PRE_COMPACTION_USER_HEADER}`;
+  const segments = removedMessages.map((m, i) => messageToExtractionSegment(m, i));
+  const removedText = segments.map(renderSegment).join("\n\n---\n\n");
+
   const runHandle = startExtractionRun({
     trigger: "pre-compaction",
-    chatId,
-    chatTitle: chat?.title,
+    chatId: job.chatId,
+    chatTitle: chat.title,
     model: effectiveModelId,
     priorMemoryCount: 0,
-    messages: substantiveMessages.map((m) => ({ role: m.role, content: m.content })),
+    messages: removedMessages.map((m) => ({ role: m.role, content: m.content })),
     systemPrompt,
-    userPrompt: removedText,
+    userPrompt: `${header}\n\n${removedText}`,
+    metadata: {
+      sessionId: session.id,
+      sessionMessageCount: session.history.length,
+      promptChars: systemPrompt.length + header.length + removedText.length,
+      estimatedPromptTokens: estimateExtractionTextTokens(systemPrompt) + estimateExtractionTextTokens(header + removedText),
+    },
   });
 
   try {
-    // Each removed message becomes one segment; messages that exceed the
-    // per-chunk budget (typically huge tool results) get paragraph-split.
-    const segments: ExtractSegment[] = substantiveMessages.map((m, i) =>
-      messageToExtractionSegment(m, i)
-    );
-
-    const projectHeader = await resolveProjectHeader(projectId);
-
-    // Retry happens per-chunk inside extractInChunks.
-    const chunkResult = await extractInChunks({
-      modelId,
+    const result = await runPreCompactionSession({
+      modelId: job.modelId,
+      session,
       systemPrompt,
+      header,
       segments,
-      userPromptHeader: projectHeader || undefined,
-      contextLabel: `preCompactionFlush chat=${chatId}`,
+      maxInputChars,
+      settings,
+      extractionSettings,
+      assumeMutexHeld: Boolean(settings.extractionModelUrl),
+      contextLabel,
     });
-    runHandle.attachOutput(chunkResult.rawOutput);
+    runHandle.attachOutput(result.rawOutput);
 
-    const facts = chunkResult.facts;
+    const chunksMeta = { count: result.chunkCount, failures: result.chunkFailures, timingsMs: result.chunkTimingsMs };
+    const facts = result.facts;
     if (facts.length === 0) {
       console.log("[memory] Pre-compaction flush: no facts extracted");
-      runHandle.complete({
-        facts: [],
-        subject: chunkResult.subjects[0],
-        saved: 0,
-        superseded: 0,
-        skippedDuplicates: 0,
-        errors: 0,
-        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
-      });
+      appendFlushExchangesToSession(state, session, result.exchanges, maxInputChars);
+      runHandle.complete({ facts: [], subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta });
+      job.resolve();
       return;
     }
 
-    console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
+    console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted across ${result.chunkCount} call(s), embedding batch...`);
 
     // Batch-embed all facts in a single API call
     let embeddings: number[][];
     try {
       embeddings = await withRetry(
         () => embedBatch(facts.map((f) => buildMemoryIndexText(f.text, f.subject))),
-        `embedBatch for ${facts.length} pre-compaction facts (chat ${chatId})`
+        `embedBatch for ${facts.length} pre-compaction facts (chat ${job.chatId})`
       );
     } catch (e) {
       console.error("[memory] Pre-compaction batch embedding failed:", e);
       runHandle.fail(e);
+      job.reject(e);
       return;
     }
 
     // Re-check chat exists before saving — race window between the initial
     // getChat and here (LLM call + embedding). If deleted during
     // compaction, skip saving to avoid orphaned memories.
-    const chatStillExists = await getChat(chatId).catch(() => null);
+    const chatStillExists = await getChat(job.chatId).catch(() => null);
     if (!chatStillExists) {
       console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
-      runHandle.complete({
-        facts,
-        subject: chunkResult.subjects[0],
-        saved: 0,
-        superseded: 0,
-        skippedDuplicates: 0,
-        errors: 0,
-        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
-      });
+      runHandle.complete({ facts, subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta });
+      job.resolve();
       return;
     }
 
     const sourceSpan = sourceSpanFromIndexedMessages(
-      substantiveMessages.map((message) => ({ message })),
+      removedMessages.map((message) => ({ message })),
     );
-    const outcome = await dedupAndSave(facts, embeddings, chatId, { projectId, sourceType: "chat", sourceId: chatId, sourceSpan });
+    const outcome = await dedupAndSave(facts, embeddings, job.chatId, { projectId, sourceType: "chat", sourceId: job.chatId, sourceSpan });
 
     // Invalidate memories cache so next turn picks up new memories.
     // Block updates are not performed here — they're handled by the main
     // agent during synthesis cycles.
-    invalidateMemoriesCache(chatId);
+    invalidateMemoriesCache(job.chatId);
+
+    // Session history update happens after the save path succeeds so a
+    // failed flush never pollutes the dialogue the next pulse rides on.
+    appendFlushExchangesToSession(state, session, result.exchanges, maxInputChars);
 
     console.log("[memory] Pre-compaction flush complete");
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
-      subject: chunkResult.subjects[0],
+      subject: result.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
       errors: 0,
-      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      chunks: chunksMeta,
     });
+    job.resolve();
   } catch (e) {
     runHandle.fail(e);
     throw e;

@@ -20,6 +20,22 @@ export const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 120_000;
 export const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 15_000;
 export const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 600_000;
 
+/**
+ * Context-pressure trigger for mid-turn pulses. When estimated context usage
+ * crosses this ratio of the effective window, a pulse is dispatched even if
+ * the signal-token threshold hasn't been reached — as long as there is at
+ * least MID_TURN_PULSE_MIN_SIGNAL_TOKENS of uncovered content. Sits well
+ * below COMPACTION_TRIGGER_RATIO (0.85) so extraction starts before the
+ * compaction stall, and keeps the extraction model's cached prompt warm for
+ * the pre-compaction flush to continue from.
+ */
+export const DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO = 0.65;
+
+/** Minimum uncovered signal for a context-ratio-triggered pulse. Avoids
+ * firing near-empty pulses when the pressure comes from older context that
+ * earlier extractions already covered. */
+export const MID_TURN_PULSE_MIN_SIGNAL_TOKENS = 256;
+
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;

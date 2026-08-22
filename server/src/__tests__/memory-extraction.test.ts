@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  estimateMidTurnSignalTokens,
   formatMessageContentForExtraction,
   formatToolArgumentsForExtraction,
   isSubstantiveForPreCompactionExtraction,
@@ -260,5 +261,68 @@ describe("resolveEffectiveExtractionModelId", () => {
 
   it("falls back to the caller model when no dedicated extraction URL is configured", () => {
     expect(resolveEffectiveExtractionModelId("Qwen3.6-27B-Q5_K_M", {})).toBe("Qwen3.6-27B-Q5_K_M");
+  });
+});
+
+describe("estimateMidTurnSignalTokens", () => {
+  const empty = { text: "", thinking: "", toolCalls: [], toolResults: [] };
+
+  it("returns zero for an empty window", () => {
+    expect(estimateMidTurnSignalTokens(empty)).toBe(0);
+  });
+
+  it("counts prose text near 4 chars/token rather than the old flat chars/2", () => {
+    const prose = "The user asked me to review the way extraction prompts are built. ";
+    const text = prose.repeat(20); // ~1360 chars of natural language
+    const tokens = estimateMidTurnSignalTokens({ ...empty, text });
+    // Density-aware prose estimate should be far below chars/2 (=680)
+    expect(tokens).toBeGreaterThan(200);
+    expect(tokens).toBeLessThan(500);
+  });
+
+  it("counts dense structured content more conservatively than prose", () => {
+    const dense = "<svg><path d=\"M0 0\"/></svg>".repeat(200);
+    const prose = "a quiet sentence about the weather today. ".repeat(135);
+    const denseChars = dense.length;
+    const proseChars = prose.length;
+    // Normalize to similar char lengths, dense should yield more tokens/char
+    const denseTokens = estimateMidTurnSignalTokens({ ...empty, text: dense });
+    const proseTokens = estimateMidTurnSignalTokens({ ...empty, text: prose });
+    expect(denseChars).toBeGreaterThan(0);
+    expect(proseChars).toBeGreaterThan(0);
+    expect(denseTokens / denseChars).toBeGreaterThan(proseTokens / proseChars);
+  });
+
+  it("caps bulk tool results at the extraction result limit", () => {
+    const huge = "x".repeat(50_000);
+    const capped = estimateMidTurnSignalTokens({
+      ...empty,
+      toolResults: [{ toolName: "bash", content: huge }],
+    });
+    const small = estimateMidTurnSignalTokens({
+      ...empty,
+      toolResults: [{ toolName: "bash", content: "ok" }],
+    });
+    // 50KB of bulk output should not scale linearly — it is truncated to ~500 chars
+    expect(capped).toBeLessThan(600);
+    expect(capped).toBeGreaterThan(small);
+  });
+
+  it("counts non-bulk tool results at full length", () => {
+    const content = "A custom tool returned a fairly long textual explanation. ".repeat(40);
+    const tokens = estimateMidTurnSignalTokens({
+      ...empty,
+      toolResults: [{ toolName: "my_custom_tool", content }],
+    });
+    expect(tokens).toBeGreaterThan(200);
+  });
+
+  it("estimates tool call arguments through the capped extraction formatter", () => {
+    const tokens = estimateMidTurnSignalTokens({
+      ...empty,
+      toolCalls: [{ name: "create_artifact", arguments: { html: "<svg>" + "x".repeat(50_000) + "</svg>" } }],
+    });
+    // Huge html argument is omitted/truncated by the formatter, so the signal stays small
+    expect(tokens).toBeLessThan(800);
   });
 });

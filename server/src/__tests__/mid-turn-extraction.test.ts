@@ -192,9 +192,40 @@ describe("mid-turn extraction behavior", () => {
       "chat-model",
       "chat-1",
       [{ role: "assistant", content: "Uncovered task state before compaction.", timestamp: 3 }],
-      { projectId: "project-1", lastPulseIndex: 0 },
+      { projectId: "project-1" },
     );
 
     expect(mockState.fetch).toHaveBeenCalled();
+  });
+
+  it("continues the immediate extraction session for pre-compaction flushes", async () => {
+    const { preCompactionFlush } = await import("../services/memory-extraction.js");
+    const captured: Array<{ system: string; user: string }> = [];
+    mockState.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+        const system = body.messages.find((m) => m.role === "system")?.content ?? "";
+        const user = body.messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
+        captured.push({ system, user });
+        return streamResponse("[]");
+      }
+      return jsonResponse({ default_generation_settings: { n_ctx: 16384 } });
+    });
+
+    await preCompactionFlush(
+      "chat-model",
+      "chat-1",
+      [{ role: "assistant", content: "Task state that is about to be compacted away.", timestamp: 3 }],
+      { projectId: "project-1" },
+    );
+
+    expect(captured.length).toBeGreaterThan(0);
+    // Same system prompt as immediate/mid-turn extraction (session continuation,
+    // not the old standalone pre-compaction system prompt).
+    expect(captured[0].system).toContain("## Memory Extraction Task");
+    // The pre-compaction framing lives in the user turn so the cached prefix is reused.
+    expect(captured[0].user).toContain("[PRE-COMPACTION]");
+    expect(captured[0].user).toContain("Task state that is about to be compacted away.");
   });
 });
