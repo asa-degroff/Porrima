@@ -36,6 +36,14 @@ const GROUP_COLORS: Record<ContextBreakdownGroup, { bar: string; text: string; d
 
 const GROUP_ORDER: ContextBreakdownGroup[] = ["system", "memory", "tools", "conversation", "output"];
 
+// The two memory rows exist because of the KV-cache design (frozen snapshot in
+// the system prompt vs. append-only recalls in history) — the labels say what
+// the tokens are, the tooltips say why there are two rows at all.
+const ROW_TOOLTIPS: Record<string, string> = {
+  retrievedMemories: "Baked into the system prompt at first retrieval — unchanged until reset or compaction",
+  memoryDelta: "Recalls added after the snapshot (retrieval + passive) — pruned on compaction",
+};
+
 // Module-level cache keyed by chatId so repeated hover/open doesn't refetch.
 const breakdownCache = new Map<string, { data: ContextBreakdown; timestamp: number }>();
 const CACHE_TTL_MS = 15_000;
@@ -128,7 +136,7 @@ function BreakdownPopover({ breakdown, loading, contextWindow, rescaled }: {
                     {group?.label ?? key}
                   </div>
                   {rows.map((r) => (
-                    <div key={r.key} className="flex items-center justify-between text-[11px] leading-5">
+                    <div key={r.key} className="flex items-center justify-between text-[11px] leading-5" title={ROW_TOOLTIPS[r.key]}>
                       <span className="text-white/45">{r.label}</span>
                       <span className="text-white/70 tabular-nums">
                         {formatNumber(r.tokens)}
