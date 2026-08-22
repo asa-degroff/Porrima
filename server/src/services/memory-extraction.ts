@@ -2846,11 +2846,26 @@ interface MidTurnPulseContent {
   sourceSpan?: MemorySourceSpan;
 }
 
-interface MidTurnPulseResult {
+/**
+ * How much of the dispatched pulse window the prompt actually covered.
+ * Counts are relative to the window that was dispatched (i.e. they add to
+ * the pre-dispatch cursors). Undefined coverage on a completed pulse means
+ * the full window was covered.
+ */
+export interface MidTurnWindowCoverage {
+  thinkingChars: number;
+  textChars: number;
+  toolCalls: number;
+  toolResults: number;
+}
+
+export interface MidTurnPulseResult {
   added: number;
   superseded: number;
   skippedDuplicates: number;
   completed: boolean;
+  /** Present when the window was FIFO-sliced to fit the input budget. */
+  coverage?: MidTurnWindowCoverage;
 }
 
 function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
@@ -2901,6 +2916,189 @@ function buildMidTurnUserPrompt(pulseIndex: number, content: MidTurnPulseContent
   return `${header}\n\nUSER MESSAGE:\n${content.userMessage}\n\nAGENT PARTIAL PROGRESS:\n${assistantContent}`;
 }
 
+/** Marker appended to char sections (thinking/text) truncated by the FIFO slice. */
+const PULSE_WINDOW_TRUNC_MARKER =
+  "\n[... truncated: pulse window exceeds the extraction budget; the remainder is covered by later pulses]";
+
+/** Minimum content size for a truncated slice to be worth an extraction call. */
+const PULSE_ITEM_MIN_CHARS = 200;
+
+/**
+ * FIFO window slicer: shrink the pulse window to the oldest content that fits
+ * the char budget. Sections are visited in the same order
+ * buildMidTurnAssistantContent renders them (thinking → text → tool calls →
+ * tool results). Coverage is per-group prefixes, matching the per-group
+ * cursors in the chat route.
+ *
+ * Rules:
+ * - A section that fits entirely is taken and the next section is tried.
+ * - A char section (thinking/text) that doesn't fit takes a char prefix and
+ *   stops the slice — later sections wait for the next pulse.
+ * - An item section (calls/results) takes whole items until the next one
+ *   doesn't fit, then stops.
+ * - Oversized single item: when NOTHING at all has been covered yet and the
+ *   first item alone exceeds the budget, it is truncated to fit instead of
+ *   permanently blocking every pulse.
+ *
+ * `empty` means not even a minimal slice fit — the caller should skip.
+ */
+export function sliceMidTurnWindowToFit(
+  content: MidTurnPulseContent,
+  budgetChars: number,
+): { sliced: MidTurnPulseContent; coverage: MidTurnWindowCoverage; truncated: boolean; empty: boolean } {
+  const fullThinking = content.thinkingText ?? "";
+  const fullText = content.textContent ?? "";
+  const fullCalls = content.toolCalls ?? [];
+  const fullResults = content.toolResults ?? [];
+
+  const coverage: MidTurnWindowCoverage = { thinkingChars: 0, textChars: 0, toolCalls: 0, toolResults: 0 };
+  let slicedThinking = "";
+  let slicedText = "";
+  let slicedCalls: MidTurnPulseContent["toolCalls"] = [];
+  let slicedResults: MidTurnPulseContent["toolResults"] = [];
+  let remaining = budgetChars;
+  let truncated = false;
+  let coveredAnything = false;
+
+  const finish = () => ({
+    sliced: {
+      ...content,
+      thinkingText: slicedThinking,
+      textContent: slicedText,
+      toolCalls: slicedCalls,
+      toolResults: slicedResults,
+    },
+    coverage,
+    truncated,
+    empty: !coveredAnything,
+  });
+
+  /**
+   * Char section (thinking/text): take entirely if it fits, otherwise report
+   * the char allowance for a truncated prefix. The caller stops the slice
+   * after a partial take (FIFO — later sections wait for the next pulse).
+   */
+  const takeCharSection = (raw: string, label: string): { taken: true } | { allowance: number } | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const joinBefore = coveredAnything ? 2 : 0;
+    if (joinBefore + label.length + trimmed.length <= remaining) {
+      remaining -= joinBefore + label.length + trimmed.length;
+      coveredAnything = true;
+      return { taken: true };
+    }
+    const allowance = remaining - joinBefore - label.length - PULSE_WINDOW_TRUNC_MARKER.length;
+    if (allowance < PULSE_ITEM_MIN_CHARS) return null;
+    truncated = true;
+    coveredAnything = true;
+    return { allowance };
+  };
+
+  // 1. Thinking
+  if (fullThinking.trim()) {
+    const outcome = takeCharSection(fullThinking, "Thinking:\n");
+    if (!outcome) return finish();
+    if ("taken" in outcome) {
+      slicedThinking = fullThinking;
+      coverage.thinkingChars = fullThinking.length;
+    } else {
+      slicedThinking = fullThinking.trim().slice(0, outcome.allowance) + PULSE_WINDOW_TRUNC_MARKER;
+      coverage.thinkingChars = outcome.allowance;
+      return finish();
+    }
+  }
+
+  // 2. Assistant text
+  if (fullText.trim()) {
+    const outcome = takeCharSection(fullText, "Assistant text:\n");
+    if (!outcome) return finish();
+    if ("taken" in outcome) {
+      slicedText = fullText;
+      coverage.textChars = fullText.length;
+    } else {
+      slicedText = fullText.trim().slice(0, outcome.allowance) + PULSE_WINDOW_TRUNC_MARKER;
+      coverage.textChars = outcome.allowance;
+      return finish();
+    }
+  }
+
+  // 3. Tool calls (whole items; rendered args are already capped upstream)
+  if (fullCalls.length > 0) {
+    const labelLen = "Tool calls:\n".length;
+    const joinBefore = coveredAnything ? 2 : 0;
+    const rendered = fullCalls.map((tc) => `- ${tc.name}: ${formatToolArgumentsForExtraction(tc.arguments)}`);
+    const fullSection = rendered.join("\n");
+    if (joinBefore + labelLen + fullSection.length <= remaining) {
+      slicedCalls = fullCalls;
+      coverage.toolCalls = fullCalls.length;
+      remaining -= joinBefore + labelLen + fullSection.length;
+      coveredAnything = true;
+    } else {
+      let sectionLen = 0;
+      let count = 0;
+      for (let i = 0; i < rendered.length; i++) {
+        const addLen = (i === 0 ? 0 : 1) + rendered[i].length;
+        if (joinBefore + labelLen + sectionLen + addLen > remaining) break;
+        sectionLen += addLen;
+        count++;
+      }
+      if (count > 0) {
+        slicedCalls = fullCalls.slice(0, count);
+        coverage.toolCalls = count;
+        coveredAnything = true;
+      }
+      return finish();
+    }
+  }
+
+  // 4. Tool results (whole items; oversized single item gets truncated)
+  if (fullResults.length > 0) {
+    const labelLen = "Tool results:\n".length;
+    const joinBefore = coveredAnything ? 2 : 0;
+    const rendered = fullResults.map((tr) => formatToolResultForExtraction(tr));
+    const fullSection = rendered.join("\n");
+    if (joinBefore + labelLen + fullSection.length <= remaining) {
+      slicedResults = fullResults;
+      coverage.toolResults = fullResults.length;
+      remaining -= joinBefore + labelLen + fullSection.length;
+      coveredAnything = true;
+    } else {
+      let sectionLen = 0;
+      let count = 0;
+      for (let i = 0; i < rendered.length; i++) {
+        const addLen = (i === 0 ? 0 : 1) + rendered[i].length;
+        if (joinBefore + labelLen + sectionLen + addLen > remaining) {
+          // Oversized single item blocking an otherwise empty pulse: truncate
+          // it to fit so pulses make forward progress instead of stalling.
+          if (count === 0 && !coveredAnything) {
+            const tr = fullResults[i];
+            const prefix = `- ${tr.toolName}${tr.isError ? " (error)" : ""}: `;
+            const itemBudget = remaining - joinBefore - labelLen - prefix.length;
+            const marker = `\n[... truncated for pulse budget: ${Math.max(0, tr.content.length - itemBudget).toLocaleString()} chars omitted]`;
+            const keep = itemBudget - marker.length;
+            if (keep >= PULSE_ITEM_MIN_CHARS) {
+              slicedResults = [{ ...tr, content: tr.content.slice(0, keep) + marker }];
+              coverage.toolResults = i + 1;
+              truncated = true;
+              coveredAnything = true;
+            }
+          }
+          break;
+        }
+        sectionLen += addLen;
+        count++;
+      }
+      if (count > 0) {
+        slicedResults = fullResults.slice(0, count);
+        coverage.toolResults = count;
+        coveredAnything = true;
+      }
+    }
+  }
+
+  return finish();
+}
+
 export async function triggerMidTurnExtractionPulse(opts: {
   modelId: string;
   chatId: string;
@@ -2932,7 +3130,6 @@ export async function triggerMidTurnExtractionPulse(opts: {
     const systemPrompt = await buildExtractionSystemPrompt(projectId);
     const effectiveModelId = resolveEffectiveExtractionModelId(modelId, settings);
     const projectHeader = await resolveProjectHeader(projectId);
-    const userPrompt = `${projectHeader}${buildMidTurnUserPrompt(pulseIndex, content)}`;
 
     // Reuse the immediate extraction session for KV cache continuity
     const state = getImmediateQueueState(chatId);
@@ -2952,10 +3149,40 @@ export async function triggerMidTurnExtractionPulse(opts: {
       { maxTokens: extractionSettings.maxTokens },
     );
 
-    // Check if the prompt alone exceeds the budget — if so, skip this pulse
+    // FIFO window slicing: if the full uncovered window exceeds the input
+    // budget, cover the oldest slice that fits and report how far the
+    // cursors may advance. Later pulses drain the remainder — an oversized
+    // window can no longer block pulses permanently (the old behavior
+    // skipped + rolled back, so the window only grew and every subsequent
+    // pulse failed too, dumping everything onto the pre-compaction flush).
+    let pulseContent = content;
+    let coverage: MidTurnWindowCoverage | undefined;
+    let windowTruncated = false;
+    let userPrompt = `${projectHeader}${buildMidTurnUserPrompt(pulseIndex, content)}`;
     if (estimateDialogueChars([{ role: "user", content: userPrompt }]) > maxInputChars) {
-      console.log(`[extraction:mid-turn] Pulse #${pulseIndex} skipped: prompt alone exceeds budget`);
-      return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+      const fixedChars = projectHeader.length +
+        buildMidTurnBatchHeader(pulseIndex).length +
+        `\n\nUSER MESSAGE:\n${content.userMessage}\n\nAGENT PARTIAL PROGRESS:\n`.length +
+        32; // per-message framing overhead (mirrors estimateDialogueChars)
+      const windowBudget = maxInputChars - fixedChars;
+      const fit = sliceMidTurnWindowToFit(content, windowBudget);
+      if (fit.empty) {
+        console.log(
+          `[extraction:mid-turn] Pulse #${pulseIndex} skipped: budget too small for a window slice (${windowBudget} chars)`
+        );
+        return { added: 0, superseded: 0, skippedDuplicates: 0, completed: false };
+      }
+      pulseContent = fit.sliced;
+      coverage = fit.coverage;
+      windowTruncated = true;
+      userPrompt = `${projectHeader}${buildMidTurnUserPrompt(pulseIndex, pulseContent)}`;
+      console.log(
+        `[extraction:mid-turn] Pulse #${pulseIndex}: window exceeds budget, FIFO slice covers ` +
+        `thinking=${coverage.thinkingChars}/${(content.thinkingText ?? "").length} ` +
+        `text=${coverage.textChars}/${(content.textContent ?? "").length} ` +
+        `calls=${coverage.toolCalls}/${(content.toolCalls ?? []).length} ` +
+        `results=${coverage.toolResults}/${(content.toolResults ?? []).length}`
+      );
     }
 
     // Prune session history for budget
@@ -2969,8 +3196,8 @@ export async function triggerMidTurnExtractionPulse(opts: {
     }
 
     const pulseMessages: ExtractionDialogueMessage[] = [
-      { role: "user", content: content.userMessage },
-      { role: "assistant", content: buildMidTurnAssistantContent(content) },
+      { role: "user", content: pulseContent.userMessage },
+      { role: "assistant", content: buildMidTurnAssistantContent(pulseContent) },
     ];
     const runHandle = startExtractionRun({
       trigger: "mid-turn-pulse",
@@ -2990,6 +3217,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         estimatedPromptTokens: estimateExtractionTextTokens(systemPrompt) + estimateExtractionTextTokens(messages.map(m => m.content).join("\n\n")),
         prunedPriorMessages: pruned,
         freshSessionReason,
+        windowTruncated,
       },
     });
 
@@ -3023,7 +3251,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         runHandle.complete({ facts: [], subject: parsed.subject, saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
         extractionMetrics.successfulExtractions++;
         extractionMetrics.lastExtractionAt = new Date().toISOString();
-        return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true };
+        return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true, coverage };
       }
 
       console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: extracted ${facts.length} fact(s), embedding...`);
@@ -3074,7 +3302,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
       extractionMetrics.successfulExtractions++;
       extractionMetrics.lastExtractionAt = new Date().toISOString();
 
-      return { ...outcome, completed: true };
+      return { ...outcome, completed: true, coverage };
     } catch (e) {
       extractionMetrics.failedExtractions++;
       extractionMetrics.lastFailureAt = new Date().toISOString();
@@ -3266,18 +3494,28 @@ async function runPreCompactionSession(opts: {
   // Fast path: the whole removed window fits alongside the pruned history.
   const singleMessages: ExtractionDialogueMessage[] = [...session.history, { role: "user", content: singleUser }];
   if (estimateDialogueChars(singleMessages) <= maxInputChars) {
-    const t0 = Date.now();
-    const raw = await callLLM(singleMessages, contextLabel);
-    const parsed = parseExtractionResponse(raw);
-    return {
-      facts: parsed.facts,
-      subjects: parsed.subject ? [parsed.subject] : [],
-      rawOutput: raw,
-      chunkCount: 1,
-      chunkTimingsMs: [Date.now() - t0],
-      chunkFailures: 0,
-      exchanges: [{ role: "user", content: singleUser }, { role: "assistant", content: raw || "[]" }],
-    };
+    try {
+      const t0 = Date.now();
+      const raw = await callLLM(singleMessages, contextLabel);
+      const parsed = parseExtractionResponse(raw);
+      return {
+        facts: parsed.facts,
+        subjects: parsed.subject ? [parsed.subject] : [],
+        rawOutput: raw,
+        chunkCount: 1,
+        chunkTimingsMs: [Date.now() - t0],
+        chunkFailures: 0,
+        exchanges: [{ role: "user", content: singleUser }, { role: "assistant", content: raw || "[]" }],
+      };
+    } catch (e) {
+      // A failed fast path (extraction server hiccup, OOM, router blip)
+      // must not kill the flush: fall through to the chunked path, which
+      // re-attempts in smaller pieces and degrades per chunk.
+      console.error(
+        `[memory-chunk] ${contextLabel}: fast-path call failed after retries; falling back to chunked continuation:`,
+        e,
+      );
+    }
   }
 
   // Chunked continuation. Continuation chunks carry no overlap/prior-facts
@@ -3335,11 +3573,11 @@ async function runPreCompactionSession(opts: {
       chunkTimingsMs.push(Date.now() - chunkT0);
       chunkFailures++;
       console.error(
-        `[memory-chunk] ${contextLabel}: continuation chunk ${i + 1}/${chunks.length} failed after retries:`,
+        `[memory-chunk] ${contextLabel}: continuation chunk ${i + 1}/${chunks.length} failed after retries; ` +
+        `degrading it (with everything after) to independent calls so it is re-attempted, not dropped:`,
         e,
       );
-      i++; // the failed chunk is consumed; degrade everything after it
-      break;
+      break; // leave the failed chunk unconsumed so the remainder below includes it
     }
 
     rawOutputs.push(raw);

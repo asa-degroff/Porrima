@@ -6,18 +6,13 @@ const mockState = vi.hoisted(() => ({
   embedBatch: vi.fn(),
   fetch: vi.fn(),
   getChat: vi.fn(),
+  getSettings: vi.fn(),
   invalidateMemoriesCache: vi.fn(),
   startExtractionRun: vi.fn(),
 }));
 
 vi.mock("../services/chat-storage.js", () => ({
-  getSettings: vi.fn(async () => ({
-    extractionModelUrl: "http://127.0.0.1:32101",
-    extractionModelId: "extract-model",
-    extractionCtxSize: 16384,
-    extractionMaxTokens: 4000,
-    extractionTimeoutMs: 600000,
-  })),
+  getSettings: mockState.getSettings,
   getChat: mockState.getChat,
   updateChatExtractionState: vi.fn(),
 }));
@@ -101,6 +96,13 @@ describe("mid-turn extraction behavior", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    mockState.getSettings.mockResolvedValue({
+      extractionModelUrl: "http://127.0.0.1:32101",
+      extractionModelId: "extract-model",
+      extractionCtxSize: 16384,
+      extractionMaxTokens: 4000,
+      extractionTimeoutMs: 600000,
+    });
     mockState.getChat.mockResolvedValue(makeChat());
     mockState.embedBatch.mockResolvedValue([new Array(1024).fill(0.1)]);
     mockState.startExtractionRun.mockReturnValue({
@@ -228,4 +230,98 @@ describe("mid-turn extraction behavior", () => {
     expect(captured[0].user).toContain("[PRE-COMPACTION]");
     expect(captured[0].user).toContain("Task state that is about to be compacted away.");
   });
+
+  it("runs a pre-compaction flush alone, after queued exchange jobs", async () => {
+    const { enqueueImmediateExtraction, preCompactionFlush } = await import("../services/memory-extraction.js");
+    // Unique chat id: immediate-extraction sessions and queues are keyed by
+    // chat at module level and persist across tests in this file.
+    const chatId = "chat-flush-order";
+    mockState.getChat.mockResolvedValue({ ...makeChat(), id: chatId });
+    const captured: Array<Array<{ role: string; content: string }>> = [];
+    mockState.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+        captured.push(body.messages);
+        return streamResponse("[]");
+      }
+      return jsonResponse({ default_generation_settings: { n_ctx: 16384 } });
+    });
+
+    const exchangeDone = enqueueImmediateExtraction(
+      "chat-model",
+      chatId,
+      "Exchange user message about the parser.",
+      "Exchange assistant reply about the parser.",
+      "project-1",
+    );
+    const flushDone = preCompactionFlush(
+      "chat-model",
+      chatId,
+      [{ role: "assistant", content: "Flushed task state before compaction.", timestamp: 3 }],
+      { projectId: "project-1" },
+    );
+    await Promise.all([exchangeDone, flushDone]);
+
+    expect(captured.length).toBe(2);
+    // The exchange job ran first, as its own call.
+    const exchangeUserTurns = captured[0].filter((m) => m.role === "user").map((m) => m.content).join("\n");
+    expect(exchangeUserTurns).toContain("Exchange assistant reply about the parser.");
+    expect(exchangeUserTurns).not.toContain("[PRE-COMPACTION]");
+    // The flush ran alone afterwards: its own user turn carries the
+    // pre-compaction framing and the removed content, and does not fold in
+    // the exchange (that lives in session history, not the flush turn).
+    const flushCall = captured[1];
+    const flushUserTurn = flushCall.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    expect(flushUserTurn).toContain("[PRE-COMPACTION]");
+    expect(flushUserTurn).toContain("Flushed task state before compaction.");
+    expect(flushUserTurn).not.toContain("Exchange assistant reply about the parser.");
+  });
+
+  it("re-attempts a failed pre-compaction continuation chunk through the degraded path", async () => {
+    const { preCompactionFlush } = await import("../services/memory-extraction.js");
+    // Unique chat id: immediate-extraction sessions and queues are keyed by
+    // chat at module level and persist across tests in this file.
+    const chatId = "chat-failed-chunk";
+    mockState.getChat.mockResolvedValue({ ...makeChat(), id: chatId });
+    const bodies: string[] = [];
+    let completions = 0;
+    mockState.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        completions += 1;
+        bodies.push(String(init?.body ?? ""));
+        // Fail the first three completions — the first call's retries.
+        if (completions <= 3) {
+          return { ok: false, status: 500, text: async () => "synthetic failure" } as Response;
+        }
+        return streamResponse("[]");
+      }
+      return jsonResponse({ default_generation_settings: { n_ctx: 16384 } });
+    });
+
+    // ~21k chars of removed content: near the single-call budget for
+    // ctx 16384 / maxTokens 4000, so the flush takes the chunked path.
+    const filler = "Recoverable content prose about the cache redesign. ".repeat(120);
+    await preCompactionFlush(
+      "chat-model",
+      chatId,
+      [
+        { role: "assistant", content: `FAILED-CHUNK-MARKER ${filler}`, timestamp: 3 },
+        { role: "assistant", content: `SECOND-CHUNK-MARKER ${filler}`, timestamp: 4 },
+        { role: "assistant", content: `THIRD-CHUNK-MARKER ${filler}`, timestamp: 5 },
+      ],
+      { projectId: "project-1" },
+    );
+
+    // The failed chunk's content must survive: it degrades to the independent
+    // path and is re-attempted there, instead of being dropped with the
+    // failed continuation call. (3 failed attempts + at least 1 degraded call.)
+    const failedMarkerBodies = bodies.filter((b) => b.includes("FAILED-CHUNK-MARKER"));
+    expect(failedMarkerBodies.length).toBeGreaterThanOrEqual(4);
+    expect(completions).toBeGreaterThanOrEqual(4);
+    // The remaining chunks were still extracted.
+    expect(bodies.join("\n")).toContain("SECOND-CHUNK-MARKER");
+    expect(bodies.join("\n")).toContain("THIRD-CHUNK-MARKER");
+  }, 20_000);
 });

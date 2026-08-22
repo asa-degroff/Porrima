@@ -70,6 +70,8 @@ export interface ExtractionRunMetadata {
   prunedPriorMessages?: number;
   freshSessionReason?: string;
   chunkedFallback?: boolean;
+  /** Mid-turn pulse window was FIFO-sliced to fit the extraction budget. */
+  windowTruncated?: boolean;
 }
 
 export interface ExtractionRun {

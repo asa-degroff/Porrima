@@ -10,7 +10,7 @@ import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
-import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse } from "../services/memory-extraction.js";
+import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
 import {
   DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
   DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
@@ -637,7 +637,7 @@ async function withSSEKeepalive<T>(res: Response, fn: () => Promise<T>): Promise
  * extraction paths that need a consistent cursor state.
  */
 async function awaitMidTurnPulse(state: {
-  midTurnInFlightPulse: Promise<{ added: number; superseded: number; skippedDuplicates: number; completed: boolean }> | null;
+  midTurnInFlightPulse: Promise<MidTurnPulseResult> | null;
 }): Promise<void> {
   if (state.midTurnInFlightPulse) {
     try {
@@ -996,7 +996,7 @@ async function handleChatStream(
     // pulse is running. Awaited before compaction so freshly extracted
     // memories are available for the rebuilt prompt and so the extraction
     // server isn't hit concurrently by the pulse and preCompactionFlush.
-    midTurnInFlightPulse: null as Promise<{ added: number; superseded: number; skippedDuplicates: number; completed: boolean }> | null,
+    midTurnInFlightPulse: null as Promise<MidTurnPulseResult> | null,
     // Track last llama.cpp timings for model-stats recording (per-message)
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
@@ -1380,26 +1380,47 @@ async function handleChatStream(
     });
   }
 
+  // Step-latch for the context-pressure trigger: at most one pressure pulse
+  // per +0.05 of ratio progress (0.65 → 0.70 → 0.75 → 0.80 → compaction).
+  // The 256-token signal floor alone cannot bound frequency — a single tool
+  // round-trip easily adds ≥256 new signal tokens, so without the latch the
+  // 0.65–0.85 band would dispatch a pulse at nearly every iteration
+  // boundary. Each such pulse costs a 4B CPU extraction call plus one
+  // session-dialogue pair (at the 8-pair cap that prunes and re-prefills).
+  // Re-arms when the ratio falls back out of the zone (e.g. after compaction).
+  let midTurnPressureLatchRatio = DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO;
+
   /**
    * Dispatch a mid-turn extraction pulse if the uncovered window warrants it.
    * Two triggers:
    * - signal threshold: enough new extraction content accumulated
    * - context ratio: usage is approaching the compaction trigger, so start
    *   extracting early even if the signal threshold hasn't been crossed
-   *   (guarded by a minimum-signal floor to avoid near-empty pulses)
+   *   (guarded by the minimum-signal floor and the step-latch, which bounds
+   *   the pressure band to a handful of pulses rather than one per
+   *   iteration boundary)
    * Runs at most one pulse in flight; further crossings coalesce.
    */
   function maybeDispatchMidTurnPulse(opts: { source: string; contextRatio?: number }): void {
     if (state.midTurnInFlightPulse) return;
 
+    const ratio = opts.contextRatio;
+    if (ratio !== undefined && ratio < DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO - 0.05) {
+      midTurnPressureLatchRatio = DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO;
+    }
+
     const signal = currentMidTurnSignalTokens();
     const midTurnThreshold = settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD;
     const thresholdCrossed = signal >= midTurnThreshold;
     const contextPressure =
-      opts.contextRatio !== undefined &&
-      opts.contextRatio > DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO &&
+      ratio !== undefined &&
+      ratio > DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO &&
+      ratio > midTurnPressureLatchRatio &&
       signal >= MID_TURN_PULSE_MIN_SIGNAL_TOKENS;
     if (!thresholdCrossed && !contextPressure) return;
+    if (contextPressure && ratio !== undefined) {
+      midTurnPressureLatchRatio = Math.min(0.9, ratio + 0.05);
+    }
 
     const pulseIndex = state.midTurnLastPulseIndex + 1;
     const pulseTextEnd = state.fullText.length;
@@ -1467,7 +1488,19 @@ async function handleChatStream(
     })
       .then((pulseResult) => {
         if (pulseResult.completed) {
-          console.log(`[extraction] Mid-turn pulse #${pulseIndex} completed in background: added=${pulseResult.added} superseded=${pulseResult.superseded}`);
+          if (pulseResult.coverage) {
+            // FIFO slice: only the covered prefix was sent. Rewind the
+            // optimistic cursors to the slice end so the next pulse drains
+            // the uncovered remainder instead of skipping it.
+            state.midTurnLastPulseTextLength = prevPulseTextLength + pulseResult.coverage.textChars;
+            state.midTurnLastPulseThinkingLength = prevPulseThinkingLength + pulseResult.coverage.thinkingChars;
+            state.midTurnLastPulseToolCallCount = prevPulseToolCallCount + pulseResult.coverage.toolCalls;
+            state.midTurnLastPulseToolResultCount = prevPulseToolResultCount + pulseResult.coverage.toolResults;
+          }
+          console.log(
+            `[extraction] Mid-turn pulse #${pulseIndex} completed in background: added=${pulseResult.added} superseded=${pulseResult.superseded}` +
+            (pulseResult.coverage ? " (partial window)" : "")
+          );
         } else {
           // Timed out or skipped — roll the cursors back so the next pulse
           // retries this window plus whatever accumulated while waiting.

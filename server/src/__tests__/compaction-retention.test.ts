@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, ChatMessage } from "../types.js";
+import { saveArchives } from "../services/chat-storage.js";
 
 const mockState = vi.hoisted(() => ({
   savedArchives: [] as any[],
@@ -104,6 +105,59 @@ describe("compaction retention planning", () => {
     expect(activeToolPayload).toContain("(no output)");
     expect(activeToolPayload).not.toContain("sigma source line");
     expect(JSON.stringify(mockState.savedArchives)).toContain("sigma source line");
+  });
+
+  it("runs onBeforeArchive before archiving removed messages", async () => {
+    const { truncateBeforeSend } = await import("../services/compaction.js");
+    const order: string[] = [];
+    let hookRemoved: ChatMessage[] = [];
+    vi.mocked(saveArchives).mockImplementation((archives: any[]) => {
+      mockState.savedArchives.push(...archives);
+      order.push("archived");
+    });
+    const hugeSource = "sigma source line with graph setup and reducers\n".repeat(1800);
+    const chat = makeChat([
+      { role: "user", content: "Earlier setup request.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: "",
+        thinking: "I should inspect the rewritten graph viewer and then check the diff.",
+        timestamp: 2,
+        toolCalls: [
+          { id: "read", name: "read_file", arguments: { path: "/repo/MemoryGraphView.tsx" } },
+        ],
+        toolResults: [
+          { toolCallId: "read", toolName: "read_file", content: hugeSource, isError: false },
+        ],
+      },
+      { role: "user", content: "Current request after the big read.", timestamp: 3 },
+    ]);
+
+    const result = await truncateBeforeSend(
+      chat,
+      8000,
+      "You are helpful.",
+      undefined,
+      undefined,
+      [],
+      undefined,
+      async (removed) => {
+        order.push(`hook:${removed.length}`);
+        hookRemoved = removed;
+      },
+    );
+
+    expect(result?.truncated).toBe(true);
+    // The hook saw the removed messages — the flush gets the real content,
+    // including bulky tool payloads.
+    expect(hookRemoved.length).toBeGreaterThan(0);
+    expect(hookRemoved.some((m) =>
+      m.content?.includes("sigma source line") ||
+      (m.toolResults ?? []).some((t) => t.content.includes("sigma source line"))
+    )).toBe(true);
+    // And it ran before the archive/index generation consumed them.
+    expect(order[0]).toMatch(/^hook:/);
+    expect(order).toContain("archived");
   });
 
   it("keeps visible assistant output by archiving its oversized tool payload", async () => {

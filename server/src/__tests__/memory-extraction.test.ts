@@ -7,6 +7,7 @@ import {
   parseExtractionResponse,
   readOpenAIContentStream,
   resolveEffectiveExtractionModelId,
+  sliceMidTurnWindowToFit,
 } from "../services/memory-extraction.js";
 import type { ChatMessage } from "../types.js";
 
@@ -324,5 +325,74 @@ describe("estimateMidTurnSignalTokens", () => {
     });
     // Huge html argument is omitted/truncated by the formatter, so the signal stays small
     expect(tokens).toBeLessThan(800);
+  });
+});
+
+describe("sliceMidTurnWindowToFit", () => {
+  const base = {
+    userMessage: "Do the thing",
+    thinkingText: "",
+    toolCalls: [] as Array<{ name: string; arguments: Record<string, any> }>,
+    toolResults: [] as Array<{ toolName: string; content: string; isError: boolean }>,
+  };
+
+  it("returns the full window untouched when it fits the budget", () => {
+    const content = { ...base, thinkingText: "short thought", textContent: "short reply" };
+    const result = sliceMidTurnWindowToFit(content, 100_000);
+    expect(result.empty).toBe(false);
+    expect(result.truncated).toBe(false);
+    expect(result.sliced.thinkingText).toBe("short thought");
+    expect(result.sliced.textContent).toBe("short reply");
+    expect(result.coverage.thinkingChars).toBe("short thought".length);
+    expect(result.coverage.textChars).toBe("short reply".length);
+  });
+
+  it("takes a FIFO char prefix of an oversized thinking section", () => {
+    const content = { ...base, thinkingText: "a".repeat(10_000) };
+    const result = sliceMidTurnWindowToFit(content, 1_000);
+    expect(result.empty).toBe(false);
+    expect(result.truncated).toBe(true);
+    // Prefix + marker, budget respected
+    expect(result.sliced.thinkingText.length).toBeLessThanOrEqual(1_000);
+    expect(result.sliced.thinkingText).toContain("truncated: pulse window exceeds");
+    expect(result.coverage.thinkingChars).toBeGreaterThan(0);
+    expect(result.coverage.thinkingChars).toBeLessThan(10_000);
+  });
+
+  it("truncates a single oversized tool result instead of returning empty", () => {
+    const content = {
+      ...base,
+      toolResults: [{ toolName: "read_memory_block", content: "z".repeat(60_000), isError: false }],
+    };
+    const result = sliceMidTurnWindowToFit(content, 2_000);
+    expect(result.empty).toBe(false);
+    expect(result.truncated).toBe(true);
+    expect(result.coverage.toolResults).toBe(1);
+    const rendered = result.sliced.toolResults[0];
+    expect(rendered.content).toContain("truncated for pulse budget");
+    expect(rendered.content.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("returns empty when the budget cannot fit even a minimal slice", () => {
+    const content = { ...base, thinkingText: "x".repeat(10_000) };
+    const result = sliceMidTurnWindowToFit(content, 50);
+    expect(result.empty).toBe(true);
+    expect(result.coverage.thinkingChars).toBe(0);
+  });
+
+  it("keeps whole tool results that fit and leaves the rest for the next pulse", () => {
+    const content = {
+      ...base,
+      toolResults: [
+        { toolName: "bash", content: "ok", isError: false },
+        { toolName: "bash", content: "y".repeat(5_000), isError: false },
+      ],
+    };
+    // Budget fits the first small result but not the big one
+    const result = sliceMidTurnWindowToFit(content, 300);
+    expect(result.empty).toBe(false);
+    expect(result.coverage.toolResults).toBe(1);
+    expect(result.sliced.toolResults).toHaveLength(1);
+    expect(result.sliced.toolResults[0].content).toBe("ok");
   });
 });
