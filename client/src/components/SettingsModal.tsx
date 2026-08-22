@@ -127,6 +127,9 @@ const MAX_MID_TURN_EXTRACTION_THRESHOLD = 32000;
 const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 30000;
 const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 5000;
 const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 300000;
+const DEFAULT_TIME_MARKER_INTERVAL_MINUTES = 15;
+const MIN_TIME_MARKER_INTERVAL_MINUTES = 0;
+const MAX_TIME_MARKER_INTERVAL_MINUTES = 1440;
 const DEFAULT_INFERENCE_URL = getDefaultLlamaServerUrl("inference");
 const DEFAULT_EXTRACTION_URL = getDefaultLlamaServerUrl("extraction");
 const DEFAULT_RERANKER_URL = getDefaultLlamaServerUrl("reranker");
@@ -635,6 +638,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   // Mid-turn extraction settings (app-level behavior, not server process config)
   const [midTurnExtractionThreshold, setMidTurnExtractionThreshold] = useState(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD);
   const [midTurnExtractionThresholdDraft, setMidTurnExtractionThresholdDraft] = useState(String(settings.midTurnExtractionThreshold ?? DEFAULT_MID_TURN_EXTRACTION_THRESHOLD));
+  const [timeMarkerInterval, setTimeMarkerInterval] = useState(settings.timeMarkerIntervalMinutes ?? DEFAULT_TIME_MARKER_INTERVAL_MINUTES);
+  const [timeMarkerIntervalDraft, setTimeMarkerIntervalDraft] = useState(String(settings.timeMarkerIntervalMinutes ?? DEFAULT_TIME_MARKER_INTERVAL_MINUTES));
   const [midTurnExtractionTimeoutMs, setMidTurnExtractionTimeoutMs] = useState(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS);
   const [midTurnExtractionTimeoutSecondsDraft, setMidTurnExtractionTimeoutSecondsDraft] = useState(String(timeoutMsToSeconds(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
@@ -1657,6 +1662,17 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setMidTurnExtractionTimeoutSecondsDraft(String(seconds));
   }, [midTurnExtractionTimeoutMs, midTurnExtractionTimeoutSecondsDraft]);
 
+  const applyTimeMarkerIntervalDraft = useCallback(() => {
+    const next = clampIntegerDraft(
+      timeMarkerIntervalDraft,
+      timeMarkerInterval,
+      MIN_TIME_MARKER_INTERVAL_MINUTES,
+      MAX_TIME_MARKER_INTERVAL_MINUTES,
+    );
+    setTimeMarkerInterval(next);
+    setTimeMarkerIntervalDraft(String(next));
+  }, [timeMarkerInterval, timeMarkerIntervalDraft]);
+
   // Assign a binary to a specific server slot
   const handleAssignBinary = useCallback(async (slotId: LlamaServerId, binaryDir: string) => {
     setLlamaServerMessage(null);
@@ -2106,6 +2122,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
         MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000,
       ) * 1000;
+    const savedTimeMarkerIntervalMinutes = clampIntegerDraft(
+      timeMarkerIntervalDraft,
+      timeMarkerInterval,
+      MIN_TIME_MARKER_INTERVAL_MINUTES,
+      MAX_TIME_MARKER_INTERVAL_MINUTES,
+    );
     const newSettings: Settings = {
       ...settings,
       agentName: agentName.trim() || undefined,
@@ -2131,6 +2153,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       extractionTimeoutMs: savedExtractionTimeoutMs,
       midTurnExtractionThreshold: savedMidTurnExtractionThreshold,
       midTurnExtractionTimeoutMs: savedMidTurnExtractionTimeoutMs,
+      timeMarkerIntervalMinutes: savedTimeMarkerIntervalMinutes,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
       rerankerModelId: rerankerModelId.trim() || undefined,
@@ -5791,7 +5814,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <h4 className="text-xs font-medium text-white/65">During long turns</h4>
                     <p className="text-[11px] text-white/30 mt-0.5">Capture completed portions of an active agent turn before the response becomes too large.</p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-3">
                     <label className="space-y-1">
                       <span className="block text-sm text-white/50">Signal token threshold</span>
                       <div className="flex items-center gap-2">
@@ -5826,6 +5849,24 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         <span className="text-xs text-white/30">seconds</span>
                       </div>
                       <span className="block text-[11px] text-white/25">Maximum time one mid-turn extraction pulse may run.</span>
+                    </label>
+
+                    <label className="space-y-1">
+                      <span className="block text-sm text-white/50">Time marker interval</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={timeMarkerIntervalDraft}
+                          onChange={(e) => setTimeMarkerIntervalDraft(e.target.value)}
+                          onBlur={applyTimeMarkerIntervalDraft}
+                          min={MIN_TIME_MARKER_INTERVAL_MINUTES}
+                          max={MAX_TIME_MARKER_INTERVAL_MINUTES}
+                          step={5}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                        />
+                        <span className="text-xs text-white/30">min</span>
+                      </div>
+                      <span className="block text-[11px] text-white/25">Minutes between [time:] markers appended to tool results in long loops (0 disables).</span>
                     </label>
                   </div>
                 </div>

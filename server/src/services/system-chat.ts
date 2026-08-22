@@ -2,6 +2,7 @@ import type { ToolSideEffects } from "./agent-tools.js";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
+import { createTimeMarkerState, type TimeMarkerState } from "./time-marker.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -771,6 +772,15 @@ async function buildPhaseTrigger(
 // sync by runSystemSynthesis (it writes the resolved id back after each run)
 // and is only used as a fallback here when no default is configured or the
 // default isn't currently available.
+// Per-run time-marker state for system-chat loops (synthesis, wake). The
+// headless turn spans multiple phases in one loop, so the gate carries
+// across phase boundaries — exactly the long-run case markers exist for.
+async function createSystemTimeMarker(): Promise<TimeMarkerState | null> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  return createTimeMarkerState(settings.timeMarkerIntervalMinutes);
+}
+
 async function getSynthesisModelId(storedModelId?: string): Promise<string | null> {
   const { discoverAllModels } = await import("./models.js");
   const models = await discoverAllModels();
@@ -969,7 +979,7 @@ export async function runSystemSynthesis(options?: {
       generatedImages,
     });
 
-    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system")
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
       .filter((tool) => tool.name !== "ask_user");
 
     // --- Pre-send compaction keeps history bounded ---
@@ -1307,7 +1317,7 @@ export async function runWakeCycle(options?: {
       visuals,
       generatedImages,
     });
-    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system")
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
       .filter((tool) => tool.name !== "ask_user");
 
     // Pre-send compaction

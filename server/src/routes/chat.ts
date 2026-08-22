@@ -6,6 +6,7 @@ import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
+import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
@@ -1602,7 +1603,14 @@ async function handleChatStream(
 
     // Create tools AFTER model discovery so we can pass the effective context window
     const project = chat.projectId ? await getProject(chat.projectId) : null;
-    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type) : undefined;
+    // Per-turn time-marker state: long tool loops get a fresh clock reading
+    // appended to a tool-result tail every N minutes (see time-marker.ts).
+    // Created per handleChatStream so steering shares the gate while a
+    // follow-up (new stream) restarts the "since turn start" reference.
+    const timeMarker = createTimeMarkerState(settings.timeMarkerIntervalMinutes);
+    const agentTools = isAgent
+      ? getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker)
+      : undefined;
 
     // Build agent context
     const context: AgentContext = {

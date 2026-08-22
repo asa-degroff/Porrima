@@ -1133,6 +1133,13 @@ export async function deleteSshConnection(id: string): Promise<boolean> {
 // Settings
 // ---------------------------------------------------------------------------
 
+// Time markers: minimum minutes between intra-loop [time:] markers appended
+// to tool results. 0 disables. Default 15 — dense enough to keep long
+// autonomous loops temporally grounded, sparse enough to stay noise-free.
+export const DEFAULT_TIME_MARKER_INTERVAL_MINUTES = 15;
+export const MIN_TIME_MARKER_INTERVAL_MINUTES = 0;
+export const MAX_TIME_MARKER_INTERVAL_MINUTES = 1_440;
+
 const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
@@ -1146,6 +1153,7 @@ const DEFAULT_SETTINGS: Settings = {
   imageSandboxEnabled: true,
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
+  timeMarkerIntervalMinutes: DEFAULT_TIME_MARKER_INTERVAL_MINUTES,
   crossProjectScoreMultiplier: 0.3,
   globalProjectScoreMultiplier: 1.0,
   retrievalDepthProfile: "balanced",
@@ -1186,6 +1194,12 @@ export function normalizeSettings(settings: Settings): Settings {
       DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
       MIN_MID_TURN_EXTRACTION_TIMEOUT_MS,
       MAX_MID_TURN_EXTRACTION_TIMEOUT_MS,
+    ),
+    timeMarkerIntervalMinutes: clamp(
+      settings.timeMarkerIntervalMinutes,
+      DEFAULT_TIME_MARKER_INTERVAL_MINUTES,
+      MIN_TIME_MARKER_INTERVAL_MINUTES,
+      MAX_TIME_MARKER_INTERVAL_MINUTES,
     ),
     preserveThinking:
       settings.preserveThinking ??

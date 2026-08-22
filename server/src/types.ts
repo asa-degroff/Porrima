@@ -465,6 +465,10 @@ export interface Settings {
   // read_file hard byte cap on returned content, applied after line slicing
   // as a safety net for pathological lines / minified bundles (default 262144).
   readFileMaxBytes?: number;
+  // Minimum minutes between intra-loop time markers appended to the tail of a
+  // tool result (default 15; 0 disables). Keeps long tool chains temporally
+  // grounded without disturbing the KV prefix.
+  timeMarkerIntervalMinutes?: number;
   // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
   maxBlockChars?: number;
   // Cross-project score multiplier — dampens memories from other projects during retrieval.

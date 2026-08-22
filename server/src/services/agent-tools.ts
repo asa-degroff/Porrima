@@ -9,6 +9,7 @@ import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
 import { formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
 import { getSettings } from "./chat-storage.js";
+import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, InlineVisual, Project } from "../types.js";
@@ -348,7 +349,27 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
-export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string): AgentTool[] {
+/**
+ * Wrap every tool's execute so time markers can be appended to results.
+ *
+ * The marker lands on the result BEFORE it enters the live context or the
+ * persisted row (both read the execute return value), so wire and replay
+ * stay byte-identical — the KV prefix is never disturbed. With no state the
+ * tool array passes through untouched.
+ */
+export function wrapToolsWithTimeMarker(tools: AgentTool[], timeMarker: TimeMarkerState | null): AgentTool[] {
+  if (!timeMarker) return tools;
+  return tools.map((tool) => {
+    const original = tool.execute;
+    return {
+      ...tool,
+      execute: async (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) =>
+        applyTimeMarker(await original(toolCallId, params, signal, onUpdate), timeMarker),
+    };
+  });
+}
+
+export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string, timeMarker?: TimeMarkerState | null): AgentTool[] {
   const workspacePromise = getWorkspaceForProject(project);
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
@@ -686,9 +707,10 @@ URL: ${result.url}${warningText}`, {
     });
   }
 
-  return tools
+  const available = tools
     .filter((tool) => toolIsAvailable(tool.name, chatType))
     .map((tool) => SEQUENTIAL_TOOL_NAMES.has(tool.name) ? { ...tool, executionMode: "sequential" as const } : tool);
+  return wrapToolsWithTimeMarker(available, timeMarker ?? null);
 }
 
 // --- read_pdf implementation ---

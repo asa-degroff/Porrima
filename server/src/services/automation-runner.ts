@@ -13,6 +13,7 @@ import {
 import { selectAutomationPromptStepsForRun } from "./automation-prompt-selection.js";
 import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system-chat.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
+import { createTimeMarkerState } from "./time-marker.js";
 import { SYSTEM_CHAT_ID } from "./system-chat.js";
 
 interface AutomationExecutionResult extends SynthesisResult {
@@ -230,7 +231,9 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       visuals,
       generatedImages,
     });
-    const tools = getAgentTools(task.chatId, effects, contextWindow, undefined, "system")
+    const { getSettings } = await import("./chat-storage.js");
+    const { timeMarkerIntervalMinutes } = await getSettings();
+    const tools = getAgentTools(task.chatId, effects, contextWindow, undefined, "system", createTimeMarkerState(timeMarkerIntervalMinutes))
       .filter((tool) => tool.name !== "ask_user");
 
     const compactionResult = await truncateBeforeSend(
