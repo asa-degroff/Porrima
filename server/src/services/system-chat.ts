@@ -1137,19 +1137,15 @@ export async function runSystemSynthesis(options?: {
     // The headless runner is the authoritative source for this classification.
     // If it failed before producing text, thinking, or tools, do not burn the
     // 24h synthesis slot; let the scheduler retry on a later tick.
-    if (!turn.success) {
-      const phaseError = turn.error || "Synthesis returned no output";
-      console.warn(
-        `[system-chat] Synthesis failed (${phaseError}) - NOT updating lastSynthesis so the next scheduler tick can retry.`,
-      );
-      emitter.emitError(`Synthesis failed: ${phaseError}`);
-      emitter.end();
-      releaseSynthesisLock();
-      return makeErrorResult(phaseError);
-    }
-
     // --- End-of-turn compaction: if the model hit the context limit, compact ---
     // --- before the next run so it doesn't immediately fail again.         ---
+    // Runs on BOTH the success and failure paths (fix 7, Aug 23): a failed
+    // turn can still leave the context above the threshold (it ran many
+    // iterations before dying, or the chat was already hot — which is often
+    // what caused the failure). The old failure path early-returned before
+    // this check, so a hot context failed, skipped compaction, retried hot,
+    // and failed again. The next scheduler tick's pre-send was the only
+    // backstop, and it runs at 0.85 after the retry has already started.
     const needsCompaction = stopReason === "length" ||
       (() => {
         const estimated = estimateContextTokens(chat.messages, synthesisPrompt, tools);
@@ -1172,6 +1168,21 @@ export async function runSystemSynthesis(options?: {
       } catch (e: any) {
         console.warn("[system-chat] End-of-turn compaction failed:", e.message);
       }
+    }
+
+    // --- Detect "ran but produced nothing" failure (e.g., upstream LLM error) ---
+    // The headless runner is the authoritative source for this classification.
+    // If it failed before producing text, thinking, or tools, do not burn the
+    // 24h synthesis slot; let the scheduler retry on a later tick.
+    if (!turn.success) {
+      const phaseError = turn.error || "Synthesis returned no output";
+      console.warn(
+        `[system-chat] Synthesis failed (${phaseError}) - NOT updating lastSynthesis so the next scheduler tick can retry.`,
+      );
+      emitter.emitError(`Synthesis failed: ${phaseError}`);
+      emitter.end();
+      releaseSynthesisLock();
+      return makeErrorResult(phaseError);
     }
 
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
@@ -1377,6 +1388,37 @@ export async function runWakeCycle(options?: {
       `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
     );
 
+    // --- End-of-turn compaction: if the model hit the context limit, compact ---
+    // --- before the next run so it doesn't immediately fail again.           ---
+    // Runs on BOTH the success and failure paths (fix 7, Aug 23) — see the
+    // synthesis note above: a failed turn can still leave the context above
+    // the threshold, and the old failure path early-returned before this
+    // check, so hot-context failure loops could only be broken by the next
+    // tick's pre-send (at 0.85, after the retry had already started).
+    const needsCompaction = stopReason === "length" ||
+      (() => {
+        const estimated = estimateContextTokens(chat.messages, wakePrompt, tools);
+        const ratio = estimated / contextWindow;
+        return ratio > COMPACTION_TRIGGER_RATIO;
+      })();
+    if (needsCompaction) {
+      console.log(
+        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, wakePrompt, tools)}/${contextWindow}`,
+      );
+      try {
+        const cResult = await truncateChatHistory(
+          chat, contextWindow, stopReason === "length",
+          undefined, undefined, undefined, wakePrompt, tools,
+        );
+        if (cResult.truncated) {
+          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
+          await saveChat(chat);
+        }
+      } catch (e: any) {
+        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
+      }
+    }
+
     if (!turn.success) {
       const errorMessage = turn.error || `wake cycle produced no visible output (stopReason=${stopReason})`;
       console.warn(
@@ -1405,32 +1447,6 @@ export async function runWakeCycle(options?: {
       saveChat,
       (title) => emitter.emitTitleUpdate(title),
     );
-
-    // --- End-of-turn compaction: if the model hit the context limit, compact ---
-    // --- before the next run so it doesn't immediately fail again.           ---
-    const needsCompaction = stopReason === "length" ||
-      (() => {
-        const estimated = estimateContextTokens(chat.messages, wakePrompt, tools);
-        const ratio = estimated / contextWindow;
-        return ratio > COMPACTION_TRIGGER_RATIO;
-      })();
-    if (needsCompaction) {
-      console.log(
-        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, wakePrompt, tools)}/${contextWindow}`,
-      );
-      try {
-        const cResult = await truncateChatHistory(
-          chat, contextWindow, stopReason === "length",
-          undefined, undefined, undefined, wakePrompt, tools,
-        );
-        if (cResult.truncated) {
-          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
-          await saveChat(chat);
-        }
-      } catch (e: any) {
-        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
-      }
-    }
 
     // Invalidate caches and gate future ticks
     try {
