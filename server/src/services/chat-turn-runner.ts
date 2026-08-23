@@ -702,7 +702,11 @@ export async function runHeadlessChatTurn(
         context: activeContext,
         config,
         signal: controller.signal,
-        streamFn: createSafeStreamFn(),
+        // Pass the chat id through so the provider layer can record the
+        // context high-water (fix 4) for headless turns — without this,
+        // system chat and automations (the long-turn workhorses) never
+        // feed the floor and its stale-discovery protection.
+        streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id }),
         logPrefix,
         onEvent: async (event) => {
           if (event.type === "message_update") {

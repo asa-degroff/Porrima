@@ -3,6 +3,7 @@ import type { InferenceModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
+import { getContextWindowFloor, applyContextWindowFloor } from "./context-high-water.js";
 
 const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
@@ -240,6 +241,10 @@ export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
   };
 }
 
+// Dedupe the "floor engaged" log: getEffectiveContextWindow runs on every
+// ratio check, so log once per (chat, discovered, floor) triple.
+const lastFloorLog = new Map<string, string>();
+
 /**
  * Get the effective context window for a chat.
  *
@@ -247,19 +252,40 @@ export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
  * 1. Explicit chat override (chat.contextWindow) - user knows best
  * 2. Model's detected context window (model.contextWindow) - from discovery
  * 3. Safe fallback (32768) - when detection fails
+ *
+ * In every discovered/fallback case the result is floored at the chat's
+ * context high-water (context-high-water.ts): the max usage.totalTokens of
+ * successful calls proves the real window is at least that large, so a
+ * smaller discovery value is stale by construction (fb9cdb6f: 113152 cached
+ * vs ~190k real). The floor can only make compaction happen a little early,
+ * never destructive — and when it engages it logs loudly, which is the
+ * detection signal that the discovery data needs repair.
  */
 export function getEffectiveContextWindow(
-  chat: { contextWindow?: number; modelId?: string },
+  chat: { id?: string; contextWindow?: number; modelId?: string },
   model: InferenceModel | undefined,
 ): number {
   if (chat.contextWindow) {
     return chat.contextWindow;
   }
-  if (model?.contextWindow) {
-    return model.contextWindow;
+  const discovered = model?.contextWindow ?? 32768; // fallback: better to compact early than overflow
+  if (!chat.id) {
+    return discovered;
   }
-  // Fallback to conservative default - better to compact early than overflow
-  return 32768;
+  const floor = getContextWindowFloor(chat.id, model?.id ?? chat.modelId);
+  const { window, engaged } = applyContextWindowFloor(discovered, floor);
+  if (engaged) {
+    const key = `${chat.id}|${discovered}|${floor}`;
+    if (lastFloorLog.get(key) !== key) {
+      lastFloorLog.set(key, key);
+      console.warn(
+        `[context-window] chat=${chat.id} model=${model?.id ?? chat.modelId ?? "?"}: ` +
+        `discovered=${discovered} < observed-high-water=${floor} — using floor as denominator ` +
+        `(stale discovery suspected; the real window is at least ${floor})`,
+      );
+    }
+  }
+  return window;
 }
 
 /**

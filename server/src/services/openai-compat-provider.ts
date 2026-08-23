@@ -21,6 +21,7 @@ import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
+import { recordContextObservation } from "./context-high-water.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -1977,6 +1978,19 @@ export const streamOpenAICompat = (
         (output as any).llamaTimings = llamaTimings;
       }
       (output as any).llamaCache = cacheMetadata;
+      // Context high-water (fix 4, Aug 23): a call that completed with final
+      // usage proves the real window is at least totalTokens large. Record it
+      // so getEffectiveContextWindow can floor the denominator when discovery
+      // reports less (stale default_generation_settings, the fb9cdb6f case).
+      // Only successful completions reach here with usage — aborted/errored
+      // calls have none and are not recorded.
+      if (promptDebugChatId && output.usage.totalTokens > 0) {
+        try {
+          recordContextObservation(promptDebugChatId, model.id, model.baseUrl, output.usage.totalTokens);
+        } catch (e: any) {
+          console.warn(`[openai-compat] context observation failed: ${e.message}`);
+        }
+      }
       // `input` is the full prompt the model saw (llama.cpp `prompt_tokens`,
       // cached or not) and `cacheRead` is the subset of it served from the KV
       // cache, so totalTokens = input + output. This deliberately deviates
