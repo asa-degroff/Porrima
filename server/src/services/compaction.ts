@@ -25,6 +25,24 @@ export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
 const USAGE_ANCHOR_HARD_CAP_MULTIPLIER = COMPACTION_HARD_CAP_RATIO / COMPACTION_TRIGGER_RATIO;
 const CHAR_ESTIMATE_SAFETY_RATIO = 1.15;
+/**
+ * Bounds for the char-vs-actual scale factor. In steady state this ratio is a
+ * small correction (~0.8-1.3) between char estimates and tokenizer reality.
+ * Outside these bounds the planning value and the char estimate disagree
+ * structurally (e.g. a stale usage anchor from before compaction), and
+ * applying the ratio would inflate overhead far beyond reality — the Aug 19
+ * fb9cdb6f incident ran at 14.8x, turning a 5.4K-token prompt into 79K of
+ * phantom overhead.
+ */
+const SCALE_FACTOR_MIN = 0.75;
+const SCALE_FACTOR_MAX = 1.5;
+/**
+ * Headroom kept above fixed overhead when overhead alone already exceeds the
+ * compaction target (overhead-dominated chats). Compaction cannot make
+ * overhead smaller, so the target is raised instead of the conversation
+ * being wiped toward nothing.
+ */
+const OVERHEAD_MARGIN_TOKENS = 4096;
 const ARCHIVE_INDEX_MAX_TOKENS = 768;
 
 /**
@@ -189,6 +207,21 @@ export interface ContextEstimateBreakdown {
   postUsageAdditionalTokens?: number;
 }
 
+/**
+ * Index of the most recent compaction summary, or -1 if none.
+ * Usage anchored at or before this index was measured against the
+ * pre-compaction prompt, so it is stale: the retained tail after compaction
+ * still carries those numbers, but they describe context that no longer
+ * exists (Aug 19 fb9cdb6f: post-/compact anchor of 153625 vs ~19K reality).
+ * Mirrors the boundary scan in context-breakdown.ts latestUsage().
+ */
+function lastCompactionSummaryIndex(messages: Chat["messages"]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]._isCompactionSummary) return i;
+  }
+  return -1;
+}
+
 function estimateContextBreakdown(
   messages: Chat["messages"],
   systemPrompt: string,
@@ -197,12 +230,17 @@ function estimateContextBreakdown(
   // Path B: pure char-based estimate across the whole in-context set + prompt.
   const pathBTokens = charEstimateContextSize(messages, systemPrompt, tools);
 
-  // Path A: anchor on the latest in-context assistant's reported usage.
+  // Path A: anchor on the latest in-context assistant's reported usage — but
+  // only replies strictly AFTER the most recent compaction summary. Usage
+  // before the summary reflects the pre-compaction prompt size; if nothing
+  // post-summary has usage yet, fall through to the char path (path B),
+  // which sees post-compaction reality.
+  const summaryIdx = lastCompactionSummaryIndex(messages);
   let lastKnownUsage = 0;
   let lastUsageIndex = -1;
   let lastUsageInput: number | undefined;
   let lastUsageOutput: number | undefined;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (let i = messages.length - 1; i > summaryIdx; i--) {
     if (messages[i]._outOfContext) continue;
     if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
       lastKnownUsage = messages[i].usage!.totalTokens;
@@ -813,7 +851,8 @@ export async function truncateBeforeSend(
   // char-based estimation did (typically when system prompt grew between turns
   // or no prior usage exists).
   let lastUsage = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  const drivingSummaryIdx = lastCompactionSummaryIndex(messages);
+  for (let i = messages.length - 1; i > drivingSummaryIdx; i--) {
     if (messages[i]._outOfContext) continue;
     if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
       lastUsage = messages[i].usage!.totalTokens;
@@ -858,9 +897,40 @@ export async function truncateBeforeSend(
   const messageContentTokens = icEstimates.reduce((s, t) => s + t, 0);
   const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
   const planningTokens = charSafetyExceeded ? estimatedTokens : (hardCapExceeded ? hardCapTokens : displayTokens);
-  const scaleFactor = charEstimateTotal > 0 ? planningTokens / charEstimateTotal : 1;
+  // The scale factor is a char-vs-actual correction (~0.8-1.3 in steady
+  // state). An unbounded ratio means the planner and the char estimate
+  // disagree structurally (e.g. a stale usage anchor) — clamp so overhead
+  // can inflate at most 1.5x instead of 14.8x (Aug 19 fb9cdb6f).
+  const rawScaleFactor = charEstimateTotal > 0 ? planningTokens / charEstimateTotal : 1;
+  const scaleFactor = Math.min(SCALE_FACTOR_MAX, Math.max(SCALE_FACTOR_MIN, rawScaleFactor));
+  if (scaleFactor !== rawScaleFactor) {
+    console.warn(`[compaction] scaleFactor clamped ${rawScaleFactor.toFixed(2)} -> ${scaleFactor.toFixed(2)} (estimator divergence, chat=${chat.id})`);
+  }
   const scaledEstimates = icEstimates.map((t) => Math.ceil(t * scaleFactor));
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
+
+  // Degenerate case: the fixed overhead (system prompt + tool schemas,
+  // scaled) alone exceeds the 30% target. Compaction cannot make overhead
+  // smaller, so instead of wiping the conversation down to the last two
+  // messages we raise the target to overhead + margin and keep as much as
+  // that allows. If even that breaches the hard cap, the window is too
+  // small for this prompt and no compaction can help — skip with a loud
+  // error instead of a destructive wipe (Aug 19 fb9cdb6f).
+  let effectiveTarget = target;
+  if (overheadTokens >= target) {
+    effectiveTarget = overheadTokens + OVERHEAD_MARGIN_TOKENS;
+    if (effectiveTarget >= hardCap) {
+      console.error(
+        `[compaction] SKIP: overhead ${Math.ceil(overheadTokens)} >= hard cap ${Math.ceil(hardCap)} (ctx=${contextWindow}) ` +
+        `— window too small for prompt+tools; nothing to compact (chat=${chat.id})`,
+      );
+      return noOp;
+    }
+    console.warn(
+      `[compaction] overhead ${Math.ceil(overheadTokens)} >= target ${Math.ceil(target)} — raising target to ` +
+      `${Math.ceil(effectiveTarget)} (overhead-dominated chat=${chat.id})`,
+    );
+  }
 
   // Iterate backwards over in-context messages to find budget boundary.
   // Fills up to the 30% target, not the 85% trigger, so the post-compaction
@@ -872,7 +942,7 @@ export async function truncateBeforeSend(
   let runningTotal = overheadTokens;
   let keepFromIC = icIndices.length; // sentinel: nothing fit yet
   for (let ic = icIndices.length - 1; ic >= 0; ic--) {
-    if (runningTotal + scaledEstimates[ic] <= target) {
+    if (runningTotal + scaledEstimates[ic] <= effectiveTarget) {
       runningTotal += scaledEstimates[ic];
       keepFromIC = ic;
     } else {
@@ -891,7 +961,7 @@ export async function truncateBeforeSend(
     const lastOrigIdx = icIndices[icIndices.length - 1];
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
-      Math.max(0, target - overheadTokens),
+      Math.max(0, effectiveTarget - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
@@ -910,7 +980,7 @@ export async function truncateBeforeSend(
         icIndices.length - 2,
         keepFromIC,
         runningTotal,
-        target,
+        effectiveTarget,
         scaledEstimates,
         scaleFactor,
         splitInfos,
@@ -920,11 +990,11 @@ export async function truncateBeforeSend(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
-          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(target)}`,
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTarget)}`,
         );
       }
     } else {
-      console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
+      console.warn(`[compaction] No recent messages fit within raised target ${Math.ceil(effectiveTarget)} (chat=${chat.id}), keeping last 2 in-context`);
       keepFromIC = Math.max(0, icIndices.length - 2);
     }
   } else if (keepFromIC > 0) {
@@ -934,7 +1004,7 @@ export async function truncateBeforeSend(
     // being archived whole.
     const boundaryICIdx = keepFromIC - 1;
     const boundaryOrigIdx = icIndices[boundaryICIdx];
-    const remainingBudget = Math.max(0, target - runningTotal);
+    const remainingBudget = Math.max(0, effectiveTarget - runningTotal);
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
@@ -955,7 +1025,7 @@ export async function truncateBeforeSend(
         boundaryICIdx - 1,
         keepFromIC,
         runningTotal,
-        target,
+        effectiveTarget,
         scaledEstimates,
         scaleFactor,
         splitInfos,
@@ -965,7 +1035,7 @@ export async function truncateBeforeSend(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
-          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(target)}`,
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTarget)}`,
         );
       }
     }
@@ -975,7 +1045,7 @@ export async function truncateBeforeSend(
   const splitSummary = splitInfos.length
     ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
     : "";
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context${splitSummary}`);
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context target=${Math.ceil(effectiveTarget)}${effectiveTarget !== target ? ` (raised from ${Math.ceil(target)})` : ""}${splitSummary}`);
 
   if (messagesToMarkCount <= 0 && splitInfos.length === 0) {
     // Budget planning says keep everything AND no split occurred — nothing to
@@ -1810,7 +1880,11 @@ export async function truncateChatHistory(
     // Use caller-provided usage if available, otherwise search messages
     let lastUsage = knownUsage ?? 0;
     if (!lastUsage) {
-      for (let i = messages.length - 1; i >= 0; i--) {
+      // Usage at or before the most recent compaction summary was measured
+      // against the pre-compaction prompt and is stale — anchor only on
+      // replies after it (same boundary as estimateContextBreakdown).
+      const summaryIdx = lastCompactionSummaryIndex(messages);
+      for (let i = messages.length - 1; i > summaryIdx; i--) {
         if (messages[i]._outOfContext) continue;
         if (messages[i].usage?.totalTokens) {
           lastUsage = messages[i].usage!.totalTokens;
@@ -1877,7 +1951,11 @@ export async function truncateChatHistory(
     // cover the same scope. The old code used a partial denominator (system
     // prompt + message content only) that excluded tool schemas and framing,
     // producing an inconsistent and unreliable scale factor.
-    scaleFactor = charEstimateFull > 0 ? usageForScale / charEstimateFull : 1;
+    const rawScale = charEstimateFull > 0 ? usageForScale / charEstimateFull : 1;
+    scaleFactor = Math.min(SCALE_FACTOR_MAX, Math.max(SCALE_FACTOR_MIN, rawScale));
+    if (scaleFactor !== rawScale) {
+      console.warn(`[compaction] scaleFactor clamped ${rawScale.toFixed(2)} -> ${scaleFactor.toFixed(2)} (estimator divergence, chat=${chat.id})`);
+    }
     overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
     effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
   }
@@ -1889,8 +1967,28 @@ export async function truncateChatHistory(
   let runningTotal = overheadTokens;
   let keepFromICIdx = inContextIndices.length; // sentinel: nothing fit yet
 
+  // Degenerate case: fixed overhead alone exceeds the target (same logic as
+  // truncateBeforeSend). Raise the target, or skip entirely when the window
+  // can't hold the prompt at all.
+  let effectiveTargetTokens = targetTokens;
+  if (overheadTokens >= targetTokens) {
+    effectiveTargetTokens = overheadTokens + OVERHEAD_MARGIN_TOKENS;
+    const hardCapTokens = contextWindow * COMPACTION_HARD_CAP_RATIO;
+    if (effectiveTargetTokens >= hardCapTokens) {
+      console.error(
+        `[compaction] SKIP: overhead ${Math.ceil(overheadTokens)} >= hard cap ${Math.ceil(hardCapTokens)} (ctx=${contextWindow}) ` +
+        `— window too small for prompt+tools; nothing to compact (chat=${chat.id})`,
+      );
+      return noOp;
+    }
+    console.warn(
+      `[compaction] overhead ${Math.ceil(overheadTokens)} >= target ${Math.ceil(targetTokens)} — raising target to ` +
+      `${Math.ceil(effectiveTargetTokens)} (overhead-dominated chat=${chat.id})`,
+    );
+  }
+
   for (let ic = inContextIndices.length - 1; ic >= 0; ic--) {
-    if (runningTotal + effectiveEstimates[ic] <= targetTokens) {
+    if (runningTotal + effectiveEstimates[ic] <= effectiveTargetTokens) {
       runningTotal += effectiveEstimates[ic];
       keepFromICIdx = ic;
     } else {
@@ -1909,7 +2007,7 @@ export async function truncateChatHistory(
     const lastOrigIdx = inContextIndices[inContextIndices.length - 1];
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
-      Math.max(0, targetTokens - overheadTokens),
+      Math.max(0, effectiveTargetTokens - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
@@ -1927,7 +2025,7 @@ export async function truncateChatHistory(
         inContextIndices.length - 2,
         keepFromICIdx,
         runningTotal,
-        targetTokens,
+        effectiveTargetTokens,
         effectiveEstimates,
         scaleFactor,
         splitInfos,
@@ -1937,10 +2035,11 @@ export async function truncateChatHistory(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
-          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(targetTokens)}`,
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTargetTokens)}`,
         );
       }
     } else {
+      console.warn(`[compaction] No recent messages fit within raised target ${Math.ceil(effectiveTargetTokens)} (chat=${chat.id}), keeping last in-context message`);
       keepFromICIdx = Math.max(0, inContextIndices.length - 1);
     }
   } else if (keepFromICIdx > 0) {
@@ -1949,7 +2048,7 @@ export async function truncateChatHistory(
     // off its head so its tail rides along with the kept window.
     const boundaryICIdx = keepFromICIdx - 1;
     const boundaryOrigIdx = inContextIndices[boundaryICIdx];
-    const remainingBudget = Math.max(0, targetTokens - runningTotal);
+    const remainingBudget = Math.max(0, effectiveTargetTokens - runningTotal);
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
@@ -1970,7 +2069,7 @@ export async function truncateChatHistory(
         boundaryICIdx - 1,
         keepFromICIdx,
         runningTotal,
-        targetTokens,
+        effectiveTargetTokens,
         effectiveEstimates,
         scaleFactor,
         splitInfos,
@@ -1980,7 +2079,7 @@ export async function truncateChatHistory(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
-          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(targetTokens)}`,
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTargetTokens)}`,
         );
       }
     }
@@ -1999,7 +2098,7 @@ export async function truncateChatHistory(
     ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
     : "";
 
-  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitSummary}`);
+  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${Math.ceil(effectiveTargetTokens)}${effectiveTargetTokens !== targetTokens ? ` (raised from ${Math.ceil(targetTokens)})` : ""} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitSummary}`);
 
   if (messagesToMarkCount <= 0 && splitInfos.length === 0) return noOp;
 

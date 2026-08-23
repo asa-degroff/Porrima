@@ -2801,11 +2801,21 @@ async function handleChatStream(
                 })}\n\n`);
               }
             });
+          } else {
+            console.log(
+              `[compaction] End-of-turn check: no compaction (chat=${chat.id}, usage=${lastUsage}/${effectiveContextWindow} ` +
+              `(${(usageRatio * 100).toFixed(1)}%, trigger=${COMPACTION_TRIGGER_RATIO * 100}%)`,
+            );
           }
         }
       } catch (err) {
         console.error("[compaction] End-of-turn compaction failed:", err);
       }
+    } else {
+      console.log(
+        `[compaction] End-of-turn check skipped (chat=${chat.id}, midTurn=${state.needsMidTurnCompaction}, ` +
+        `askUser=${!!askUserRef.current}, waitingInput=${waitingForInput}, stranded=${state.strandedToolCall})`,
+      );
     }
 
     // If the last turn ended with toolUse but no final text, continue the loop
