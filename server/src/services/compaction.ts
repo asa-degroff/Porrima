@@ -21,8 +21,43 @@ export interface CompactionResult {
 }
 
 export const COMPACTION_TRIGGER_RATIO = 0.85;
+// End-of-turn compaction triggers earlier than pre-send: it runs while the
+// user is reading the response, not waiting for one. Compacting at 0.80 here
+// avoids the compaction landing at pre-send (0.85) after the user has already
+// typed the next message and is waiting on the round-trip. Pre-send stays at
+// 0.85 as the backstop for what end-of-turn can't see (the next user message
+// itself, rows added after the turn ends).
+export const END_OF_TURN_COMPACTION_TRIGGER_RATIO = 0.80;
 export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
+
+/**
+ * End-of-turn compaction decision (fix 6, Aug 23).
+ *
+ * Two signals, conservative max: `lastUsage` is the measured final call
+ * (input+output) and `estimatedTokens` is the refined re-measurement of the
+ * persisted context (exact tool-result tokenization; also the only signal
+ * that sees rows added after usage measurement, e.g. passive-recall
+ * injection). max() never min(): either signal crossing the trigger
+ * compacts. The trigger is END_OF_TURN_COMPACTION_TRIGGER_RATIO (0.80),
+ * earlier than pre-send's 0.85, because this check runs while the user is
+ * reading — not waiting.
+ */
+export function endOfTurnNeedsCompaction(params: {
+  lastUsage: number;
+  estimatedTokens: number;
+  contextWindow: number;
+  hitContextLimit: boolean;
+}): { needsCompaction: boolean; drivingTokens: number; ratio: number } {
+  const drivingTokens = Math.max(params.lastUsage, params.estimatedTokens);
+  const ratio = params.contextWindow > 0 ? drivingTokens / params.contextWindow : 0;
+  return {
+    needsCompaction: params.hitContextLimit || ratio > END_OF_TURN_COMPACTION_TRIGGER_RATIO,
+    drivingTokens,
+    ratio,
+  };
+}
+
 const USAGE_ANCHOR_HARD_CAP_MULTIPLIER = COMPACTION_HARD_CAP_RATIO / COMPACTION_TRIGGER_RATIO;
 const CHAR_ESTIMATE_SAFETY_RATIO = 1.15;
 /**

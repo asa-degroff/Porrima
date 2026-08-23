@@ -21,6 +21,8 @@ import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title
 import {
   COMPACTION_HARD_CAP_RATIO,
   COMPACTION_TRIGGER_RATIO,
+  END_OF_TURN_COMPACTION_TRIGGER_RATIO,
+  endOfTurnNeedsCompaction,
   estimateContextTokens,
   estimateContextTokensWithExactToolResults,
   truncateChatHistory,
@@ -3365,23 +3367,55 @@ async function handleChatStream(
         if (model) {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
-          const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
-          // Check if we crossed the compaction threshold
-          let needsCompaction = hitContextLimit || usageRatio > COMPACTION_TRIGGER_RATIO;
-
-          // Fallback to character estimation if usage is missing
-          if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
-            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
-            const estimatedRatio = estimatedTokens / effectiveContextWindow;
-            if (estimatedRatio > COMPACTION_TRIGGER_RATIO) {
-              console.log(`[compaction] End-of-turn: usage missing but estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}%) — forcing compaction`);
-              needsCompaction = true;
-            }
+          // Refined estimate — the SAME estimator pre-send uses in
+          // production (exact tokenization of large tool results on top of
+          // the anchor/char estimate). Reading both signals, not just the
+          // raw final usage, closes the asymmetry that let turns land in
+          // the dead band: end-of-turn saw 84.8% (raw usage), the refined
+          // estimate said 85.3%, end-of-turn stayed quiet, and the
+          // compaction landed at pre-send — i.e. while the user was already
+          // waiting for a response. Rows added after usage measurement
+          // (e.g. passive-recall injection) are only visible to the
+          // estimate. The exact-token path self-gates (candidates only at
+          // >=70% of window or >=16k-char results, max 12), so a small
+          // turn costs no extra HTTP.
+          let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+          if (inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
+            const exactEstimate = await estimateContextTokensWithExactToolResults(
+              chat.messages,
+              systemPrompt,
+              agentTools,
+              {
+                baseUrl: piModel.baseUrl,
+                modelId: piModel.id,
+                chatId: chat.id,
+                phase: "end_of_turn",
+                contextWindow: effectiveContextWindow,
+              },
+            );
+            estimatedTokens = exactEstimate.estimatedTokens;
           }
 
+          // Either signal can drive the trigger (conservative max, never
+          // min), against the earlier end-of-turn threshold (0.80 vs
+          // pre-send's 0.85) — see endOfTurnNeedsCompaction. Pre-send
+          // remains the backstop for anything end-of-turn can't see.
+          const decision = endOfTurnNeedsCompaction({
+            lastUsage,
+            estimatedTokens,
+            contextWindow: effectiveContextWindow,
+            hitContextLimit,
+          });
+          const drivingTokens = decision.drivingTokens;
+          const usageRatio = decision.ratio;
+          const needsCompaction = decision.needsCompaction;
+
           if (needsCompaction) {
-            console.log(`[compaction] End-of-turn compaction triggered: ${lastUsage}/${effectiveContextWindow} (${(usageRatio * 100).toFixed(0)}%)`);
+            console.log(
+              `[compaction] End-of-turn compaction triggered: driving=${drivingTokens}/${effectiveContextWindow} ` +
+              `(${(usageRatio * 100).toFixed(0)}%) [usage=${lastUsage}, estimated=${estimatedTokens}]`,
+            );
             const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
             const emitKeepalive = () => res.write(`: keepalive\n\n`);
             // Wrap in keepalive loop so the client's 95s inactivity timeout
@@ -3444,8 +3478,9 @@ async function handleChatStream(
             });
           } else {
             console.log(
-              `[compaction] End-of-turn check: no compaction (chat=${chat.id}, usage=${lastUsage}/${effectiveContextWindow} ` +
-              `(${(usageRatio * 100).toFixed(1)}%, trigger=${COMPACTION_TRIGGER_RATIO * 100}%)`,
+              `[compaction] End-of-turn check: no compaction (chat=${chat.id}, driving=${drivingTokens}/${effectiveContextWindow} ` +
+              `(${(usageRatio * 100).toFixed(1)}%, trigger=${END_OF_TURN_COMPACTION_TRIGGER_RATIO * 100}%) ` +
+              `[usage=${lastUsage}, estimated=${estimatedTokens}]`,
             );
           }
         }

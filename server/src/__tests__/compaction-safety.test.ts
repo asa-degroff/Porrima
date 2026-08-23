@@ -215,3 +215,63 @@ describe("compaction safety (fb9cdb6f regression)", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("raising target"));
   });
 });
+
+// --- endOfTurnNeedsCompaction (fix 6: refined-estimator trigger at 0.80) ---
+//
+// Production dead band (Aug 9-23): a turn ended at 84.8% by raw final usage,
+// under the old 0.85 trigger, so end-of-turn stayed quiet; the next turn's
+// pre-send saw the refined estimate at 85.3%, crossed 0.85, and compacted
+// while the user was already waiting. Fix 6 reads both signals (conservative
+// max) against the earlier 0.80 end-of-turn threshold.
+describe("endOfTurnNeedsCompaction", () => {
+  const W = 100_000; // trigger at 0.80 → 80_000; old trigger at 0.85 → 85_000
+
+  async function decision(lastUsage: number, estimatedTokens: number, hitContextLimit = false) {
+    const { endOfTurnNeedsCompaction } = await import("../services/compaction.js");
+    return endOfTurnNeedsCompaction({ lastUsage, estimatedTokens, contextWindow: W, hitContextLimit });
+  }
+
+  it("fires when the estimate crosses 0.80 but raw usage stays under (estimate-driven)", async () => {
+    // Rows added after usage measurement (e.g. passive-recall injection) are
+    // only visible to the estimate.
+    const d = await decision(79_000, 82_000);
+    expect(d.needsCompaction).toBe(true);
+    expect(d.drivingTokens).toBe(82_000);
+  });
+
+  it("fires when raw usage crosses 0.80 but the estimate reads lower (measured wins — max, never min)", async () => {
+    const d = await decision(81_000, 75_000);
+    expect(d.needsCompaction).toBe(true);
+    expect(d.drivingTokens).toBe(81_000);
+  });
+
+  it("fires at 84% — the production dead band the old 0.85 trigger let through", async () => {
+    // 84.8% by usage / 85.3% by refined estimate: under the old shared
+    // 0.85 trigger this turn stayed quiet at end-of-turn and the compaction
+    // landed at pre-send. At 0.80 it compacts while the user is reading.
+    const d = await decision(84_000, 84_500);
+    expect(d.needsCompaction).toBe(true);
+    expect(d.ratio).toBeCloseTo(0.845, 3);
+  });
+
+  it("stays quiet below 0.80", async () => {
+    const d = await decision(78_000, 77_500);
+    expect(d.needsCompaction).toBe(false);
+    expect(d.drivingTokens).toBe(78_000);
+    expect(d.ratio).toBeCloseTo(0.78, 3);
+  });
+
+  it("hitContextLimit forces compaction at any level", async () => {
+    expect((await decision(50_000, 40_000, true)).needsCompaction).toBe(true);
+    expect((await decision(50_000, 40_000, false)).needsCompaction).toBe(false);
+  });
+
+  it("degrades safely on a zero context window", async () => {
+    const { endOfTurnNeedsCompaction } = await import("../services/compaction.js");
+    const quiet = endOfTurnNeedsCompaction({ lastUsage: 10, estimatedTokens: 20, contextWindow: 0, hitContextLimit: false });
+    expect(quiet.needsCompaction).toBe(false);
+    expect(quiet.ratio).toBe(0);
+    const forced = endOfTurnNeedsCompaction({ lastUsage: 10, estimatedTokens: 20, contextWindow: 0, hitContextLimit: true });
+    expect(forced.needsCompaction).toBe(true);
+  });
+});
