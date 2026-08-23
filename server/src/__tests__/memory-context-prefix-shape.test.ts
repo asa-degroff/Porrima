@@ -300,10 +300,9 @@ describe("persisted time anchors in replay", () => {
       createPiModelFromProvider: vi.fn(),
       discoverAllModels: vi.fn(async () => []),
       getExtractionRoute: vi.fn(),
-      streamSimple: vi.fn(),
     }));
-    vi.doMock("@earendil-works/pi-ai/compat", () => ({
-      streamSimple: vi.fn(),
+    vi.doMock("../services/llm-provider.js", () => ({
+      streamLlamaCpp: vi.fn(),
     }));
     vi.doMock("../services/llama-router-client.js", () => ({
       normalizeRouterModelId: vi.fn((id: string) => id),

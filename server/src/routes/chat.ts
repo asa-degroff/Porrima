@@ -507,13 +507,8 @@ interface SentPrefixSnapshot {
 
 const lastSentPrefixSnapshot = new Map<string, SentPrefixSnapshot>();
 
-function replayIdentityForModel(modelId: string, model?: InferenceModel | null): ReplayModelIdentity {
-  // All models now go through llama.cpp (openai-compat). Legacy ollama models
-  // are mapped to openai-compat for backward compatibility.
-  if (model?.provider === "llamacpp") {
-    return { api: "openai-compat", provider: "llamacpp", model: modelId };
-  }
-  // Fallback: treat unknown/legacy models as openai-compat
+function replayIdentityForModel(modelId: string): ReplayModelIdentity {
+  // All models run through the local llama.cpp provider.
   return { api: "openai-compat", provider: "llamacpp", model: modelId };
 }
 
@@ -4081,16 +4076,10 @@ router.post("/", async (req, res) => {
     if (contextMessages.length === 0 && chat.messages.length > 0) {
       console.warn(`[chat] pending state has empty context, rebuilding from chat.messages (${chat.messages.length} messages)`);
       // Exclude the last message (current user message) from context
-      let resumeModel: InferenceModel | undefined;
-      try {
-        resumeModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
-      } catch {
-        resumeModel = undefined;
-      }
       const rebuiltContext = await chatMessagesToHydratedPiMessages(
         chat.messages.slice(0, -1),
         chat.modelId,
-        replayIdentityForModel(chat.modelId, resumeModel),
+        replayIdentityForModel(chat.modelId),
       );
       contextMessages.push(...rebuiltContext);
     }
@@ -4435,7 +4424,7 @@ router.post("/", async (req, res) => {
     const nextUserContextChars = nextUserContext.systemContexts.reduce((sum, content) => sum + content.length, 0);
     const persistedHistoryEnd = nextUserContext.persistedHistoryEnd;
     const persistedHistory = chat.messages.slice(0, persistedHistoryEnd);
-    const replayIdentity = replayIdentityForModel(chat.modelId, model);
+    const replayIdentity = replayIdentityForModel(chat.modelId);
     const contextMessages = await chatMessagesToHydratedPiMessages(persistedHistory, chat.modelId, replayIdentity);
 
     // Safety check: warn if context is empty for non-first messages
@@ -4690,13 +4679,7 @@ router.post("/artifact-error", async (req, res) => {
     chat.messages[currentPromptIndex - 1]?.content === memoryDeltaContext
       ? currentPromptIndex - 1
       : currentPromptIndex;
-  let repairModel: InferenceModel | undefined;
-  try {
-    repairModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
-  } catch {
-    repairModel = undefined;
-  }
-  const repairReplayIdentity = replayIdentityForModel(chat.modelId, repairModel);
+  const repairReplayIdentity = replayIdentityForModel(chat.modelId);
   const contextMessages = await chatMessagesToHydratedPiMessages(
     chat.messages.slice(0, persistedHistoryEnd),
     chat.modelId,
@@ -5061,7 +5044,7 @@ router.post("/edit", async (req, res) => {
       ? currentEditUserIndex - 1
       : currentEditUserIndex;
   const editPersistedHistory = chat.messages.slice(0, editPersistedHistoryEnd);
-  const editReplayIdentity = replayIdentityForModel(chat.modelId, model);
+  const editReplayIdentity = replayIdentityForModel(chat.modelId);
   const contextMessages = await chatMessagesToHydratedPiMessages(editPersistedHistory, chat.modelId, editReplayIdentity);
 
   // Safety check: warn if context is empty for non-first messages

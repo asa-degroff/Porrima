@@ -8,7 +8,7 @@ import {
   type ToolResultMessage,
   type StopReason,
 } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+import { streamLlamaCpp } from "./llm-provider.js";
 import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import type { Model } from "@earendil-works/pi-ai";
@@ -393,7 +393,7 @@ export async function streamChat(
   if (options?.numGpu !== undefined) streamOptions.numGpu = options.numGpu;
   if (options?.numPredict !== undefined) streamOptions.numPredict = options.numPredict;
 
-  const eventStream = streamSimple(piModel, context, streamOptions);
+  const eventStream = streamLlamaCpp(piModel, context, streamOptions);
 
   let fullText = "";
   let thinkingText = "";

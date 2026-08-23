@@ -240,10 +240,6 @@ export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
   };
 }
 
-function supportsReasoning(family: string): boolean {
-  return family.startsWith("qwen3") || family.startsWith("gemma4");
-}
-
 /**
  * Get the effective context window for a chat.
  *
@@ -282,7 +278,7 @@ export async function createPiModelFromProvider(
     api: "openai-compat",
     provider: "llamacpp",
     baseUrl,
-    reasoning: supportsReasoning(model.family) || true, // llama.cpp serves reasoning models; thinking via delta.reasoning_content
+    reasoning: true, // thinking arrives via delta.reasoning_content; non-reasoning models simply emit none
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: model.contextWindow,

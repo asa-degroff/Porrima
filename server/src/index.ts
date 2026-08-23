@@ -46,12 +46,8 @@ import { initializeExtractionPrompt } from "./services/extraction-prompt-store.j
 import { createSystemChat } from "./services/system-chat.js";
 import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
-import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
 import { initSshMux, destroyAllMasters } from "./services/workspace.js";
 import { logStorageMigrationDiagnostics } from "./services/storage-diagnostics.js";
-
-// Register API providers before any requests
-registerOpenAICompatProvider();
 
 // Prevent unhandled promise rejections from crashing the process.
 // pi-agent-core's agentLoop() runs an unawaited async IIFE — if the loop throws

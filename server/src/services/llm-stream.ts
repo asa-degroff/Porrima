@@ -1,27 +1,20 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { beginStream as beginLLMStream, endStream as endLLMStream } from "./llm-activity.js";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
+import { streamLlamaCpp } from "./llm-provider.js";
 
 /**
  * Inactivity timeouts for LLM streaming.
  *
- * Local models can take several minutes to load and prefill large contexts.
- * Cloud models should answer faster, but may still buffer large tool-call
- * arguments before the first event.
+ * Local models can take several minutes to load and prefill large contexts,
+ * and may buffer large tool-call arguments before the first event.
  */
 const LOCAL_INACTIVITY_TIMEOUT_MS = 1_800_000;
 const LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS = 600_000;
 const LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS = 7_200_000;
-const CLOUD_INACTIVITY_TIMEOUT_MS = 300_000;
-const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;
-
-function isCloudModel(modelId: string): boolean {
-  return modelId.includes(":cloud");
-}
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -108,12 +101,9 @@ export function createSafeStreamFn(
       mergedOptions.llamaPromptDebugChatId = hooks.promptDebugChatId;
     }
 
-    const rawStream = streamSimple(model, ctx, mergedOptions as any);
+    const rawStream = streamLlamaCpp(model, ctx, mergedOptions as any);
     const wrappedStream = createAssistantMessageEventStream();
 
-    const cloud = isCloudModel(model.id);
-    const ongoingTimeout = cloud ? CLOUD_INACTIVITY_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
-    const firstEventTimeout = cloud ? CLOUD_FIRST_EVENT_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
     const localNoProgressTimeout = readPositiveIntEnv("LLM_LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS", LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS);
     const localAbsoluteTimeout = readPositiveIntEnv("LLM_LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS", LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS);
 
@@ -165,9 +155,9 @@ export function createSafeStreamFn(
 
       const resetTimer = () => {
         if (timer) clearTimeout(timer);
-        const timeout = receivedFirstEvent
-          ? ongoingTimeout
-          : (!cloud && receivedProviderProgress ? localNoProgressTimeout : firstEventTimeout);
+        const timeout = !receivedFirstEvent && receivedProviderProgress
+          ? localNoProgressTimeout
+          : LOCAL_INACTIVITY_TIMEOUT_MS;
         timer = setTimeout(() => {
           const progressText = receivedProviderProgress ? "no prefill progress" : "no first event";
           failStream(
@@ -189,15 +179,13 @@ export function createSafeStreamFn(
       }
 
       resetTimer();
-      if (!cloud) {
-        absoluteTimer = setTimeout(() => {
-          if (!receivedFirstEvent) {
-            failStream(
-              `Model unresponsive for ${localAbsoluteTimeout / 1000}s before first output - long prefill exceeded the hard timeout.`,
-            );
-          }
-        }, localAbsoluteTimeout);
-      }
+      absoluteTimer = setTimeout(() => {
+        if (!receivedFirstEvent) {
+          failStream(
+            `Model unresponsive for ${localAbsoluteTimeout / 1000}s before first output - long prefill exceeded the hard timeout.`,
+          );
+        }
+      }, localAbsoluteTimeout);
       beginLLMStream();
 
       try {

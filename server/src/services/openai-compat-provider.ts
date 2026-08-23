@@ -1,4 +1,3 @@
-import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import {
   createAssistantMessageEventStream,
   parseStreamingJson,
@@ -2012,27 +2011,3 @@ export const streamOpenAICompat = (
 
   return stream;
 };
-
-// ---------------------------------------------------------------------------
-// Simple stream wrapper
-// ---------------------------------------------------------------------------
-
-export const streamSimpleOpenAICompat = (
-  model: Model<Api>,
-  context: Context,
-  options?: SimpleStreamOptions
-) => {
-  return streamOpenAICompat(model, context, options);
-};
-
-// ---------------------------------------------------------------------------
-// Provider registration
-// ---------------------------------------------------------------------------
-
-export function registerOpenAICompatProvider() {
-  registerApiProvider({
-    api: "openai-compat",
-    stream: streamOpenAICompat,
-    streamSimple: streamSimpleOpenAICompat,
-  });
-}
