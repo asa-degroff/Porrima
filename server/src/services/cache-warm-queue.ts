@@ -262,6 +262,12 @@ export function slotHasActiveTask(slot: any): boolean {
   if (!slot || typeof slot !== "object") return false;
   if (slot.is_processing === true || slot.processing === true) return true;
 
+  // Explicit idle wins over residual task state. llama.cpp never zeroes
+  // next_token.n_remain (n_predict_max - cumulative n_gen) or id_task when a
+  // slot goes idle, so a slot whose last task left an unused token budget
+  // would otherwise read as busy forever and block the automation scheduler.
+  if (slot.is_processing === false || slot.processing === false) return false;
+
   const nextTokens = Array.isArray(slot.next_token)
     ? slot.next_token
     : slot.next_token && typeof slot.next_token === "object"
@@ -280,9 +286,9 @@ export function slotHasActiveTask(slot: any): boolean {
   const state = String(slot.state ?? slot.status ?? "").toLowerCase();
   if (state.includes("process") || state.includes("busy") || state === "1") return true;
 
-  // Recent llama.cpp slot payloads retain the last non-negative task id even
-  // after the slot has gone idle. Trust explicit idle signals over stale ids.
-  if (slot.is_processing === false || slot.processing === false) return false;
+  // Older payloads without an explicit idle flag may retain the last
+  // non-negative task id after the slot goes idle; idle state strings win
+  // over that fallback.
   if (state.includes("idle") || state.includes("complete") || state.includes("done")) return false;
 
   const taskId = slot.id_task ?? slot.task_id ?? slot.task?.id_task ?? slot.task?.task_id;

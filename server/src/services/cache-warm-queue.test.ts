@@ -70,6 +70,22 @@ describe("llama slot busy detection", () => {
     ).toBe(false);
   });
 
+  it("does not treat stale n_remain on idle slots as active work (b10164 residue)", () => {
+    // Live b10164 payload: slot idle, but its last task (finite max_tokens)
+    // ended with 16 tokens of unused budget. n_remain = n_predict_max -
+    // cumulative n_gen and is never zeroed on idle.
+    expect(
+      slotHasActiveTask({
+        id: 0,
+        is_processing: false,
+        id_task: 240501,
+        n_prompt_tokens: 0,
+        n_prompt_tokens_processed: 6736,
+        next_token: [{ has_next_token: false, has_new_line: false, n_remain: 16, n_decoded: 980 }],
+      }),
+    ).toBe(false);
+  });
+
   it("detects explicit active slot state", () => {
     expect(slotHasActiveTask({ is_processing: true, id_task: 10 })).toBe(true);
     expect(slotHasActiveTask({ processing: true })).toBe(true);
