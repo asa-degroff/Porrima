@@ -91,6 +91,15 @@ const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
 const artifactErrorRepairAttempts = new Map<string, number>();
 const artifactAutoRepairAttempts = new Map<string, number>();
 
+// Chats whose context was just rebuilt by a compaction (end-of-turn, pre-send,
+// or manual /compact) whose cold prefill hasn't happened yet. The next
+// handleChatStream call for the chat consumes its entry and force-shows the
+// prefill progress indicator for the first LLM call — auto-detection can't see
+// this case because the slot probe still reports the pre-compaction context.
+// In-memory only: a server restart empties every slot anyway, which makes the
+// provider's cold-cache auto-detection accurate again.
+const postCompactionPrefillPending = new Set<string>();
+
 function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
   return type === "agent" || type === "system";
 }
@@ -1842,7 +1851,14 @@ async function handleChatStream(
     // Gate the prefill indicator:
     //   - First turns, first iteration: show unless the new-chat baseline is warm
     //   - Non-first turns, first iteration: auto-show only if the slot probe sees a cold prefill
-    //   - Tool iterations (iteration > 1): always hide
+    //   - Tool iterations (iteration > 1): hide, except the first call after a
+    //     mid-turn compaction — the rebuilt post-compaction context invalidates
+    //     the KV prefix, so the resume prefills mostly cold. Auto-detection can't
+    //     catch that: the slot probe still sees the pre-compaction context and
+    //     reports "hot". The same applies when an earlier compaction (end-of-turn,
+    //     pre-send, manual /compact) armed postCompactionPrefillPending for this
+    //     chat — consume it and force the indicator for the first call.
+    let forcePrefillIndicatorForNextCall = postCompactionPrefillPending.delete(chat.id);
     const isFirstTurn = chat.messages.length === 1;
     firstTurnBaselineWarm =
       isFirstTurn &&
@@ -1861,6 +1877,15 @@ async function handleChatStream(
       promptDebugChatId: chat.id,
       onModelProgress: emitModelProgress,
       modelProgressShowIndicator: (iteration) => {
+        // A compaction just rebuilt the context (mid-turn resume arms this
+        // directly; end-of-turn / pre-send / manual /compact arm it via
+        // postCompactionPrefillPending consumed above). Force the indicator for
+        // the single cold resume/next call, then drop the flag so later tool
+        // iterations fall back to the normal hide rule.
+        if (forcePrefillIndicatorForNextCall) {
+          forcePrefillIndicatorForNextCall = false;
+          return true;
+        }
         if (iteration > 1) return false;
         if (isFirstTurn) return firstTurnBaselineWarm ? undefined : true;
         return undefined;
@@ -2750,6 +2775,9 @@ async function handleChatStream(
               const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage, systemPrompt, agentTools, preCompactionFlushHook(chat, "end-of-turn flush failed"));
               if (compaction.truncated) {
                 await saveChat(chat, { allowTruncation: true });
+                // The next prefill (a queued follow-up in this request or the
+                // next turn) starts from the rebuilt context — arm the indicator.
+                postCompactionPrefillPending.add(chat.id);
 
                 // Full reset of memory context after compaction — rebuild with
                 // fresh retrieval, all memories frozen into the new system prompt.
@@ -3244,6 +3272,9 @@ async function handleChatStream(
       }
 
       // 4. Resume the agent loop with compacted context
+      // Compaction rebuilt the context, so the slot's KV prefix is invalidated and
+      // the resume call prefills mostly cold. Arm the prefill indicator for it.
+      if (compaction?.truncated) forcePrefillIndicatorForNextCall = true;
       const resumeContext: AgentContext = {
         systemPrompt,
         messages: resumeMessages,
@@ -3884,6 +3915,9 @@ router.post("/", async (req, res) => {
         if (isMemoryAugmentedChatType(chat.type)) {
           resetMemoryContext(chat.id);
         }
+        // Whether the follow-up runs in this request or on the next turn, its
+        // prefill starts from the rebuilt context — arm the indicator.
+        postCompactionPrefillPending.add(chat.id);
       }
       return result;
     });
@@ -4143,6 +4177,8 @@ router.post("/", async (req, res) => {
           );
           if (compaction && compaction.truncated) {
             await saveChat(chat, { allowTruncation: true });
+            // The resumed turn prefills the rebuilt context — arm the indicator.
+            postCompactionPrefillPending.add(chat.id);
             // Rebuild system prompt after truncation with full memory reset
             resetMemoryContext(chat.id);
             if (isMemoryAugmentedChatType(chat.type)) {
@@ -4331,6 +4367,8 @@ router.post("/", async (req, res) => {
           );
           if (compaction && compaction.truncated) {
             await saveChat(chat, { allowTruncation: true });
+            // The turn about to start prefills the rebuilt context — arm the indicator.
+            postCompactionPrefillPending.add(chat.id);
             // Full reset of memory context — compaction reshapes the entire context,
             // so we need fresh retrieval with all memories frozen into the new system prompt.
             // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
@@ -4963,6 +5001,8 @@ router.post("/edit", async (req, res) => {
         );
         if (compaction && compaction.truncated) {
           await saveChat(chat, { allowTruncation: true });
+          // The regenerated turn prefills the rebuilt context — arm the indicator.
+          postCompactionPrefillPending.add(chat.id);
           // Rebuild system prompt after truncation with full memory reset
           resetMemoryContext(chat.id);
           if (isMemoryAugmentedChatType(chat.type)) {
