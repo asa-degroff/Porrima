@@ -193,6 +193,48 @@ describe("compaction retention planning", () => {
     expect(activeAssistant?.toolResults).toBeUndefined();
     expect(chat.messages.some((m) => !m._outOfContext && m.role === "user" && m.content === currentUser)).toBe(true);
     expect(JSON.stringify(mockState.savedArchives)).toContain("large inspection payload");
+    // Fix 4: the archived split head must carry the turn's final text too, so
+    // read_archived_context returns the conclusion, not just tool activity.
+    const strippedHead = mockState.savedArchives
+      .flatMap((a: any) => a.messages)
+      .find((m: any) => m._isSplitHead);
+    expect(strippedHead?.content).toBe(assistantOutput);
+  });
+
+  it("carries the turn's final text onto a tool-pair-tail split head", async () => {
+    const { truncateBeforeSend } = await import("../services/compaction.js");
+    const hugeWriteContent = "bulk artifact payload line\n".repeat(2400);
+    const finalText = "Final conclusion: the retention planner keeps visible output intact.";
+    const currentUser = "Continue from the retention planner review.";
+    const chat = makeChat([
+      { role: "user", content: "Earlier setup request.", timestamp: 1 },
+      { role: "assistant", content: "Earlier output.", timestamp: 2 },
+      { role: "user", content: currentUser, timestamp: 3 },
+      {
+        role: "assistant",
+        content: finalText,
+        thinking: "Write the artifact, then verify the diff.",
+        timestamp: 4,
+        toolCalls: [
+          { id: "write", name: "write_file", arguments: { path: "/repo/artifact.html", content: hugeWriteContent } },
+          { id: "diff", name: "bash", arguments: { command: "git diff --stat HEAD" } },
+        ],
+        toolResults: [],
+      },
+    ]);
+
+    const result = await truncateBeforeSend(chat, 8000, "You are helpful.", undefined, undefined, []);
+
+    expect(result?.truncated).toBe(true);
+    const splitHead = mockState.savedArchives
+      .flatMap((a: any) => a.messages)
+      .find((m: any) => m._isSplitHead);
+    expect(splitHead).toBeTruthy();
+    expect(splitHead?.content).toBe(finalText);
+    expect(JSON.stringify(mockState.savedArchives)).toContain("bulk artifact payload line");
+    // The kept tail still holds the final text and the surviving pair.
+    const active = chat.messages.filter((m) => !m._outOfContext);
+    expect(active.some((m) => m.role === "assistant" && m.content === finalText)).toBe(true);
   });
 
   it("backfills across a single completed tool-only row by keeping an archived placeholder", async () => {

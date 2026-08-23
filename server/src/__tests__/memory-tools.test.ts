@@ -14,12 +14,13 @@ async function loadMemoryTools(homeDir: string) {
     };
   });
 
-  const [memoryTools, notebookStorage, memoryStorage] = await Promise.all([
+  const [memoryTools, notebookStorage, memoryStorage, chatStorage] = await Promise.all([
     import("../services/memory-tools.js"),
     import("../services/notebook-storage.js"),
     import("../services/memory-storage.js"),
+    import("../services/chat-storage.js"),
   ]);
-  return { memoryTools, notebookStorage, memoryStorage };
+  return { memoryTools, notebookStorage, memoryStorage, chatStorage };
 }
 
 // --- save_memory supersession test scaffolding ---
@@ -234,6 +235,181 @@ describe("memory tools", () => {
       expect(result.content).toContain("1000 over");
       expect(memoryStorage.getMemoryBlock("blk-limit-test")?.content).toBe("Original content.");
       expect(memoryStorage.listMemoryBlocks({ includeInternal: true }).map((b) => b.id)).toEqual(["blk-limit-test"]);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+function makeArchiveFixture(overrides: {
+  id?: string;
+  chatId?: string;
+  messages: any[];
+}) {
+  const messages = overrides.messages;
+  return {
+    id: overrides.id ?? "archive:testchat:001",
+    chatId: overrides.chatId ?? "test-chat",
+    sequenceNum: 1,
+    messages,
+    indexEntry: "test archive",
+    messageCount: messages.length,
+    estimatedTokens: 100,
+    createdAt: "2026-08-23T00:00:00.000Z",
+  };
+}
+
+describe("read_archived_context", () => {
+  it("omits verbose thinking by default but keeps the conclusion within budget", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-archive-read-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      const hugeThinking = "THINKING_MARKER filler reasoning ".repeat(4000); // ~130KB
+      chatStorage.saveArchives([makeArchiveFixture({
+        messages: [
+          { role: "user", content: "What did we decide about the rollout?" },
+          {
+            role: "assistant",
+            thinking: hugeThinking,
+            content: "CONCLUSION_MARKER Ship behind the flag and monitor error rates before widening.",
+          },
+        ],
+      })]);
+
+      const budget = 6000;
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_archived_context",
+        arguments: { archive_id: "archive:testchat:001" },
+      } as any, "test-chat", { maxResultChars: budget });
+
+      expect(result.isError).toBe(false);
+      expect(result.content.length).toBeLessThanOrEqual(budget);
+      expect(result.content).toContain("CONCLUSION_MARKER");
+      expect(result.content).not.toContain("THINKING_MARKER");
+      expect(result.content).toContain("reasoning traces omitted");
+      expect(result.content).toContain("include_thinking=true");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes thinking when include_thinking=true", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-archive-read-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      chatStorage.saveArchives([makeArchiveFixture({
+        messages: [
+          { role: "user", content: "Trace the bug." },
+          {
+            role: "assistant",
+            thinking: "short reasoning about the null deref",
+            content: "It was a null deref in the parser.",
+          },
+        ],
+      })]);
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_archived_context",
+        arguments: { archive_id: "archive:testchat:001", include_thinking: true },
+      } as any, "test-chat", { maxResultChars: 20000 });
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("short reasoning about the null deref");
+      expect(result.content).not.toContain("reasoning traces omitted");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pages large archives with offset/limit", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-archive-read-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      const messages = [];
+      for (let i = 0; i < 5; i++) messages.push({ role: "user", content: `msg-${i}` });
+      chatStorage.saveArchives([makeArchiveFixture({ messages })]);
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_archived_context",
+        arguments: { archive_id: "archive:testchat:001", offset: 1, limit: 2 },
+      } as any, "test-chat", { maxResultChars: 20000 });
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("Showing messages 2-3 of 5");
+      expect(result.content).toContain("msg-1");
+      expect(result.content).toContain("msg-2");
+      expect(result.content).not.toContain("msg-0");
+      expect(result.content).not.toContain("msg-3");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps conclusions within a small budget even when tool results and thinking are huge", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-archive-read-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      const hugeResult = "TOOLRESULT_MARKER dense payload ".repeat(2000); // ~64KB
+      const hugeThinking = "THINKING_MARKER filler ".repeat(1200); // ~27KB
+      chatStorage.saveArchives([makeArchiveFixture({
+        messages: [
+          { role: "user", content: "Investigate the failure." },
+          {
+            role: "assistant",
+            thinking: hugeThinking,
+            toolCalls: [{ id: "t1", name: "bash", arguments: { command: "collect-logs" } }],
+            toolResults: [{ toolCallId: "t1", toolName: "bash", content: hugeResult, isError: false }],
+          },
+          { role: "user", content: "And the fix?" },
+          {
+            role: "assistant",
+            thinking: hugeThinking,
+            content: "FINAL_CONCLUSION Restart the worker after clearing the poisoned cache entry.",
+          },
+        ],
+      })]);
+
+      const budget = 6000;
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_archived_context",
+        arguments: { archive_id: "archive:testchat:001" },
+      } as any, "test-chat", { maxResultChars: budget });
+
+      expect(result.isError).toBe(false);
+      expect(result.content.length).toBeLessThanOrEqual(budget);
+      expect(result.content).toContain("FINAL_CONCLUSION");
+      // Bulky low-value content was trimmed away to protect the conclusion.
+      expect(result.content).not.toContain("TOOLRESULT_MARKER dense payload ".repeat(100));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stays within a tight budget across many content-heavy messages", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-archive-read-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      const messages = [];
+      for (let i = 0; i < 12; i++) {
+        messages.push({ role: "user", content: `Question ${i}: ${"context ".repeat(400)}` });
+        messages.push({
+          role: "assistant",
+          thinking: "reasoning ".repeat(300),
+          content: `Answer ${i}: ${i === 11 ? "LAST_ANSWER_MARKER the cache was poisoned." : "analysis ".repeat(300)}`,
+        });
+      }
+      chatStorage.saveArchives([makeArchiveFixture({ messages })]);
+
+      const budget = 8000;
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_archived_context",
+        arguments: { archive_id: "archive:testchat:001" },
+      } as any, "test-chat", { maxResultChars: budget });
+
+      expect(result.isError).toBe(false);
+      expect(result.content.length).toBeLessThanOrEqual(budget);
+      // The final conclusion survives the budget squeeze.
+      expect(result.content).toContain("LAST_ANSWER_MARKER");
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

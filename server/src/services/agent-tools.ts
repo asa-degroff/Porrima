@@ -389,7 +389,12 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       label: tool.name,
       execute: async (toolCallId, params) => {
         const args = params as Record<string, any>;
-        return wrapResult(await executeMemoryTool(makeToolCall(toolCallId, tool.name, args), chatId), tool.name);
+        return wrapResult(
+          await executeMemoryTool(makeToolCall(toolCallId, tool.name, args), chatId, {
+            maxResultChars: getMaxToolResultChars(contextWindow),
+          }),
+          tool.name,
+        );
       },
     });
   }

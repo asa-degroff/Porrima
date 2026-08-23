@@ -565,7 +565,11 @@ function trySplitAssistantMessage(
 
   const head: ChatMessage = {
     role: "assistant",
-    content: "",                 // final text stays on the kept tail
+    // Copy of the turn's final text: the head only feeds archiving and
+    // pre-compaction extraction (the kept tail retains its own copy), and
+    // without it read_archived_context would return reasoning + tool
+    // activity with none of the conclusions.
+    content: msg.content,
     thinking: msg.thinking,
     toolCalls: archivedCalls,
     toolResults: archivedResults,
@@ -586,7 +590,8 @@ function trySplitAssistantMessage(
     let t = estimateToolCallTokens(tc);
     if (tr) t += estimateToolResultContentTokens(tr.content) + 20;
     return sum + t;
-  }, 0) + (head.thinking ? estimateTokens(head.thinking) : 0);
+  }, 0) + (head.thinking ? estimateTokens(head.thinking) : 0)
+    + (head.content ? estimateTokens(head.content) : 0);
 
   return {
     head,
@@ -619,7 +624,9 @@ function tryStripAssistantToolPayloadForTextRetention(
   const archivedPairCount = Math.max(archivedCalls?.length ?? 0, archivedResults?.length ?? 0);
   const head: ChatMessage = {
     role: "assistant",
-    content: "",
+    // Copy of the turn's final text (the kept message retains its own copy)
+    // so the archive holds the conclusion, not just the tool payload.
+    content: msg.content,
     thinking: msg.thinking,
     toolCalls: archivedCalls,
     toolResults: archivedResults,

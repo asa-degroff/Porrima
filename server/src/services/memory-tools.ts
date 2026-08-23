@@ -14,7 +14,7 @@ import {
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
-import type { MemoryCategory } from "../types.js";
+import type { ChatMessage, MemoryCategory } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
 
 export const MEMORY_TOOLS: Tool[] = [
@@ -80,9 +80,18 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "read_archived_context",
     description:
-      "Retrieve the full content of an archived context block by its ID. Use this when you see an archive reference (e.g. archive:xxxx:001) in a compaction summary and need the exact details — tool outputs, code, reasoning traces.",
+      "Retrieve the content of an archived context block by its ID. Use this when you see an archive reference (e.g. archive:xxxx:001) in a compaction summary and need the exact details — conversation content, tool outputs, code. User/assistant conversation is rendered first; reasoning traces are omitted by default (pass include_thinking=true to include them), and tool activity is trimmed as needed to fit. Use offset/limit to page through large archives.",
     parameters: Type.Object({
       archive_id: Type.String({ description: "Archive block ID (e.g. archive:abc12345:001)" }),
+      include_thinking: Type.Optional(
+        Type.Boolean({ description: "Include reasoning traces (thinking blocks). Default false — thinking is verbose and rarely needed to recover facts or conclusions." }),
+      ),
+      offset: Type.Optional(
+        Type.Number({ description: "0-based index of the first message to render. Use with limit to page through large archives.", minimum: 0 }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum number of messages to render. Use with offset to page through large archives.", minimum: 1 }),
+      ),
     }),
   },
   {
@@ -199,9 +208,168 @@ async function resolveProjectIdForScope(
   return "";
 }
 
+// --- read_archived_context formatting helpers ---
+
+/**
+ * Per-field character caps applied when rendering an archive. Thinking is
+ * capped separately via `thinkingCap` so it can be omitted entirely by
+ * default (thinking routinely dominates an archive — up to ~95% of the
+ * chars — and buries the conclusions the caller is actually after).
+ */
+interface ArchiveRenderCaps {
+  user: number;
+  agent: number;
+  args: number;
+  result: number;
+  thinking: number;
+  /** When false, tool calls/results collapse into a one-line count summary. */
+  tools: boolean;
+}
+
+const ARCHIVE_CAPS_FULL: ArchiveRenderCaps = { user: 8000, agent: 12000, args: 500, result: 4000, thinking: 8000, tools: true };
+const ARCHIVE_CAPS_REDUCED: ArchiveRenderCaps = { user: 4000, agent: 8000, args: 300, result: 1500, thinking: 0, tools: true };
+const ARCHIVE_CAPS_MINIMAL: ArchiveRenderCaps = { user: 2000, agent: 4000, args: 200, result: 600, thinking: 0, tools: true };
+
+/** Budget used when the caller doesn't supply one (e.g. headless runners). */
+const DEFAULT_ARCHIVE_READ_BUDGET_CHARS = 24_000;
+
+function truncateMiddleArchive(text: string, maxLen: number): string {
+  if (maxLen <= 0) return "";
+  if (text.length <= maxLen) return text;
+  if (maxLen < 16) return text.slice(0, maxLen);
+  const headLen = Math.ceil(maxLen * 0.6);
+  const tailLen = Math.floor(maxLen * 0.4) - 5;
+  return `${text.slice(0, headLen)} ... ${text.slice(-tailLen)}`;
+}
+
+/**
+ * Render archived messages as readable conversation text under the given caps.
+ * Conversation (user/agent) is emitted first within each turn because that is
+ * what retrieval almost always wants; reasoning and tool activity follow and
+ * absorb any trimming.
+ */
+function renderArchiveMessages(messages: ChatMessage[], caps: ArchiveRenderCaps): string[] {
+  const lines: string[] = [];
+  for (const m of messages) {
+    if (m.role === "user") {
+      lines.push(`user: ${truncateMiddleArchive(m.content || "", caps.user)}`);
+    } else if (m.role === "assistant") {
+      if (m.content) lines.push(`agent: ${truncateMiddleArchive(m.content, caps.agent)}`);
+      if (m.thinking && caps.thinking > 0) {
+        lines.push(`thinking: ${truncateMiddleArchive(m.thinking, caps.thinking)}`);
+      }
+      const callCount = m.toolCalls?.length ?? 0;
+      const resultCount = m.toolResults?.length ?? 0;
+      if (!caps.tools) {
+        if (callCount || resultCount) {
+          lines.push(`[tool activity: ${callCount} call(s), ${resultCount} result(s) — omitted to fit budget]`);
+        }
+        continue;
+      }
+      if (m.toolCalls?.length) {
+        for (const tc of m.toolCalls) {
+          lines.push(`tool_call: ${tc.name}(${truncateMiddleArchive(JSON.stringify(tc.arguments), caps.args)})`);
+        }
+      }
+      if (m.toolResults?.length) {
+        for (const tr of m.toolResults) {
+          lines.push(`tool_result [${tr.toolName}]: ${truncateMiddleArchive(tr.content || "", caps.result)}`);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+/**
+ * Format an archive under a char budget, progressively tightening caps until
+ * the output fits. Returns the rendered text plus metadata about what was
+ * trimmed so the caller can tell the model where to look next.
+ */
+function formatArchiveWithinBudget(
+  archive: { id: string; chatId: string; messageCount: number; estimatedTokens: number; createdAt: string; messages: ChatMessage[] },
+  chatTitle: string,
+  opts: { includeThinking: boolean; offset: number; limit?: number; budgetChars: number },
+): string {
+  const total = archive.messages.length;
+  const offset = Math.min(Math.max(0, Math.floor(opts.offset)), total);
+  const limit = opts.limit != null ? Math.max(1, Math.floor(opts.limit)) : total - offset;
+  const window = archive.messages.slice(offset, offset + limit);
+
+  const header: string[] = [
+    `Archive: ${archive.id} (${archive.messageCount} messages, ~${archive.estimatedTokens} tokens)`,
+    `From chat: ${chatTitle || archive.chatId}`,
+    `Archived: ${archive.createdAt.slice(0, 10)}`,
+  ];
+  if (window.length < total) {
+    header.push(`Showing messages ${offset + 1}-${offset + window.length} of ${total} (use offset/limit to page)`);
+  }
+
+  const totalThinkingChars = window.reduce((sum, m) => sum + ((m.role === "assistant" && m.thinking) ? m.thinking.length : 0), 0);
+  if (totalThinkingChars > 0 && !opts.includeThinking) {
+    header.push(`[reasoning traces omitted: ${totalThinkingChars.toLocaleString()} chars — call again with include_thinking=true if you need them]`);
+  }
+  header.push("---");
+  const headerText = header.join("\n");
+  // Reserve room for the header, separators, and the worst-case truncation
+  // footer so the final string lands under the caller's tool-result budget
+  // and the generic wrapper never has to hard-cut the tail.
+  const budget = Math.max(2000, opts.budgetChars - headerText.length - 200);
+
+  const tiers: ArchiveRenderCaps[] = opts.includeThinking
+    ? [
+        ARCHIVE_CAPS_FULL,
+        { ...ARCHIVE_CAPS_REDUCED, thinking: 2000 },
+        { ...ARCHIVE_CAPS_MINIMAL, thinking: 800 },
+        { ...ARCHIVE_CAPS_MINIMAL, thinking: 400, tools: false },
+      ]
+    : [
+        { ...ARCHIVE_CAPS_FULL, thinking: 0 },
+        ARCHIVE_CAPS_REDUCED,
+        ARCHIVE_CAPS_MINIMAL,
+        { ...ARCHIVE_CAPS_MINIMAL, tools: false },
+      ];
+
+  let body = renderArchiveMessages(window, tiers[0]);
+  for (let i = 1; i < tiers.length; i++) {
+    if (body.join("\n").length <= budget) break;
+    body = renderArchiveMessages(window, tiers[i]);
+  }
+
+  // Last resort: still over budget at the tightest tier. Scale the
+  // highest-value fields (agent/user) down proportionally rather than letting
+  // the generic tool-result wrapper hard-cut the tail, which is where
+  // conclusions live. Iterates because the per-field floors keep a single
+  // pass slightly over.
+  let text = body.join("\n");
+  const tight = tiers[tiers.length - 1];
+  let scale = 1;
+  for (let pass = 0; pass < 6 && text.length > budget; pass++) {
+    scale = Math.max(0.05, scale * (budget / text.length));
+    body = renderArchiveMessages(window, {
+      ...tight,
+      tools: false,
+      user: Math.max(200, Math.floor(tight.user * scale)),
+      agent: Math.max(400, Math.floor(tight.agent * scale)),
+      thinking: Math.max(0, Math.floor(tight.thinking * scale)),
+    });
+    text = body.join("\n");
+    if (scale <= 0.05) break;
+  }
+
+  let footer = "";
+  if (text.length > budget) {
+    text = text.slice(0, budget);
+    footer = `\n[output truncated to fit context budget — use offset/limit to page through this archive]`;
+  }
+
+  return `${headerText}\n${text}${footer}`;
+}
+
 export async function executeMemoryTool(
   toolCall: ToolCall,
-  chatId: string
+  chatId: string,
+  opts: { maxResultChars?: number } = {},
 ): Promise<ToolResult> {
   switch (toolCall.name) {
     case "save_memory": {
@@ -398,7 +566,7 @@ export async function executeMemoryTool(
     }
 
     case "read_archived_context": {
-      const { archive_id } = toolCall.arguments;
+      const { archive_id, include_thinking, offset, limit } = toolCall.arguments;
       if (!archive_id) return { content: "Missing archive_id", isError: true };
 
       const archive = getArchive(archive_id) ?? (
@@ -408,33 +576,15 @@ export async function executeMemoryTool(
         return { content: `Archive block not found: ${archive_id}`, isError: false };
       }
 
-      // Format the archived messages as readable conversation text
-      const lines: string[] = [];
-      lines.push(`Archive: ${archive.id} (${archive.messageCount} messages, ~${archive.estimatedTokens} tokens)`);
-      lines.push(`From chat: ${getChatTitle(archive.chatId) || archive.chatId}`);
-      lines.push(`Archived: ${archive.createdAt.slice(0, 10)}`);
-      lines.push("---");
-
-      for (const m of archive.messages) {
-        if (m.role === "user") {
-          lines.push(`user: ${m.content}`);
-        } else if (m.role === "assistant") {
-          if (m.thinking) lines.push(`thinking: ${m.thinking}`);
-          if (m.content) lines.push(`agent: ${m.content}`);
-          if (m.toolCalls?.length) {
-            for (const tc of m.toolCalls) {
-              lines.push(`tool_call: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 500)})`);
-            }
-          }
-          if (m.toolResults?.length) {
-            for (const tr of m.toolResults) {
-              lines.push(`tool_result [${tr.toolName}]: ${tr.content}`);
-            }
-          }
-        }
-      }
-
-      return { content: lines.join("\n"), isError: false };
+      const offsetNum = Number(offset);
+      const limitNum = Number(limit);
+      const content = formatArchiveWithinBudget(archive, getChatTitle(archive.chatId) || "", {
+        includeThinking: Boolean(include_thinking),
+        offset: Number.isFinite(offsetNum) ? offsetNum : 0,
+        limit: limit !== undefined && Number.isFinite(limitNum) ? limitNum : undefined,
+        budgetChars: opts.maxResultChars ?? DEFAULT_ARCHIVE_READ_BUDGET_CHARS,
+      });
+      return { content, isError: false };
     }
 
     case "create_memory_block": {
