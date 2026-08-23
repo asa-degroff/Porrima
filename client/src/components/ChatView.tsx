@@ -262,6 +262,7 @@ interface Props {
   compaction?: { removedCount: number; remainingCount: number } | null;
   modelProgress?: ModelProgress | null;
   inferenceActivityPhase?: InferenceActivityPhase | null;
+  turnQueueInfo?: import("../hooks/useChat").TurnQueueInfo | null;
   hasCompactionSummary?: boolean;
   contextWindow: number;
   error: string | null;
@@ -324,6 +325,7 @@ export function ChatView({
   compaction,
   modelProgress,
   inferenceActivityPhase,
+  turnQueueInfo,
   hasCompactionSummary,
   contextWindow,
   error,
@@ -624,9 +626,20 @@ export function ChatView({
     />
   );
 
-  const hasStatusNotice = !!warning || reconnecting || !!displayError;
+  const hasStatusNotice = !!warning || reconnecting || !!displayError || !!turnQueueInfo;
   const statusNotices = (
     <>
+      {turnQueueInfo && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-purple-500/8 border border-purple-400/15 text-purple-300/80 text-xs flex items-center gap-2">
+          <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+          <span>
+            {turnQueueInfo.activeChatId === "system"
+              ? "Waiting for system activity to finish…"
+              : "Waiting for another chat to finish…"}
+            {turnQueueInfo.position > 1 ? ` (position ${turnQueueInfo.position})` : ""}
+          </span>
+        </div>
+      )}
       {warning && (
         <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
           {warning.message}

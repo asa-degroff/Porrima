@@ -5,7 +5,9 @@ import {
   isSynthesisActive,
   runWakeCycle,
   isWakeCycleActive,
+  SYSTEM_CHAT_ID,
 } from "./system-chat.js";
+import { acquireTurn, isTurnGateBusy, releaseTurn } from "./turn-gate.js";
 import { getDb, getSettings, saveSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
@@ -46,6 +48,12 @@ async function checkAndRunSynthesis() {
       console.log("[scheduler] Skipping synthesis check — active chat(s) in progress");
       return;
     }
+    // Also skip when turns are queued at the gate — the user is about to be
+    // active, and queueing synthesis ahead of their turn would delay it.
+    if (isTurnGateBusy()) {
+      console.log("[scheduler] Skipping synthesis check — turn gate busy");
+      return;
+    }
     // Respect sleep mode cooldown — the /sleep endpoint triggers synthesis
     // manually and stamps a timestamp; we skip periodic runs for 2 hours
     // after that so we don't immediately re-synthesize.
@@ -60,7 +68,15 @@ async function checkAndRunSynthesis() {
     }
     if (await shouldRunSystemSynthesis()) {
       console.log("[scheduler] Synthesis due, starting system synthesis...");
-      const result = await runSystemSynthesis();
+      // The idle checks above can race with a user turn starting; the gate
+      // lease is the authoritative serialization point.
+      const lease = await acquireTurn(SYSTEM_CHAT_ID);
+      let result;
+      try {
+        result = await runSystemSynthesis();
+      } finally {
+        releaseTurn(lease);
+      }
       if (result.success) {
         console.log(`[scheduler] System synthesis complete: ${result.summary.length} chars`);
       } else {
@@ -209,6 +225,12 @@ async function checkAndRunWakeCycle() {
       return;
     }
 
+    // Don't contend with user turns (active or queued) for the GPU slot.
+    if (hasActiveChats() || isTurnGateBusy()) {
+      console.log("[scheduler] Skipping wake cycle — turn gate busy");
+      return;
+    }
+
     // Don't start a wake cycle while a cache-warm or llama.cpp prefill is in
     // progress. The runtime probe catches timed-out warm requests that are no
     // longer in the JS queue but are still burning GPU inside llama.cpp.
@@ -229,8 +251,16 @@ async function checkAndRunWakeCycle() {
     
     // Fire the wake cycle
     console.log("[scheduler] Wake cycle due, starting...");
-    const result = await runWakeCycle({ modelId: settings.defaultModelId });
-    
+    // The idle checks above can race with a user turn starting; the gate
+    // lease is the authoritative serialization point.
+    const wakeLease = await acquireTurn(SYSTEM_CHAT_ID);
+    let result;
+    try {
+      result = await runWakeCycle({ modelId: settings.defaultModelId });
+    } finally {
+      releaseTurn(wakeLease);
+    }
+
     if (result.success) {
       console.log(`[scheduler] Wake cycle complete: ${result.summary.length} chars, ${result.toolCalls.length} tool calls`);
     } else {

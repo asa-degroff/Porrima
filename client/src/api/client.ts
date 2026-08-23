@@ -284,6 +284,7 @@ export interface StreamCallbacks {
   onMessageComplete?: (message: any, meta?: { continues?: boolean; queuedMessageId?: string }) => void;
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
+  onWaiting?: (info: { activeChatId: string | null; position: number; queuedCount: number }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
   onAudioChunk?: (chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number }) => void;
   onAudioDone?: () => void;
@@ -683,6 +684,9 @@ function processSSEEvent(
       break;
     case "background_activity":
       callbacks.onBackgroundActivity?.(data);
+      break;
+    case "waiting":
+      callbacks.onWaiting?.(data);
       break;
     case "model_progress":
       callbacks.onModelProgress?.(data);

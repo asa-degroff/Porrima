@@ -12,6 +12,7 @@ import { getActiveAutomationTaskId, isAutomationActive } from "./automation-lock
 import { runAutomationTask } from "./automation-runner.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 import { isSystemPauseActive } from "./system-pause.js";
+import { isTurnGateBusy } from "./turn-gate.js";
 
 const AUTOMATION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60;
@@ -83,6 +84,12 @@ export async function checkAndRunDueAutomations(): Promise<void> {
     }
     if (hasActiveChats()) {
       console.log("[automation] Skipping check — active chat(s) in progress");
+      return;
+    }
+    // Queued user turns count too — don't let an automation cut in front of a
+    // message that is already waiting for the GPU slot.
+    if (isTurnGateBusy()) {
+      console.log("[automation] Skipping check — turn gate busy (active or queued turns)");
       return;
     }
 

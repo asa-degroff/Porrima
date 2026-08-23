@@ -11,6 +11,13 @@ import {
 } from "../lib/db";
 import type { Chat } from "../types";
 
+/** Server-reported position in the global turn queue (single GPU slot) */
+export interface TurnQueueInfo {
+  activeChatId: string | null;
+  position: number;
+  queuedCount: number;
+}
+
 /** Per-chat streaming state stored when the chat is not actively displayed */
 interface BackgroundStream {
   content: string;
@@ -28,6 +35,7 @@ interface BackgroundStream {
   compaction: CompactionInfo | null;
   modelProgress: ModelProgress | null;
   inferenceActivityPhase: InferenceActivityPhase | null;
+  queueInfo: TurnQueueInfo | null;
   doneCalled: boolean;
   abortController: AbortController | null;
   chatRef: Chat | null;
@@ -152,6 +160,7 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     compaction: null,
     modelProgress: null,
     inferenceActivityPhase: "prefill",
+    queueInfo: null,
     doneCalled: false,
     abortController: null,
     chatRef,
@@ -232,6 +241,9 @@ export function useChat(chatId: string | null) {
   const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
   const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
   const [inferenceActivityPhase, setInferenceActivityPhase] = useState<InferenceActivityPhase | null>(null);
+  // Set while this chat's turn is queued behind another session (single GPU
+  // slot); cleared as soon as the turn starts producing output.
+  const [turnQueueInfo, setTurnQueueInfo] = useState<TurnQueueInfo | null>(null);
   // Provisional token count from the most recent compaction event — used to
   // show an accurate (if approximate) context size between compaction and the
   // next assistant's real usage, so the indicator never reverts to
@@ -311,6 +323,7 @@ export function useChat(chatId: string | null) {
       setCompaction(bg.compaction);
       setModelProgress(bg.modelProgress);
       setInferenceActivityPhase(bg.inferenceActivityPhase);
+      setTurnQueueInfo(bg.queueInfo);
       doneCalledRef.current = bg.doneCalled;
       abortRef.current = bg.abortController;
 
@@ -343,6 +356,7 @@ export function useChat(chatId: string | null) {
       setCompaction(null);
       setModelProgress(null);
       setInferenceActivityPhase(null);
+      setTurnQueueInfo(null);
       setPostCompactionEstimate(null);
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
@@ -425,6 +439,10 @@ export function useChat(chatId: string | null) {
       onDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
+        }
         if (bg.modelProgress) {
           bg.modelProgress = null;
           if (activeChatIdRef.current === streamChatId) setModelProgress(null);
@@ -477,6 +495,10 @@ export function useChat(chatId: string | null) {
       onThinkingDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
+        }
         if (bg.modelProgress) {
           bg.modelProgress = null;
           if (activeChatIdRef.current === streamChatId) setModelProgress(null);
@@ -563,6 +585,10 @@ export function useChat(chatId: string | null) {
         // compaction window + silent reconnect skips buffered events).
         bg.compacting = false;
         bg.compaction = null;
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
+        }
 
         // The persisted server row is authoritative. This also corrects any
         // live-only over-append caused by reconnect replay before the user has
@@ -1126,6 +1152,11 @@ export function useChat(chatId: string | null) {
         setHasBackgroundActivity(true);
         setTimeout(() => setHasBackgroundActivity(false), 5000);
       },
+      onWaiting: (info) => {
+        const bg = bgStreams.get(streamChatId);
+        if (bg) bg.queueInfo = info;
+        if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(info);
+      },
       onAudioChunk: (chunk) => {
         // Live agent TTS streaming: forward audio data to TTS hook
         const idx = chunk.index !== undefined ? `${chunk.index + 1}/${chunk.totalChunks}` : "?";
@@ -1175,6 +1206,11 @@ export function useChat(chatId: string | null) {
         // transport error should not surface in the UI.
         if (!bg || bg.doneCalled) {
           return;
+        }
+
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
         }
 
         // Determine whether the server received the message before the
@@ -1567,6 +1603,7 @@ export function useChat(chatId: string | null) {
       if (!chatId) return;
       const targetChatId = chatId;
       markRecentlyStreaming(targetChatId);
+      setTurnQueueInfo(null);
 
       const userMsg: ChatMessage = {
         role: "user",
@@ -1768,6 +1805,7 @@ export function useChat(chatId: string | null) {
     // Also abort the local controller as a fallback
     abortRef.current?.abort();
     setStreaming(false);
+    setTurnQueueInfo(null);
   }, [chatId]);
 
   // Process queued messages for the current chat
@@ -1920,6 +1958,7 @@ export function useChat(chatId: string | null) {
     compaction,
     modelProgress,
     inferenceActivityPhase,
+    turnQueueInfo,
     error,
     warning,
     streamingSegmentIndex,

@@ -34,6 +34,7 @@ import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor,
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
+import { acquireTurn, releaseTurn, isTurnGateBusy, turnGateStatus, type TurnLease } from "../services/turn-gate.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
@@ -887,6 +888,54 @@ async function waitForBackgroundAutomation(chatId: string): Promise<void> {
       `[chat] Waiting for system synthesis to complete before processing message for chat ${chatId}`,
     );
     await pendingSynthesis;
+  }
+}
+
+/**
+ * Serialize GPU-bound turns through the global turn gate. The llama.cpp
+ * inference server only handles one session at a time — concurrent turns
+ * collide on the single slot and fail with provider errors. Opens the SSE
+ * stream before waiting so queued clients see `waiting` events and keepalive
+ * pings instead of a silent hang. The waiter is wired to the live stream's
+ * abort signal so /stop (or a replacement turn for the same chat) cancels a
+ * queued turn. Returns null when the wait was cancelled — the caller should
+ * bail out (the response is already closed).
+ */
+async function acquireTurnGate(
+  chat: Chat,
+  req: Request,
+  res: Response,
+): Promise<TurnLease | null> {
+  ensureSSEStream(res, req, chat.id);
+  const stream = liveStreams.get(chat.id)!;
+
+  const emitWaiting = (info: { activeChatId: string | null; position: number; queuedCount: number }) => {
+    try {
+      res.write(`event: waiting\ndata: ${JSON.stringify(info)}\n\n`);
+    } catch {
+      // Connection gone — the abort path cleans up.
+    }
+  };
+
+  try {
+    return await withSSEKeepalive(res, async () => {
+      const status = turnGateStatus(chat.id);
+      if (status) emitWaiting(status);
+      return await acquireTurn(chat.id, {
+        signal: stream.abort.signal,
+        onQueueUpdate: emitWaiting,
+      });
+    });
+  } catch {
+    // Aborted while queued: /stop, or installLiveStream replaced this stream
+    // when a newer turn for the same chat arrived.
+    console.log(`[turn-gate] queued turn for chat ${chat.id} cancelled while waiting`);
+    if (liveStreams.get(chat.id) === stream) {
+      closeLiveSSE(chat.id, res);
+    } else if (!res.writableEnded) {
+      try { res.end(); } catch {}
+    }
+    return null;
   }
 }
 
@@ -3902,8 +3951,19 @@ router.post("/", async (req, res) => {
 
   // Wait for any running scheduled automation before processing user messages.
   // This prevents system-chat maintenance from contending with the user's turn
-  // or mutating memories/context while prompt construction is starting.
-  await waitForBackgroundAutomation(chatId);
+  // or mutating memories/context while prompt construction is starting. When
+  // something is actually running, open the SSE stream first so the wait is
+  // visible (waiting event + keepalives) instead of a silent fetch hang.
+  // Skipped when this chat already has a live stream so the duplicate-attach
+  // path below can still find and attach to it.
+  if ((getAutomationLock() || getSynthesisLock()) && !liveStreams.get(chatId)) {
+    ensureSSEStream(res, req, chat.id);
+    const waitStatus = turnGateStatus(chatId) ?? { activeChatId: null, position: 1, queuedCount: 0 };
+    res.write(`event: waiting\ndata: ${JSON.stringify(waitStatus)}\n\n`);
+    await withSSEKeepalive(res, () => waitForBackgroundAutomation(chatId));
+  } else {
+    await waitForBackgroundAutomation(chatId);
+  }
 
   // Restore any queued messages from a previous SSE drop
   await messageQueue.loadFromDisk(chatId);
@@ -4304,7 +4364,13 @@ router.post("/", async (req, res) => {
     }
 
     // Resume: userPiMessage=null triggers agentLoopContinue
-    await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
+    const resumeLease = await acquireTurnGate(chat, req, res);
+    if (!resumeLease) return;
+    try {
+      await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
+    } finally {
+      releaseTurn(resumeLease);
+    }
   } else {
     // NORMAL: add user message and build fresh context
     // Deduplication: if any recent message in chat is an identical user message
@@ -4584,7 +4650,13 @@ router.post("/", async (req, res) => {
     const sendTimeAnchor = trailingRow?.role === "user" ? trailingRow.timeAnchor : undefined;
     const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, sendTimeAnchor);
 
-    await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+    const sendLease = await acquireTurnGate(chat, req, res);
+    if (!sendLease) return;
+    try {
+      await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+    } finally {
+      releaseTurn(sendLease);
+    }
   }
 });
 
@@ -4790,9 +4862,15 @@ router.post("/artifact-error", async (req, res) => {
   const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt), buildTimeAnchor(chat.messages));
 
   console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
-  await handleChatStream(chat, repairPrompt, contextMessages, systemPrompt, userPiMessage, req, res, {
-    hiddenUserMessage: true,
-  });
+  const repairLease = await acquireTurnGate(chat, req, res);
+  if (!repairLease) return;
+  try {
+    await handleChatStream(chat, repairPrompt, contextMessages, systemPrompt, userPiMessage, req, res, {
+      hiddenUserMessage: true,
+    });
+  } finally {
+    releaseTurn(repairLease);
+  }
 });
 
 // Enqueue a message while the agent is streaming
@@ -5177,7 +5255,13 @@ router.post("/edit", async (req, res) => {
   const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
   const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext, editTimeAnchor);
 
-  await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+  const editLease = await acquireTurnGate(chat, req, res);
+  if (!editLease) return;
+  try {
+    await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+  } finally {
+    releaseTurn(editLease);
+  }
 });
 
 export default router;

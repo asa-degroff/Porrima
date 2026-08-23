@@ -15,6 +15,7 @@ import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import { createTimeMarkerState } from "./time-marker.js";
 import { SYSTEM_CHAT_ID } from "./system-chat.js";
+import { acquireTurn, releaseTurn } from "./turn-gate.js";
 
 interface AutomationExecutionResult extends SynthesisResult {
   chatId?: string;
@@ -431,6 +432,11 @@ export async function runAutomationTask(
   const task = typeof taskOrId === "string" ? getAutomationTask(taskOrId) : taskOrId;
   if (!task) return makeErrorResult("Automation task not found");
 
+  // Serialize with user chat turns — automations use the same single GPU
+  // inference slot. Scheduler-originated runs only reach this point when the
+  // gate was idle at dispatch time; manual runs queue behind in-flight turns
+  // and start as soon as the active turn completes.
+  const turnLease = await acquireTurn(SYSTEM_CHAT_ID);
   await acquireAutomationLock(task.id);
   let run: AutomationRun | null = null;
   try {
@@ -473,5 +479,6 @@ export async function runAutomationTask(
     return result;
   } finally {
     releaseAutomationLock(task.id);
+    releaseTurn(turnLease);
   }
 }

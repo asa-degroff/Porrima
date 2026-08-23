@@ -486,6 +486,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     compaction,
     modelProgress,
     inferenceActivityPhase,
+    turnQueueInfo,
     error,
     warning,
     streamingSegmentIndex,
@@ -1704,6 +1705,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         compaction={compaction}
         modelProgress={modelProgress}
         inferenceActivityPhase={inferenceActivityPhase}
+        turnQueueInfo={turnQueueInfo}
         hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}
         error={error}
