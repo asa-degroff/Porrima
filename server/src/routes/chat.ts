@@ -21,14 +21,13 @@ import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title
 import {
   COMPACTION_HARD_CAP_RATIO,
   COMPACTION_TRIGGER_RATIO,
-  END_OF_TURN_COMPACTION_TRIGGER_RATIO,
-  endOfTurnNeedsCompaction,
   estimateContextTokens,
   truncateChatHistory,
   truncateBeforeSend,
   triggerCompaction,
   hasStrandedToolCall,
 } from "../services/compaction.js";
+import { runEndOfTurnCompaction } from "../services/turn-compaction.js";
 import {
   evaluateTurnGuards,
   estimateContextPressure,
@@ -3453,88 +3452,74 @@ async function handleChatStream(
           // min), against the earlier end-of-turn threshold (0.80 vs
           // pre-send's 0.85) — see endOfTurnNeedsCompaction. Pre-send
           // remains the backstop for anything end-of-turn can't see.
-          const decision = endOfTurnNeedsCompaction({
-            lastUsage,
-            estimatedTokens,
+          // Turn-engine phase 2: the decision, execution ordering, and
+          // logging (including the negative path) live in
+          // runEndOfTurnCompaction; the route-specific aftermath runs in
+          // onCompacted, whose closure owns route-local state. Pure move —
+          // no behavior change (doc §4.4).
+          await runEndOfTurnCompaction({
+            chat,
             contextWindow: effectiveContextWindow,
+            lastUsage,
             hitContextLimit,
-          });
-          const drivingTokens = decision.drivingTokens;
-          const usageRatio = decision.ratio;
-          const needsCompaction = decision.needsCompaction;
+            estimatedTokens,
+            emitCompacting: () => res.write(`event: compacting\ndata: {}\n\n`),
+            emitKeepalive: () => res.write(`: keepalive\n\n`),
+            keepaliveWrap: (body) => withSSEKeepalive(res, body),
+            settleInFlight: () => awaitMidTurnPulse(state),
+            preFlush: preCompactionFlushHook(chat, "end-of-turn flush failed"),
+            systemPrompt,
+            tools: agentTools,
+            onCompacted: async ({ removedCount }) => {
+              // The next prefill (a queued follow-up in this request or the
+              // next turn) starts from the rebuilt context — arm the indicator.
+              postCompactionPrefillPending.add(chat.id);
 
-          if (needsCompaction) {
-            console.log(
-              `[compaction] End-of-turn compaction triggered: driving=${drivingTokens}/${effectiveContextWindow} ` +
-              `(${(usageRatio * 100).toFixed(0)}%) [usage=${lastUsage}, estimated=${estimatedTokens}]`,
-            );
-            const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
-            const emitKeepalive = () => res.write(`: keepalive\n\n`);
-            // Wrap in keepalive loop so the client's 95s inactivity timeout
-            // doesn't fire during slow extraction/embed/rerank steps.
-            await withSSEKeepalive(res, async () => {
-              // Settle any in-flight mid-turn pulse before the flush so its
-              // cursor is final and it isn't racing the extraction server.
-              await awaitMidTurnPulse(state);
-              const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage, systemPrompt, agentTools, preCompactionFlushHook(chat, "end-of-turn flush failed"));
-              if (compaction.truncated) {
-                await saveChat(chat, { allowTruncation: true });
-                // The next prefill (a queued follow-up in this request or the
-                // next turn) starts from the rebuilt context — arm the indicator.
-                postCompactionPrefillPending.add(chat.id);
+              // Full reset of memory context after compaction — rebuild with
+              // fresh retrieval, all memories frozen into the new system prompt.
+              if (isMemoryAugmentedChatType(chat.type)) {
+                resetMemoryContext(chat.id);
+                const split = await buildSplitAugmentedPrompt(
+                  chat.systemPrompt || "You are a helpful assistant.",
+                  chat.messages, chat.id, chat.projectId, chat.type, projectPath
+                );
+                systemPrompt = split.systemPrompt;
 
-                // Full reset of memory context after compaction — rebuild with
-                // fresh retrieval, all memories frozen into the new system prompt.
-                if (isMemoryAugmentedChatType(chat.type)) {
-                  resetMemoryContext(chat.id);
-                  const split = await buildSplitAugmentedPrompt(
-                    chat.systemPrompt || "You are a helpful assistant.",
-                    chat.messages, chat.id, chat.projectId, chat.type, projectPath
-                  );
-                  systemPrompt = split.systemPrompt;
-
-                  // Reinjected skills after compaction — they were lost when
-                  // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
-                  if (chat.activeSkills?.length) {
-                    const skillsCache = new Map<string, Skill>();
-                    const allSkills = await discoverSkills(chat.projectId);
-                    for (const s of allSkills) skillsCache.set(s.name, s);
-                    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
-                    console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
-                  }
+                // Reinjected skills after compaction — they were lost when
+                // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+                if (chat.activeSkills?.length) {
+                  const skillsCache = new Map<string, Skill>();
+                  const allSkills = await discoverSkills(chat.projectId);
+                  for (const s of allSkills) skillsCache.set(s.name, s);
+                  systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+                  console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
                 }
-                setCachedAugmentedPrompt(chat.id, systemPrompt);
-
-                // The current assistant usage was measured against the
-                // pre-compaction prompt. Once a summary is inserted before the
-                // final assistant row, that usage becomes stale; if persisted,
-                // the next pre-send estimate treats the compacted chat as still
-                // near the old limit and immediately compacts again.
-                clearPendingAssistantUsageAfterCompaction();
-
-                // Find the summary message that was inserted. Emit AFTER the
-                // systemPrompt rebuild so the estimate reflects the prompt the
-                // next turn will actually use. The client uses `estimatedTokens`
-                // to refresh the token indicator to the compacted state.
-                const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-                const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
-                res.write(`event: compaction\ndata: ${JSON.stringify({
-                  removedCount: compaction.removedCount,
-                  remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-                  summaryMessage: summaryMsg || null,
-                  phase: "end_turn",
-                  continues: false,
-                  estimatedTokens,
-                })}\n\n`);
               }
-            });
-          } else {
-            console.log(
-              `[compaction] End-of-turn check: no compaction (chat=${chat.id}, driving=${drivingTokens}/${effectiveContextWindow} ` +
-              `(${(usageRatio * 100).toFixed(1)}%, trigger=${END_OF_TURN_COMPACTION_TRIGGER_RATIO * 100}%) ` +
-              `[usage=${lastUsage}, estimated=${estimatedTokens}]`,
-            );
-          }
+              setCachedAugmentedPrompt(chat.id, systemPrompt);
+
+              // The current assistant usage was measured against the
+              // pre-compaction prompt. Once a summary is inserted before the
+              // final assistant row, that usage becomes stale; if persisted,
+              // the next pre-send estimate treats the compacted chat as still
+              // near the old limit and immediately compacts again.
+              clearPendingAssistantUsageAfterCompaction();
+
+              // Find the summary message that was inserted. Emit AFTER the
+              // systemPrompt rebuild so the estimate reflects the prompt the
+              // next turn will actually use. The client uses `estimatedTokens`
+              // to refresh the token indicator to the compacted state.
+              const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+              const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
+              res.write(`event: compaction\ndata: ${JSON.stringify({
+                removedCount,
+                remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+                summaryMessage: summaryMsg || null,
+                phase: "end_turn",
+                continues: false,
+                estimatedTokens,
+              })}\n\n`);
+            },
+          });
         }
       } catch (err) {
         console.error("[compaction] End-of-turn compaction failed:", err);

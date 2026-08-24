@@ -48,11 +48,19 @@ export function endOfTurnNeedsCompaction(params: {
   estimatedTokens: number;
   contextWindow: number;
   hitContextLimit: boolean;
+  /**
+   * Default END_OF_TURN_COMPACTION_TRIGGER_RATIO (0.80). Named deltas pass
+   * their own (turn-engine D2/D3); the default keeps every existing caller
+   * behavior-identical.
+   */
+  triggerRatio?: number;
 }): { needsCompaction: boolean; drivingTokens: number; ratio: number } {
   const drivingTokens = Math.max(params.lastUsage, params.estimatedTokens);
   const ratio = params.contextWindow > 0 ? drivingTokens / params.contextWindow : 0;
   return {
-    needsCompaction: params.hitContextLimit || ratio > END_OF_TURN_COMPACTION_TRIGGER_RATIO,
+    needsCompaction:
+      params.hitContextLimit ||
+      ratio > (params.triggerRatio ?? END_OF_TURN_COMPACTION_TRIGGER_RATIO),
     drivingTokens,
     ratio,
   };
