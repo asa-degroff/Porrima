@@ -142,8 +142,6 @@ Parameters:
   activationPolicy: enum   — "idle" (default, fires when system is idle) |
                              "absent" (waits for user absence threshold) |
                              "manual_only" (never auto-fires)
-  maxIterations: number    — max tool-loop iterations (default 5)
-  timeoutMs: number        — max execution time in ms (default 300000)
 
 Returns: AutomationTask — created task with id, nextRunAt, status
 ```

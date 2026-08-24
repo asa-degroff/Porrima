@@ -448,6 +448,11 @@ export interface Settings {
   // after each synthesis cycle. The capacity-aware warm plan prioritizes the
   // new-chat baseline and system chat before recent chats.
   postSynthesisWarmCount?: number;
+  // Agent reminder execution budget — defaults applied to new one-time reminders
+  // created via schedule_reminder. Each reminder stores its own copy at creation
+  // time; changing these does not retroactively update existing tasks.
+  reminderMaxIterations?: number;
+  reminderTimeoutMs?: number;
   // System stats bar — show/hide resource usage in sidebar
   systemStatsEnabled?: boolean;
   // System stats history buffer duration in seconds (default 60)

@@ -1140,6 +1140,16 @@ export const DEFAULT_TIME_MARKER_INTERVAL_MINUTES = 15;
 export const MIN_TIME_MARKER_INTERVAL_MINUTES = 0;
 export const MAX_TIME_MARKER_INTERVAL_MINUTES = 1_440;
 
+// Agent reminder execution budget — defaults applied when schedule_reminder
+// creates a new one-time reminder task. Ranges match the per-task editor in
+// the settings UI (1–100 turns, 1–240 minutes).
+export const DEFAULT_REMINDER_MAX_ITERATIONS = 20;
+export const MIN_REMINDER_MAX_ITERATIONS = 1;
+export const MAX_REMINDER_MAX_ITERATIONS = 100;
+export const DEFAULT_REMINDER_TIMEOUT_MS = 30 * 60 * 1000;
+export const MIN_REMINDER_TIMEOUT_MS = 60_000;
+export const MAX_REMINDER_TIMEOUT_MS = 240 * 60 * 1000;
+
 const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
@@ -1154,6 +1164,8 @@ const DEFAULT_SETTINGS: Settings = {
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
   timeMarkerIntervalMinutes: DEFAULT_TIME_MARKER_INTERVAL_MINUTES,
+  reminderMaxIterations: DEFAULT_REMINDER_MAX_ITERATIONS,
+  reminderTimeoutMs: DEFAULT_REMINDER_TIMEOUT_MS,
   crossProjectScoreMultiplier: 0.3,
   globalProjectScoreMultiplier: 1.0,
   retrievalDepthProfile: "balanced",
@@ -1200,6 +1212,18 @@ export function normalizeSettings(settings: Settings): Settings {
       DEFAULT_TIME_MARKER_INTERVAL_MINUTES,
       MIN_TIME_MARKER_INTERVAL_MINUTES,
       MAX_TIME_MARKER_INTERVAL_MINUTES,
+    ),
+    reminderMaxIterations: clamp(
+      settings.reminderMaxIterations,
+      DEFAULT_REMINDER_MAX_ITERATIONS,
+      MIN_REMINDER_MAX_ITERATIONS,
+      MAX_REMINDER_MAX_ITERATIONS,
+    ),
+    reminderTimeoutMs: clamp(
+      settings.reminderTimeoutMs,
+      DEFAULT_REMINDER_TIMEOUT_MS,
+      MIN_REMINDER_TIMEOUT_MS,
+      MAX_REMINDER_TIMEOUT_MS,
     ),
     preserveThinking:
       settings.preserveThinking ??

@@ -281,8 +281,6 @@ const SCHEDULE_REMINDER_TOOL: Tool = {
     title: Type.String({ description: "Short label for the reminder (e.g. 'Check PR #22616 status')" }),
     scheduledAt: Type.String({ description: "ISO 8601 timestamp for when to fire (must be at least 2 minutes in the future)", format: "date-time" }),
     activationPolicy: Type.Optional(Type.Enum(["idle", "absent", "manual_only"] as const, { description: "When to fire: 'idle' (default, fires when system is idle), 'absent' (waits for user absence threshold), 'manual_only' (never auto-fires)" })),
-    maxIterations: Type.Optional(Type.Integer({ description: "Max tool-loop iterations (default 5)", minimum: 1, maximum: 50 })),
-    timeoutMs: Type.Optional(Type.Integer({ description: "Max execution time in ms (default 300000 = 5 min)", minimum: 1000, maximum: 1800000 })),
   }),
 };
 
@@ -418,13 +416,11 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     execute: async (_id, params) => {
       const { createReminderTask } = await import("./automation-storage.js");
       const args = params as Record<string, any>;
-      const task = createReminderTask({
+      const task = await createReminderTask({
         message: args.message,
         title: args.title,
         scheduledAt: args.scheduledAt,
         activationPolicy: args.activationPolicy,
-        maxIterations: args.maxIterations,
-        timeoutMs: args.timeoutMs,
       });
       return wrapResult({
         content: `Reminder scheduled.\n\n- **ID**: ${task.id}\n- **Title**: ${task.title}\n- **Scheduled**: ${task.nextRunAt}\n- **Policy**: ${task.activationPolicy}\n- **Chat**: system`,

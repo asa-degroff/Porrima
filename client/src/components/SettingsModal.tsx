@@ -840,6 +840,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   // Sleep cycle and post-synthesis settings. Wake scheduling is owned by automations.
   const [sleepCycleThreshold, setSleepCycleThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
   const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
+  // Agent reminder execution budget — defaults for new schedule_reminder tasks
+  const [reminderMaxIterations, setReminderMaxIterations] = useState(settings.reminderMaxIterations ?? 20);
+  const [reminderTimeoutMinutes, setReminderTimeoutMinutes] = useState(Math.round((settings.reminderTimeoutMs ?? 30 * 60 * 1000) / 60_000));
   const [systemStatsEnabled, setSystemStatsEnabled] = useState(settings.systemStatsEnabled ?? false);
   const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
   const systemStatsBufferDd = useDropdown();
@@ -2186,6 +2189,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       enrichmentBatchSize,
       sleepCycleThresholdMinutes: sleepCycleThreshold,
       postSynthesisWarmCount,
+      reminderMaxIterations,
+      reminderTimeoutMs: reminderTimeoutMinutes * 60_000,
       systemStatsEnabled,
       systemStatsBufferSeconds,
       systemStatsHiddenGpus: normalizeSystemStatsHiddenGpus(Array.from(hiddenGpus)),
@@ -6564,7 +6569,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	              </div>
 	            )}
 
-	            {/* Sleep Cycle & Post-synthesis warm */}
+	            {/* Global automation settings */}
 	            <div className="pt-4 border-t border-white/10 space-y-4 mb-4">
 	              <div>
 	                <label className="block text-sm font-medium text-white/60">Sleep cycle threshold</label>
@@ -6595,11 +6600,45 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                    onChange={(e) => setPostSynthesisWarmCount(Number(e.target.value))}
 	                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
 	                  />
-	                  <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'recent off' : `${postSynthesisWarmCount} chats`}</span>
-	                </div>
-	                <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. New-chat baseline and system chat are prioritized within available slots.</p>
-	              </div>
-	            </div>
+                  <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'recent off' : `${postSynthesisWarmCount} chats`}</span>
+                </div>
+                <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. New-chat baseline and system chat are prioritized within available slots.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white/60">Reminder max turns</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={reminderMaxIterations}
+                    onChange={(e) => setReminderMaxIterations(Number(e.target.value))}
+                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                  />
+                  <span className="text-xs text-white/40 w-16 text-right">{reminderMaxIterations} turns</span>
+                </div>
+                <p className="text-xs text-white/30">Tool-loop iteration budget for new agent reminders. Each reminder keeps the value it was created with.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white/60">Reminder timeout</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={240}
+                    step={1}
+                    value={reminderTimeoutMinutes}
+                    onChange={(e) => setReminderTimeoutMinutes(Number(e.target.value))}
+                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                  />
+                  <span className="text-xs text-white/40 w-16 text-right">{reminderTimeoutMinutes} min</span>
+                </div>
+                <p className="text-xs text-white/30">Max execution time for new agent reminders before the run is aborted.</p>
+              </div>
+            </div>
 
 	            {automationsLoading ? (
 	              <p className="text-xs text-white/40">Loading automations...</p>

@@ -495,6 +495,9 @@ export interface Settings {
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
   postSynthesisWarmCount?: number;
+  // Agent reminder execution budget — defaults for new schedule_reminder tasks
+  reminderMaxIterations?: number;
+  reminderTimeoutMs?: number;
   synthesisScheduleType?: "interval" | "daily";
   synthesisScheduleTimeOfDay?: string;
   synthesisScheduleEveryMinutes?: number;

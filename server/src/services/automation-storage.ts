@@ -10,7 +10,12 @@ import type {
   AutomationSchedule,
   AutomationTask,
 } from "../types.js";
-import { getDb, getSettings } from "./chat-storage.js";
+import {
+  DEFAULT_REMINDER_MAX_ITERATIONS,
+  DEFAULT_REMINDER_TIMEOUT_MS,
+  getDb,
+  getSettings,
+} from "./chat-storage.js";
 import {
   getDefaultSynthesisPromptSteps,
   getDefaultWakePromptSteps,
@@ -635,17 +640,16 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
   return task;
 }
 
-export function createReminderTask(input: {
+export async function createReminderTask(input: {
   message: string;
   title: string;
   scheduledAt: string;  // ISO 8601
   activationPolicy?: AutomationActivationPolicy;
-  maxIterations?: number;
-  timeoutMs?: number;
   maxPending?: number;
-}): AutomationTask {
+}): Promise<AutomationTask> {
   ensureSchema();
 
+  const settings = await getSettings();
   const maxPending = input.maxPending ?? DEFAULT_MAX_PENDING_AGENT_REMINDERS;
 
   // Check pending cap: count enabled agent-created tasks with future nextRunAt
@@ -687,8 +691,8 @@ export function createReminderTask(input: {
     promptSteps,
     promptDispatchMode: "sequence",
     notifications: { enabled: false },
-    maxIterations: input.maxIterations ?? 5,
-    timeoutMs: input.timeoutMs ?? 5 * 60 * 1000,
+    maxIterations: settings.reminderMaxIterations ?? DEFAULT_REMINDER_MAX_ITERATIONS,
+    timeoutMs: settings.reminderTimeoutMs ?? DEFAULT_REMINDER_TIMEOUT_MS,
     consecutiveFailures: 0,
     createdBy: "agent",
     nextRunAt: schedule.runAt,

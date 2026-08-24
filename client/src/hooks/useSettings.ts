@@ -15,6 +15,8 @@ const DEFAULT_SETTINGS: Settings = {
   imageSandboxEnabled: true,
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
+  reminderMaxIterations: 20,
+  reminderTimeoutMs: 30 * 60 * 1000,
   crossProjectScoreMultiplier: 0.3,
   globalProjectScoreMultiplier: 1.0,
   retrievalDepthProfile: "balanced",
