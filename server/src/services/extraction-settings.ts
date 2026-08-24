@@ -18,7 +18,10 @@ export const MIN_MID_TURN_EXTRACTION_THRESHOLD = 500;
 export const MAX_MID_TURN_EXTRACTION_THRESHOLD = 32000;
 export const DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS = 120_000;
 export const MIN_MID_TURN_EXTRACTION_TIMEOUT_MS = 15_000;
-export const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 600_000;
+// Keep in sync with the client SettingsModal cap — the modal offers up to
+// this many minutes, so a lower server cap would silently clamp user picks
+// (the 5→15 min bump in 5747028 initially drifted exactly this way).
+export const MAX_MID_TURN_EXTRACTION_TIMEOUT_MS = 900_000;
 
 /**
  * Context-pressure trigger for mid-turn pulses. When estimated context usage
