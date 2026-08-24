@@ -17,6 +17,7 @@ import {
   COMPACTION_TRIGGER_RATIO,
   endOfTurnNeedsCompaction,
   estimateContextBreakdown,
+  estimateContextTokens,
   estimateHardCapTokens,
 } from "../services/compaction.js";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
@@ -546,5 +547,74 @@ describe("comparePressureShadow", () => {
       /^\[context-pressure\] shadow legacy=\d+ unified=\d+ delta=-?\d+ path=(exact|usage_anchor|char_estimate) fire=(both|legacy|unified|none)$/,
     );
     expect(out.logLine).toContain("fire=both");
+  });
+});
+
+describe("path-3 shadow outcomes — the D1 decision (row anchor, no live usage)", () => {
+  // Iterations where the completed message carries no usage (usageTotal = 0)
+  // but the rows hold an anchor are the ONLY branch where the D1 flip can
+  // change trigger outcomes: path 2's refinedTokens IS the legacy arithmetic
+  // (delta 0 by construction), and path 4 agrees with legacy on number AND
+  // ratio (chars at 0.95). Path 3 agrees on the number too — when the anchor
+  // path dominates, breakdown.estimatedTokens === displayTokens — so the
+  // entire delta is the trigger ratio: unified fires the (0.85, 0.95] band
+  // that legacy's 0.95 hard-cap gate sleeps through. The shadow week's
+  // anchored samples (the ≥15 sample floor) will log delta=0 by construction;
+  // THESE rows are the decision the flip actually makes.
+
+  async function shadowFor(messages: ChatMessage[]) {
+    const legacyEstimate = estimateContextTokens(messages, SYSTEM_PROMPT, TOOLS);
+    const pressure = await estimateContextPressure({
+      messages,
+      systemPrompt: SYSTEM_PROMPT,
+      tools: TOOLS,
+      contextWindow: WINDOW,
+    });
+    const comparison = comparePressureShadow({
+      legacyEstimate,
+      legacyTriggerRatio: COMPACTION_HARD_CAP_RATIO, // the legacy no-anchor branch's own gate
+      pressure,
+      contextWindow: WINDOW,
+    });
+    return { pressure, comparison };
+  }
+
+  const rows = [
+    { name: "below the band (60%) — both quiet", tokens: 60_000, fire: "none" },
+    { name: "in the band (86%) — unified fires at 0.85, legacy sleeps until 0.95", tokens: 86_000, fire: "unified" },
+    { name: "exactly 0.95 — unified already fired; legacy's strict > stays quiet", tokens: 95_000, fire: "unified" },
+    { name: "above the band (97%) — both fire", tokens: 97_000, fire: "both" },
+  ] as const;
+
+  for (const row of rows) {
+    it(row.name, async () => {
+      const messages: ChatMessage[] = [userMsg("Summarize the log."), assistantWithUsage(row.tokens)];
+      const { pressure, comparison } = await shadowFor(messages);
+
+      expect(pressure.selectedPath).toBe("usage_anchor");
+      expect(pressure.rawUsageTotal).toBe(row.tokens);
+      // The D1 delta is the ratio, not the estimate: both sides read the
+      // identical number, so a divergent fire outcome is the 0.85-vs-0.95
+      // decision and nothing else.
+      expect(comparison.unifiedEstimate).toBe(comparison.legacyEstimate);
+      expect(comparison.fire).toBe(row.fire);
+    });
+  }
+
+  it("the number identity holds with post-anchor rows (realistic mid-phase shape)", async () => {
+    // Anchor mid-phase, content appended after it: pathA = anchor +
+    // post-anchor delta. pathB still trails (fixture chars are small), so the
+    // anchor path dominates and both sides must again agree on the number.
+    const messages: ChatMessage[] = [
+      userMsg("Summarize the log."),
+      assistantWithUsage(88_000),
+      userMsg("Follow-up question. ".repeat(200)), // ~4_000 chars ≈ 1K tokens after the anchor
+    ];
+    const { pressure, comparison } = await shadowFor(messages);
+
+    expect(pressure.selectedPath).toBe("usage_anchor");
+    expect(comparison.unifiedEstimate).toBe(comparison.legacyEstimate);
+    expect(comparison.unifiedEstimate).toBeGreaterThan(88_000); // anchor + post-anchor delta
+    expect(comparison.fire).toBe("unified"); // ~89% sits in the (0.85, 0.95] band
   });
 });
