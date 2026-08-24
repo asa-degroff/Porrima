@@ -3093,6 +3093,19 @@ async function handleChatStream(
             );
 
             await saveChat(chat, { allowTruncation: true });
+
+            // The pre-compaction flush just extracted everything from the
+            // removed messages, which includes all content streamed up to
+            // this point that the archive dropped. Advance the mid-turn
+            // pulse cursors to the current stream ends so resumed-loop
+            // pulses only cover NEW content instead of re-extracting the
+            // flushed window (the FIFO slicer would otherwise spend its
+            // budget on old content). Safe because awaitMidTurnPulse above
+            // settled any in-flight pulse.
+            state.midTurnLastPulseTextLength = state.fullText.length;
+            state.midTurnLastPulseThinkingLength = state.thinkingText.length;
+            state.midTurnLastPulseToolCallCount = state.allToolCalls.length;
+            state.midTurnLastPulseToolResultCount = state.allToolResults.length;
           }
         } catch (compErr) {
           console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
@@ -3245,6 +3258,13 @@ async function handleChatStream(
                 isError: event.isError,
               };
               state.allToolResults.push(toolResult);
+
+              // Mid-turn extraction on the resumed loop: same signal check
+              // as the live tool_result path so post-compaction turns keep
+              // pulsing instead of dumping everything onto the next flush.
+              console.log(`[extraction] midTurnSignalTokens: ${currentMidTurnSignalTokens()} (tool: ${event.toolName}, resume cycle ${compactionCycle})`);
+              maybeDispatchMidTurnPulse({ source: "resume_tool_result" });
+
               const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
               const callIdx = state.segments.findIndex(
                 s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
@@ -3311,6 +3331,22 @@ async function handleChatStream(
               state.needsMidTurnCompaction = true;
               resumeAbortController.abort();
               stopAgentLoop();
+            }
+
+            // Early mid-turn extraction at the iteration boundary (same as
+            // the live loop): signal threshold OR context pressure, skipped
+            // when we're about to compact since the flush covers the window.
+            if (
+              sr === "toolUse" &&
+              !resumeAbortController.signal.aborted &&
+              !state.needsMidTurnCompaction &&
+              resumeEffectiveCW > 0 &&
+              resumeTokens > 0
+            ) {
+              maybeDispatchMidTurnPulse({
+                source: "resume_iteration",
+                contextRatio: resumeTokens / resumeEffectiveCW,
+              });
             }
 
             if (
