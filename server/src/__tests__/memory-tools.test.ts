@@ -241,6 +241,233 @@ describe("memory tools", () => {
   });
 });
 
+describe("memory block lifecycle tools", () => {
+  function fixtureBlock(id: string, overrides: Record<string, unknown> = {}) {
+    const now = new Date().toISOString();
+    return {
+      id,
+      name: "Fixture Block",
+      description: "A fixture block",
+      content: "Original content.",
+      scope: "global" as const,
+      projectId: "",
+      createdAt: now,
+      updatedAt: now,
+      updatedBy: "agent" as const,
+      supersededBy: undefined,
+      supersedes: undefined,
+      ...overrides,
+    };
+  }
+
+  it("renames a block via update_memory_block and rejects empty names", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-rename-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-rename-1", { name: "Old Name" }));
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: "blk-rename-1", name: "New Name" },
+      } as any, "chat-1");
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("name: Old Name → New Name");
+      expect(memoryStorage.getMemoryBlock("blk-rename-1")?.name).toBe("New Name");
+
+      const empty = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: "blk-rename-1", name: "   " },
+      } as any, "chat-1");
+      expect(empty.isError).toBe(true);
+      expect(empty.content).toContain("cannot be empty");
+      expect(memoryStorage.getMemoryBlock("blk-rename-1")?.name).toBe("New Name");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("read_memory_block include_history surfaces prior content snapshots newest first", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-history-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-hist-tool", { content: "VERSION_ONE content" }));
+
+      await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: "blk-hist-tool", content: "VERSION_TWO content" },
+      } as any, "chat-1");
+      await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: "blk-hist-tool", content: "VERSION_THREE content" },
+      } as any, "chat-1");
+
+      const plain = await memoryTools.executeMemoryTool({
+        name: "read_memory_block",
+        arguments: { block_id: "blk-hist-tool" },
+      } as any, "chat-1");
+      expect(plain.content).not.toContain("Revision History");
+
+      const withHistory = await memoryTools.executeMemoryTool({
+        name: "read_memory_block",
+        arguments: { block_id: "blk-hist-tool", include_history: true },
+      } as any, "chat-1", { maxResultChars: 24000 });
+
+      expect(withHistory.isError).toBe(false);
+      expect(withHistory.content).toContain("VERSION_THREE content");
+      expect(withHistory.content).toContain("Revision History (2 previous version(s), newest first)");
+      expect(withHistory.content).toContain("VERSION_TWO content");
+      expect(withHistory.content).toContain("VERSION_ONE content");
+      // Newest prior snapshot renders before the oldest one.
+      expect(withHistory.content.indexOf("VERSION_TWO content"))
+        .toBeLessThan(withHistory.content.indexOf("VERSION_ONE content"));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("read_memory_block include_history reports blocks with no prior versions", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-history-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-no-hist"));
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "read_memory_block",
+        arguments: { block_id: "blk-no-hist", include_history: true },
+      } as any, "chat-1");
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("No previous versions.");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("create_memory_block supersedes_block_id links lineage and inherits scope/project", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-supersede-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-old-1", {
+        scope: "project",
+        projectId: "proj-42",
+      }));
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Fixture Block v2",
+          description: "Replacement version",
+          content: "Rewritten content.",
+          supersedes_block_id: "blk-old-1",
+        },
+      } as any, "chat-1");
+
+      expect(result.isError).toBe(false);
+      const match = result.content.match(/Superseded \[blk-old-1\] with \[([^\]]+)\]/);
+      expect(match?.[1]).toBeTruthy();
+      const newId = match![1];
+
+      const oldBlock = memoryStorage.getMemoryBlock("blk-old-1");
+      expect(oldBlock?.supersededBy).toBe(newId);
+      const newBlock = memoryStorage.getMemoryBlock(newId);
+      expect(newBlock?.supersedes).toBe("blk-old-1");
+      expect(newBlock?.scope).toBe("project");
+      expect(newBlock?.projectId).toBe("proj-42");
+      // Only the current version appears in listings.
+      expect(memoryStorage.listMemoryBlocks({ includeInternal: true }).map((b) => b.id)).toEqual([newId]);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects supersedes_block_id for missing or already-superseded targets", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-supersede-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-chain-1"));
+
+      const missing = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Nope",
+          description: "Missing target",
+          content: "content",
+          supersedes_block_id: "blk-does-not-exist",
+        },
+      } as any, "chat-1");
+      expect(missing.isError).toBe(true);
+      expect(missing.content).toContain("block not found: blk-does-not-exist");
+
+      const first = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Chain v2",
+          description: "First replacement",
+          content: "content v2",
+          supersedes_block_id: "blk-chain-1",
+        },
+      } as any, "chat-1");
+      expect(first.isError).toBe(false);
+      const midId = first.content.match(/Superseded \[blk-chain-1\] with \[([^\]]+)\]/)![1];
+
+      const second = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Chain v3",
+          description: "Stale-target replacement",
+          content: "content v3",
+          supersedes_block_id: "blk-chain-1",
+        },
+      } as any, "chat-1");
+      expect(second.isError).toBe(true);
+      expect(second.content).toContain("already superseded by");
+      expect(second.content).toContain(midId);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("list_memory_blocks filters by substring query", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-list-query-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-q-1", {
+        name: "Tech Stack",
+        description: "Languages and frameworks",
+        content: "TypeScript, React, Express.",
+      }));
+      memoryStorage.createMemoryBlock(fixtureBlock("blk-q-2", {
+        name: "Garden Notes",
+        description: "Seasonal planting log",
+        content: "Tomatoes went in late this year.",
+      }));
+
+      const byName = await memoryTools.executeMemoryTool({
+        name: "list_memory_blocks",
+        arguments: { query: "garden" },
+      } as any, "chat-1");
+      expect(byName.content).toContain("[blk-q-2]");
+      expect(byName.content).not.toContain("[blk-q-1]");
+
+      const byContent = await memoryTools.executeMemoryTool({
+        name: "list_memory_blocks",
+        arguments: { query: "typescript" },
+      } as any, "chat-1");
+      expect(byContent.content).toContain("[blk-q-1]");
+      expect(byContent.content).not.toContain("[blk-q-2]");
+
+      const noMatch = await memoryTools.executeMemoryTool({
+        name: "list_memory_blocks",
+        arguments: { query: "zzz-no-such-term" },
+      } as any, "chat-1");
+      expect(noMatch.content).toContain("No memory blocks found");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
 function makeArchiveFixture(overrides: {
   id?: string;
   chatId?: string;

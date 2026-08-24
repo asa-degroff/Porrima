@@ -17,13 +17,15 @@ interface MemoryBlock {
   id: string;              // blk-{uuid}
   name: string;            // "Tech Stack", "User Preferences"
   description: string;     // One-line summary for retrieval and indexing
-  content: string;         // Full block content (max 4000 chars)
-  scope: "global" | "project";
+  content: string;         // Full block content (configurable char cap)
+  scope: "global" | "project" | "archived";
   projectId?: string;      // For project-scoped blocks
   createdAt: string;
   updatedAt: string;
   updatedBy: "agent" | "user";
   tokenEstimate: number;   // Approximate tokens (~content.length / 4)
+  blockType: "note" | "notebook" | "synthesis" | "zeitgeist-archive";
+  attachments?: BlockAttachments; // Reference-only JSON (images, artifacts, ...)
   supersededBy?: string;   // Links to newer version
   supersedes?: string;     // Links to older version
 }
@@ -34,7 +36,7 @@ interface MemoryBlock {
 - **Table**: `memory_blocks` in `app.db`
 - **FTS5**: `memory_blocks_fts` virtual table indexes content, name, and description for full-text search
 - **Auto-sync triggers**: FTS kept in sync via INSERT/UPDATE/DELETE triggers
-- **Character limit**: 4000 chars per block (~1000 tokens). Exceeding the limit during an update creates a new superseding block.
+- **Character limit**: 4000 chars per block (~1000 tokens) by default (configurable). Updates exceeding the limit are rejected with the exact overage — the agent trims, splits, or supersedes explicitly.
 
 ## Scoping
 
@@ -46,6 +48,12 @@ interface MemoryBlock {
 - Scoped to a specific project
 - Examples: architecture decisions, tech stack, coding conventions
 - Still searchable cross-project via FTS and `search_memory`
+
+**Archived blocks** (never loaded):
+- Retired knowledge moved out of active context via `scope='archived'`
+- Excluded from context injection and default listings
+- Still searchable via FTS/`search_memory`, readable via `read_memory_block`, and listable via `list_memory_blocks(scope='archived')`
+- Reversible: set the scope back to `global`/`project` to restore
 
 ## Context Injection
 
@@ -76,20 +84,20 @@ In `buildStablePrefix` / `buildMemoryAugmentedPrompt`, blocks and project contex
 
 | Tool | Description |
 |------|-------------|
-| `create_memory_block` | Create a new named block with content, scope, optional projectId |
-| `update_memory_block` | Edit a block's content or description. Auto-supersedes if over 4000 chars |
-| `read_memory_block` | Load full content of a block by ID |
-| `list_memory_blocks` | Browse blocks by scope, project, or name/description query |
-| `get_block_history` | Walk the supersession chain to see how a block evolved |
+| `create_memory_block` | Create a new named block with content, scope, optional projectId. With `supersedes_block_id`, replaces an existing block while preserving lineage (scope/project inherited unless overridden) |
+| `update_memory_block` | Edit a block's content, description, or name; change scope (e.g. `'archived'` to retire it, `'global'`/`'project'` to restore). Rejects over-limit content with the exact overage |
+| `read_memory_block` | Load full content of a block by ID. `include_history=true` adds prior content snapshots (newest first) |
+| `list_memory_blocks` | Browse blocks by scope, project, substring `query`, recency, limit. Excludes archived unless `scope='archived'` |
 | `search_memory` | Extended to also return block excerpts alongside atomic memory results |
 
 ## Supersession
 
-When a block exceeds the 4000 character limit during an update, a new block is created that supersedes the old one — using the same supersession system as atomic memories:
+Blocks use the same supersession lineage system as atomic memories:
 
-- Old block gets `supersededBy` pointing to the new block
-- New block gets `supersedes` pointing to the old block
-- Old blocks remain accessible via `get_block_history` or direct ID lookup
+- The agent replaces a block wholesale by passing `supersedes_block_id` to `create_memory_block` — scope and project are inherited from the old block unless explicitly overridden
+- Updates that exceed the character limit are rejected (with the exact overage) rather than auto-superseded; the agent decides whether to trim, split, or supersede
+- Old block gets `supersededBy` pointing to the new block; new block gets `supersedes` pointing to the old block
+- Every edit also snapshots the prior state into `memory_blocks_history`, surfaced via `read_memory_block(include_history=true)`
 - Only current (non-superseded) blocks appear in listings and context injection
 
 ## Extraction Integration

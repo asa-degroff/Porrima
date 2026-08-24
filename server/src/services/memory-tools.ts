@@ -1,7 +1,6 @@
 import { StringEnum, Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import { embed } from "./embeddings.js";
 import {
-  deleteMemory,
   getMemoryById,
   searchMemories,
   createMemoryBlock,
@@ -10,7 +9,9 @@ import {
   searchBlocks,
   listMemoryBlocks,
   getBlockHistory,
+  supersedeBlock,
   getMaxBlockChars,
+  type MemoryBlock,
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
@@ -97,42 +98,56 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "create_memory_block",
     description:
-      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable.",
+      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable. To park knowledge that is no longer active, create with scope='archived' — archived blocks stay searchable and readable but are never loaded into context.",
     parameters: Type.Object({
       name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
       description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
       content: Type.String({ description: "Full block content — structured text, up to the configured limit" }),
-      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Scope: 'global' (all chats), 'project' (project-scoped), or 'archived' (hidden from context, searchable). Default: global" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Scope: 'global' (all chats), 'project' (project-scoped), or 'archived' (out of active context, still searchable/readable). Default: global" })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
+      supersedes_block_id: Type.Optional(
+        Type.String({
+          description:
+            "ID of an existing block that this new block replaces (it is stale, outgrown, or restructured). " +
+            "The old block is kept but marked superseded — not deleted — preserving lineage. " +
+            "Scope and project are inherited from the old block unless overridden here. " +
+            "Find IDs via list_memory_blocks or search_memory. Omit when the block is genuinely new.",
+        })
+      ),
     }),
   },
   {
     name: "update_memory_block",
     description:
-      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. Updates exceeding the configured character limit are rejected with the exact overage — split into multiple blocks if the content is too large.",
+      "Update an existing memory block's content, description, or name. Use this to refine, expand, correct, or rename knowledge in a block. Updates exceeding the configured character limit are rejected with the exact overage — split into multiple blocks if the content is too large (supersede the old block via create_memory_block's supersedes_block_id when replacing it wholesale). Set scope='archived' to retire a block: it leaves active context but stays searchable and readable via list_memory_blocks(scope='archived').",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
       description: Type.Optional(Type.String({ description: "Updated one-line description" })),
-      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Change scope (e.g. 'archived' to hide from context while keeping searchable)" })),
+      name: Type.Optional(Type.String({ description: "New block name" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Change scope: 'archived' retires the block (out of active context, still searchable/readable); 'global'/'project' restore or reassign it" })),
       project_id: Type.Optional(Type.String({ description: "Reassign to a different project (pass empty string to clear)" })),
     }),
   },
   {
     name: "read_memory_block",
     description:
-      "Load the full content of a memory block. Use when you see a block reference in the Available Memory Blocks section and need the full details.",
+      "Load the full content of a memory block. Use when you see a block reference in the Available Memory Blocks section and need the full details. Pass include_history=true to also see prior content snapshots (e.g. to recover text removed by a later edit).",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
+      include_history: Type.Optional(
+        Type.Boolean({ description: "Include the block's revision history (previous content snapshots, newest first). Default false." })
+      ),
     }),
   },
   {
     name: "list_memory_blocks",
     description:
-      "List available memory blocks by scope. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated non-archived blocks. Use scope='archived' to see archived-only blocks. To find blocks by content, use search_memory.",
+      "List available memory blocks by scope. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated active blocks. Use scope='archived' to see archived blocks (moved out of active context but still readable), or scope='global'/'project' to restrict. Use query for direct substring filtering; for semantic search across all blocks, use search_memory.",
     parameters: Type.Object({
-      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope. Default excludes 'archived' blocks — use scope='archived' to see archived-only, or scope='global'/'project' to restrict." })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope. Default excludes archived blocks — use scope='archived' to see them." })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
+      query: Type.Optional(Type.String({ description: "Case-insensitive substring filter matched against name, description, and content" })),
       recent_days: Type.Optional(Type.Number({ description: "Only return blocks updated within the last N days. Omit for no recency filter." })),
       limit: Type.Optional(Type.Number({ description: "Maximum number of blocks to return (default 15). Set higher to see more results." })),
     }),
@@ -206,6 +221,38 @@ async function resolveProjectIdForScope(
     if (chat?.projectId) return chat.projectId;
   }
   return "";
+}
+
+/**
+ * Render prior block snapshots newest first under a char budget. Older
+ * snapshots absorb the trimming since the most recent versions are what
+ * recovery reads almost always want.
+ */
+function renderBlockHistory(priorSnapshots: MemoryBlock[], budgetChars: number): string {
+  const snaps = [...priorSnapshots].reverse();
+  const header = `--- Revision History (${snaps.length} previous version(s), newest first) ---`;
+  let used = header.length + 1;
+  const sections: string[] = [];
+  let omitted = 0;
+  for (let i = 0; i < snaps.length; i++) {
+    const s = snaps[i];
+    const label = `--- v${snaps.length - i} updated ${s.updatedAt.slice(0, 10)} by ${s.updatedBy} (${s.content.length} chars) ---`;
+    const remaining = budgetChars - used - label.length;
+    if (remaining < 200) {
+      omitted = snaps.length - i;
+      break;
+    }
+    let body = s.content;
+    let note = "";
+    if (body.length > remaining) {
+      body = body.slice(0, Math.max(0, remaining - 15));
+      note = "\n[truncated]";
+    }
+    sections.push(`${label}\n${body}${note}`);
+    used += label.length + body.length + note.length + 2;
+  }
+  if (omitted > 0) sections.push(`[${omitted} older version(s) omitted to fit budget]`);
+  return [header, ...sections].join("\n");
 }
 
 // --- read_archived_context formatting helpers ---
@@ -588,7 +635,7 @@ export async function executeMemoryTool(
     }
 
     case "create_memory_block": {
-      const { name, description, content, scope, project_id } = toolCall.arguments;
+      const { name, description, content, scope, project_id, supersedes_block_id } = toolCall.arguments;
       if (!name || !description || !content) {
         return { content: "Missing required fields: name, description, content", isError: true };
       }
@@ -596,6 +643,46 @@ export async function executeMemoryTool(
       if (content.length > maxChars) {
         return { content: `Content exceeds ${maxChars} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
       }
+
+      if (supersedes_block_id) {
+        const old = getMemoryBlock(supersedes_block_id);
+        if (!old) {
+          return {
+            content: `Cannot supersede: block not found: ${supersedes_block_id}. Use list_memory_blocks or search_memory to find the correct ID.`,
+            isError: true,
+          };
+        }
+        if (old.supersededBy) {
+          return {
+            content: `Cannot supersede: ${supersedes_block_id} is already superseded by ${old.supersededBy}. Supersede the current version instead.`,
+            isError: true,
+          };
+        }
+        const { id, blockType } = await resolveNewBlockIdentity(chatId);
+        const effectiveScope = scope || old.scope;
+        let finalProjectId = project_id !== undefined ? project_id : old.projectId;
+        if (effectiveScope === "project" && !finalProjectId) {
+          finalProjectId = await resolveProjectIdForScope("project", undefined, chatId);
+        }
+        const now = new Date().toISOString();
+        const block = supersedeBlock(old.id, {
+          id,
+          name,
+          description,
+          content,
+          scope: effectiveScope,
+          projectId: finalProjectId,
+          createdAt: now,
+          updatedAt: now,
+          updatedBy: "agent",
+          blockType,
+        });
+        return {
+          content: `Superseded [${old.id}] with [${block.id}] "${block.name}" (${content.length}/${maxChars} chars, ${block.tokenEstimate} tokens)`,
+          isError: false,
+        };
+      }
+
       const { id, blockType } = await resolveNewBlockIdentity(chatId);
       const finalProjectId = await resolveProjectIdForScope(scope, project_id, chatId);
       const now = new Date().toISOString();
@@ -618,12 +705,15 @@ export async function executeMemoryTool(
     }
 
     case "update_memory_block": {
-      const { block_id, content: newContent, description: newDesc, scope: newScope, project_id } = toolCall.arguments;
+      const { block_id, content: newContent, description: newDesc, scope: newScope, project_id, name: newName } = toolCall.arguments;
       if (!block_id) return { content: "Missing block_id", isError: true };
+      if (newName !== undefined && !String(newName).trim()) {
+        return { content: "Block name cannot be empty", isError: true };
+      }
 
       const existing = getMemoryBlock(block_id);
       if (!existing) {
-        const similar = suggestSimilarBlocks([newDesc, newContent].filter(Boolean).join(" "));
+        const similar = suggestSimilarBlocks([newName, newDesc, newContent].filter(Boolean).join(" "));
         const hint = similar.length
           ? `\n\nSimilar active blocks:\n${similar}`
           : "\n\nUse search_memory to find the current block ID, then retry the update.";
@@ -647,18 +737,20 @@ export async function executeMemoryTool(
       updateMemoryBlock(block_id, {
         content: newContent,
         description: newDesc,
+        name: newName,
         scope: newScope,
         projectId: projectIdVal,
         updatedBy: "agent",
       });
+      const nameNote = newName !== undefined && newName !== existing.name ? ` name: ${existing.name} → ${newName}` : "";
       const scopeNote = scopeChanged ? ` scope: ${existing.scope} → ${newScope}` : "";
       const projectNote = projectIdVal !== undefined && projectIdVal !== existing.projectId
         ? ` projectId: ${existing.projectId || "(none)"} → ${projectIdVal || "(none)"}` : "";
-      return { content: `Updated block [${block_id}] "${existing.name}" (${finalContent.length}/${maxChars} chars)${scopeNote}${projectNote}`, isError: false };
+      return { content: `Updated block [${block_id}] "${newName ?? existing.name}" (${finalContent.length}/${maxChars} chars)${nameNote}${scopeNote}${projectNote}`, isError: false };
     }
 
     case "read_memory_block": {
-      const { block_id } = toolCall.arguments;
+      const { block_id, include_history } = toolCall.arguments;
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const block = getMemoryBlock(block_id);
@@ -678,18 +770,29 @@ export async function executeMemoryTool(
         `---`,
         block.content,
       ];
+
+      if (include_history) {
+        const prior = getBlockHistory(block_id).filter((h) => h.id !== block_id);
+        if (prior.length === 0) {
+          lines.push("", "No previous versions.");
+        } else {
+          const budget = Math.max(1000, (opts.maxResultChars ?? DEFAULT_ARCHIVE_READ_BUDGET_CHARS) - lines.join("\n").length - 100);
+          lines.push("", renderBlockHistory(prior, budget));
+        }
+      }
+
       return { content: lines.join("\n"), isError: false };
     }
 
     case "list_memory_blocks": {
-      const { scope, project_id, recent_days, limit: maxResults } = toolCall.arguments;
+      const { scope, project_id, query, recent_days, limit: maxResults } = toolCall.arguments;
       
       // Default: exclude archived (handled by backend), cap at 15
       const effectiveLimit = maxResults ?? 15;
       
       // Fetch all matching blocks (no limit at DB level — we cap in output)
       const maxChars = await getMaxBlockChars();
-      const blocks = listMemoryBlocks({ scope, projectId: project_id, includeInternal: true });
+      const blocks = listMemoryBlocks({ scope, projectId: project_id, query, includeInternal: true });
       
       // Apply recency filter if requested
       let filteredBlocks = blocks;
@@ -710,7 +813,7 @@ export async function executeMemoryTool(
       const shown = Math.min(effectiveLimit, filteredBlocks.length);
       const truncated = filteredBlocks.length > effectiveLimit;
       const output = lines.slice(0, effectiveLimit).join("\n");
-      const suffix = truncated ? `\n\n... and ${filteredBlocks.length - effectiveLimit} more block(s). Use limit=<N> or scope='archived' to see additional results.` : "";
+      const suffix = truncated ? `\n\n... and ${filteredBlocks.length - effectiveLimit} more block(s). Use limit=<N> to see more.` : "";
       
       return { content: `Found ${filteredBlocks.length} memory block(s) (showing ${shown}):\n${output}${suffix}`, isError: false };
     }
