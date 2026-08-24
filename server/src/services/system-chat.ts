@@ -3,6 +3,7 @@ import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import { createTimeMarkerState, type TimeMarkerState } from "./time-marker.js";
+import { formatAgentClock } from "./time-format.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -353,13 +354,7 @@ async function buildSynthesisTriggerContent(
   // That avoids the text accumulating in chat history.
 
   const parts: string[] = [];
-  const stamp = new Date().toLocaleString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const stamp = formatAgentClock(new Date());
 
   parts.push(`# Synthesis Cycle — ${stamp}`);
 
@@ -1281,10 +1276,7 @@ export async function runWakeCycle(options?: {
     runtimeModel.contextWindow = contextWindow;
 
     // Append wake cycle trigger
-    const stamp = new Date().toLocaleString("en-US", {
-      year: "numeric", month: "long", day: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
+    const stamp = formatAgentClock(new Date());
     const triggerContent = `# Wake Cycle — ${stamp}\n\n${wakePromptFromSteps(options?.promptSteps)}`;
     const { buildSplitAugmentedPrompt, resetMemoryContext, buildTimeAnchor } = await import("./memory-context.js");
     const triggerMsg: ChatMessage = {

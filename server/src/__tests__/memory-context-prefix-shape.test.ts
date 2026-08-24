@@ -225,8 +225,8 @@ describe("memory context stable prefix shape", () => {
 });
 
 describe("time anchor", () => {
-  const ANCHOR_RE = /\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]$/;
-  const SPLIT_ANCHOR_RE = /\n\n\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]$/;
+  const ANCHOR_RE = /\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: [A-Z]{2,5})? \(UTC[+-]\d{2}:\d{2}\)\]$/;
+  const SPLIT_ANCHOR_RE = /\n\n\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: [A-Z]{2,5})? \(UTC[+-]\d{2}:\d{2}\)\]$/;
 
   it("builds a bare [time:] anchor for recent chats", async () => {
     mockMemoryContextDeps({});
@@ -323,8 +323,8 @@ describe("persisted time anchors in replay", () => {
   it("re-appends each user row's frozen time anchor during replay", async () => {
     mockAgentDeps();
     const { chatMessagesToPiMessages } = await import("../services/agent.js");
-    const anchorA = "\n\n[time: 2026-08-20 10:00 UTC]";
-    const anchorB = "\n\n[time: 2026-08-21 11:30 UTC]";
+    const anchorA = "\n\n[time: 2026-08-20 10:00 MDT (UTC-06:00)]";
+    const anchorB = "\n\n[time: 2026-08-21 11:30 MDT (UTC-06:00)]";
 
     const pi = chatMessagesToPiMessages(
       [
@@ -344,7 +344,7 @@ describe("persisted time anchors in replay", () => {
   it("keeps turn N's replayed history a byte-prefix of turn N+1's", async () => {
     mockAgentDeps();
     const { chatMessagesToPiMessages } = await import("../services/agent.js");
-    const anchorA = "\n\n[time: 2026-08-20 10:00 UTC]";
+    const anchorA = "\n\n[time: 2026-08-20 10:00 MDT (UTC-06:00)]";
 
     // Turn N wire prompt ended with: u1 + frozen anchor.
     const turnN = chatMessagesToPiMessages(
@@ -356,7 +356,7 @@ describe("persisted time anchors in replay", () => {
       [
         { role: "user", content: "u1", timestamp: 1000, timeAnchor: anchorA },
         { role: "assistant", content: "r1", timestamp: 2000 },
-        { role: "user", content: "u2", timestamp: 3000, timeAnchor: "\n\n[time: 2026-08-20 10:05 UTC]" },
+        { role: "user", content: "u2", timestamp: 3000, timeAnchor: "\n\n[time: 2026-08-20 10:05 MDT (UTC-06:00)]" },
       ],
       "test-model",
     );
@@ -379,7 +379,7 @@ describe("persisted time anchors in replay", () => {
   it("appends the anchor after merged system contexts, matching live prompt shape", async () => {
     mockAgentDeps();
     const { chatMessagesToPiMessages } = await import("../services/agent.js");
-    const anchor = "\n\n[time: 2026-08-21 12:00 UTC]";
+    const anchor = "\n\n[time: 2026-08-21 12:00 MDT (UTC-06:00)]";
 
     const pi = chatMessagesToPiMessages(
       [

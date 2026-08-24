@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { applyTimeMarker, createTimeMarkerState } from "../services/time-marker.js";
 import { wrapToolsWithTimeMarker } from "../services/agent-tools.js";
+import { formatAgentClock } from "../services/time-format.js";
+
+/**
+ * The clock's zone is the system zone (presentation detail), so exact
+ * expected lines derive the stamp from the shared formatter; the
+ * zone-independent rendering itself is pinned in time-format.test.ts.
+ */
 
 const MIN = 60_000;
 
@@ -48,7 +55,7 @@ describe("applyTimeMarker", () => {
   it("fires at exactly the interval with a turn-start delta", () => {
     const state = createTimeMarkerState(15, 0)!;
     const result = applyTimeMarker(textResult("hi"), state, 15 * MIN);
-    expect(firstText(result)).toBe(`hi\n\n[time: 1970-01-01 00:15 UTC — 15m since turn start]`);
+    expect(firstText(result)).toBe(`hi\n\n[time: ${formatAgentClock(new Date(15 * MIN))} — 15m since turn start]`);
     expect(state.lastMarkerMs).toBe(15 * MIN);
     expect(state.markerCount).toBe(1);
   });
@@ -65,7 +72,7 @@ describe("applyTimeMarker", () => {
     const state = createTimeMarkerState(15, 0)!;
     applyTimeMarker(textResult("one"), state, 15 * MIN);
     const result = applyTimeMarker(textResult("two"), state, 52 * MIN);
-    expect(firstText(result)).toBe("two\n\n[time: 1970-01-01 00:52 UTC — 37m since last marker]");
+    expect(firstText(result)).toBe(`two\n\n[time: ${formatAgentClock(new Date(52 * MIN))} — 37m since last marker]`);
     expect(state.markerCount).toBe(2);
   });
 
@@ -73,7 +80,7 @@ describe("applyTimeMarker", () => {
     const state = createTimeMarkerState(15, 0)!;
     applyTimeMarker(textResult("one"), state, 15 * MIN);
     const result = applyTimeMarker(textResult("two"), state, (15 + 65) * MIN);
-    expect(firstText(result)).toBe("two\n\n[time: 1970-01-01 01:20 UTC — 1h 05m since last marker]");
+    expect(firstText(result)).toBe(`two\n\n[time: ${formatAgentClock(new Date(80 * MIN))} — 1h 05m since last marker]`);
   });
 
   it("appends a text part to image-only results", () => {
@@ -183,7 +190,7 @@ describe("getAgentTools time-marker integration", () => {
     expect(bash).toBeDefined();
     const result = await bash!.execute("tc-1", { command: "echo marker-probe" } as any);
     expect(firstText(result)).toContain("marker-probe");
-    expect(firstText(result)).toMatch(/\n\n\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC — 20m since turn start\]\s*$/);
+    expect(firstText(result)).toMatch(/\n\n\[time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: [A-Z]{2,5})? \(UTC[+-]\d{2}:\d{2}\) — 20m since turn start\]\s*$/);
     expect(state.markerCount).toBe(1);
   });
 

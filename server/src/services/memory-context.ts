@@ -8,6 +8,7 @@ import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
 import { getProject, getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
+import { formatAgentClock } from "./time-format.js";
 import { log } from "./logger.js";
 import { getRetrievalBudget } from "./retrieval-settings.js";
 import {
@@ -783,14 +784,6 @@ export async function buildStablePrefix(
 const TIME_ANCHOR_GAP_THRESHOLD_MS = 60 * 60 * 1000; // "resumed after" clause beyond 1h
 const TIME_ANCHOR_CURRENT_TURN_MS = 60 * 1000;       // skip rows created in the last minute
 
-function formatUtcTimestamp(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
-  );
-}
-
 function formatGap(ms: number): string {
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 60) return `${minutes}m`;
@@ -813,7 +806,8 @@ function formatGap(ms: number): string {
  */
 export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
   const nowMs = Date.now();
-  let line = `[time: ${formatUtcTimestamp(new Date(nowMs))}]`;
+  const stamp = formatAgentClock(new Date(nowMs));
+  let line = `[time: ${stamp}]`;
 
   let prevTs: number | null = null;
   for (let i = recentMessages.length - 1; i >= 0; i--) {
@@ -827,7 +821,7 @@ export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
   if (prevTs !== null) {
     const gap = nowMs - prevTs;
     if (gap >= TIME_ANCHOR_GAP_THRESHOLD_MS) {
-      line = `[time: ${formatUtcTimestamp(new Date(nowMs))} — resumed after ${formatGap(gap)}]`;
+      line = `[time: ${stamp} — resumed after ${formatGap(gap)}]`;
     }
   }
 

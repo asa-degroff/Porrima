@@ -1,3 +1,5 @@
+import { formatAgentClock } from "./time-format.js";
+
 /**
  * Time markers for long-running agent loops.
  *
@@ -52,14 +54,6 @@ export function createTimeMarkerState(
   };
 }
 
-function formatUtc(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
-  );
-}
-
 /**
  * "42m" under an hour, "1h 05m" above — finer than the turn anchor's gap
  * clause, because marker deltas ARE the model's intra-loop clock unit.
@@ -92,7 +86,7 @@ export function applyTimeMarker<R extends { content: readonly unknown[] }>(
   if (now - reference < state.intervalMs) return result;
 
   const since = state.lastMarkerMs === null ? "turn start" : "last marker";
-  const line = `\n\n[time: ${formatUtc(new Date(now))} — ${formatDelta(now - reference)} since ${since}]`;
+  const line = `\n\n[time: ${formatAgentClock(new Date(now))} — ${formatDelta(now - reference)} since ${since}]`;
 
   const content = (result.content as readonly any[]).map((part) => ({ ...part }));
   const textIdx = content.findIndex((part) => part.type === "text");
