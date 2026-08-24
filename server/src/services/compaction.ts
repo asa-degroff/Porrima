@@ -257,7 +257,7 @@ function lastCompactionSummaryIndex(messages: Chat["messages"]): number {
   return -1;
 }
 
-function estimateContextBreakdown(
+export function estimateContextBreakdown(
   messages: Chat["messages"],
   systemPrompt: string,
   tools?: unknown,
@@ -369,7 +369,7 @@ export interface ExactContextTokenEstimate {
   contextBreakdown: ContextEstimateBreakdown;
 }
 
-function estimateHardCapTokens(
+export function estimateHardCapTokens(
   conservativeTokens: number,
   displayTokens: number,
   useUsageAnchorBound: boolean,

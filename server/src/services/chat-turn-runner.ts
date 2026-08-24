@@ -14,6 +14,11 @@ import {
   estimateContextTokens,
   truncateChatHistory,
 } from "./compaction.js";
+import {
+  comparePressureShadow,
+  evaluateTurnGuards,
+  estimateContextPressure,
+} from "./context-pressure.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
@@ -606,6 +611,31 @@ export async function runHeadlessChatTurn(
         estimate = estimateContextTokens(chat.messages, systemPrompt, tools);
         threshold = COMPACTION_HARD_CAP_RATIO;
       }
+
+      // Shadow mode (turn-engine phase 1, doc §4.2 ship condition): the
+      // unified pressure estimate runs side-by-side and is logged against
+      // the legacy arithmetic, but the LEGACY value still acts. The flip to
+      // the unified trigger (delta D1) is gated on the pass criteria in
+      // comparePressureShadow's doc — sample floor, zero trigger-outcome
+      // divergence, no systematic directional bias — evaluable from these
+      // log lines alone (the fire= outcome is part of the line).
+      const pressure = await estimateContextPressure({
+        messages: chat.messages,
+        systemPrompt,
+        tools,
+        contextWindow: cw,
+        lastUsageTotal: usageTotal > 0 ? usageTotal : undefined,
+        postUsageToolResults: usageTotal > 0 ? toolResults : undefined,
+      });
+      console.log(
+        comparePressureShadow({
+          legacyEstimate: estimate,
+          legacyTriggerRatio: threshold,
+          pressure,
+          contextWindow: cw,
+        }).logLine,
+      );
+
       const ratio = estimate / cw;
       if (ratio > threshold) {
         needsMidTurnCompaction = true;
@@ -775,41 +805,40 @@ export async function runHeadlessChatTurn(
               projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
             });
 
-            if (turnToolCalls.length > 0) {
-              const sig = JSON.stringify(turnToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
-              duplicateToolCallStreak = sig === lastToolCallSignature ? duplicateToolCallStreak + 1 : 1;
-              lastToolCallSignature = sig;
-              if (duplicateToolCallStreak >= 3) {
+            // Dedup + iteration-cap guards (turn-engine phase 1): the shared
+            // pure decision (evaluateTurnGuards) with the chat route; the
+            // emitter expresses it. Precedence: dedup, total cap, segment
+            // cap. The canonical warning text unifies both routes (em dash).
+            const guard = evaluateTurnGuards({
+              newToolCalls: turnToolCalls,
+              lastSignature: lastToolCallSignature,
+              streak: duplicateToolCallStreak,
+              iterations,
+              maxIterations,
+              perSegmentIterations: iterations - lastPersistedAssistantBoundary.iterations,
+              maxIterationsPerSegment: options.maxIterationsPerAssistantSegment,
+            });
+            duplicateToolCallStreak = guard.streak;
+            lastToolCallSignature = guard.lastSignature;
+            if (guard.stop) {
+              if (guard.stop.reason === "duplicate_tool_call") {
                 const names = turnToolCalls.map((c) => c.name).join(", ");
-                console.warn(`[${logPrefix}] duplicate tool call streak hit ${duplicateToolCallStreak}: ${names}`);
-                emitter.emitWarning({
-                  type: "duplicate_tool_call",
-                  message: `Stopped - model called the same tool ${duplicateToolCallStreak} times in a row (${names})`,
-                });
-                controller.abort();
+                console.warn(`[${logPrefix}] duplicate tool call streak hit ${guard.streak}: ${names}`);
+              } else if (
+                options.maxIterationsPerAssistantSegment &&
+                iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
+              ) {
+                // The segment cap only fires when the total cap didn't
+                // (guard precedence), so this condition identifies it.
+                console.warn(
+                  `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
+                );
+              } else {
+                console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
               }
-            } else {
-              duplicateToolCallStreak = 0;
-              lastToolCallSignature = null;
-            }
-
-            if (iterations >= maxIterations) {
-              console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
               emitter.emitWarning({
-                type: "iteration_limit",
-                message: `Stopped - reached ${maxIterations} iteration limit`,
-              });
-              controller.abort();
-            } else if (
-              options.maxIterationsPerAssistantSegment &&
-              iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
-            ) {
-              console.warn(
-                `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
-              );
-              emitter.emitWarning({
-                type: "iteration_limit",
-                message: `Stopped - reached ${options.maxIterationsPerAssistantSegment} iteration limit for this phase`,
+                type: guard.stop.reason,
+                message: guard.stop.warning,
               });
               controller.abort();
             }

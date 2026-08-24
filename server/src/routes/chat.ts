@@ -24,12 +24,16 @@ import {
   END_OF_TURN_COMPACTION_TRIGGER_RATIO,
   endOfTurnNeedsCompaction,
   estimateContextTokens,
-  estimateContextTokensWithExactToolResults,
   truncateChatHistory,
   truncateBeforeSend,
   triggerCompaction,
   hasStrandedToolCall,
 } from "../services/compaction.js";
+import {
+  evaluateTurnGuards,
+  estimateContextPressure,
+  type PressureObservation,
+} from "../services/context-pressure.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
@@ -2507,61 +2511,36 @@ async function handleChatStream(
           // single large one (e.g. read_file on a 50 KB source file) can push
           // past the hard context cap before the next iteration even starts.
           const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel);
-          let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
-          let displayEstimatedTokens = estimatedTokens;
-          let hardCapEstimatedTokens = estimatedTokens;
-          const approximateTokens = estimatedTokens;
-          let approximateDisplayTokens: number | undefined;
-          let approximateHardCapTokens: number | undefined;
-          let exactToolResultCount = 0;
-          let exactDelta = 0;
-          let signedExactDelta = 0;
-          let selectedEstimatePath: "usage_anchor" | "char_estimate" | undefined;
-          let displayEstimatePath: "usage_anchor" | "char_estimate" | undefined;
-          let pathAEstimateTokens: number | undefined;
-          let pathBEstimateTokens: number | undefined;
-          let lastUsageInputTokens: number | undefined;
-          let lastUsageOutputTokens: number | undefined;
-          let lastUsageTotalTokens: number | undefined;
-          let postUsageAdditionalTokens: number | undefined;
-          if (stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
-            const exactEstimate = await estimateContextTokensWithExactToolResults(
-              chat.messages,
-              systemPrompt,
-              agentTools,
-              {
-                baseUrl: piModel.baseUrl,
-                modelId: piModel.id,
-                chatId: chat.id,
-                phase: "tool_loop",
-                contextWindow: effectiveCWForCheck,
-              },
+          // Unified context-pressure estimate (turn-engine phase 1): the
+          // inline anchor+exact+char plumbing collapses to this call. Same
+          // numbers — the exact path self-gates internally (no HTTP below
+          // 70% of window / 16k-char results, max 12 candidates).
+          // Observation recording stays via onObservation: the estimator
+          // reports its estimate through the sink; the pending record below
+          // is built from the sink (gates applied there — after the
+          // mid-turn guard has had its say).
+          const observation = { estimate: null as PressureObservation | null };
+          const pressure = await estimateContextPressure({
+            messages: chat.messages,
+            systemPrompt,
+            tools: agentTools,
+            contextWindow: effectiveCWForCheck,
+            exact:
+              stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl
+                ? { baseUrl: piModel.baseUrl, modelId: piModel.id, chatId: chat.id, phase: "tool_loop" }
+                : undefined,
+            onObservation: (obs) => {
+              observation.estimate = obs;
+            },
+          });
+          if (pressure.exactToolResultCount > 0 || pressure.errors.length > 0) {
+            console.log(
+              `[token-estimate] chat=${chat.id} iter=${iterations} approx=${pressure.approximateTokens} ` +
+              `estimated=${pressure.estimatedTokens} exactToolResults=${pressure.exactToolResultCount} ` +
+              `delta=${pressure.exactDelta} signedDelta=${pressure.signedExactDelta} ` +
+              `display=${pressure.refinedTokens} hardCap=${pressure.hardCapTokens} elapsedMs=${pressure.exactElapsedMs}` +
+              (pressure.errors.length ? ` errors=${pressure.errors.length}` : ""),
             );
-            estimatedTokens = exactEstimate.estimatedTokens;
-            displayEstimatedTokens = exactEstimate.refinedTokens;
-            hardCapEstimatedTokens = exactEstimate.hardCapTokens;
-            approximateDisplayTokens = exactEstimate.approximateDisplayTokens;
-            approximateHardCapTokens = exactEstimate.approximateHardCapTokens;
-            exactToolResultCount = exactEstimate.exactToolResultCount;
-            exactDelta = exactEstimate.exactDelta;
-            signedExactDelta = exactEstimate.signedExactDelta;
-            selectedEstimatePath = exactEstimate.contextBreakdown.selectedPath;
-            displayEstimatePath = exactEstimate.contextBreakdown.displayPath;
-            pathAEstimateTokens = exactEstimate.contextBreakdown.pathATokens;
-            pathBEstimateTokens = exactEstimate.contextBreakdown.pathBTokens;
-            lastUsageInputTokens = exactEstimate.contextBreakdown.lastUsageInput;
-            lastUsageOutputTokens = exactEstimate.contextBreakdown.lastUsageOutput;
-            lastUsageTotalTokens = exactEstimate.contextBreakdown.lastUsageTotal;
-            postUsageAdditionalTokens = exactEstimate.contextBreakdown.postUsageAdditionalTokens;
-            if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
-              console.log(
-                `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
-                `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
-                `delta=${exactEstimate.exactDelta} signedDelta=${exactEstimate.signedExactDelta} ` +
-                `display=${displayEstimatedTokens} hardCap=${hardCapEstimatedTokens} elapsedMs=${exactEstimate.exactElapsedMs}` +
-                (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
-              );
-            }
           }
 
           // Send iteration event with usage so the client can update token
@@ -2581,8 +2560,8 @@ async function handleChatStream(
             usage: state.finalUsage || undefined,
           };
           if (stopReason === "toolUse") {
-            iterationPayload.estimatedTokens = estimatedTokens;
-            iterationPayload.displayEstimatedTokens = displayEstimatedTokens;
+            iterationPayload.estimatedTokens = pressure.estimatedTokens;
+            iterationPayload.displayEstimatedTokens = pressure.refinedTokens;
           }
           res.write(`event: iteration\ndata: ${JSON.stringify(iterationPayload)}\n\n`);
 
@@ -2616,17 +2595,17 @@ async function handleChatStream(
           // char path as a bounded hard-cap guard so biased char estimates do not
           // preempt the normal usage-anchor trigger in steady-state tool loops.
           if (stopReason === "toolUse" && !hitContextLimit) {
-            if (effectiveCWForCheck > 0 && displayEstimatedTokens > 0) {
-              const usageRatio = displayEstimatedTokens / effectiveCWForCheck;
-              const hardCapRatio = hardCapEstimatedTokens / effectiveCWForCheck;
+            if (effectiveCWForCheck > 0 && pressure.refinedTokens > 0) {
+              const usageRatio = pressure.refinedTokens / effectiveCWForCheck;
+              const hardCapRatio = pressure.hardCapTokens / effectiveCWForCheck;
               if (usageRatio > COMPACTION_TRIGGER_RATIO) {
                 const rawUsage = state.finalUsage?.totalTokens ?? 0;
-                console.warn(`[chat] Mid-turn context overflow: displayEst ${displayEstimatedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, conservative=${estimatedTokens}] — breaking for compaction`);
+                console.warn(`[chat] Mid-turn context overflow: displayEst ${pressure.refinedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, conservative=${pressure.estimatedTokens}] — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
               } else if (hardCapRatio > COMPACTION_HARD_CAP_RATIO) {
                 const rawUsage = state.finalUsage?.totalTokens ?? 0;
-                console.warn(`[chat] Mid-turn hard-cap safety: hardCapEst ${hardCapEstimatedTokens}/${effectiveCWForCheck} (${(hardCapRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, display=${displayEstimatedTokens}, conservative=${estimatedTokens}] — breaking for compaction`);
+                console.warn(`[chat] Mid-turn hard-cap safety: hardCapEst ${pressure.hardCapTokens}/${effectiveCWForCheck} (${(hardCapRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, display=${pressure.refinedTokens}, conservative=${pressure.estimatedTokens}] — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
               }
@@ -2646,47 +2625,35 @@ async function handleChatStream(
           ) {
             maybeDispatchMidTurnPulse({
               source: "iteration",
-              contextRatio: effectiveCWForCheck > 0 && displayEstimatedTokens > 0
-                ? displayEstimatedTokens / effectiveCWForCheck
+              contextRatio: effectiveCWForCheck > 0 && pressure.refinedTokens > 0
+                ? pressure.refinedTokens / effectiveCWForCheck
                 : undefined,
             });
           }
 
-          // Dedup guard: detect when the model is stuck re-emitting the same
-          // tool call. Compare this iteration's new tool calls against the
-          // prior iteration's signature. After DUPLICATE_TOOL_CALL_LIMIT
-          // consecutive identical iterations, abort the loop so the user
-          // isn't stuck watching the same call run.
-          const DUPLICATE_TOOL_CALL_LIMIT = 3;
-          if (newToolCallsThisIter.length > 0) {
-            const sig = JSON.stringify(newToolCallsThisIter.map(c => ({ name: c.name, args: c.arguments })));
-            if (sig === state.lastIterationToolCallSignature) {
-              state.duplicateToolCallStreak++;
-            } else {
-              state.duplicateToolCallStreak = 1;
-            }
-            state.lastIterationToolCallSignature = sig;
-
-            if (state.duplicateToolCallStreak >= DUPLICATE_TOOL_CALL_LIMIT) {
+          // Dedup + iteration-cap guards (turn-engine phase 1): the shared
+          // pure decision (evaluateTurnGuards) with the headless route;
+          // chat.ts expresses it as SSE warning + abort. Precedence: dedup,
+          // then the iteration cap.
+          const guard = evaluateTurnGuards({
+            newToolCalls: newToolCallsThisIter,
+            lastSignature: state.lastIterationToolCallSignature,
+            streak: state.duplicateToolCallStreak,
+            iterations,
+            maxIterations: MAX_ITERATIONS,
+          });
+          state.duplicateToolCallStreak = guard.streak;
+          state.lastIterationToolCallSignature = guard.lastSignature;
+          if (guard.stop) {
+            if (guard.stop.reason === "duplicate_tool_call") {
               const dupNames = newToolCallsThisIter.map(c => c.name).join(", ");
-              console.warn(`[chat] duplicate tool call streak hit ${state.duplicateToolCallStreak} (${dupNames}) at iteration ${iterations}, aborting`);
-              res.write(`event: warning\ndata: ${JSON.stringify({
-                type: "duplicate_tool_call",
-                message: `Stopped — model called the same tool ${state.duplicateToolCallStreak} times in a row (${dupNames})`,
-              })}\n\n`);
-              turnAbortController.abort();
+              console.warn(`[chat] duplicate tool call streak hit ${guard.streak} (${dupNames}) at iteration ${iterations}, aborting`);
+            } else {
+              console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
             }
-          } else {
-            state.duplicateToolCallStreak = 0;
-            state.lastIterationToolCallSignature = null;
-          }
-
-          // Guard against runaway tool loops
-          if (iterations >= MAX_ITERATIONS) {
-            console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
             res.write(`event: warning\ndata: ${JSON.stringify({
-              type: "iteration_limit",
-              message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
+              type: guard.stop.reason,
+              message: guard.stop.warning,
             })}\n\n`);
             turnAbortController.abort();
           }
@@ -2695,28 +2662,30 @@ async function handleChatStream(
             stopReason === "toolUse" &&
             !state.needsMidTurnCompaction &&
             !hitContextLimit &&
-            !turnAbortController.signal.aborted
+            !turnAbortController.signal.aborted &&
+            observation.estimate
           ) {
+            const obs = observation.estimate;
             state.pendingTokenEstimateObservation = {
               sourceIteration: iterations,
               sourceStopReason: stopReason,
-              estimatedInputTokens: estimatedTokens,
-              displayEstimatedInputTokens: displayEstimatedTokens,
-              hardCapInputTokens: hardCapEstimatedTokens,
-              approximateTokens,
-              approximateDisplayTokens,
-              approximateHardCapTokens,
-              exactToolResultCount,
-              exactDelta,
-              signedExactDelta,
-              selectedEstimatePath,
-              displayEstimatePath,
-              pathAEstimateTokens,
-              pathBEstimateTokens,
-              lastUsageInputTokens,
-              lastUsageOutputTokens,
-              lastUsageTotalTokens,
-              postUsageAdditionalTokens,
+              estimatedInputTokens: obs.estimatedTokens,
+              displayEstimatedInputTokens: obs.refinedTokens,
+              hardCapInputTokens: obs.hardCapTokens,
+              approximateTokens: obs.approximateTokens,
+              approximateDisplayTokens: obs.approximateDisplayTokens,
+              approximateHardCapTokens: obs.approximateHardCapTokens,
+              exactToolResultCount: obs.exactToolResultCount,
+              exactDelta: obs.exactDelta,
+              signedExactDelta: obs.signedExactDelta,
+              selectedEstimatePath: obs.contextBreakdown.selectedPath,
+              displayEstimatePath: obs.contextBreakdown.displayPath,
+              pathAEstimateTokens: obs.contextBreakdown.pathATokens,
+              pathBEstimateTokens: obs.contextBreakdown.pathBTokens,
+              lastUsageInputTokens: obs.contextBreakdown.lastUsageInput,
+              lastUsageOutputTokens: obs.contextBreakdown.lastUsageOutput,
+              lastUsageTotalTokens: obs.contextBreakdown.lastUsageTotal,
+              postUsageAdditionalTokens: obs.contextBreakdown.postUsageAdditionalTokens,
               contextWindow: effectiveCWForCheck,
               toolCallCount: state.allToolCalls.length,
               toolResultCount: state.allToolResults.length,
@@ -2746,7 +2715,7 @@ async function handleChatStream(
             if (persistedTurnMsg) {
               res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedTurnMsg, continues: true })}\n\n`);
             }
-            console.log(`[chat] iteration ${iterations}: saved progress (${persistedTurnMsg?.toolCalls?.length || 0} tools, ${persistedTurnMsg?.content.length || 0}ch, est ${estimatedTokens} tokens)`);
+            console.log(`[chat] iteration ${iterations}: saved progress (${persistedTurnMsg?.toolCalls?.length || 0} tools, ${persistedTurnMsg?.content.length || 0}ch, est ${pressure.estimatedTokens} tokens)`);
             if (!turnAbortController.signal.aborted && !state.needsMidTurnCompaction) {
               passiveRecall?.schedule({
                 iteration: iterations,
@@ -3429,22 +3398,20 @@ async function handleChatStream(
           // estimate. The exact-token path self-gates (candidates only at
           // >=70% of window or >=16k-char results, max 12), so a small
           // turn costs no extra HTTP.
-          let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
-          if (inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
-            const exactEstimate = await estimateContextTokensWithExactToolResults(
-              chat.messages,
-              systemPrompt,
-              agentTools,
-              {
-                baseUrl: piModel.baseUrl,
-                modelId: piModel.id,
-                chatId: chat.id,
-                phase: "end_of_turn",
-                contextWindow: effectiveContextWindow,
-              },
-            );
-            estimatedTokens = exactEstimate.estimatedTokens;
-          }
+          // Unified pressure estimate (turn-engine phase 1) — same numbers:
+          // exact tokenization of large tool results when the llamacpp
+          // capability is present, the breakdown base otherwise.
+          const pressure = await estimateContextPressure({
+            messages: chat.messages,
+            systemPrompt,
+            tools: agentTools,
+            contextWindow: effectiveContextWindow,
+            exact:
+              inferenceModel?.provider === "llamacpp" && piModel.baseUrl
+                ? { baseUrl: piModel.baseUrl, modelId: piModel.id, chatId: chat.id, phase: "end_of_turn" }
+                : undefined,
+          });
+          const estimatedTokens = pressure.estimatedTokens;
 
           // Either signal can drive the trigger (conservative max, never
           // min), against the earlier end-of-turn threshold (0.80 vs
