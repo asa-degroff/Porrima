@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
+import type { Artifact, ChatMessage, ChatToolCall, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
 import {
   enqueueMessage,
@@ -1084,23 +1084,74 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             }
           }
         }
+        // Reset streaming accumulators for the next response
+        const resetAccumulators = () => {
+          bg.content = "";
+          bg.thinking = "";
+          bg.thinkingActive = false;
+          bg.thinkingAccumulatedMs = 0;
+          bg.thinkingLastStart = 0;
+          bg.tools = [];
+          bg.artifacts = [];
+          bg.visuals = [];
+          bg.generatedImages = [];
+          bg.segments = [];
+          bg.seqCounter = 0;
+          bg.inferenceActivityPhase = meta?.continues ? "prefill" : null;
+        };
+        const syncResetToReact = () => {
+          streamingContentRef.current = "";
+          setStreamingThinking("");
+          setStreamingThinkingActive(false);
+          setStreamingThinkingAccumulatedMs(0);
+          streamingThinkingLastStartRef.current = 0;
+          setActiveTools([]);
+          setArtifacts([]);
+          setGeneratedImages([]);
+          setInferenceActivityPhase(bg.inferenceActivityPhase);
+        };
+
+        // Replay-safe: reconnect buffer replay re-delivers message_complete
+        // for fragments the server already committed — and tryReconnect's
+        // seed fetch already carries them as rows. Merging into the live
+        // placeholder and appending a fresh one would keep the seeded rows,
+        // duplicating every committed fragment of the turn. All duplicates
+        // share the turn's _toolLoopId, so buildDisplayMessages would merge
+        // them into one bubble re-rendered (and markdown-reparsed) every
+        // frame — the lag seen on resumed streams. Detect the replayed
+        // duplicate by fragment identity (tool-call ids, unique per model
+        // call; content+timestamp fallback for fragments without tools) and
+        // skip it: the seeded row already occupies the slot, and subsequent
+        // replayed/live deltas stream into the existing last row.
+        if (matchedIdx >= 0) {
+          const completedIds: string[] | undefined = message?.toolCalls?.map((tc: ChatToolCall) => tc.id);
+          let replayedDuplicateIdx = -1;
+          for (let i = matchedIdx - 1; i >= 0; i--) {
+            const row = msgs[i];
+            if (row.role !== "assistant") continue;
+            if (completedIds?.length) {
+              const rowIds = row.toolCalls?.map((tc) => tc.id);
+              if (rowIds?.length === completedIds.length && rowIds.every((id, k) => id === completedIds[k])) {
+                replayedDuplicateIdx = i;
+                break;
+              }
+            } else if (message?.content && row.content === message.content && row.timestamp === message.timestamp) {
+              replayedDuplicateIdx = i;
+              break;
+            }
+          }
+          if (replayedDuplicateIdx >= 0) {
+            resetAccumulators();
+            if (activeChatIdRef.current === streamChatId) syncResetToReact();
+            return;
+          }
+        }
+
         if (matchedIdx >= 0) {
           msgs[matchedIdx] = { ...msgs[matchedIdx], ...message };
         }
 
-        // Reset streaming accumulators for the next response
-        bg.content = "";
-        bg.thinking = "";
-        bg.thinkingActive = false;
-        bg.thinkingAccumulatedMs = 0;
-        bg.thinkingLastStart = 0;
-        bg.tools = [];
-        bg.artifacts = [];
-        bg.visuals = [];
-        bg.generatedImages = [];
-        bg.segments = [];
-        bg.seqCounter = 0;
-        bg.inferenceActivityPhase = meta?.continues ? "prefill" : null;
+        resetAccumulators();
 
         if (meta?.continues) {
           const placeholder: ChatMessage = {
@@ -1113,15 +1164,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         }
 
         if (activeChatIdRef.current === streamChatId) {
-          streamingContentRef.current = "";
-          setStreamingThinking("");
-          setStreamingThinkingActive(false);
-          setStreamingThinkingAccumulatedMs(0);
-          streamingThinkingLastStartRef.current = 0;
-          setActiveTools([]);
-          setArtifacts([]);
-          setGeneratedImages([]);
-          setInferenceActivityPhase(bg.inferenceActivityPhase);
+          syncResetToReact();
           setMessages([...bg.messages]);
         }
       },
@@ -1270,7 +1313,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
                 // Server stream ended naturally before we reattached. Pull the
                 // authoritative persisted messages so the UI catches up instead
                 // of waiting for a chat switch or full reload.
-                const chat = await apiFetchChat(streamChatId);
+                const chat = await apiFetchChat(streamChatId, { messageLimit: MESSAGE_PAGE_SIZE });
                 if (chat && bgStreams.get(streamChatId) === bg) {
                   setActiveChatData(chat);
                   bg.messages = cloneMessages(chat.messages);
@@ -1456,7 +1499,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     console.log(`[chat] reconnecting to in-flight stream for ${chatIdToConnect} (${status.bufferedChunks} buffered chunks)`);
     let serverChat: Chat | null = null;
     try {
-      serverChat = await apiFetchChat(chatIdToConnect);
+      // Windowed like the normal chat load — a full-history fetch here would
+      // render the entire chat and reconcile it on every streaming frame.
+      serverChat = await apiFetchChat(chatIdToConnect, { messageLimit: MESSAGE_PAGE_SIZE });
     } catch {
       serverChat = activeChatRef.current?.id === chatIdToConnect ? activeChatRef.current : null;
     }
@@ -1469,6 +1514,8 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     bgStreams.set(chatIdToConnect, bg);
     prepareStream();
     setMessages([...bg.messages]);
+    setMessageOffset(bg.messageOffset);
+    setMessageTotal(Math.max(bg.messageTotal, bg.messageOffset + bg.messages.length));
     setStreaming(true);
     setError(null);
     if (serverChat) setActiveChatData(serverChat);
@@ -1480,7 +1527,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         // Sync authoritative persisted state instead of leaving a stuck
         // streaming placeholder until the next poll or chat switch.
         if (bgStreams.get(chatIdToConnect) !== bg || bg.doneCalled) return;
-        apiFetchChat(chatIdToConnect)
+        apiFetchChat(chatIdToConnect, { messageLimit: MESSAGE_PAGE_SIZE })
           .then((chat) => {
             if (bgStreams.get(chatIdToConnect) !== bg || bg.doneCalled) return;
             if (chat) {
