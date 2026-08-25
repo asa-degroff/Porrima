@@ -141,6 +141,9 @@ export interface TurnResyncPayload {
   /** True when the turn is mid-thinking at snapshot time, so the client
    *  restarts its thinking timer instead of freezing the duration. */
   thinkingActive?: boolean;
+  /** Turn-gate queue position — present while this chat's turn is queued
+   *  behind another (single GPU slot). */
+  queue?: { activeChatId: string | null; position: number; queuedCount: number };
 }
 
 export interface Chat {

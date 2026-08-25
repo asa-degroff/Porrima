@@ -1,11 +1,12 @@
 import type {
+  Artifact,
   ChatMessage,
   ChatToolCall,
   ChatToolResult,
-  Artifact,
   GeneratedImage,
   InlineVisual,
   MessageUsage,
+  TurnResyncPayload,
 } from "../types.js";
 import {
   type LiveStream,
@@ -56,6 +57,8 @@ export class SynthesisEmitter {
   readonly stream: LiveStream;
   readonly state: SynthesisStreamState;
   private keepaliveInterval: NodeJS.Timeout | null = null;
+  /** Last emitted iteration event — resync snapshot for the token indicator. */
+  private lastIteration: TurnResyncPayload["iteration"] | null = null;
 
   constructor(chatId: string) {
     this.stream = installHeadlessLiveStream(chatId);
@@ -72,6 +75,10 @@ export class SynthesisEmitter {
       pendingText: "",
       finalUsage: undefined,
     };
+    // Resync on attach: headless runs persist nothing until the end, so the
+    // whole accumulated state IS the uncommitted tail — a client attaching
+    // via /reconnect hydrates from this snapshot.
+    this.stream.buildResync = () => this.buildResyncPayload();
     // Emit a connected comment so reconnecting clients see something on
     // attach. Matches the regular chat ensureSSEStream behavior.
     this.write(`: connected\n\n`);
@@ -210,6 +217,13 @@ export class SynthesisEmitter {
     usage?: MessageUsage;
     estimatedTokens?: number;
   }): void {
+    this.lastIteration = {
+      iteration: info.iteration,
+      stopReason: info.stopReason ?? "stop",
+      toolCount: info.toolCount ?? 0,
+      usage: info.usage,
+      estimatedTokens: info.estimatedTokens,
+    };
     this.writeEvent("iteration", info);
   }
 
@@ -279,6 +293,50 @@ export class SynthesisEmitter {
     if (usage.totalTokens > 0) {
       this.state.finalUsage = usage;
     }
+  }
+
+  /**
+   * Resync snapshot for clients attaching via /chat/reconnect. Headless runs
+   * persist nothing until the end, so the entire accumulated state is the
+   * uncommitted tail. Non-mutating: reads pendingText instead of flushing it
+   * so the live segment stream keeps its boundaries. Installed on the
+   * LiveStream in the constructor.
+   */
+  private buildResyncPayload(): TurnResyncPayload {
+    const s = this.state;
+    const segments: OutputSegment[] = s.segments.map((seg) => ({ ...seg }));
+    if (s.pendingText.trim()) {
+      segments.push({ seq: s.seqCounter + 1, type: "text", content: s.pendingText });
+    }
+    const hasActivity =
+      !!s.fullText ||
+      !!s.thinkingText ||
+      s.toolCalls.length > 0 ||
+      s.artifacts.length > 0 ||
+      s.visuals.length > 0 ||
+      s.generatedImages.length > 0 ||
+      segments.length > 0;
+    const message: ChatMessage | null = hasActivity
+      ? {
+          role: "assistant",
+          content: s.fullText,
+          thinking: s.thinkingText || undefined,
+          usage: s.finalUsage,
+          toolCalls: s.toolCalls.length > 0 ? s.toolCalls : undefined,
+          toolResults: s.toolResults.length > 0 ? s.toolResults : undefined,
+          artifacts: s.artifacts.length > 0 ? s.artifacts : undefined,
+          visuals: s.visuals.length > 0 ? s.visuals : undefined,
+          generatedImages: s.generatedImages.length > 0 ? s.generatedImages : undefined,
+          segments: segments.length > 0 ? segments : undefined,
+          timestamp: Date.now(),
+          _isSystemMessage: true,
+        }
+      : null;
+    return {
+      message,
+      iteration: this.lastIteration ? { ...this.lastIteration } : undefined,
+      modelProgress: null,
+    };
   }
 
   /**

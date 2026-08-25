@@ -191,6 +191,8 @@ export interface TurnResyncPayload {
   compacting?: boolean;
   /** True when the turn is mid-thinking at snapshot time. */
   thinkingActive?: boolean;
+  /** Turn-gate queue position — present while this chat's turn is queued. */
+  queue?: { activeChatId: string | null; position: number; queuedCount: number };
 }
 
 export interface Chat {

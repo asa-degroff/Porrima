@@ -286,9 +286,13 @@ export interface StreamCallbacks {
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
   onWaiting?: (info: { activeChatId: string | null; position: number; queuedCount: number }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
-  /** State snapshot delivered instead of a buffer replay when attaching to an
-   *  in-flight stream — hydrates live state from the server's accumulators. */
+  /** State snapshot delivered when attaching to an in-flight stream — the
+   *  turn's uncommitted tail, built from the server's live accumulators.
+   *  Hydrates client state on reconnect. */
   onResync?: (payload: import("../types").TurnResyncPayload) => void;
+  /** The server deduped this POST onto an already-running turn — the client
+   *  should drop its optimistic state and reattach via the reconnect flow. */
+  onReattach?: (info: { chatId: string }) => void;
   onAudioChunk?: (chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number }) => void;
   onAudioDone?: () => void;
   onAudioError?: (error: string) => void;
@@ -341,7 +345,7 @@ async function readSSEBody(
     if (line.startsWith("data: ")) {
       try {
         const data = JSON.parse(line.slice(6));
-        if (currentEvent === "done" || currentEvent === "error") {
+        if (currentEvent === "done" || currentEvent === "error" || currentEvent === "reattach") {
           receivedDoneOrError = true;
           if (inactivityTimer) {
             clearTimeout(inactivityTimer);
@@ -487,26 +491,26 @@ export function streamArtifactErrorRepair(
  */
 export async function getChatStatus(
   chatId: string
-): Promise<{ active: boolean; bufferedChunks: number; subscribers: number; reachable: boolean }> {
+): Promise<{ active: boolean; subscribers: number; reachable: boolean }> {
   try {
     const res = await apiFetch(`${BASE}/chat/status/${encodeURIComponent(chatId)}`);
-    if (!res.ok) return { active: false, bufferedChunks: 0, subscribers: 0, reachable: true };
+    if (!res.ok) return { active: false, subscribers: 0, reachable: true };
     const data = await res.json();
     return {
       active: Boolean(data.active),
-      bufferedChunks: Number(data.bufferedChunks ?? 0),
       subscribers: Number(data.subscribers ?? 0),
       reachable: true,
     };
   } catch {
-    return { active: false, bufferedChunks: 0, subscribers: 0, reachable: false };
+    return { active: false, subscribers: 0, reachable: false };
   }
 }
 
 /**
  * Attach to a server-side in-flight stream via the reconnect endpoint. The
- * server replays buffered SSE events then streams live events until the turn
- * ends. Returns the AbortController the caller can use to disconnect early.
+ * server sends a resync snapshot of the turn's uncommitted tail (built from
+ * its live accumulators), then streams live events until the turn ends.
+ * Returns the AbortController the caller can use to disconnect early.
  *
  * 404 responses (no active stream) are silent — the caller should check
  * getChatStatus first, but races are expected. Pass onNoActiveStream to be
@@ -515,12 +519,11 @@ export async function getChatStatus(
 export function reconnectChat(
   chatId: string,
   callbacks: StreamCallbacks,
-  options?: { replay?: boolean; onNoActiveStream?: () => void }
+  options?: { onNoActiveStream?: () => void }
 ): AbortController {
   const controller = new AbortController();
-  const replayParam = options?.replay === false ? "?replay=0" : "";
 
-  fetch(appendDeviceIdQuery(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}${replayParam}`), {
+  fetch(appendDeviceIdQuery(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}`), {
     method: "GET",
     signal: controller.signal,
     credentials: "include",
@@ -696,6 +699,9 @@ function processSSEEvent(
       break;
     case "resync":
       callbacks.onResync?.(data);
+      break;
+    case "reattach":
+      callbacks.onReattach?.(data);
       break;
     case "audio_chunk":
       callbacks.onAudioChunk?.(data);

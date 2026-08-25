@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, ChatToolCall, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
 import {
   enqueueMessage,
@@ -222,26 +222,34 @@ function withLiveAssistant(messages: ChatMessage[], bg: BackgroundStream): ChatM
 
 /**
  * Seed messages for a reconnect attach. Unlike withLiveAssistant (which
- * merges the live placeholder into the last assistant row), this keeps a
- * committed tool-loop fragment's row intact: mid-turn rows are committed
- * per toolUse iteration, so the last row is usually a COMPLETE fragment,
- * not the in-flight one — the uncommitted tail belongs on a fresh row
- * after it (the live stream would have it that way too: message_complete
+ * merges the live placeholder into the last assistant row), this keeps any
+ * COMPLETE assistant row intact: mid-turn rows are committed per toolUse
+ * iteration (tool loops) or not at all until turn end (headless runs, whose
+ * last row is the PREVIOUS turn's message), so the last row is normally a
+ * finished row, not the in-flight one — the uncommitted tail belongs on a
+ * fresh row after it (the live stream has it that way too: message_complete
  * appends a placeholder per commit). Only an _inProgress partial row (a
- * self-modifying-tool checkpoint) IS the in-flight row and gets merged.
- * Merging into a committed fragment instead would let the next
- * message_complete overwrite the fragment's data in place.
+ * self-modifying-tool checkpoint) — or an empty row with nothing to
+ * preserve — IS the in-flight row and gets merged. Merging into a complete
+ * row instead would let the next message_complete overwrite the row's data
+ * in place, and would blank the previous turn's message in system chats.
  */
 function withLiveAssistantForReconnect(messages: ChatMessage[], bg: BackgroundStream): ChatMessage[] {
   const last = messages[messages.length - 1];
-  const lastIsCommittedFragment =
+  const lastIsInFlightRow =
     last?.role === "assistant" &&
     !last._isCompactionSummary &&
-    !last._inProgress &&
-    !!last.toolCalls?.length;
-  if (lastIsCommittedFragment) {
+    (last._inProgress ||
+      (!last.content &&
+        !last.thinking &&
+        !last.toolCalls?.length &&
+        !last.segments?.length &&
+        !last.artifacts?.length &&
+        !last.generatedImages?.length &&
+        !last.visuals?.length));
+  if (last?.role === "assistant" && !last._isCompactionSummary && !lastIsInFlightRow) {
     const placeholder = makeAssistantPlaceholder(bg);
-    placeholder._toolLoopId = last!._toolLoopId;
+    placeholder._toolLoopId = last._toolLoopId;
     return [...cloneMessages(messages), placeholder];
   }
   return withLiveAssistant(messages, bg);
@@ -308,6 +316,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   const rafRef = useRef<number | null>(null);
   const reportedArtifactRepairRef = useRef<Set<string>>(new Set());
   const activeChatRef = useRef<Chat | null>(null);
+  // Lets stream callbacks built before tryReconnect (makeStreamCallbacks)
+  // route the duplicate-POST `reattach` event through the reconnect flow.
+  const tryReconnectRef = useRef<((chatId: string) => Promise<void | (() => void)>) | null>(null);
   const messageOffsetRef = useRef(0);
   const messageTotalRef = useRef(0);
   const olderMessagesLoadingRef = useRef(false);
@@ -568,9 +579,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onGeneratedImage: (image) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
-        // Replay-safe: generation ids are unique — drop re-delivered events
-        // from reconnect buffer replay instead of duplicating the segment.
-        if (bg.generatedImages.some((img) => img.id === image.id)) return;
         bg.generatedImages.push(image);
 
         // Add generated image segment
@@ -590,9 +598,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onVisual: (visual) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
-        // Replay-safe upsert — same id+version contract as onArtifact above.
-        const existingIdx = bg.visuals.findIndex((v) => v.id === visual.id);
-        if (existingIdx >= 0 && (bg.visuals[existingIdx].version ?? 1) === (visual.version ?? 1)) return;
         bg.visuals.push(visual);
 
         // Add visual segment
@@ -618,9 +623,8 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         // Safety net for turn ends that produced no `iteration` event
         // (error/abort paths) — guarantees a final stats re-fetch.
         setModelStatsVersion((v) => v + 1);
-        // A finished turn is never still compacting. Clears the header state
-        // even when the `compaction` event was lost (SSE drop during a long
-        // compaction window + silent reconnect skips buffered events).
+        // A finished turn is never still compacting — clear the header state
+        // even if a `compaction` event never arrived.
         bg.compacting = false;
         bg.compaction = null;
         if (bg.queueInfo) {
@@ -628,9 +632,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
         }
 
-        // The persisted server row is authoritative. This also corrects any
-        // live-only over-append caused by reconnect replay before the user has
-        // to refresh the page.
+        // The persisted server row is authoritative for the final content.
         const finalContent =
           typeof serverContent === "string"
             ? serverContent
@@ -805,19 +807,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           if (activeChatIdRef.current === streamChatId) setCompacting(false);
         }
 
-        // Replay-safe: reconnect buffer replay re-delivers events onto state
-        // that may already hold them. Tool calls/results have exactly one
-        // segment per id, so a repeat is always a duplicate.
-        const isDuplicateToolCall =
-          segment.type === "tool_call" &&
-          !!segment.toolCall &&
-          bg.segments.some((s) => s.type === "tool_call" && s.toolCall?.id === segment.toolCall!.id);
-        const isDuplicateToolResult =
-          segment.type === "tool_result" &&
-          !!segment.toolResult &&
-          bg.segments.some((s) => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolResult!.toolCallId);
-        if (isDuplicateToolCall || isDuplicateToolResult) return;
-
         // For tool_result, insert immediately after its matching tool_call
         // so visual/artifact segments stay in the right position
         if (segment.type === "tool_result" && segment.toolResult) {
@@ -866,11 +855,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onArtifact: (artifact) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
-        // Replay-safe upsert: update_artifact re-emits the same id with a
-        // newer version, so only skip when this exact id+version already
-        // arrived (buffer replay duplicate); newer versions flow through.
-        const existingIdx = bg.artifacts.findIndex((a) => a.id === artifact.id);
-        if (existingIdx >= 0 && (bg.artifacts[existingIdx].version ?? 1) === (artifact.version ?? 1)) return;
         bg.artifacts.push(artifact);
 
         // Add artifact segment
@@ -923,11 +907,13 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setInferenceActivityPhase(bg.inferenceActivityPhase);
         }
       },
-      // State snapshot delivered instead of a buffer replay when attaching to
-      // an in-flight stream (refresh-reconnect, silent reconnect). Replaces
-      // the accumulators with the server's authoritative uncommitted tail —
-      // exactly what a full replay would converge to, minus the reprocessing
-      // and the dedupe-against-seeded-rows the replay design needed.
+      // State snapshot delivered when attaching to an in-flight stream
+      // (refresh-reconnect, silent reconnect, duplicate-send reattach). The
+      // server builds it from the turn's live accumulators; the client
+      // replaces its own accumulators wholesale with that authoritative
+      // uncommitted tail. Replaces the retired buffer-replay design, which
+      // reprocessed the whole event history and deduped it against the
+      // persisted rows the client had just fetched.
       onResync: (payload) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
@@ -953,8 +939,8 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         bg.thinkingLastStart = bg.thinkingActive ? Date.now() : 0;
 
         // Phase mapping mirrors onModelProgress: a fragment that already has
-        // output is mid-decode by definition (replay clears modelProgress on
-        // the first delta), so a stale prefill snapshot never applies to it.
+        // output is mid-decode by definition (the first delta clears
+        // modelProgress live), so a stale prefill snapshot never applies.
         if (msg) {
           bg.modelProgress = null;
           bg.inferenceActivityPhase = "decode";
@@ -972,25 +958,27 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         // event would otherwise keep the indicator stuck).
         bg.compacting = !!payload?.compacting;
         bg.waitingForInput = !!payload?.waitingForInput;
+        bg.queueInfo = payload?.queue ?? null;
 
-        // Fold the uncommitted tail into the live row. A seeded committed
-        // fragment keeps its identity; a fresh placeholder gets the turn's
+        // Fold the uncommitted tail into the live row. A complete persisted
+        // row keeps its identity; a fresh placeholder gets the turn's
         // tool-loop id so buildDisplayMessages grouping stays contiguous.
         const last = bg.messages[bg.messages.length - 1];
-        const lastIsCommittedFragment =
+        const lastIsCompleteRow =
           last?.role === "assistant" &&
           !last._inProgress &&
           !last._steeringPending &&
-          !!last.toolCalls?.length;
-        if (lastIsCommittedFragment) {
+          (!!last.toolCalls?.length || !!last.content || !!last.segments?.length);
+        if (lastIsCompleteRow) {
           // Defensive: seeding normally appends a placeholder after a
-          // committed fragment, but never overwrite a complete row in place.
+          // complete row, but never overwrite a finished row in place.
           bg.messages = [...bg.messages, {
             role: "assistant",
             content: bg.content,
             timestamp: Date.now(),
             segments: bg.segments.length ? bg.segments.map((s) => ({ ...s })) : undefined,
             _toolLoopId: msg?._toolLoopId,
+            _isSystemMessage: msg?._isSystemMessage,
           }];
         } else if (last?.role === "assistant" && !last._steeringPending) {
           bg.messages[bg.messages.length - 1] = {
@@ -999,12 +987,13 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             segments: bg.segments.length ? bg.segments.map((s) => ({ ...s })) : undefined,
             _toolLoopId: last._toolLoopId ?? msg?._toolLoopId,
             _toolLoopFragment: last._toolLoopFragment ?? msg?._toolLoopFragment,
+            _isSystemMessage: last._isSystemMessage ?? msg?._isSystemMessage,
           };
         }
         streamingContentRef.current = bg.content;
 
         // Token-indicator state: route the snapshot through the same handler
-        // a replayed iteration event would hit.
+        // a live iteration event would hit.
         if (payload?.iteration) callbacks.onIteration?.(payload.iteration);
 
         if (activeChatIdRef.current === streamChatId) {
@@ -1019,6 +1008,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setInferenceActivityPhase(bg.inferenceActivityPhase);
           setCompacting(bg.compacting);
           setWaitingForInput(bg.waitingForInput);
+          setTurnQueueInfo(bg.queueInfo);
           const lastIdx = bg.segments.length - 1;
           const lastType = lastIdx >= 0 ? bg.segments[lastIdx].type : null;
           setStreamingSegmentIndex(
@@ -1026,6 +1016,41 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           );
           setMessages([...bg.messages]);
         }
+      },
+      // The server deduped this POST onto an already-running turn (a retried
+      // send). Our optimistic rows are not a usable baseline — the turn's
+      // committed fragments are missing — so drop the stream state and attach
+      // through the reconnect flow: seed persisted rows, hydrate via resync.
+      onReattach: () => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg || bg.doneCalled) return;
+        bgStreams.delete(streamChatId);
+        if (activeChatIdRef.current === streamChatId) setReconnecting(true);
+        void (async () => {
+          try {
+            const cleanup = await tryReconnectRef.current?.(streamChatId);
+            if (cleanup) cleanup();
+            // Nothing attached (turn ended or server unreachable in the race):
+            // sync persisted state and stand down instead of spinning forever.
+            if (!bgStreams.has(streamChatId) && activeChatIdRef.current === streamChatId) {
+              const chat = await apiFetchChat(streamChatId, { messageLimit: MESSAGE_PAGE_SIZE }).catch(() => null);
+              if (chat && activeChatIdRef.current === streamChatId) {
+                setActiveChatData(chat);
+                loadMessages(chat.messages, {
+                  offset: chat.messageOffset ?? 0,
+                  total: chat.messageTotal ?? chat.messages.length,
+                });
+              }
+              setStreaming(false);
+              setModelProgress(null);
+              setInferenceActivityPhase(null);
+              setCompacting(false);
+              setCompaction(null);
+            }
+          } finally {
+            if (activeChatIdRef.current === streamChatId) setReconnecting(false);
+          }
+        })();
       },
       onWarning: (w) => {
         console.warn(`[chat] warning: ${w.type} — ${w.message}`);
@@ -1243,53 +1268,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setInferenceActivityPhase(bg.inferenceActivityPhase);
         };
 
-        // Replay-safe: reconnect buffer replay re-delivers message_complete
-        // for fragments the server already committed — and tryReconnect's
-        // seed fetch already carries them as rows. Merging into the live
-        // placeholder and appending a fresh one would keep the seeded rows,
-        // duplicating every committed fragment of the turn. All duplicates
-        // share the turn's _toolLoopId, so buildDisplayMessages would merge
-        // them into one bubble re-rendered (and markdown-reparsed) every
-        // frame — the lag seen on resumed streams. Detect the replayed
-        // duplicate by fragment identity (tool-call ids, unique per model
-        // call; content+timestamp fallback for fragments without tools) and
-        // skip it: the seeded row already occupies the slot, and subsequent
-        // replayed/live deltas stream into the existing last row.
-        if (matchedIdx >= 0) {
-          const completedIds: string[] | undefined = message?.toolCalls?.map((tc: ChatToolCall) => tc.id);
-          let replayedDuplicateIdx = -1;
-          for (let i = matchedIdx - 1; i >= 0; i--) {
-            const row = msgs[i];
-            if (row.role !== "assistant") continue;
-            if (completedIds?.length) {
-              const rowIds = row.toolCalls?.map((tc) => tc.id);
-              if (rowIds?.length === completedIds.length && rowIds.every((id, k) => id === completedIds[k])) {
-                replayedDuplicateIdx = i;
-                break;
-              }
-            } else if (message?.content && row.content === message.content && row.timestamp === message.timestamp) {
-              replayedDuplicateIdx = i;
-              break;
-            }
-          }
-          if (replayedDuplicateIdx >= 0) {
-            resetAccumulators();
-            // The skipped fragment's replayed deltas already wrote their
-            // content onto the live row (onDelta targets the last row) — wipe
-            // it so the row doesn't display a stale copy of the seeded
-            // fragment until the next live delta overwrites it.
-            const liveRow = msgs[msgs.length - 1];
-            if (liveRow?.role === "assistant" && !liveRow._steeringPending && liveRow.content) {
-              msgs[msgs.length - 1] = { ...liveRow, content: "", segments: undefined };
-            }
-            if (activeChatIdRef.current === streamChatId) {
-              syncResetToReact();
-              setMessages([...msgs]);
-            }
-            return;
-          }
-        }
-
         if (matchedIdx >= 0) {
           msgs[matchedIdx] = { ...msgs[matchedIdx], ...message };
         }
@@ -1487,13 +1465,13 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
               // Reconnect to the live server stream
               bg.abortController?.abort();
               const callbacks = makeStreamCallbacks(streamChatId);
-              bg.abortController = reconnectChat(streamChatId, callbacks, { replay: false });
+              bg.abortController = reconnectChat(streamChatId, callbacks);
               abortRef.current = bg.abortController;
               if (activeChatIdRef.current === streamChatId) {
                 setError(null);
                 setReconnecting(false);
               }
-              console.log(`[chat] silently reconnected to ${streamChatId} (${status.bufferedChunks} buffered chunks)`);
+              console.log(`[chat] silently reconnected to ${streamChatId} (resync snapshot)`);
             } catch (_reconnectErr) {
               // Reconnect failed — clear the indicator and let the user know.
               // The message is already persisted on the server.
@@ -1641,7 +1619,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     if (chatIdToConnect !== activeChatIdRef.current) return;
     if (bgStreams.has(chatIdToConnect)) return;
 
-    console.log(`[chat] reconnecting to in-flight stream for ${chatIdToConnect} (${status.bufferedChunks} buffered chunks)`);
+    console.log(`[chat] reconnecting to in-flight stream for ${chatIdToConnect} (resync snapshot)`);
     let serverChat: Chat | null = null;
     try {
       // Windowed like the normal chat load — a full-history fetch here would
@@ -1714,6 +1692,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
 
     return () => { cancelled = true; };
   }, [prepareStream, makeStreamCallbacks, setActiveChatData]);
+  tryReconnectRef.current = tryReconnect;
 
   // ---------- Stale-content detection ----------
   // Track which chats have recently been streaming so we can skip the
@@ -1789,7 +1768,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         if (activeChatId !== activeChatIdRef.current) return;
         if (bgStreams.has(activeChatId)) return;
 
-        console.log(`[chat] reconnecting on visibility change for ${activeChatId} (${status.bufferedChunks} buffered chunks)`);
+        console.log(`[chat] reconnecting on visibility change for ${activeChatId} (resync snapshot)`);
         const cleanup = await tryReconnect(activeChatId);
         if (cleanup) cleanup();
       })();

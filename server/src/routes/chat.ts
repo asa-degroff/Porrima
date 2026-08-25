@@ -419,13 +419,7 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.write(`: connected\n\n`);
 }
 
-function attachToLiveStreamResponse(
-  req: Request,
-  res: Response,
-  stream: LiveStream,
-  label: string,
-  opts: { resync?: boolean; replay?: boolean } = {}
-) {
+function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -439,10 +433,9 @@ function attachToLiveStreamResponse(
   // a push notification when that turn completes.
   stampStreamPresence(req);
 
-  // Resync snapshot first (when the owner installs a builder); buffer replay
-  // only as fallback. See buildAttachFrames — the duplicate-attach path opts
-  // out of resync because its client has no persisted-row baseline.
-  for (const frame of buildAttachFrames(stream, opts)) {
+  // Resync snapshot from the stream owner's live accumulators — the client
+  // hydrates from authoritative state instead of reprocessing event history.
+  for (const frame of buildAttachFrames(stream)) {
     try { res.write(frame); } catch { return; }
   }
 
@@ -920,7 +913,17 @@ async function acquireTurnGate(
   ensureSSEStream(res, req, chat.id);
   const stream = liveStreams.get(chat.id)!;
 
+  // Resync while queued: a client attaching to this stream before the lease
+  // is acquired sees the current queue position. The turn's builder replaces
+  // this one once handleChatStream starts.
+  let lastWaitingInfo: { activeChatId: string | null; position: number; queuedCount: number } | null = null;
+  stream.buildResync = () => ({
+    message: null,
+    queue: lastWaitingInfo ?? turnGateStatus(chat.id) ?? undefined,
+  });
+
   const emitWaiting = (info: { activeChatId: string | null; position: number; queuedCount: number }) => {
+    lastWaitingInfo = info;
     try {
       res.write(`event: waiting\ndata: ${JSON.stringify(info)}\n\n`);
     } catch {
@@ -1002,9 +1005,9 @@ async function handleChatStream(
   const liveStream = liveStreams.get(chat.id)!;
   // Resync on attach: a client connecting mid-turn (refresh, silent
   // reconnect, another device) receives a snapshot of the uncommitted tail
-  // instead of the full buffer replay. Installed here — the stream exists
-  // from ensureSSEStream above, and the builder reads the accumulators
-  // declared in this closure. Replaced wholesale by the next turn's stream.
+  // built from this closure's accumulators. Installed here — the stream
+  // exists from ensureSSEStream above. Replaced wholesale by the next
+  // turn's stream.
   liveStream.buildResync = () => buildResyncPayload();
   const connectionAbortController = liveStream.abort;
   let connectionClosed = false;
@@ -1454,11 +1457,11 @@ async function handleChatStream(
   }
 
   /**
-   * Resync snapshot for clients attaching mid-turn via /chat/reconnect —
-   * sent in place of a buffer replay. The client fetches persisted rows
-   * first (committed fragments included), so this only carries the
-   * uncommitted tail plus the indicator state a replay would have
-   * reconstructed from events. Pure read; installed on the LiveStream below.
+   * Resync snapshot for clients attaching mid-turn via /chat/reconnect. The
+   * client fetches persisted rows first (committed fragments included), so
+   * this only carries the uncommitted tail plus the indicator state the
+   * client needs to pick up seamlessly. Pure read; installed on the
+   * LiveStream below.
    */
   function buildResyncPayload(): TurnResyncPayload | null {
     const message = buildResyncMessage();
@@ -1468,7 +1471,7 @@ async function handleChatStream(
       iteration: lastIterationEvent ? { ...lastIterationEvent } : undefined,
       // Stale prefill progress would mislabel an in-progress decode — only
       // report it while nothing has been generated in the current fragment
-      // (same shape replay would leave behind: deltas clear modelProgress).
+      // (deltas clear modelProgress, so output implies decode).
       modelProgress: hasOutput ? null : lastModelProgressEvent,
       waitingForInput: waitingForInput || !!askUserRef.current || undefined,
       compacting: compactingActive || undefined,
@@ -1755,8 +1758,8 @@ async function handleChatStream(
   let hitContextLimit = false;
   // Resync snapshots for clients attaching mid-turn (see buildResyncPayload):
   // the last emitted iteration / model_progress events and whether a
-  // compaction window is currently open. Mirrors what a full buffer replay
-  // would have re-delivered, without reprocessing the history.
+  // compaction window is currently open, so an attaching client's indicators
+  // match what it would have seen live.
   let lastIterationEvent: TurnResyncPayload["iteration"] | null = null;
   let lastModelProgressEvent: ModelProgressEvent | null = null;
   let compactingActive = false;
@@ -4499,11 +4502,20 @@ router.post("/", async (req, res) => {
       console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message found in recent history within 60s`);
       const stream = liveStreams.get(chatId);
       if (stream && !stream.ended && !stream.abort.signal.aborted) {
-        console.warn(`[chat] duplicate POST for active chat ${chatId}; attaching to existing live stream`);
-        // Replay (not resync): this client retried its POST and never saw the
-        // turn's events — it has no persisted-row baseline for the committed
-        // fragments, so it needs the full history reconstructed.
-        attachToLiveStreamResponse(req, res, stream, "duplicate-attached", { resync: false, replay: true });
+        console.warn(`[chat] duplicate POST for active chat ${chatId}; redirecting client to the reconnect flow`);
+        // The retried POST never saw the turn's events and has no
+        // persisted-row baseline for the committed fragments, so a resync
+        // snapshot alone can't hydrate it. Tell the client to reattach via
+        // /reconnect: seed persisted rows first, then hydrate the
+        // uncommitted tail from the snapshot.
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        res.write(`event: reattach\ndata: ${JSON.stringify({ chatId })}\n\n`);
+        res.end();
         return;
       }
     } else {
@@ -5044,17 +5056,14 @@ router.get("/status/:chatId", async (req, res) => {
   const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
   res.json({
     active,
-    bufferedChunks: stream?.buffer.length ?? 0,
     subscribers: stream?.subscribers.size ?? 0,
   });
 });
 
-// Reconnect to a live in-flight chat stream. Prefers a resync snapshot (the
-// turn's uncommitted tail, built from live accumulators); falls back to
-// replaying buffered SSE events when the stream owner installs no builder
-// (e.g. headless synthesis streams). Streams live events until the turn
-// ends. Responds 404 if no live stream exists (caller should fall back to
-// normal chat load).
+// Reconnect to a live in-flight chat stream. Sends a resync snapshot of the
+// turn's uncommitted tail (built from the owner's live accumulators), then
+// streams live events until the turn ends. Responds 404 if no live stream
+// exists (caller should fall back to normal chat load).
 router.get("/reconnect/:chatId", async (req, res) => {
   const { chatId } = req.params;
   const stream = liveStreams.get(chatId);
@@ -5062,13 +5071,9 @@ router.get("/reconnect/:chatId", async (req, res) => {
     return res.status(404).json({ error: "no_active_stream" });
   }
 
-  // replay=0: caller wants no history (silent reconnect legacy) — resync is
-  // still allowed: it replaces history rather than repeating it.
-  const replay = req.query.replay !== "0";
-  const resynced = !!stream.buildResync;
-  attachToLiveStreamResponse(req, res, stream, "reconnected", { resync: true, replay });
+  attachToLiveStreamResponse(req, res, stream, "reconnected");
 
-  console.log(`[chat] reconnect: attached to live stream for ${chatId} (${resynced ? "resync snapshot" : `replayed ${replay ? stream.buffer.length : 0} chunks`})`);
+  console.log(`[chat] reconnect: attached to live stream for ${chatId} (resync snapshot)`);
 });
 
 // Edit message at index and regenerate response via SSE

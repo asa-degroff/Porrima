@@ -25,16 +25,16 @@ function readDeviceId(req: Request | undefined): string | null {
 // Every chat turn (and every server-internal background task that wants to
 // stream output to the system chat — synthesis, wake cycle) gets a LiveStream
 // keyed by chatId. For HTTP-driven turns, res.write() is patched to route
-// through emitToStream, which fans out to all attached subscribers AND appends
-// to a bounded replay buffer. For server-internal tasks, there's no primary
-// res — the stream starts headless, and any subscriber attaching via
-// /reconnect/:chatId picks up the buffered events and continues live.
+// through emitToStream, which fans out to all attached subscribers. For
+// server-internal tasks, there's no primary res — the stream starts headless,
+// and any subscriber attaching via /reconnect/:chatId receives a resync
+// snapshot of the owner's live accumulators and then continues live.
 //
 // Streams are never aborted just because subscribers disconnected. The model
-// keeps generating in the background; reconnects replay the buffer; the next
-// turn on the same chat replaces the stream; explicit /stop aborts via
-// activeStreams. At end-of-turn the stream is closed and kept briefly so late
-// reconnecters can see the final events.
+// keeps generating in the background; reconnects resync from the owner's
+// state; the next turn on the same chat replaces the stream; explicit /stop
+// aborts via activeStreams. At end-of-turn the stream is closed and kept
+// briefly so in-flight reconnect requests still see the stream object.
 // ---------------------------------------------------------------------------
 
 export interface LiveStreamSubscriber {
@@ -47,22 +47,18 @@ export interface LiveStreamSubscriber {
 export interface LiveStream {
   chatId: string;
   abort: AbortController;
-  /** Bounded replay buffer — chunks are SSE frames already formatted. */
-  buffer: string[];
-  bufferBytes: number;
   subscribers: Set<LiveStreamSubscriber>;
   ended: boolean;
   /** Headless streams have no primary subscriber — they outlive disconnect by design. */
   headless: boolean;
   /**
-   * State-snapshot builder installed by the stream owner. When present, an
-   * attaching client (e.g. /reconnect) is sent a single synthetic `resync`
-   * event built from the turn's live accumulators instead of a replay of the
-   * buffered event history — the client hydrates from authoritative state and
-   * never reprocesses (or dedupes) events it already has persisted rows for.
-   * Returns null when no snapshot is available; callers fall back to replay.
-   * Must be a pure read — it runs on the request path of an attaching client
-   * and must not mutate turn state.
+   * State-snapshot builder installed by the stream owner. An attaching
+   * client (e.g. /reconnect) is sent a single synthetic `resync` event built
+   * from the owner's live accumulators — it hydrates from authoritative
+   * state and never reprocesses event history. Must be a pure read: it runs
+   * on the request path of an attaching client and must not mutate turn
+   * state. Owners: handleChatStream (chat turns), SynthesisEmitter
+   * (synthesis / wake cycles / automations), acquireTurnGate (queued turns).
    */
   buildResync?: () => TurnResyncPayload | null;
 }
@@ -77,20 +73,10 @@ export const activeStreams: Map<string, AbortController> =
   (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
 (globalThis as any)._activeChatStreams = activeStreams;
 
-const LIVE_BUFFER_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap per chat
 const LIVE_END_RETENTION_MS = 60_000;
 
 export function emitToStream(stream: LiveStream, chunk: string): void {
   if (stream.ended) return;
-  // Use UTF-8 byte length, not chunk.length (UTF-16 code units): tool results
-  // and segment payloads can carry multi-byte content (CJK, emoji, escaped
-  // unicode), and the cap is denominated in bytes.
-  const byteLen = Buffer.byteLength(chunk);
-  stream.buffer.push(chunk);
-  stream.bufferBytes += byteLen;
-  while (stream.bufferBytes > LIVE_BUFFER_MAX_BYTES && stream.buffer.length > 1) {
-    stream.bufferBytes -= Buffer.byteLength(stream.buffer.shift()!);
-  }
   for (const sub of stream.subscribers) {
     if (sub.res.writableEnded || sub.res.destroyed) {
       stream.subscribers.delete(sub);
@@ -107,8 +93,9 @@ export function emitToStream(stream: LiveStream, chunk: string): void {
 export function detachSubscriber(stream: LiveStream, sub: LiveStreamSubscriber): void {
   stream.subscribers.delete(sub);
   // Streams run to completion regardless of subscriber count. The model keeps
-  // generating in the background; reconnects replay the buffer; the next turn
-  // on this chat replaces the stream; explicit /stop aborts via activeStreams.
+  // generating in the background; reconnects resync from the owner's state;
+  // the next turn on this chat replaces the stream; explicit /stop aborts
+  // via activeStreams.
 }
 
 export function endLiveStream(chatId: string): void {
@@ -119,7 +106,8 @@ export function endLiveStream(chatId: string): void {
     try { sub.res.end(); } catch {}
   }
   stream.subscribers.clear();
-  // Retain briefly so late reconnecters get the final buffer + close signal.
+  // Retain briefly so in-flight reconnect requests still find (and 404
+  // cleanly against) the stream object instead of racing its removal.
   setTimeout(() => {
     if (liveStreams.get(chatId) === stream) {
       liveStreams.delete(chatId);
@@ -137,9 +125,9 @@ export function closeLiveSSE(chatId: string, res: Response): void {
 
 /**
  * Install the live-stream plumbing on a response. Patches res.write to route
- * through emitToStream (buffer + fan-out), registers a primary subscriber,
- * and sets up grace-on-disconnect. Replaces any existing live stream for this
- * chat (fresh turn = new stream). Idempotent per response object.
+ * through emitToStream (fan-out), registers a primary subscriber, and sets up
+ * grace-on-disconnect. Replaces any existing live stream for this chat
+ * (fresh turn = new stream). Idempotent per response object.
  */
 export function installLiveStream(res: Response, _req: Request, chatId: string): LiveStream {
   if ((res as any)._liveStreamInstalled) {
@@ -166,8 +154,6 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
   const stream: LiveStream = {
     chatId,
     abort,
-    buffer: [],
-    bufferBytes: 0,
     subscribers: new Set(),
     ended: false,
     headless: false,
@@ -179,7 +165,7 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
   stream.subscribers.add(primarySub);
 
   // Patch res.write to route everything through the stream. Callers keep
-  // writing to res as before; we fan out + buffer transparently.
+  // writing to res as before; we fan out to subscribers transparently.
   (res as any).write = ((chunk: any, encoding?: any, cb?: any) => {
     const str = typeof chunk === "string" ? chunk : chunk?.toString?.() ?? "";
     emitToStream(stream, str);
@@ -214,9 +200,10 @@ export function stampStreamPresence(req: Request): void {
 
 /**
  * Install a headless live stream — no primary res, no patching. The stream
- * exists as a buffer + fan-out target that server-internal tasks (synthesis,
- * wake cycle) emit into. Clients that open the corresponding chat connect via
- * /reconnect/:chatId and replay the buffered events, then receive live ones.
+ * exists as a fan-out target that server-internal tasks (synthesis, wake
+ * cycle) emit into. Clients that open the corresponding chat connect via
+ * /reconnect/:chatId, receive a resync snapshot from the emitter's
+ * accumulators, then live events.
  *
  * The caller drives the stream by calling emitToStream() and endLiveStream()
  * directly. abort.signal is exposed so the caller can wire it to its work
@@ -237,8 +224,6 @@ export function installHeadlessLiveStream(chatId: string): LiveStream {
   const stream: LiveStream = {
     chatId,
     abort,
-    buffer: [],
-    bufferBytes: 0,
     subscribers: new Set(),
     ended: false,
     headless: true,
@@ -254,29 +239,23 @@ export function getLiveStream(chatId: string): LiveStream | undefined {
 
 /**
  * Build the SSE frames an attaching client (e.g. /reconnect) should receive
- * before going live. Prefers a resync snapshot when the stream owner installs
- * a builder; falls back to buffered replay when one is unavailable (headless
- * streams, turns that haven't installed a builder yet) or when the caller
- * opts out (resync:false — the duplicate-POST attach path, whose client has
- * no persisted-row baseline and needs the full history reconstructed).
+ * before going live: the owner's resync snapshot. Every stream owner
+ * installs a builder (chat turns, turn-gate waiters, headless synthesis);
+ * without one the attach goes live with no history — the owner's state
+ * can't be reconstructed any other way.
  *
  * Pure (no res I/O) so the selection logic is unit-testable. A throwing
- * builder degrades to replay instead of failing the attach.
+ * builder degrades to a bare attach instead of failing it.
  */
-export function buildAttachFrames(
-  stream: LiveStream,
-  opts: { resync?: boolean; replay?: boolean } = {}
-): string[] {
-  const { resync = true, replay = true } = opts;
-  if (resync && stream.buildResync) {
-    try {
-      const payload = stream.buildResync();
-      if (payload) {
-        return [`event: resync\ndata: ${JSON.stringify(payload)}\n\n`];
-      }
-    } catch (err) {
-      console.error(`[live-streams] buildResync failed for ${stream.chatId}, falling back to replay:`, err);
+export function buildAttachFrames(stream: LiveStream): string[] {
+  if (!stream.buildResync) return [];
+  try {
+    const payload = stream.buildResync();
+    if (payload) {
+      return [`event: resync\ndata: ${JSON.stringify(payload)}\n\n`];
     }
+  } catch (err) {
+    console.error(`[live-streams] buildResync failed for ${stream.chatId}:`, err);
   }
-  return replay ? [...stream.buffer] : [];
+  return [];
 }
