@@ -220,7 +220,17 @@ function withLiveAssistant(messages: ChatMessage[], bg: BackgroundStream): ChatM
   return next;
 }
 
-export function useChat(chatId: string | null) {
+export interface UseChatOptions {
+  /** Optimistic sidebar queue-count nudge for queue events this client
+   *  witnesses: +1 on enqueue success, -1 on drain (follow_up_start). */
+  onQueueCountDelta?: (chatId: string, delta: number) => void;
+}
+
+export function useChat(chatId: string | null, options?: UseChatOptions) {
+  const onQueueCountDeltaRef = useRef(options?.onQueueCountDelta);
+  useEffect(() => {
+    onQueueCountDeltaRef.current = options?.onQueueCountDelta;
+  });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageOffset, setMessageOffset] = useState(0);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -1121,6 +1131,7 @@ export function useChat(chatId: string | null) {
         // clear its pending flag so deltas start flowing into it. Otherwise
         // this is a pure follow-up (e.g. queued while offline) — add a fresh
         // placeholder.
+        onQueueCountDeltaRef.current?.(streamChatId, -1);
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
         bg.inferenceActivityPhase = "prefill";
@@ -1640,9 +1651,9 @@ export function useChat(chatId: string | null) {
           bg.messages = [...bg.messages, userMsg, placeholder];
         }
         setMessages((prev) => [...prev, userMsg, placeholder]);
-        apiEnqueueMessage(targetChatId, text, images).catch((err) =>
-          console.error("[chat] enqueue failed:", err)
-        );
+        apiEnqueueMessage(targetChatId, text, images)
+          .then(() => onQueueCountDeltaRef.current?.(targetChatId, 1))
+          .catch((err) => console.error("[chat] enqueue failed:", err));
         return;
       }
 

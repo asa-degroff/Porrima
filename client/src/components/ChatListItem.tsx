@@ -3,6 +3,8 @@ import type { ChatListItem as ChatListItemType } from "../types";
 import type { CacheResidency } from "../api/client";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
+import { QueuedMessageIcon } from "./QueuedMessageIcon";
+import { getStreamingChatIds } from "../hooks/useChat";
 
 interface Props {
   chat: ChatListItemType;
@@ -83,6 +85,28 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
   const hasCacheIndicator = effectiveCacheWarming || isQueued || Boolean(cacheWarmError);
 
+  // Queued messages (server-side message queue) — binary indicator; the count
+  // lives in the tooltip. Non-reactive read: the tooltip text just needs to be
+  // right at render time, and any state change re-renders the row anyway.
+  const queueCount = chat.queueCount ?? 0;
+  const hasQueueIndicator = queueCount > 0;
+  const queueTitle = hasQueueIndicator
+    ? `${queueCount} queued — ${getStreamingChatIds().includes(chat.id) ? "sends after the current turn" : "waiting to send"}`
+    : undefined;
+  const cacheErrorVisible = Boolean(cacheWarmError) && !effectiveCacheWarming && !isQueued;
+  const indicatorCount =
+    (hasQueueIndicator ? 1 : 0) + (effectiveCacheWarming || isQueued ? 1 : 0) + (cacheErrorVisible ? 1 : 0);
+
+  const [zoneMounted, setZoneMounted] = useState(indicatorCount > 0);
+  useEffect(() => {
+    if (indicatorCount > 0) {
+      setZoneMounted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setZoneMounted(false), 220);
+    return () => window.clearTimeout(timer);
+  }, [indicatorCount]);
+
   const handleWarm = useCallback(() => {
     setContextMenu(null);
     if (effectiveCacheWarming) return;
@@ -120,7 +144,9 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       )}
       {/* Keep sidebar rows compact: the title carries the identity; previews live in search. */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <p className={`truncate text-xs font-medium leading-4 text-white/80 ${hasCacheIndicator ? "pr-5" : "md:group-hover:pr-5"}`}>
+        <p className={`truncate text-xs font-medium leading-4 text-white/80 ${
+          indicatorCount === 0 ? "md:group-hover:pr-5" : indicatorCount === 1 ? "pr-5" : "pr-11"
+        }`}>
           {chat.title}
         </p>
       </div>
@@ -148,30 +174,31 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
         </div>
       )}
 
-      {(effectiveCacheWarming || isQueued) && !confirmDelete && (
-        <div
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-          title={isQueued ? "Cache warming queued" : "Warming cache"}
-        >
-          <PrefillActivityIcon paused={isQueued} />
-        </div>
-      )}
-
-      {cacheWarmError && !effectiveCacheWarming && !isQueued && !confirmDelete && (
-        <div
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-300/80"
-          title={`Cache warm failed: ${cacheWarmError}`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v5" />
-            <path d="M12 17h.01" />
-          </svg>
+      {/* Right-edge indicator zone — queued messages, then cache state.
+          The zone lingers ~220ms after its last indicator leaves so the
+          QueuedMessageIcon's exit fade can play before unmounting. */}
+      {!confirmDelete && zoneMounted && (
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+          <QueuedMessageIcon visible={hasQueueIndicator} title={queueTitle} />
+          {(effectiveCacheWarming || isQueued) && (
+            <div title={isQueued ? "Cache warming queued" : "Warming cache"}>
+              <PrefillActivityIcon paused={isQueued} />
+            </div>
+          )}
+          {cacheErrorVisible && (
+            <div className="text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v5" />
+                <path d="M12 17h.01" />
+              </svg>
+            </div>
+          )}
         </div>
       )}
 
       {/* Hover action — warm cache for agent chats, delete for others — desktop only */}
-      {!confirmDelete && !effectiveCacheWarming && !isQueued && !cacheWarmError && (
+      {!confirmDelete && !hasQueueIndicator && !effectiveCacheWarming && !isQueued && !cacheWarmError && (
         <div
           onClick={(e) => {
             e.stopPropagation();

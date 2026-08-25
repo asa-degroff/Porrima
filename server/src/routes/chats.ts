@@ -4,6 +4,7 @@ import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessage
 import { getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
+import { listVisibleQueueCounts } from "../services/message-queue.js";
 import { computeContextBreakdown } from "../services/context-breakdown.js";
 import { discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { Chat } from "../types.js";
@@ -26,7 +27,15 @@ function parseMessageLimit(value: unknown): number | undefined {
 // List all chats
 router.get("/", async (_req, res) => {
   const chats = await listChats();
-  res.json(chats);
+  // Attach visible queued-message counts so the sidebar can show a
+  // "messages waiting" indicator. One pass over a few small JSON files.
+  const queueCounts = await listVisibleQueueCounts();
+  res.json(
+    chats.map((chat) => {
+      const queueCount = queueCounts.get(chat.id);
+      return queueCount ? { ...chat, queueCount } : chat;
+    })
+  );
 });
 
 // Get a page of messages before an absolute sequence index.

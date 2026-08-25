@@ -273,6 +273,8 @@ export interface ChatListItem {
   lastModified: string;
   preview: string;
   projectId?: string;
+  /** Visible queued-message count (server-side message queue). Present only when > 0. */
+  queueCount?: number;
 }
 
 export interface ChatMessageWindow {

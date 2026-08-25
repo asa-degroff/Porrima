@@ -170,7 +170,7 @@ interface AuthenticatedAppProps {
 
 function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeChange }: AuthenticatedAppProps) {
   const { models, refresh: refreshModels } = useModels();
-  const { chats, createChat, removeChat, updateChatTitle, refresh, refreshImmediate } = useChats();
+  const { chats, createChat, removeChat, updateChatTitle, adjustChatQueueCount, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { isOnline } = useOnlineStatus();
@@ -506,7 +506,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     modelFallback,
     hasCompactionSummary,
     reconnecting,
-  } = useChat(activeChatId);
+  } = useChat(activeChatId, { onQueueCountDelta: adjustChatQueueCount });
 
   // Any chat streaming — includes background chats so the sidebar indicator stays correct when viewing a different chat
   const anyStreaming = streaming || getStreamingChatIds().length > 0;

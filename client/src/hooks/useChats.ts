@@ -183,5 +183,25 @@ export function useChats() {
     );
   }, []);
 
-  return { chats, loading, createChat, removeChat, updateChatTitle, refresh, refreshImmediate, isFromCache, refreshNow };
+  // Optimistic queue-count nudge for queue events this client witnessed
+  // (enqueue success, drain via follow_up_start). The 30s poll reconciles
+  // against server truth — which also covers messages queued from other
+  // devices. Clamped at zero; the field is dropped at 0 to match the server
+  // shape (present only when > 0).
+  const adjustChatQueueCount = useCallback((chatId: string, delta: number) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const current = c.queueCount ?? 0;
+        const next = Math.max(0, current + delta);
+        if (next === current) return c;
+        const updated: ChatListItem = { ...c };
+        if (next > 0) updated.queueCount = next;
+        else delete updated.queueCount;
+        return updated;
+      })
+    );
+  }, []);
+
+  return { chats, loading, createChat, removeChat, updateChatTitle, adjustChatQueueCount, refresh, refreshImmediate, isFromCache, refreshNow };
 }
