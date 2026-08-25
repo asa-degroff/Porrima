@@ -43,7 +43,7 @@ import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from
 import type { Skill } from "../services/skills.js";
 import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project, TurnResyncPayload } from "../types.js";
 import { hydrateUserImageAttachments, saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
 import { saveToolResultImage, stripToolResultImageData } from "../services/tool-result-image-storage.js";
 import { streamTTS, isStreamingCapable, TTS_FLUSH_SIGNAL, type StreamingTTSTextInput } from "../services/tts-streaming.js";
@@ -83,6 +83,7 @@ import {
   closeLiveSSE,
   installLiveStream,
   stampStreamPresence,
+  buildAttachFrames,
 } from "../services/live-streams.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
@@ -418,7 +419,13 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.write(`: connected\n\n`);
 }
 
-function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string, replay = true) {
+function attachToLiveStreamResponse(
+  req: Request,
+  res: Response,
+  stream: LiveStream,
+  label: string,
+  opts: { resync?: boolean; replay?: boolean } = {}
+) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -432,10 +439,11 @@ function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStr
   // a push notification when that turn completes.
   stampStreamPresence(req);
 
-  if (replay) {
-    for (const chunk of stream.buffer) {
-      try { res.write(chunk); } catch { return; }
-    }
+  // Resync snapshot first (when the owner installs a builder); buffer replay
+  // only as fallback. See buildAttachFrames — the duplicate-attach path opts
+  // out of resync because its client has no persisted-row baseline.
+  for (const frame of buildAttachFrames(stream, opts)) {
+    try { res.write(frame); } catch { return; }
   }
 
   const subWrite = res.write.bind(res) as (chunk: string) => boolean;
@@ -992,6 +1000,12 @@ async function handleChatStream(
   // or server-initiated), NOT on transient client disconnect — the live
   // stream keeps generation running while a refreshing client reconnects.
   const liveStream = liveStreams.get(chat.id)!;
+  // Resync on attach: a client connecting mid-turn (refresh, silent
+  // reconnect, another device) receives a snapshot of the uncommitted tail
+  // instead of the full buffer replay. Installed here — the stream exists
+  // from ensureSSEStream above, and the builder reads the accumulators
+  // declared in this closure. Replaced wholesale by the next turn's stream.
+  liveStream.buildResync = () => buildResyncPayload();
   const connectionAbortController = liveStream.abort;
   let connectionClosed = false;
   connectionAbortController.signal.addEventListener("abort", () => {
@@ -1145,6 +1159,11 @@ async function handleChatStream(
     state.duplicateToolCallStreak = 0;
     state.lastIterationToolCallSignature = null;
     state.pendingTokenEstimateObservation = null;
+    // Resync snapshot cursors — see declarations below; reset so a follow-up
+    // turn never resyncs stale iteration/progress state from its predecessor.
+    lastIterationEvent = null;
+    lastModelProgressEvent = null;
+    compactingActive = false;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -1377,6 +1396,84 @@ async function handleChatStream(
       state.allToolResults.length > state.committedToolResultCount ||
       state.segments.length > state.committedSegmentCount
     );
+  }
+
+  /**
+   * Non-mutating snapshot of the uncommitted fragment for resync. Mirrors
+   * buildUncommittedAssistantMessage but reads pendingText instead of
+   * flushing it — a resync runs on the attach path of a live turn and must
+   * not perturb the segment stream the turn is still writing.
+   */
+  function buildResyncMessage(): ChatMessage | null {
+    const content = stripPlaceholderEllipsisBlocks(state.fullText.slice(state.committedTextLength));
+    const thinkingRaw = state.thinkingText.slice(state.committedThinkingLength);
+    const thinking = isPlaceholderEllipsis(thinkingRaw) ? "" : thinkingRaw;
+    const toolCalls = state.allToolCalls.slice(state.committedToolCallCount);
+    const toolCallIds = new Set(toolCalls.map((tc) => tc.id));
+    const toolResults = orderToolResultsByToolCalls(
+      toolCalls,
+      state.allToolResults
+        .slice(state.committedToolResultCount)
+        .filter((tr) => toolCallIds.size === 0 || toolCallIds.has(tr.toolCallId)),
+    );
+    const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
+    const visuals = state.allVisuals.slice(state.committedVisualCount);
+    const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
+    if (state.pendingText.trim() && !isPlaceholderEllipsis(state.pendingText)) {
+      segments.push({ seq: state.seqCounter + 1, type: "text", content: state.pendingText });
+    }
+
+    const hasActivity =
+      !!content ||
+      !!thinking ||
+      toolCalls.length > 0 ||
+      artifacts.length > 0 ||
+      visuals.length > 0 ||
+      segments.length > 0;
+    if (!hasActivity) return null;
+
+    let thinkingDurationMs = state.thinkingDurationMs - state.committedThinkingDurationMs;
+    if (state.thinkingStartTime !== null) {
+      thinkingDurationMs += Date.now() - state.thinkingStartTime;
+    }
+
+    return applyToolLoopMetadata({
+      role: "assistant",
+      content,
+      thinking: state.thinkingPromoted ? undefined : (thinking || undefined),
+      thinkingDurationMs: thinkingDurationMs > 0 ? thinkingDurationMs : undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+      visuals: visuals.length > 0 ? visuals : undefined,
+      segments: segments.length > 0 ? segments : undefined,
+      timestamp: Date.now(),
+      _thinkingPromoted: state.thinkingPromoted || undefined,
+      ...assistantProviderFields(),
+    });
+  }
+
+  /**
+   * Resync snapshot for clients attaching mid-turn via /chat/reconnect —
+   * sent in place of a buffer replay. The client fetches persisted rows
+   * first (committed fragments included), so this only carries the
+   * uncommitted tail plus the indicator state a replay would have
+   * reconstructed from events. Pure read; installed on the LiveStream below.
+   */
+  function buildResyncPayload(): TurnResyncPayload | null {
+    const message = buildResyncMessage();
+    const hasOutput = message !== null;
+    return {
+      message,
+      iteration: lastIterationEvent ? { ...lastIterationEvent } : undefined,
+      // Stale prefill progress would mislabel an in-progress decode — only
+      // report it while nothing has been generated in the current fragment
+      // (same shape replay would leave behind: deltas clear modelProgress).
+      modelProgress: hasOutput ? null : lastModelProgressEvent,
+      waitingForInput: waitingForInput || !!askUserRef.current || undefined,
+      compacting: compactingActive || undefined,
+      thinkingActive: state.thinkingStartTime !== null || undefined,
+    };
   }
 
   function flushPendingPassiveRecallRows(): void {
@@ -1656,6 +1753,13 @@ async function handleChatStream(
   let iterations = 0;
   let waitingForInput = false;
   let hitContextLimit = false;
+  // Resync snapshots for clients attaching mid-turn (see buildResyncPayload):
+  // the last emitted iteration / model_progress events and whether a
+  // compaction window is currently open. Mirrors what a full buffer replay
+  // would have re-delivered, without reprocessing the history.
+  let lastIterationEvent: TurnResyncPayload["iteration"] | null = null;
+  let lastModelProgressEvent: ModelProgressEvent | null = null;
+  let compactingActive = false;
   let llamaSlotLease: LlamaSlotLease | null = null;
   let llamaCacheContext: {
     baseUrl: string;
@@ -1896,6 +2000,7 @@ async function handleChatStream(
         markLlamaCachePrefillComplete(chat.id);
       }
       prevProgressPhase = progress.phase;
+      lastModelProgressEvent = progress;
       res.write(`event: model_progress\ndata: ${JSON.stringify({
         chatId: chat.id,
         ...progress,
@@ -2562,6 +2667,7 @@ async function handleChatStream(
             iterationPayload.estimatedTokens = pressure.estimatedTokens;
             iterationPayload.displayEstimatedTokens = pressure.refinedTokens;
           }
+          lastIterationEvent = { ...iterationPayload };
           res.write(`event: iteration\ndata: ${JSON.stringify(iterationPayload)}\n\n`);
 
           if (stopReason === "length") {
@@ -3058,7 +3164,10 @@ async function handleChatStream(
 
       // 2. Run compaction to free context space
       const effectiveCW = getEffectiveContextWindow(chat, inferenceModel);
-      const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
+      const emitCompacting = () => {
+        compactingActive = true;
+        res.write(`event: compacting\ndata: {}\n\n`);
+      };
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       // Wrap all compaction work in a keepalive ping loop so the client's
       // 95s inactivity timeout doesn't fire during slow LLM/embed steps.
@@ -3108,6 +3217,7 @@ async function handleChatStream(
           }
         } catch (compErr) {
           console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
+          compactingActive = false;
           compactionAborted = true;
           return;
         }
@@ -3196,6 +3306,8 @@ async function handleChatStream(
           estimatedTokens,
         })}\n\n`);
       }
+      // Compaction window closed (success or no-op) — resync no longer reports it.
+      compactingActive = false;
 
       // 4. Resume the agent loop with compacted context
       // Compaction rebuilt the context, so the slot's KV prefix is invalidated and
@@ -3307,12 +3419,14 @@ async function handleChatStream(
             }
 
             // Emit iteration event so client updates token indicator in real-time
-            res.write(`event: iteration\ndata: ${JSON.stringify({
+            const resumeIterationEvent: NonNullable<TurnResyncPayload["iteration"]> = {
               iteration: iterations,
               stopReason: sr,
               toolCount: event.toolResults?.length || 0,
               usage: state.finalUsage || undefined,
-            })}\n\n`);
+            };
+            lastIterationEvent = resumeIterationEvent;
+            res.write(`event: iteration\ndata: ${JSON.stringify(resumeIterationEvent)}\n\n`);
 
             if (sr !== "toolUse") {
               resumeAbortController.abort();
@@ -3463,7 +3577,10 @@ async function handleChatStream(
             lastUsage,
             hitContextLimit,
             estimatedTokens,
-            emitCompacting: () => res.write(`event: compacting\ndata: {}\n\n`),
+            emitCompacting: () => {
+              compactingActive = true;
+              res.write(`event: compacting\ndata: {}\n\n`);
+            },
             emitKeepalive: () => res.write(`: keepalive\n\n`),
             keepaliveWrap: (body) => withSSEKeepalive(res, body),
             settleInFlight: () => awaitMidTurnPulse(state),
@@ -3518,11 +3635,13 @@ async function handleChatStream(
                 continues: false,
                 estimatedTokens,
               })}\n\n`);
+              compactingActive = false;
             },
           });
         }
       } catch (err) {
         console.error("[compaction] End-of-turn compaction failed:", err);
+        compactingActive = false;
       }
     } else {
       console.log(
@@ -4381,7 +4500,10 @@ router.post("/", async (req, res) => {
       const stream = liveStreams.get(chatId);
       if (stream && !stream.ended && !stream.abort.signal.aborted) {
         console.warn(`[chat] duplicate POST for active chat ${chatId}; attaching to existing live stream`);
-        attachToLiveStreamResponse(req, res, stream, "duplicate-attached");
+        // Replay (not resync): this client retried its POST and never saw the
+        // turn's events — it has no persisted-row baseline for the committed
+        // fragments, so it needs the full history reconstructed.
+        attachToLiveStreamResponse(req, res, stream, "duplicate-attached", { resync: false, replay: true });
         return;
       }
     } else {
@@ -4927,9 +5049,12 @@ router.get("/status/:chatId", async (req, res) => {
   });
 });
 
-// Reconnect to a live in-flight chat stream. Replays the buffered SSE events
-// and then streams subsequent events until the turn ends. Responds 404 if no
-// live stream exists (caller should fall back to normal chat load).
+// Reconnect to a live in-flight chat stream. Prefers a resync snapshot (the
+// turn's uncommitted tail, built from live accumulators); falls back to
+// replaying buffered SSE events when the stream owner installs no builder
+// (e.g. headless synthesis streams). Streams live events until the turn
+// ends. Responds 404 if no live stream exists (caller should fall back to
+// normal chat load).
 router.get("/reconnect/:chatId", async (req, res) => {
   const { chatId } = req.params;
   const stream = liveStreams.get(chatId);
@@ -4937,10 +5062,13 @@ router.get("/reconnect/:chatId", async (req, res) => {
     return res.status(404).json({ error: "no_active_stream" });
   }
 
+  // replay=0: caller wants no history (silent reconnect legacy) — resync is
+  // still allowed: it replaces history rather than repeating it.
   const replay = req.query.replay !== "0";
-  attachToLiveStreamResponse(req, res, stream, "reconnected", replay);
+  const resynced = !!stream.buildResync;
+  attachToLiveStreamResponse(req, res, stream, "reconnected", { resync: true, replay });
 
-  console.log(`[chat] reconnect: attached to live stream for ${chatId} (replayed ${replay ? stream.buffer.length : 0} chunks)`);
+  console.log(`[chat] reconnect: attached to live stream for ${chatId} (${resynced ? "resync snapshot" : `replayed ${replay ? stream.buffer.length : 0} chunks`})`);
 });
 
 // Edit message at index and regenerate response via SSE

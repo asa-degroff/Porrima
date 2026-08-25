@@ -286,6 +286,9 @@ export interface StreamCallbacks {
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
   onWaiting?: (info: { activeChatId: string | null; position: number; queuedCount: number }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
+  /** State snapshot delivered instead of a buffer replay when attaching to an
+   *  in-flight stream — hydrates live state from the server's accumulators. */
+  onResync?: (payload: import("../types").TurnResyncPayload) => void;
   onAudioChunk?: (chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number }) => void;
   onAudioDone?: () => void;
   onAudioError?: (error: string) => void;
@@ -690,6 +693,9 @@ function processSSEEvent(
       break;
     case "model_progress":
       callbacks.onModelProgress?.(data);
+      break;
+    case "resync":
+      callbacks.onResync?.(data);
       break;
     case "audio_chunk":
       callbacks.onAudioChunk?.(data);

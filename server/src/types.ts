@@ -113,6 +113,36 @@ export interface ChatMessage {
 
 export type ChatType = "agent" | "quick" | "system";
 
+/**
+ * State snapshot sent to a newly attaching client instead of replaying the
+ * SSE buffer. Built from the turn's live accumulators, so a reconnecting
+ * client hydrates straight from authoritative state instead of reprocessing
+ * the entire event history and deduping it against the persisted rows it
+ * just fetched — the replay design that duplicated committed tool-loop
+ * fragments on refresh-reconnect.
+ */
+export interface TurnResyncPayload {
+  /** Uncommitted fragment of the in-flight turn — everything streamed since
+   *  the last committed row. null when there is no uncommitted activity. */
+  message: ChatMessage | null;
+  /** Shape of the last emitted `iteration` event (token-indicator state). */
+  iteration?: {
+    iteration: number;
+    stopReason: string;
+    toolCount: number;
+    usage?: MessageUsage;
+    estimatedTokens?: number;
+    displayEstimatedTokens?: number;
+  };
+  /** Last emitted `model_progress` event (prefill-indicator state). */
+  modelProgress?: import("./services/model-progress.js").ModelProgressEvent | null;
+  waitingForInput?: boolean;
+  compacting?: boolean;
+  /** True when the turn is mid-thinking at snapshot time, so the client
+   *  restarts its thinking timer instead of freezing the duration. */
+  thinkingActive?: boolean;
+}
+
 export interface Chat {
   id: string;
   title: string;

@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import type { TurnResyncPayload } from "../types.js";
 import { markPresence } from "./push-storage.js";
 
 /**
@@ -53,6 +54,17 @@ export interface LiveStream {
   ended: boolean;
   /** Headless streams have no primary subscriber — they outlive disconnect by design. */
   headless: boolean;
+  /**
+   * State-snapshot builder installed by the stream owner. When present, an
+   * attaching client (e.g. /reconnect) is sent a single synthetic `resync`
+   * event built from the turn's live accumulators instead of a replay of the
+   * buffered event history — the client hydrates from authoritative state and
+   * never reprocesses (or dedupes) events it already has persisted rows for.
+   * Returns null when no snapshot is available; callers fall back to replay.
+   * Must be a pure read — it runs on the request path of an attaching client
+   * and must not mutate turn state.
+   */
+  buildResync?: () => TurnResyncPayload | null;
 }
 
 export const liveStreams: Map<string, LiveStream> =
@@ -238,4 +250,33 @@ export function installHeadlessLiveStream(chatId: string): LiveStream {
 
 export function getLiveStream(chatId: string): LiveStream | undefined {
   return liveStreams.get(chatId);
+}
+
+/**
+ * Build the SSE frames an attaching client (e.g. /reconnect) should receive
+ * before going live. Prefers a resync snapshot when the stream owner installs
+ * a builder; falls back to buffered replay when one is unavailable (headless
+ * streams, turns that haven't installed a builder yet) or when the caller
+ * opts out (resync:false — the duplicate-POST attach path, whose client has
+ * no persisted-row baseline and needs the full history reconstructed).
+ *
+ * Pure (no res I/O) so the selection logic is unit-testable. A throwing
+ * builder degrades to replay instead of failing the attach.
+ */
+export function buildAttachFrames(
+  stream: LiveStream,
+  opts: { resync?: boolean; replay?: boolean } = {}
+): string[] {
+  const { resync = true, replay = true } = opts;
+  if (resync && stream.buildResync) {
+    try {
+      const payload = stream.buildResync();
+      if (payload) {
+        return [`event: resync\ndata: ${JSON.stringify(payload)}\n\n`];
+      }
+    } catch (err) {
+      console.error(`[live-streams] buildResync failed for ${stream.chatId}, falling back to replay:`, err);
+    }
+  }
+  return replay ? [...stream.buffer] : [];
 }

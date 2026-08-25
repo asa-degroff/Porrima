@@ -167,6 +167,32 @@ export interface ChatMessage {
 
 export type ChatType = "agent" | "quick" | "system";
 
+/**
+ * State snapshot delivered in place of an SSE buffer replay when attaching
+ * to an in-flight stream (see /api/chat/reconnect). Hydrates the live
+ * accumulators from authoritative server state.
+ */
+export interface TurnResyncPayload {
+  /** Uncommitted fragment of the in-flight turn (everything streamed since
+   *  the last committed row). null when there is no uncommitted activity. */
+  message: ChatMessage | null;
+  /** Shape of the last emitted iteration event (token-indicator state). */
+  iteration?: {
+    iteration: number;
+    stopReason: string;
+    toolCount: number;
+    usage?: MessageUsage;
+    estimatedTokens?: number;
+    displayEstimatedTokens?: number;
+  };
+  /** Last emitted model_progress event (prefill-indicator state). */
+  modelProgress?: ModelProgress | null;
+  waitingForInput?: boolean;
+  compacting?: boolean;
+  /** True when the turn is mid-thinking at snapshot time. */
+  thinkingActive?: boolean;
+}
+
 export interface Chat {
   id: string;
   title: string;
