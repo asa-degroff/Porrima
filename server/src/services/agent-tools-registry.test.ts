@@ -15,7 +15,11 @@ describe("agent tool registry", () => {
     expect(systemDefinitions).toEqual(systemRuntime);
     expect(systemDefinitions).not.toContain("ask_user");
     expect(systemDefinitions).not.toContain("install_skill");
-    expect(systemDefinitions).not.toContain("update_automation");
+    // Automation management stays available in system/headless chats —
+    // reminder chaining from within automation runs is deliberate.
+    expect(systemDefinitions).toContain("schedule_reminder");
+    expect(systemDefinitions).toContain("list_automations");
+    expect(systemDefinitions).toContain("update_automation");
     expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_reminder");
   });
 

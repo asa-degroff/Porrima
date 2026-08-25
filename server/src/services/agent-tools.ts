@@ -275,7 +275,7 @@ function makeToolCall(id: string, name: string, args: Record<string, any>): Tool
 
 const SCHEDULE_REMINDER_TOOL: Tool = {
   name: "schedule_reminder",
-  description: "Schedule a one-time reminder for yourself. Creates a message in the system chat that fires at the specified time, respecting inactivity gates. Use this to follow up on open threads, check on tasks, or revisit ideas later. Reminders run as full automation turns with tool access.",
+  description: "Schedule a one-time reminder for yourself. Creates a message in the system chat that fires at the specified time, respecting inactivity gates. Use this to follow up on open threads, check on tasks, or revisit ideas later. Reminders run as full automation turns with tool access — including this one, so you can schedule the next follow-up from within a fired reminder run.",
   parameters: Type.Object({
     message: Type.String({ description: "The prompt content to deliver to your future self — what you want to be reminded to do or think about" }),
     title: Type.String({ description: "Short label for the reminder (e.g. 'Check PR #22616 status')" }),
@@ -322,11 +322,14 @@ const FILESYSTEM_TOOLS: Tool[] = [
 ];
 
 const AUTOMATION_TOOLS: Tool[] = [SCHEDULE_REMINDER_TOOL, LIST_AUTOMATIONS_TOOL, UPDATE_AUTOMATION_TOOL];
+// System/headless chats (synthesis, wake, automation runs) keep the automation
+// management tools — scheduling and reminder chaining are deliberate and are
+// bounded by the pending-reminder cap, the 2-minute minimum lead time, and
+// per-run iteration/time budgets. What stays out are the tools that require a
+// live user: ask_user (would stall the headless loop forever) and the
+// per-chat skill tools (system chats don't activate skills).
 const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
   "ask_user",
-  "schedule_reminder",
-  "list_automations",
-  "update_automation",
   ...SKILL_TOOLS.map((tool) => tool.name),
 ]);
 const SEQUENTIAL_TOOL_NAMES = new Set([

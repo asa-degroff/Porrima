@@ -4,7 +4,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 ## Registry (`server/src/services/agent-tools.ts`)
 
-- `getAgentTools(chatId, effects, contextWindow, project, chatType)` returns the runtime registry with context-aware result limits and chat-type gating. System/headless chats omit interactive skill/automation management tools and `ask_user`.
+- `getAgentTools(chatId, effects, contextWindow, project, chatType)` returns the runtime registry with context-aware result limits and chat-type gating. System/headless chats omit `ask_user` and the per-chat skill tools. Automation management tools (`schedule_reminder`, `list_automations`, `update_automation`) remain available — reminder chaining from within fired automation runs is deliberate, bounded by the pending-reminder cap (10), the 2-minute minimum lead time, three-tier update permissions, and per-run iteration/time budgets.
 - **Memory tools** (from `memory-tools.ts`): `save_memory`, `search_memory`, `forget_memory`
 - **Conversation search**: `search_conversation` — FTS5 search on chat history AND archived context blocks (cross-chat), scoped to single chat or global
 - **Archive retrieval**: `read_archived_context` — dereferences an archive block ID to return full original messages (tool outputs, code, reasoning)
