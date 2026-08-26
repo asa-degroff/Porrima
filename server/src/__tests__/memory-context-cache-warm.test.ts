@@ -49,6 +49,11 @@ describe("memory context after cache warming", () => {
       isSystemManagedMemoryBlock: vi.fn(() => false),
       buildMemoryIndexText: (text: string, subject?: string) =>
         subject?.trim() ? `${subject.trim()}\n${text}` : text,
+      getMemoryContextState: vi.fn(() => null),
+      upsertMemoryContextState: vi.fn(),
+      deleteMemoryContextState: vi.fn(),
+      setMemoryContextDirty: vi.fn(),
+      setAllMemoryContextDirty: vi.fn(),
     }));
     vi.doMock("../services/reranker.js", () => ({
       RERANK_INSTRUCTIONS: {

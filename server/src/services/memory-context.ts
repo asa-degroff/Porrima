@@ -1,6 +1,11 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
 import { estimateTextTokens } from "./token-count.js";
-import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, isSystemManagedMemoryBlock, buildMemoryIndexText, type MemoryBlock } from "./memory-storage.js";
+import {
+  searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope,
+  isSystemManagedMemoryBlock, buildMemoryIndexText,
+  getMemoryContextState, upsertMemoryContextState, deleteMemoryContextState,
+  setMemoryContextDirty, setAllMemoryContextDirty, type MemoryBlock,
+} from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
@@ -134,32 +139,111 @@ interface MemoryContextState {
 const contextState = new Map<string, MemoryContextState>();
 
 /**
+ * Durable mirror of `contextState`. The frozen section is the only
+ * non-derivable artifact in the prompt pipeline — everything else survives a
+ * porrima restart in SQLite or is deterministically rebuildable. We persist
+ * the section string itself (not its inputs) so restore is byte-exact and
+ * never touches the reranker. See docs/design/memory-context-persistence.md.
+ *
+ * Invariant: the row mirrors the Map at every mutation site. The one
+ * deliberate exception is `resetAllMemoryContextCaches` (snapshot restore),
+ * which clears only the Map — the rows time-travel with the memory DB file.
+ *
+ * All persist calls are try/catch → warn: bookkeeping must never break a turn.
+ */
+function persistContextState(chatId: string, state: MemoryContextState): void {
+  try {
+    upsertMemoryContextState(chatId, {
+      frozenSection: state.frozenMemoriesSection,
+      frozenIds: [...state.frozenIds],
+      deltaIds: [...state.deltaIds],
+      dirty: state.dirty,
+    });
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to persist context state:`, e);
+  }
+}
+
+/**
+ * Restore in-process state from the durable row. Called from the prompt build
+ * when the Map has no entry for the chat (fresh process, or after a reset that
+ * never got a follow-up turn). A read failure falls through to a Case 1
+ * re-roll — the pre-fix behavior, never worse.
+ */
+function hydrateContextState(chatId: string): void {
+  let row;
+  try {
+    row = getMemoryContextState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to restore context state:`, e);
+    return;
+  }
+  if (!row) return;
+  contextState.set(chatId, {
+    frozenIds: new Set(row.frozenIds),
+    deltaIds: new Set(row.deltaIds),
+    frozenMemoriesSection: row.frozenSection,
+    dirty: row.dirty,
+  });
+  log(`[memory-context] chat=${chatId} restored frozen set: ${row.frozenIds.length} frozen + ${row.deltaIds.length} delta, section ${row.frozenSection.length} ch (hash ${row.sectionHash})`);
+}
+
+/**
  * Mark memories as dirty for a chat — triggers delta retrieval on next turn.
  * The frozen system prompt stays intact; only new memories are appended.
+ *
+ * `dirty` is a property of (chat, corpus), not of process lifetime: if no
+ * in-process state exists yet (post-restart, before first hydration) but a
+ * durable row does, the flag lands on the row so the later hydration restores
+ * dirty=true instead of silently clean.
  */
 export function invalidateMemoriesCache(chatId: string): void {
   const state = contextState.get(chatId);
   if (state) {
     state.dirty = true;
+    persistContextState(chatId, state);
+    return;
   }
-  // If no state exists yet, nothing to invalidate — first retrieval will be full.
+  try {
+    setMemoryContextDirty(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to mark context state dirty:`, e);
+  }
+  // If no state exists anywhere, nothing to invalidate — first retrieval will be full.
 }
 
 /**
  * Invalidate all memories caches (e.g., after global memory changes like synthesis).
+ * Rows for chats not yet hydrated this process lifetime (post-restart) must
+ * also flip — otherwise the global corpus change is silently lost for them,
+ * since the full re-roll that used to "heal" this is exactly what persistence
+ * removes.
  */
 export function invalidateAllMemoriesCaches(): void {
   for (const state of contextState.values()) {
     state.dirty = true;
+  }
+  try {
+    setAllMemoryContextDirty();
+  } catch (e) {
+    console.warn("[memory-context] failed to mark all context state dirty:", e);
   }
 }
 
 /**
  * Full reset of memory context for a chat — used after compaction.
  * Forces a complete re-retrieval with all memories going into the system prompt.
+ * The durable row is deleted with the Map entry — the next turn re-rolls from
+ * scratch and re-persists (the re-roll is owed: the whole prefix is being
+ * rebuilt anyway).
  */
 export function resetMemoryContext(chatId: string): void {
   contextState.delete(chatId);
+  try {
+    deleteMemoryContextState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete context state row:`, e);
+  }
 }
 
 /**
@@ -175,6 +259,9 @@ export function getMemoryContextIds(chatId: string): Set<string> {
 
 /**
  * Mark memory IDs as injected through an appended delta row.
+ * Passive recall (mid-turn and post-turn) is a deltaIds write point: without
+ * the persist, a restart after an injection restores stale delta_ids and the
+ * next Case 3 re-injects memories already in the history as delta rows.
  */
 export function markMemoryDeltaInjected(chatId: string, memoryIds: string[]): void {
   const state = contextState.get(chatId);
@@ -182,6 +269,7 @@ export function markMemoryDeltaInjected(chatId: string, memoryIds: string[]): vo
   for (const id of memoryIds) {
     state.deltaIds.add(id);
   }
+  persistContextState(chatId, state);
 }
 
 /**
@@ -192,10 +280,15 @@ export function invalidateStablePrefixCache(chatId: string): void {
 }
 
 /**
- * Invalidate all caches for a chat (memories + stable prefix).
+ * Invalidate all derived caches for a chat (stable prefix + prompt caches).
+ * The frozen memory state (Map entry AND durable row) is deliberately kept:
+ * a workspace change rewrites AGENTS.md → stablePrefix changes → the prefill
+ * is owed anyway, and re-rolling the frozen set on top would only manufacture
+ * a pool orphan plus a second source of prefix churn for zero benefit.
+ * (The frozen section embeds blockHint/zeitgeistHint, both derived from
+ * durable inputs, so the persisted string stays valid.)
  */
 export function invalidateAllCaches(chatId: string): void {
-  contextState.delete(chatId);
   stablePrefixCache.delete(chatId);
   promptCache.delete(chatId);
   promptBreakdownCache.delete(chatId);
@@ -209,6 +302,13 @@ export function invalidateAllStablePrefixCaches(): void {
   clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
 }
 
+/**
+ * Clear all in-memory state (e.g., after a snapshot restore). Map-only on
+ * purpose: the durable rows live inside the memory DB file, so they
+ * time-travel with the corpus and arrive consistent with the restored state.
+ * Wiping them here would force re-rolls across all chats — the exact cost
+ * persistence exists to remove.
+ */
 export function resetAllMemoryContextCaches(): void {
   contextState.clear();
   stablePrefixCache.clear();
@@ -1015,6 +1115,17 @@ async function buildSplitAugmentedPromptInner(
     return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
   }
 
+  // Hydrate from the durable row when this process has no in-memory state for
+  // the chat (fresh process after a porrima restart, or a reset that never got
+  // a follow-up turn). Process death must be indistinguishable from nothing —
+  // the frozen section the server's KV was built against must come back
+  // byte-exact, not re-rolled. Deliberately NOT done in the skipMemoryRetrieval
+  // path above: that prompt contains no frozen section, so hydrated state
+  // would wrongly suppress passive-recall injections.
+  if (chatId && !contextState.has(chatId)) {
+    hydrateContextState(chatId);
+  }
+
   const state = chatId ? contextState.get(chatId) : undefined;
 
   // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
@@ -1033,6 +1144,9 @@ async function buildSplitAugmentedPromptInner(
           frozenMemoriesSection: memoriesSection,
           dirty: false,
         });
+        // Write point 1 — the freeze. The rerank is non-deterministic, so this
+        // string is the exact artifact the server's KV prefix depends on.
+        persistContextState(chatId, contextState.get(chatId)!);
       }
 
       log(`[memory-context] chat=${chatId} full retrieval: ${memories.length} memories frozen in system prompt`);
@@ -1067,6 +1181,9 @@ async function buildSplitAugmentedPromptInner(
     for (const r of newMemories) {
       state.deltaIds.add(r.memory.id);
     }
+
+    // Write point 2 — the delta. dirty=0, deltaIds grown.
+    if (chatId) persistContextState(chatId, state);
 
     let memoriesMessage = "";
     if (newMemories.length > 0) {

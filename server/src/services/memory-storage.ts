@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
+import { createHash } from "crypto";
 import { writeFile, mkdir } from "fs/promises";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
@@ -347,6 +348,23 @@ export function getDb(): Database.Database {
         COALESCE(old.blockType, 'note')
       );
     END;
+  `);
+
+  // Memory context state — durable mirror of the per-chat frozen memory set
+  // that memory-context.ts keeps in a process Map. Persisted so a porrima
+  // restart doesn't force a Case 1 re-roll (which re-bakes the frozen section
+  // from a non-deterministic rerank and busts the server's KV prefix).
+  // See docs/design/memory-context-persistence.md.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_context_state (
+      chat_id        TEXT PRIMARY KEY,
+      frozen_section TEXT NOT NULL,
+      section_hash   TEXT NOT NULL,
+      frozen_ids     TEXT NOT NULL DEFAULT '[]',
+      delta_ids      TEXT NOT NULL DEFAULT '[]',
+      dirty          INTEGER NOT NULL DEFAULT 0,
+      updated_at     INTEGER NOT NULL
+    );
   `);
 
   // Auto-migrate from JSON if needed
@@ -2298,6 +2316,99 @@ export function getBlockHistory(blockId: string): MemoryBlock[] {
   }
 
   return history;
+}
+
+// ---------------------------------------------------------------------------
+// Memory context state — durable mirror of memory-context.ts's per-chat Map
+// ---------------------------------------------------------------------------
+// The frozen memory section is the only non-derivable, non-durable artifact in
+// the prompt pipeline (docs/design/memory-context-persistence.md). We persist
+// the section *string* itself — not its inputs — so restore is byte-exact by
+// construction and never touches the reranker. ~20 KB per active chat.
+
+export interface MemoryContextStateRow {
+  chatId: string;
+  frozenSection: string;
+  /** sha1 of frozenSection — the forensic artifact for log forensics */
+  sectionHash: string;
+  frozenIds: string[];
+  deltaIds: string[];
+  dirty: boolean;
+  updatedAt: number;
+}
+
+interface MemoryContextStateRowDb {
+  chat_id: string;
+  frozen_section: string;
+  section_hash: string;
+  frozen_ids: string;
+  delta_ids: string;
+  dirty: number;
+  updated_at: number;
+}
+
+export function getMemoryContextState(chatId: string): MemoryContextStateRow | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM memory_context_state WHERE chat_id = ?")
+    .get(chatId) as MemoryContextStateRowDb | undefined;
+  if (!row) return null;
+  return {
+    chatId: row.chat_id,
+    frozenSection: row.frozen_section,
+    sectionHash: row.section_hash,
+    frozenIds: JSON.parse(row.frozen_ids),
+    deltaIds: JSON.parse(row.delta_ids),
+    dirty: row.dirty === 1,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function upsertMemoryContextState(
+  chatId: string,
+  state: {
+    frozenSection: string;
+    frozenIds: string[];
+    deltaIds: string[];
+    dirty: boolean;
+  }
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO memory_context_state
+      (chat_id, frozen_section, section_hash, frozen_ids, delta_ids, dirty, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chatId,
+    state.frozenSection,
+    createHash("sha1").update(state.frozenSection, "utf8").digest("hex"),
+    JSON.stringify(state.frozenIds),
+    JSON.stringify(state.deltaIds),
+    state.dirty ? 1 : 0,
+    Date.now()
+  );
+}
+
+export function deleteMemoryContextState(chatId: string): void {
+  getDb()
+    .prepare("DELETE FROM memory_context_state WHERE chat_id = ?")
+    .run(chatId);
+}
+
+/** Mark one chat's state dirty. No-op (creates no row) for unknown chats. */
+export function setMemoryContextDirty(chatId: string): void {
+  getDb()
+    .prepare(
+      "UPDATE memory_context_state SET dirty = 1, updated_at = ? WHERE chat_id = ?"
+    )
+    .run(Date.now(), chatId);
+}
+
+/** Mark every chat's state dirty — global corpus changes (synthesis, etc.). */
+export function setAllMemoryContextDirty(): void {
+  getDb()
+    .prepare("UPDATE memory_context_state SET dirty = 1, updated_at = ?")
+    .run(Date.now());
 }
 
 export { DEFAULT_MAX_BLOCK_CHARS, MIN_MAX_BLOCK_CHARS, MAX_MAX_BLOCK_CHARS };
