@@ -1,8 +1,8 @@
 # Memory Context Persistence — Surviving the Process That Owns the Cache
 
-**Status**: Design (v1.1 — verified against live code)
+**Status**: Design (v1.3 — verified against live code; §10 adds compaction re-roll fix)
 **Author**: quje
-**Date**: 2026-08-25 (revised 2026-08-25)
+**Date**: 2026-08-25 (revised 2026-08-26)
 
 v1.1 changes: call-site inventory verified exhaustively (two sites the v1
 inventory missed: `automation-runner.ts:214`, `agent-snapshots.ts:270`);
@@ -11,6 +11,15 @@ invalidation added (a v1 correctness gap — post-restart global corpus
 changes would silently land on zero chats); non-write-site decisions
 recorded (snapshot restore, skip path, `getMemoryContextIds` ordering);
 Phase 2 sub-case analysis and the dirty-state leak question added.
+
+v1.2 changes: Phase 2 warm-queue timing check completed against live code
+(commit 78edd8c).
+
+v1.3 changes: Phase 1 verified LIVE in production (hydrate/persist/dirty
+fall-through all present). KV-cache hit-rate forensics from llama-server
+logs (08-26) established that the dominant remaining prefix invalidation is
+**compaction-time Case 1 re-rolls**, not restarts — see §10 for the fix:
+clobber guard + soft reset, with hysteresis re-roll deferred behind it.
 
 ## 1. Problem
 
@@ -328,7 +337,8 @@ stats for memories the user never saw — minor, same class.
   this one.
 - **Server-side loss.** Crashes and evictions are unavoidable; the 05:42 heap
   corruption remains an open watch item regardless.
-- **Compaction re-roll nondeterminism.** Owed; see option C.
+- **Compaction re-roll nondeterminism.** Was deferred as "owed; see option C" —
+  reopened and addressed in v1.3, see §10 (fix lives in a separate change).
 
 ## 6. Test plan
 
@@ -400,3 +410,142 @@ process memory: the turn-engine's shadow estimator state, cache-warm's baked
 prompts, anything that says "recompute is cheap" while the thing being protected
 lives on the other side of a process boundary. When you see it, this doc is the
 template.
+
+## 10. Compaction re-roll fix (v1.3 — closes §5's third scope item)
+
+### 10.1 Forensics that motivated reopening the scope item
+
+KV-cache hit-rate reconstruction from llama-server INFO logs (08-26, GPU 27B
+server): per-request reuse = `release n_tokens` − total `prompt processing`
+tokens. Hits were 94–100% everywhere except bursts that correlate exactly with
+compaction cycles and frozen-set flips. The worst offenders:
+
+| Time | Hit | Event |
+|---|---|---|
+| 06:35 | 7% | synthesis compaction cycle 2 rewrote history |
+| 13:46 | 2% | post-compaction Case 1 re-roll (`11 filtered` by threshold) |
+| 14:24 / 14:41 | 48% / 53% | agent-chat mid-turn overflow → compaction |
+| 16:15 | 4% | post-compaction re-roll landed on **0 frozen** (clobber class) |
+
+Every miss was followed by recovery to 94–99% on the next turn — the damage is
+one large cold prefill per event, plus one manufactured pool orphan each.
+
+Meanwhile Phase 1 shipped (9fa10f4) and restart-triggered flips disappeared
+from the logs; §7's verification confirmed hydration works (byte-exact,
+`LCP sim 0.995`). The remaining `full retrieval:` lines between genuine first
+turns were all **post-compaction**. So the §5 item "Compaction re-roll
+nondeterminism — owed" is now the dominant avoidable cost and gets a design.
+
+### 10.2 Root cause chain
+
+1. Compaction calls `resetMemoryContext(chatId)` → deletes Map state **and**
+   the durable row.
+2. Next build = Case 1 full retrieval → nondeterministic rerank roll → new
+   `frozen_section` string, new hash.
+3. The retrieval pipeline applies the relevance threshold pre-freeze; a
+   reranker variance dip (or topic-anchor dampening after topic drift) can
+   return an empty or near-empty set, which then unconditionally overwrites a
+   good row. Observed twice overnight (00:13:23, 03:47:49) and again at
+   16:15 — the hysteresis series 5→4→0→3 in one night.
+4. Each flip breaks LCP at the section boundary (~0.096 sim per §1 math),
+   walks past a warm slot, and manufactures an orphan entry in the pool.
+
+The freeze is *owed* at compaction (prefix rebuilt anyway), but rolling fresh
+dice each time is not — and silently degrading to an empty set never is.
+
+### 10.3 Fix A — clobber guard (~10 lines)
+
+At the Case 1 freeze site (memory-context.ts, after `retrieveMemories`, before
+state overwrite): if `memories.length === 0` **and** hydrated state exists with
+a non-empty section, keep the previous section byte-exact — set state from it,
+persist unchanged, log
+
+```
+[memory-context] chat=X re-roll produced empty set — retaining previous section (N ids)
+```
+
+Rationale: an empty retrieval is evidence of query/anchor failure, not corpus
+emptiness — the corpus cannot have emptied while a durable row for this chat
+holds live content. Hydration (L1125) always runs before Case 1 in the same
+build, so "previous" is available in-process. Retrieval error path (existing
+catch, returns bare stablePrefix without establishing state) already behaves
+correctly and stays.
+
+### 10.4 Fix B — soft reset at compaction (~30 lines)
+
+New export in memory-context.ts:
+
+```ts
+export function softResetMemoryContext(chatId: string): void
+```
+
+- Clear `deltaIds` only; keep `frozenIds` + `frozenMemoriesSection`.
+- Set `dirty = true`; persist to the row.
+- If no Map entry exists, hydrate from the row first so a soft reset never
+  resurrects state from nothing (no-op when no row exists).
+
+Then switch the **post-compaction** `resetMemoryContext` call sites to it.
+Site inventory requires per-call verification, but the class is: call sites
+that run inside or immediately after a compaction flow where the conversation
+history is rewritten but the chat continues. Keep hard `resetMemoryContext`
+(row delete + full re-roll) for:
+
+- **Chat deletion** (chat-deletion.ts:24) — nothing left to preserve.
+- **Zeitgeist rewrites** (system-chat.ts ×2) — `stablePrefix` changes anyway;
+  re-roll is subsumed by the owed rewrite cost.
+- **Automation starts** (automation-runner.ts:214) — synthetic trigger message;
+  next real turn's roll uses a real conversational query and is owed (doc §4.2).
+- Project workspace change path (if reachable) — stablePrefix rebuild owed.
+
+Effect: post-compaction turns become Case 3 delta builds against compacted
+history. Section string survives compaction byte-exact → prefix holds from
+stablePrefix through the whole history tail → hits stay ≥94%, zero dice, zero
+orphans.
+
+Delta growth note: deltas previously reset at every compaction will now
+accumulate across many cycles. The existing valve handles it —
+`deltaIds.size > 20` logs high-water and the dirty build performs the hard
+re-roll (Fix C). Expected cadence ≈ once/day/chat, which matches the budget
+set aside for compaction re-rolls.
+
+### 10.5 Fix C — hysteresis re-roll at the delta-overflow valve (deferred)
+
+When the valve fires, instead of a pure Case 1 roll, perform a re-roll whose
+membership votes are asymmetric:
+
+- Previously-frozen ids appearing among retrieved candidates are **exempt
+  from the threshold filter** — sub-threshold score is not evidence against
+  membership (borderline rerank variance); they leave only via supersession/
+  deletion validation or absence from candidates entirely.
+- Ids absent from candidates are dropped (slow decay).
+- Merged set == previous set → reuse previous section string byte-exact
+  (zero-churn fast path).
+
+Requires threading `{ exemptIds?: Set<string> }` through `retrieveMemories`
+to its threshold-filter site(s). Deferred until Fix A+B hit rates are
+observed for ~a day: if soft-reset alone keeps mid-conversation
+`full retrieval:` occurrences at the valve cadence, C can be minimal or
+unnecessary.
+
+### 10.6 Tests (extends §6)
+
+Unit additions:
+1. Non-empty durable row; Case 1 retrieval returns `[]` → section retained
+   byte-exact (hash compare), warn logged, row unchanged.
+2. Empty-set guard does not fire when retrieval succeeds non-empty.
+3. `softResetMemoryContext`: keeps frozenIds/section, clears deltaIds,
+   dirty=1 persisted; no-op when no row; no resurrection when neither Map
+   nor row exists.
+4. Post-compaction build after soft reset → Case 3 delta line (no
+   `full retrieval:`).
+5. Regression: hard reset still deletes row (deletion/automation/zeitgeist).
+
+Canary update (standing): `full retrieval: N memories frozen` legitimate only
+at genuine first turns and delta-valve re-rolls; `full retrieval: 0 memories`
+should be extinct.
+
+### 10.7 Rollout
+
+Single PR: Fix A + B together (A alone rots once B removes most Case 1
+arrivals; both are small). Phase 2 (cache-warm stop-re-roll) stays separate
+per §7 sequencing.
