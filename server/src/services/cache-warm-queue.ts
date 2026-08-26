@@ -13,6 +13,8 @@
 import { isActive, waitForIdle } from "./llm-activity.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 import { isAutomationActive } from "./automation-lock.js";
+import { isTurnGateBusy } from "./turn-gate.js";
+import { listActiveQueueChats } from "./message-queue.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import {
@@ -73,6 +75,15 @@ const queue: CacheWarmJob[] = [];
 let mutex: "idle" | CacheWarmJob = "idle";
 const LLAMA_BUSY_PROBE_TIMEOUT_MS = Number(process.env.LLAMA_BUSY_PROBE_TIMEOUT_MS) || 3_000;
 const POST_SYNTHESIS_RECENT_CHAT_LIMIT = 5;
+
+/**
+ * Retry interval for warm jobs deferred because a real turn is in flight or
+ * the user has queued messages. Read at call time so tests can shorten the
+ * backoff; the 30s default matches the existing synthesis deferral cadence.
+ */
+function warmDeferRetryMs(): number {
+  return Number(process.env.WARM_DEFER_RETRY_MS) || 30_000;
+}
 
 interface RouterModelEntry {
   id?: string;
@@ -480,6 +491,38 @@ async function drainQueue(): Promise<void> {
       return;
     }
 
+    // Serialize warm with real turns at the gate level. isActive() above only
+    // sees in-flight LLM streams, so a turn in its prompt-setup or tool phase
+    // reads as idle — but its prefill would collide with this one on the
+    // single slot, and a queued waiter means a turn is about to start for the
+    // same reason. This applies to ALL jobs, including user-requested ones:
+    // an explicit warm still runs, just right after the active turn ends.
+    //
+    // Non-user-requested warms (post-synthesis, sleep-prewarm) additionally
+    // yield to queued messages: a fresh queued message means the user is
+    // actively waiting on that chat, and their pending turns (and follow-ups)
+    // prefill exactly what they need — the prewarm exists to speed up the
+    // user's RETURN, not to compete with their CURRENT conversation.
+    const gateBusy = isTurnGateBusy();
+    const userWaiting =
+      job.reason !== "user-requested" && (await listActiveQueueChats()).length > 0;
+    if (gateBusy || userWaiting) {
+      console.log(
+        `[cache-warm-queue] deferring warm for ${jobTargetLabel(job)} — ` +
+          (gateBusy
+            ? "turn gate busy (turn in flight or queued)"
+            : "user has queued messages (actively waiting)"),
+      );
+      // Re-queue at the BACK (unlike the synthesis branch above) so a
+      // user-requested warm enqueued while this job keeps deferring is served
+      // first once the condition clears.
+      queue.push(job);
+      mutex = "idle";
+      shouldDrainNext = false;
+      setTimeout(drainQueue, warmDeferRetryMs());
+      return;
+    }
+
     // Check if the job was aborted while we were waiting
     if (job.signal?.aborted) {
       job.reject(job.signal.reason instanceof Error ? job.signal.reason : new Error("Aborted"));
@@ -545,6 +588,20 @@ export async function schedulePostSynthesisWarms(
   signal?: AbortSignal,
 ): Promise<CacheWarmResult[]> {
   const results: CacheWarmResult[] = [];
+
+  // A fresh queued message means the user is actively waiting on that chat.
+  // Their pending turn (and its follow-ups) prefill exactly what they need,
+  // so the prewarm pass yields to it entirely — the next synthesis cycle
+  // re-warms once the user has gone quiet. Stale queues (server restart
+  // mid-turn) don't count; see listActiveQueueChats.
+  const waitingChatIds = await listActiveQueueChats();
+  if (waitingChatIds.length > 0) {
+    console.log(
+      `[cache-warm-queue] post-synthesis warm skipped — queued messages waiting on: ${waitingChatIds.join(", ")}`,
+    );
+    return results;
+  }
+
   const capacity = await discoverPostSynthesisWarmCapacity();
   const plan = buildPostSynthesisWarmPlan(capacity, systemChatId, recentChatIds);
 

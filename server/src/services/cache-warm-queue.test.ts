@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  enqueueWarm,
   isCacheWarmOrLlamaRuntimeBusy,
   schedulePostSynthesisWarms,
   slotHasActiveTask,
 } from "./cache-warm-queue.js";
 import { getSettings } from "./chat-storage.js";
+import { listActiveQueueChats } from "./message-queue.js";
+import { acquireTurn, getActiveTurn, releaseTurn } from "./turn-gate.js";
 
 const warmMockState = vi.hoisted(() => ({
   calls: [] as string[],
@@ -15,6 +18,10 @@ vi.mock("./chat-storage.js", () => ({
     defaultModelId: "demo-model",
     llamacppUrl: "http://router.test",
   })),
+}));
+
+vi.mock("./message-queue.js", () => ({
+  listActiveQueueChats: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock("./cache-warm.js", () => ({
@@ -54,6 +61,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   warmMockState.calls = [];
+  vi.mocked(listActiveQueueChats).mockResolvedValue([]);
+  // Turn-gate state lives on globalThis — release any lease a test left held.
+  const active = getActiveTurn();
+  if (active) releaseTurn(active);
+  delete process.env.WARM_DEFER_RETRY_MS;
 });
 
 describe("llama slot busy detection", () => {
@@ -227,5 +239,85 @@ describe("post-synthesis warm planning", () => {
       "system",
       "__porrima_new_agent_chat_baseline__",
     ]);
+  });
+
+  it("skips the post-synthesis pass when the user has queued messages", async () => {
+    vi.mocked(listActiveQueueChats).mockResolvedValue(["chat-waiting"]);
+    const fetchMock = vi.fn(async () => jsonResponse({ max_instances: 4 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2"]);
+
+    expect(results).toEqual([]);
+    expect(warmMockState.calls).toEqual([]);
+    // Skipped before capacity discovery — no router probe at all
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("warm queue deferral (turn gate + queued messages)", () => {
+  it("defers warm while a real turn holds the gate (LLM idle in tool phase)", async () => {
+    process.env.WARM_DEFER_RETRY_MS = "50";
+    const lease = await acquireTurn("chat-turn");
+    const warmPromise = enqueueWarm("chat-x", "post-synthesis");
+
+    // The gate is busy but no LLM stream is active — the old guard alone
+    // would have started the warm and collided on the single slot.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(warmMockState.calls).toEqual([]);
+
+    releaseTurn(lease);
+    await vi.waitFor(
+      () => expect(warmMockState.calls).toEqual(["chat:chat-x"]),
+      { timeout: 2000 },
+    );
+    await warmPromise;
+  });
+
+  it("defers warm while a turn is queued at the gate, not just while one runs", async () => {
+    process.env.WARM_DEFER_RETRY_MS = "50";
+    const leaseA = await acquireTurn("chat-a");
+    const leaseB = acquireTurn("chat-b"); // waits behind A
+    const warmPromise = enqueueWarm("chat-x", "post-synthesis");
+
+    await new Promise((r) => setTimeout(r, 150));
+    expect(warmMockState.calls).toEqual([]);
+
+    releaseTurn(leaseA); // grants B — gate still busy
+    const leaseBResolved = await leaseB;
+    await new Promise((r) => setTimeout(r, 150));
+    expect(warmMockState.calls).toEqual([]);
+
+    releaseTurn(leaseBResolved);
+    await vi.waitFor(
+      () => expect(warmMockState.calls).toEqual(["chat:chat-x"]),
+      { timeout: 2000 },
+    );
+    await warmPromise;
+  });
+
+  it("defers post-synthesis warm while the user has queued messages, but not user-requested", async () => {
+    process.env.WARM_DEFER_RETRY_MS = "50";
+    vi.mocked(listActiveQueueChats).mockResolvedValue(["chat-waiting"]);
+
+    const psPromise = enqueueWarm("chat-ps", "post-synthesis");
+    await new Promise((r) => setTimeout(r, 150));
+    expect(warmMockState.calls).toEqual([]);
+
+    // An explicit user warm overtakes the yielding auto job
+    const urPromise = enqueueWarm("chat-ur", "user-requested");
+    await vi.waitFor(
+      () => expect(warmMockState.calls).toEqual(["chat:chat-ur"]),
+      { timeout: 2000 },
+    );
+    await urPromise;
+
+    // Once the user goes quiet (queue drained/stale), the auto job runs
+    vi.mocked(listActiveQueueChats).mockResolvedValue([]);
+    await vi.waitFor(
+      () => expect(warmMockState.calls).toEqual(["chat:chat-ur", "chat:chat-ps"]),
+      { timeout: 2000 },
+    );
+    await psPromise;
   });
 });

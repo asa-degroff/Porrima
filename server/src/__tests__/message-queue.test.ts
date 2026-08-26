@@ -135,3 +135,78 @@ describe("message queue — listVisibleQueueCounts", () => {
     expect(counts.has("a")).toBe(false);
   });
 });
+
+describe("message queue — listActiveQueueChats", () => {
+  it("counts chats with fresh visible queued messages", async () => {
+    home = makeHome();
+    const mq = await loadQueue(home);
+    await mq.enqueue("a", "just sent");
+    await mq.enqueue("b", "also fresh");
+
+    const active = await mq.listActiveQueueChats();
+    expect(active.sort()).toEqual(["a", "b"]);
+  });
+
+  it("ignores hidden-only queues", async () => {
+    home = makeHome();
+    const mq = await loadQueue(home);
+    await mq.enqueue("h", "repair", undefined, { hidden: true, kind: "artifact_repair" });
+
+    expect(await mq.listActiveQueueChats()).toEqual([]);
+  });
+
+  it("does not count stranded (stale) queued messages", async () => {
+    home = makeHome();
+    const mq = await loadQueue(home);
+
+    // Simulate queues that survived a restart: one abandoned, one recent
+    const dir = queueDirOf(home);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "stranded.json"),
+      JSON.stringify([{ id: "1", message: "abandoned", timestamp: 1 }]),
+    );
+    writeFileSync(
+      join(dir, "fresh.json"),
+      JSON.stringify([{ id: "2", message: "recent", timestamp: Date.now() }]),
+    );
+
+    expect(await mq.listActiveQueueChats()).toEqual(["fresh"]);
+
+    // A zero window makes even a just-now message count as stranded
+    expect(await mq.listActiveQueueChats(0)).toEqual([]);
+  });
+
+  it("uses the newest visible item's timestamp for freshness", async () => {
+    home = makeHome();
+    const mq = await loadQueue(home);
+    const dir = queueDirOf(home);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "mixed.json"),
+      JSON.stringify([
+        { id: "1", message: "old visible", timestamp: 1 },
+        { id: "2", message: "repair", timestamp: Date.now(), hidden: true, kind: "artifact_repair" },
+      ]),
+    );
+
+    // Newest item is hidden → falls back to the old visible one → stranded
+    expect(await mq.listActiveQueueChats()).toEqual([]);
+  });
+
+  it("suppresses stale disk files once the in-memory queue drains", async () => {
+    home = makeHome();
+    const mq = await loadQueue(home);
+    await mq.enqueue("a", "one");
+    expect(await mq.listActiveQueueChats()).toEqual(["a"]);
+
+    // Simulate a failed unlink leaving the file behind after a full drain
+    await mq.drainOne("a");
+    writeFileSync(
+      join(queueDirOf(home), "a.json"),
+      JSON.stringify([{ id: "1", message: "stale file", timestamp: Date.now() }]),
+    );
+
+    expect(await mq.listActiveQueueChats()).toEqual([]);
+  });
+});
