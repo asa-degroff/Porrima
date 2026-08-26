@@ -455,20 +455,28 @@ dice each time is not — and silently degrading to an empty set never is.
 
 ### 10.3 Fix A — clobber guard (~10 lines)
 
-At the Case 1 freeze site (memory-context.ts, after `retrieveMemories`, before
-state overwrite): if `memories.length === 0` **and** hydrated state exists with
-a non-empty section, keep the previous section byte-exact — set state from it,
-persist unchanged, log
+At the Case 1 freeze site (memory-context.ts, after `retrieveMemories`): if
+`memories.length === 0`, skip establishment entirely — set no state, persist
+no row, log
 
 ```
-[memory-context] chat=X re-roll produced empty set — retaining previous section (N ids)
+[memory-context] chat=X full retrieval returned 0 — not freezing, will retry next build
 ```
 
 Rationale: an empty retrieval is evidence of query/anchor failure, not corpus
-emptiness — the corpus cannot have emptied while a durable row for this chat
-holds live content. Hydration (L1125) always runs before Case 1 in the same
-build, so "previous" is available in-process. Retrieval error path (existing
-catch, returns bare stablePrefix without establishing state) already behaves
+emptiness. Freezing zero memories was exactly how an empty section became
+canonical (00:13:23, 03:47:49): once the row existed, Case 2 held it until
+the next compaction. Skipping establishment means the next build retries full
+retrieval with that turn's query, mirroring the existing retrieval-error path.
+
+Structural note (v1.3 revision while implementing): post-Phase-1 hydration
+promotes any surviving row to state **before** Case 1 runs, so a Case 1
+arrival structurally has no prior section to retain — "retain previous" is
+unreachable there. The effective protection against the clobber class is this
+guard (never writes a fresh empty canonical set) plus Fix B (rows survive
+compaction at all). Reaching Case 1 alongside a live row can only mean the
+row read failed (already warned); the guard keeps even that path free of
+empty writes. The existing catch-block on retrieval failure already behaves
 correctly and stays.
 
 ### 10.4 Fix B — soft reset at compaction (~30 lines)
