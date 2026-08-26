@@ -247,6 +247,35 @@ export function resetMemoryContext(chatId: string): void {
 }
 
 /**
+ * Post-compaction reset (doc §10.4). Compaction rewrites conversation history
+ * but does not change the frozen set's validity — a fresh rerank roll here is
+ * pure nondeterminism (hysteresis 5→4→0→3 observed overnight) that breaks the
+ * prompt prefix at the section boundary, walks a warm slot, and manufactures a
+ * pool orphan. Keep frozenIds + section byte-exact, drop accumulated deltaIds
+ * (they summarized messages compaction just removed), mark dirty so the next
+ * build runs Case 3: new memories — including anything preCompactionFlush
+ * just extracted — arrive as delta rows against the compacted history.
+ *
+ * Hard `resetMemoryContext` stays for chat deletion (nothing to preserve),
+ * zeitgeist rewrites (stablePrefix changes anyway), automation starts
+ * (synthetic trigger — next real turn's roll is owed), and workspace changes.
+ */
+export function softResetMemoryContext(chatId: string): void {
+  // Never resurrect state from nothing: only soften what already exists.
+  // Hydrate first so a soft reset after a process restart lands on the row.
+  if (!contextState.has(chatId)) {
+    hydrateContextState(chatId);
+  }
+  const state = contextState.get(chatId);
+  if (!state) return;
+
+  state.deltaIds.clear();
+  state.dirty = true;
+  persistContextState(chatId, state);
+  log(`[memory-context] chat=${chatId} soft reset: ${state.frozenIds.size} frozen retained, deltas cleared, dirty=true`);
+}
+
+/**
  * Return memory IDs already present in this chat's active memory context.
  * Used by passive mid-turn recall to avoid re-injecting frozen or delta
  * memories through a second hidden system row.
@@ -1026,11 +1055,15 @@ async function buildMemoryAugmentedPromptInner(
  * - memoriesMessage: delta of NEW memories not already in context (may be empty)
  *
  * Flow:
- * 1. No state yet (first turn / post-compaction) → full retrieval, all memories
- *    go into systemPrompt, memoriesMessage is empty.
+ * 1. No state yet (first turn, post-hard-reset) → full retrieval into
+ *    systemPrompt, memoriesMessage empty. An empty retrieval establishes
+ *    nothing (clobber guard — retries next build).
+ *    Post-compaction turns arrive as case 3: compaction soft-resets, keeping
+ *    the frozen section byte-exact across history rewrites.
  * 2. State exists, not dirty → return frozen systemPrompt, empty delta.
- * 3. State exists, dirty (extraction added memories) → re-retrieve, diff against
- *    frozenIds ∪ deltaIds, return only new memories as memoriesMessage.
+ * 3. State exists, dirty (extraction added memories, or post-soft-reset)
+ *    → re-retrieve, diff against frozenIds ∪ deltaIds, return only new
+ *    memories as memoriesMessage.
  */
 export async function buildSplitAugmentedPrompt(
   baseSystemPrompt: string,
@@ -1132,6 +1165,22 @@ async function buildSplitAugmentedPromptInner(
   if (!state) {
     try {
       const memories = await retrieveMemories(recentMessages, chatId, chatType, projectId);
+
+      // Clobber guard (doc §10.3): an empty retrieval is evidence of a
+      // query/anchor failure, not corpus emptiness. Freezing zero memories
+      // would establish an empty section as canonical — the 0-retrieval
+      // clobber class observed overnight twice on 08-26 — and Case 2 would
+      // then hold it until the next compaction. Skip establishment entirely:
+      // next build retries full retrieval with whatever query that turn has.
+      // By construction this cannot destroy existing content — hydration
+      // above promotes any surviving row to state, so reaching Case 1 with a
+      // live row means the row read failed (already warned) — but skipping
+      // keeps even that path free of empty writes.
+      if (memories.length === 0) {
+        log(`[memory-context] chat=${chatId} full retrieval returned 0 — not freezing, will retry next build`);
+        return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
+      }
+
       updateAccessMetadata(memories);
 
       const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);

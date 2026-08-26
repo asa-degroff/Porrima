@@ -468,3 +468,121 @@ describe("memory context persistence (service)", () => {
     expect(mocks.searchMemories).toHaveBeenCalled();
   });
 });
+
+describe("clobber guard + soft reset (doc §10)", () => {
+  const SECTION = "## Frozen section marker — exact bytes";
+  const seedRow = (rows: Map<string, EmulatedRow>, overrides?: Partial<EmulatedRow>) => {
+    rows.set("chat-1", {
+      frozenSection: SECTION,
+      frozenIds: ["f1"],
+      deltaIds: [],
+      dirty: false,
+      ...overrides,
+    });
+  };
+  const build = (mod: any, messages: ChatMessage[], options?: { skipMemoryRetrieval?: boolean }) =>
+    mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
+  const firstTurnMsgs: ChatMessage[] = [{ role: "user", content: "frozen topic", timestamp: 1000 }];
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("clobber guard: Case 1 with an empty retrieval establishes nothing — no freeze, no row", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod, mocks, log } = await loadMemoryContext(rows);
+    // Post-hard-reset world: reset deletes any row, then retrieval comes back empty.
+    mod.resetMemoryContext("chat-1");
+    const healthy = (mocks.searchMemories as any).getMockImplementation();
+    (mocks.searchMemories as any).mockResolvedValue([]);
+
+    const result = await build(mod, firstTurnMsgs);
+    // Bare stablePrefix (base + persona) — no memory section of any kind.
+    expect(result.systemPrompt).not.toContain(SECTION);
+    expect(result.systemPrompt).not.toContain("Frozen topic memory.");
+    expect(result.memoriesMessage).toBe("");
+    expect(mocks.upsertMemoryContextState).not.toHaveBeenCalled();
+    expect(rows.has("chat-1")).toBe(false); // no canonical empty section
+    expect(log.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
+      "full retrieval returned 0"
+    );
+
+    // Recovery: a later build with a healthy roll freezes normally.
+    (mocks.searchMemories as any).mockImplementation(healthy);
+    await build(mod, [{ role: "user", content: "new prompt", timestamp: 2000 }]);
+    expect(rows.get("chat-1")!.dirty).toBe(false); // full roll, clean state
+  });
+
+  it("soft reset keeps frozen set + section byte-exact, clears deltas, persists dirty", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    seedRow(rows, { deltaIds: ["d1"] });
+    const { mod } = await loadMemoryContext(rows);
+
+    await build(mod, firstTurnMsgs); // hydrate into the Map
+    mod.softResetMemoryContext("chat-1");
+
+    const row = rows.get("chat-1")!;
+    expect(row.dirty).toBe(true);
+    expect(row.frozenIds).toEqual(["f1"]);
+    expect(row.frozenSection).toBe(SECTION);
+    expect(row.deltaIds).toEqual([]);
+  });
+
+  it("post-soft-reset build is Case 3 — section retained, delta runs, no full retrieval", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    seedRow(rows);
+    const { mod, mocks, log } = await loadMemoryContext(rows);
+
+    // No Map yet → soft reset must hydrate from the row first, then soften it.
+    mod.softResetMemoryContext("chat-1");
+
+    const result = await build(mod, [
+      { role: "user", content: "new prompt", timestamp: 5000 },
+    ]);
+    expect(result.systemPrompt.endsWith(SECTION)).toBe(true);
+    expect(result.memoriesMessage).toContain("New prompt memory.");
+    const allLogs = log.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(allLogs).toContain("delta:");
+    expect(allLogs).not.toContain("full retrieval:");
+    expect(allLogs).toContain("soft reset");
+    expect(rows.get("chat-1")!.dirty).toBe(false); // consumed by Case 3
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["n1"]);
+    expect(mocks.getMemoryContextState).toHaveBeenCalled(); // hydrated inside softReset
+  });
+
+  it("soft reset is a safe no-op when neither Map nor row exists", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod, mocks } = await loadMemoryContext(rows);
+
+    mod.softResetMemoryContext("chat-unknown");
+    expect(mocks.upsertMemoryContextState).not.toHaveBeenCalled();
+    expect(mocks.deleteMemoryContextState).not.toHaveBeenCalled();
+
+    // And it creates nothing that hijacks the next real turn's Case 1 roll.
+    await build(mod, firstTurnMsgs);
+    const calls = (mocks.upsertMemoryContextState as any).mock.calls;
+    expect(calls.length).toBe(1); // exactly the Case 1 freeze
+    expect(calls[0][1].frozenIds).toEqual(["f1"]);
+    expect(calls[0][1].dirty).toBe(false);
+  });
+
+  it("hard reset after soft reset still deletes everything (regression)", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    seedRow(rows);
+    const { mod, mocks } = await loadMemoryContext(rows);
+
+    await build(mod, firstTurnMsgs);
+    mod.softResetMemoryContext("chat-1");
+    expect(rows.get("chat-1")!.dirty).toBe(true);
+
+    mod.resetMemoryContext("chat-1");
+    expect(mocks.deleteMemoryContextState).toHaveBeenCalledWith("chat-1");
+    expect(rows.has("chat-1")).toBe(false);
+
+    await build(mod, firstTurnMsgs);
+    const lastCall = (mocks.upsertMemoryContextState as any).mock.calls.at(-1)!;
+    expect(lastCall[1].dirty).toBe(false); // full re-roll established clean state
+    expect(lastCall[1].frozenSection).not.toBe(SECTION); // it's a fresh section string
+  });
+});

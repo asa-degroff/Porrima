@@ -33,7 +33,7 @@ import {
   estimateContextPressure,
   type PressureObservation,
 } from "../services/context-pressure.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, softResetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
@@ -3226,13 +3226,13 @@ async function handleChatStream(
         }
 
         // 3. Rebuild system prompt and context
-        // Full reset of memory context — compaction reshapes the entire context,
-        // so we need fresh retrieval with all memories (including newly extracted
-        // ones from preCompactionFlush) frozen into the new system prompt.
+        // Soft reset of memory context (doc §10.4) — the frozen section
+        // survives compaction; newly extracted memories (preCompactionFlush)
+        // enter as delta rows on the next build.
         // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
         // the frozen context state is set up properly for subsequent turns.
         if (compaction?.truncated && isAgent) {
-          resetMemoryContext(chat.id);
+          softResetMemoryContext(chat.id);
           const split = await buildSplitAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
             chat.messages, chat.id, chat.projectId, chat.type, projectPath
@@ -3595,10 +3595,10 @@ async function handleChatStream(
               // next turn) starts from the rebuilt context — arm the indicator.
               postCompactionPrefillPending.add(chat.id);
 
-              // Full reset of memory context after compaction — rebuild with
-              // fresh retrieval, all memories frozen into the new system prompt.
+              // Soft reset after compaction (doc §10.4) — frozen section
+              // survives; new memories flow in as a delta on the next build.
               if (isMemoryAugmentedChatType(chat.type)) {
-                resetMemoryContext(chat.id);
+                softResetMemoryContext(chat.id);
                 const split = await buildSplitAugmentedPrompt(
                   chat.systemPrompt || "You are a helpful assistant.",
                   chat.messages, chat.id, chat.projectId, chat.type, projectPath
@@ -4142,12 +4142,12 @@ router.post("/", async (req, res) => {
       // memories are available when the next buildSplitAugmentedPrompt runs.
       const result = await triggerCompaction(chat, contextWindow, compactSystemPrompt, compactTools, preCompactionFlushHook(chat, "/compact flush failed"));
       if (result && result.truncated) {
-        // Full reset of memory context — compaction reshapes the entire context,
-        // so the next buildSplitAugmentedPrompt call will do a full retrieval with
-        // all memories frozen into the new system prompt. No need to rebuild here
+        // Soft reset of memory context (doc §10.4) — the next buildSplitAugmentedPrompt
+        // call runs Case 3: frozen section retained, new memories as delta rows.
+        // No need to rebuild here
         // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
         if (isMemoryAugmentedChatType(chat.type)) {
-          resetMemoryContext(chat.id);
+          softResetMemoryContext(chat.id);
         }
         // Whether the follow-up runs in this request or on the next turn, its
         // prefill starts from the rebuilt context — arm the indicator.
@@ -4413,8 +4413,9 @@ router.post("/", async (req, res) => {
             await saveChat(chat, { allowTruncation: true });
             // The resumed turn prefills the rebuilt context — arm the indicator.
             postCompactionPrefillPending.add(chat.id);
-            // Rebuild system prompt after truncation with full memory reset
-            resetMemoryContext(chat.id);
+            // Soft reset after compaction — frozen set retained, next build
+            // is a Case 3 delta against compacted history.
+            softResetMemoryContext(chat.id);
             if (isMemoryAugmentedChatType(chat.type)) {
               let resumeProjectPath: string | undefined;
               if (chat.projectId) {
@@ -4621,12 +4622,12 @@ router.post("/", async (req, res) => {
             await saveChat(chat, { allowTruncation: true });
             // The turn about to start prefills the rebuilt context — arm the indicator.
             postCompactionPrefillPending.add(chat.id);
-            // Full reset of memory context — compaction reshapes the entire context,
-            // so we need fresh retrieval with all memories frozen into the new system prompt.
+            // Soft reset of memory context (doc §10.4) — frozen section retained
+            // across compaction; new memories arrive as delta rows on the next build.
             // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
             // the frozen context state is set up immediately, avoiding a redundant retrieval
             // on the next turn.
-            resetMemoryContext(chat.id);
+            softResetMemoryContext(chat.id);
             if (isMemoryAugmentedChatType(chat.type)) {
               let projectPath: string | undefined;
               if (chat.projectId) {
@@ -5266,8 +5267,9 @@ router.post("/edit", async (req, res) => {
           await saveChat(chat, { allowTruncation: true });
           // The regenerated turn prefills the rebuilt context — arm the indicator.
           postCompactionPrefillPending.add(chat.id);
-          // Rebuild system prompt after truncation with full memory reset
-          resetMemoryContext(chat.id);
+          // Soft reset after compaction — frozen set retained, next build
+          // is a Case 3 delta against compacted history.
+          softResetMemoryContext(chat.id);
           if (isMemoryAugmentedChatType(chat.type)) {
             let editProjectPath: string | undefined;
             if (chat.projectId) {
