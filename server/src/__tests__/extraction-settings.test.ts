@@ -96,4 +96,80 @@ describe("resolveExtractionRequestSettings", () => {
     expect(result.configuredCtxSize).toBe(131072);
     expect(result.ctxSource).toBe("settings");
   });
+
+  it("divides a server-total context by --parallel from the managed config", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({
+      n_ctx: 131072,
+      default_generation_settings: { n_ctx: 65536 },
+    })) as any;
+
+    const result = await resolveExtractionRequestSettings({
+      extractionModelUrl: "http://127.0.0.1:32101",
+      extractionCtxSize: 131072,
+      extractionMaxTokens: 4000,
+      extractionTimeoutMs: 600000,
+      llamaServiceConfigs: {
+        extraction: { host: "127.0.0.1", port: 32101, parallel: 2 },
+      },
+    });
+
+    expect(result.ctxSize).toBe(65536);
+    expect(result.configuredCtxSize).toBe(131072);
+    expect(result.ctxSource).toBe("props");
+  });
+
+  it("does not divide an already per-slot reported context", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({
+      default_generation_settings: { n_ctx: 65536 },
+    })) as any;
+
+    const result = await resolveExtractionRequestSettings({
+      extractionModelUrl: "http://127.0.0.1:32101",
+      extractionCtxSize: 131072,
+      extractionMaxTokens: 4000,
+      extractionTimeoutMs: 600000,
+      llamaServiceConfigs: {
+        extraction: { host: "127.0.0.1", port: 32101, parallel: 2 },
+      },
+    });
+
+    expect(result.ctxSize).toBe(65536);
+    expect(result.ctxSource).toBe("props");
+  });
+
+  it("applies the per-slot split to the settings fallback too", async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false, json: async () => ({}) } as Response)) as any;
+
+    const result = await resolveExtractionRequestSettings({
+      extractionModelUrl: "http://127.0.0.1:32101",
+      extractionCtxSize: 131072,
+      extractionMaxTokens: 4000,
+      extractionTimeoutMs: 600000,
+      llamaServiceConfigs: {
+        extraction: { host: "127.0.0.1", port: 32101, parallel: 2 },
+      },
+    });
+
+    expect(result.ctxSize).toBe(65536);
+    expect(result.ctxSource).toBe("settings");
+  });
+
+  it("ignores llamaServiceConfigs entries for other services", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({
+      default_generation_settings: { n_ctx: 131072 },
+    })) as any;
+
+    const result = await resolveExtractionRequestSettings({
+      extractionModelUrl: "http://127.0.0.1:32101",
+      extractionCtxSize: 131072,
+      extractionMaxTokens: 4000,
+      extractionTimeoutMs: 600000,
+      llamaServiceConfigs: {
+        inference: { host: "127.0.0.1", port: 8080, parallel: 3 },
+      },
+    });
+
+    expect(result.ctxSize).toBe(131072);
+    expect(result.ctxSource).toBe("props");
+  });
 });

@@ -70,7 +70,29 @@ export interface EffectiveExtractionRequestSettings {
 type ExtractionSettingsInput = Pick<
   Settings,
   "extractionCtxSize" | "extractionMaxTokens" | "extractionTimeoutMs" | "extractionModelUrl" | "extractionModelId"
->;
+> & { llamaServiceConfigs?: Record<string, any> };
+
+/**
+ * Number of parallel sequences (slots) the managed service behind `baseUrl`
+ * launches, per its llamaServiceConfigs entry. llama.cpp partitions the total
+ * context evenly across slots, so prompt budgeting must use the per-slot
+ * share — not the server-total n_ctx reported by /props. Returns 1 when no
+ * matching config exists (unmanaged server, or single-slot launch).
+ */
+function configuredParallelForUrl(configs: Record<string, any> | undefined, baseUrl: string): number {
+  if (!configs || typeof configs !== "object") return 1;
+  const target = normalizeBaseUrl(baseUrl);
+  for (const entry of Object.values(configs)) {
+    if (!entry || typeof entry !== "object") continue;
+    const host = typeof entry.host === "string" ? entry.host.trim() : "";
+    const port = positiveInteger(entry.port);
+    if (!host || port === undefined) continue;
+    if (normalizeBaseUrl(`http://${host}:${port}`) === target) {
+      return Math.max(1, positiveInteger(entry.parallel) ?? 1);
+    }
+  }
+  return 1;
+}
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -94,10 +116,21 @@ function parseCtxSizeArg(args: unknown): number | undefined {
   return positiveInteger(args[index + 1]);
 }
 
-function readPropsCtxSize(data: any): number | undefined {
-  return positiveInteger(data?.default_generation_settings?.n_ctx) ??
-    positiveInteger(data?.n_ctx) ??
-    positiveInteger(data?.max_model_len);
+/**
+ * Read a context size out of a /props payload, tracking whether the value is
+ * the server total or already a per-slot share. llama.cpp exposes the total
+ * at the top level and the per-slot share (total / --parallel) inside
+ * default_generation_settings — dividing a per-slot value by parallel again
+ * would halve the budget twice.
+ */
+function readPropsCtxSize(data: any): { ctxSize: number; scope: "total" | "slot" } | null {
+  const total = positiveInteger(data?.n_ctx);
+  if (total !== undefined) return { ctxSize: total, scope: "total" };
+  const slot = positiveInteger(data?.default_generation_settings?.n_ctx);
+  if (slot !== undefined) return { ctxSize: slot, scope: "slot" };
+  const legacy = positiveInteger(data?.max_model_len);
+  if (legacy !== undefined) return { ctxSize: legacy, scope: "total" };
+  return null;
 }
 
 function readModelCtxSize(entry: any): number | undefined {
@@ -121,7 +154,7 @@ async function discoverLiveExtractionCtxSize(
   baseUrl: string,
   modelId: string | undefined,
   timeoutMs: number,
-): Promise<{ ctxSize: number; source: Exclude<ExtractionContextSource, "settings"> } | null> {
+): Promise<{ ctxSize: number; source: Exclude<ExtractionContextSource, "settings">; scope: "total" | "slot" } | null> {
   const url = normalizeBaseUrl(baseUrl);
   const normalizedModelId = normalizeModelId(modelId);
   const propsUrls = normalizedModelId
@@ -130,8 +163,8 @@ async function discoverLiveExtractionCtxSize(
 
   for (const propsUrl of propsUrls) {
     const props = await fetchJson(propsUrl, timeoutMs);
-    const ctxSize = readPropsCtxSize(props);
-    if (ctxSize) return { ctxSize, source: "props" };
+    const found = readPropsCtxSize(props);
+    if (found) return { ctxSize: found.ctxSize, source: "props", scope: found.scope };
   }
 
   const models = await fetchJson(`${url}/v1/models`, timeoutMs);
@@ -152,7 +185,9 @@ async function discoverLiveExtractionCtxSize(
 
   for (const entry of candidates) {
     const ctxSize = readModelCtxSize(entry);
-    if (ctxSize) return { ctxSize, source: "models" };
+    // --ctx-size / max_model_len describe the launched context as a whole;
+    // the per-slot share only exists once the server splits it across slots.
+    if (ctxSize) return { ctxSize, source: "models", scope: "total" };
   }
   return null;
 }
@@ -171,21 +206,34 @@ export async function resolveExtractionRequestSettings(settings: ExtractionSetti
     return { ...normalized, configuredCtxSize: normalized.ctxSize, ctxSource: "settings" };
   }
 
+  // --parallel N splits the launched context evenly across slots; a single
+  // request can only ever use its slot's share, so budget against that.
+  const parallel = configuredParallelForUrl(settings.llamaServiceConfigs, baseUrl);
+  const perSlotCtx = (total: number) =>
+    Math.min(MAX_EXTRACTION_CTX_SIZE, Math.max(1, Math.floor(total / parallel)));
+
   const live = await discoverLiveExtractionCtxSize(
     baseUrl,
     settings.extractionModelId,
     Math.min(normalized.timeoutMs, 3_000),
   );
   if (!live) {
-    return { ...normalized, configuredCtxSize: normalized.ctxSize, ctxSource: "settings" };
+    // The saved setting stores the launched (total) context.
+    return { ...normalized, ctxSize: perSlotCtx(normalized.ctxSize), configuredCtxSize: normalized.ctxSize, ctxSource: "settings" };
   }
 
-  if (live.ctxSize !== normalized.ctxSize) {
-    const logKey = `${normalizeBaseUrl(baseUrl)}:${normalized.ctxSize}:${live.ctxSize}:${live.source}`;
+  // Only divide when the reported value is the server total. Some builds
+  // already expose the per-slot share (default_generation_settings.n_ctx);
+  // dividing that again would halve the budget twice.
+  const ctxSize = live.scope === "total" ? perSlotCtx(live.ctxSize) : live.ctxSize;
+  if (ctxSize !== normalized.ctxSize) {
+    const logKey = `${normalizeBaseUrl(baseUrl)}:${normalized.ctxSize}:${live.ctxSize}:${live.scope}:${parallel}:${live.source}`;
     if (lastCtxMismatchLogKey !== logKey) {
       lastCtxMismatchLogKey = logKey;
       console.warn(
-        `[extraction] Using live context size ${live.ctxSize} from ${live.source}; saved extractionCtxSize is ${normalized.ctxSize}.`
+        `[extraction] Using live context size ${live.ctxSize} (${live.scope}) from ${live.source}` +
+        (live.scope === "total" && parallel > 1 ? ` (${ctxSize} per slot with --parallel ${parallel})` : "") +
+        `; saved extractionCtxSize is ${normalized.ctxSize}.`
       );
     }
   }
@@ -194,7 +242,7 @@ export async function resolveExtractionRequestSettings(settings: ExtractionSetti
     ...normalized,
     // Do not clamp live values up to MIN_EXTRACTION_CTX_SIZE: if the process
     // really reports a smaller context, budgeting must stay below it.
-    ctxSize: Math.min(MAX_EXTRACTION_CTX_SIZE, Math.max(1, Math.round(live.ctxSize))),
+    ctxSize,
     configuredCtxSize: normalized.ctxSize,
     ctxSource: live.source,
   };
