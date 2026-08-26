@@ -9,7 +9,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 
-export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "mid-turn-pulse" | "other";
+export type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "mid-turn-pulse" | "index-gen" | "other";
 
 export type ExtractionStatus = "running" | "success" | "error";
 
@@ -72,6 +72,8 @@ export interface ExtractionRunMetadata {
   chunkedFallback?: boolean;
   /** Mid-turn pulse window was FIFO-sliced to fit the extraction budget. */
   windowTruncated?: boolean;
+  /** Free-form context label (e.g. which index-gen path this run belongs to). */
+  context?: string;
 }
 
 export interface ExtractionRun {

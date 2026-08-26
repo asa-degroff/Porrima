@@ -1,6 +1,8 @@
 import type { ChatMessage } from "../types.js";
 import { getDb, getSettings, type ContextArchive, getNextArchiveSequence, saveArchives } from "./chat-storage.js";
 import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
+import { withExtractionMutex } from "./memory-extraction.js";
+import { startExtractionRun } from "./memory-extraction-observability.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -444,15 +446,40 @@ Output ONLY the formatted lines, nothing else.`;
 
   if (extractionUrl) {
     const extractionSettings = normalizeExtractionRequestSettings(settings);
-    outputText = await callExtractionModel(
-      extractionUrl,
-      modelId,
+    const runHandle = startExtractionRun({
+      trigger: "index-gen",
+      model: settings.extractionModelId || "index-gen",
+      priorMemoryCount: 0,
+      messages: [{ role: "user", content: inputParts }],
       systemPrompt,
-      inputParts,
-      settings.extractionModelId || "index-gen",
-      extractionSettings.maxTokens,
-      extractionSettings.timeoutMs,
-    );
+      userPrompt: inputParts,
+      metadata: {
+        promptChars: systemPrompt.length + inputParts.length,
+        estimatedPromptTokens: Math.ceil((systemPrompt.length + inputParts.length) / 4),
+        context: "pre-synthesis archive index",
+      },
+    });
+    try {
+      // Serialized on the extraction mutex like every other extraction-server
+      // caller: index gen must not race flushes/immediate batches for the
+      // warm slot (this path previously bypassed the mutex entirely).
+      outputText = await withExtractionMutex(() =>
+        callExtractionModel(
+          extractionUrl,
+          modelId,
+          systemPrompt,
+          inputParts,
+          settings.extractionModelId || "index-gen",
+          extractionSettings.maxTokens,
+          extractionSettings.timeoutMs,
+        ),
+      );
+      runHandle.attachOutput(outputText);
+      runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+    } catch (e) {
+      runHandle.fail(e);
+      throw e;
+    }
   }
 
   if (!outputText) {

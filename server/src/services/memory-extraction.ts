@@ -12,7 +12,6 @@ import {
   findSimilarMemoryCandidates,
   createSupersessionLink,
   getMemoriesByChatId,
-  getMaxBlockChars,
   buildMemoryIndexText,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
@@ -40,13 +39,16 @@ const LOG_DIR = appDataPath("logs");
 // ---------------------------------------------------------------------------
 // Extraction server mutex
 // ---------------------------------------------------------------------------
-// The dedicated extraction server (llama.cpp, --parallel 1) can only process
-// one request at a time. Without coordination, multiple callers (preCompaction
-// Flush, scheduler delayed extraction, enrichment batch, compaction index
-// generation, zeitgeist synthesis) queue HTTP requests concurrently. Each
-// pending request holds its full request body in Node.js memory while waiting,
-// and the server's single slot means all but one are blocked anyway. Under
-// heavy compaction cycles this piles up enough resident memory to OOM.
+// The dedicated extraction server (llama.cpp, --parallel 2) can process two
+// requests concurrently, but serialization is still load-bearing: the callers
+// (immediate/delayed/flush extraction, compaction + pre-synthesis index
+// generation, enrichment, zeitgeist synthesis) use disjoint prompt families,
+// and interleaving a one-shot family (index gen) between runs of a session
+// family (an extraction session's warm KV) evicts the session's cached prefix
+// from the slot and forces a full cold re-prefill on the next run.
+// Serializing also bounds Node.js memory: each pending request would
+// otherwise hold its full body in memory while waiting, and under heavy
+// compaction cycles that pile-up OOMs the process.
 //
 // This mutex serializes all extraction server access so at most one request
 // is in flight. Callers that don't need the extraction server (fallback to
@@ -619,84 +621,96 @@ If nothing is significant, output: {"subject": "", "memories": []}
 
 IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 
-/**
- * Maximum share of the extraction context window that the system prompt
- * (including block summaries) is allowed to consume. At 40% we leave the
- * majority of the window for user content + output + safety margin.
- */
-const SYS_PROMPT_CTX_RATIO = 0.40;
+// ---------------------------------------------------------------------------
+// Block digest — slim, deterministic, user-turn resident
+// ---------------------------------------------------------------------------
+// The block digest tells the extraction model what is already known so it
+// skips redundant facts. It lives in the session's user turn, not the system
+// prompt: the system prompt is the stable KV prefix, and the digest is
+// carried only when its hash changes (see processImmediateExtractionJobs).
+// Editing a memory block therefore costs nothing to a warm session's cache —
+// the old design put the digest in the system prompt, so any block edit
+// invalidated the entire cached prefix AND reset the session identity
+// (double blow: full cold re-prefill + discarded history).
 
-/** Minimum input tokens reserved for user content when capping the system
- * prompt budget. If the output-token reservation + system prompt would leave
- * less than this for user content, blocks are trimmed more aggressively. */
-const MIN_INPUT_TOKENS = 1000;
+const DIGEST_CONTENT_CHARS = 400;
+const DIGEST_DESCRIPTION_CHARS = 250;
+const DIGEST_TOTAL_CHARS = 12000;
 
-/**
- * Compute per-block char allotment that keeps the system prompt within budget.
- *
- * The system prompt budget is the lesser of:
- *   - SYS_PROMPT_CTX_RATIO of the context window (40%), and
- *   - What remains after reserving output tokens, safety margin, and a
- *     MIN_INPUT_TOKENS floor for user content.
- *
- * When maxTokens is small (e.g. default 4K on a 16K context), the ratio cap
- * (40%) binds. When maxTokens is raised, the output reservation tightens the
- * block budget so blocks don't crowd out user content.
- *
- * Static prefix/instructions are fixed; blocks are the only variable part we
- * can trim.
- */
-async function computeBlockCharBudget(
-  blockCount: number,
-  staticChars: number,
-  ctxSize: number,
-  maxTokens: number = DEFAULT_EXTRACTION_MAX_TOKENS,
-): Promise<number> {
-  if (blockCount === 0) return 0;
-  const maxBlockChars = await getMaxBlockChars();
-  const safetyMarginTokens = 512;
+const DIGEST_HEADER =
+  "## Existing Knowledge Blocks\n" +
+  "The following memory blocks already contain relevant context — do NOT extract information that is already covered here:\n";
 
-  // Token budget for the entire system prompt (blocks + static prefix/instructions).
-  // Capped both by the ratio and by what remains after output + safety + min input.
-  const sysPromptTokenBudget = Math.min(
-    ctxSize * SYS_PROMPT_CTX_RATIO,
-    ctxSize - maxTokens - safetyMarginTokens - MIN_INPUT_TOKENS,
-  );
-  // Convert to chars using our conservative 3 chars/token estimate.
-  const sysPromptCharBudget = Math.max(0, Math.floor(sysPromptTokenBudget * 3));
-
-  const remaining = Math.max(0, sysPromptCharBudget - staticChars);
-  const perBlock = Math.floor(remaining / blockCount);
-  // Never let per-block drop below a useful minimum, and never exceed the
-  // configured maxBlockChars (so small ctx models get tighter budgets but
-  // large ctx models don't inflate block summaries beyond what callers expect).
-  return Math.max(300, Math.min(maxBlockChars, perBlock));
+export interface BlockDigestBlock {
+  name: string;
+  description: string;
+  content: string;
+  createdAt: string;
+  id: string;
 }
 
-async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
-  const settings = await getSettings();
-  const { ctxSize, maxTokens } = await resolveExtractionRequestSettings(settings);
-  const prefix = await loadExtractionPrefix();
+export interface BlockDigest {
+  /** Full digest text (header + lines), or "" when there are no blocks. */
+  text: string;
+  /** shortHash of `text` — compared against the session's lastDigestHash. */
+  hash: string;
+  blockCount: number;
+}
 
-  // Include loaded block summaries so extraction avoids redundant facts.
-  let blockContext = "";
+/**
+ * Format a slim, deterministic block digest: per block, name, curated
+ * one-line description, and the first DIGEST_CONTENT_CHARS of content.
+ * Blocks sort by (createdAt, id) so the digest is byte-stable for an
+ * unchanged block set regardless of updatedAt churn — which is what makes
+ * the session's KV prefix survive block edits.
+ */
+export function formatBlockDigest(blocks: BlockDigestBlock[]): BlockDigest {
+  if (blocks.length === 0) return { text: "", hash: "", blockCount: 0 };
+  const sorted = [...blocks].sort((a, b) =>
+    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  );
+  const lines: string[] = [];
+  let total = DIGEST_HEADER.length;
+  for (const b of sorted) {
+    const line = `- ${b.name} — ${b.description ? b.description.slice(0, DIGEST_DESCRIPTION_CHARS) : "(no description)"}: ${b.content.slice(0, DIGEST_CONTENT_CHARS)}`;
+    if (total + line.length + 1 > DIGEST_TOTAL_CHARS) break;
+    lines.push(line);
+    total += line.length + 1;
+  }
+  const omitted = sorted.length - lines.length;
+  if (omitted > 0) lines.push(`[+${omitted} more block(s) omitted for budget]`);
+  const text = `${DIGEST_HEADER}${lines.join("\n")}\n`;
+  return { text, hash: shortHash(text), blockCount: sorted.length };
+}
+
+/**
+ * Build the current block digest for a chat's project scope: all
+ * non-system-managed global blocks plus the project's blocks.
+ */
+async function buildBlockDigest(projectId?: string): Promise<BlockDigest> {
   try {
     const { getMemoryBlocksByScope, isSystemManagedMemoryBlock } = await import("./memory-storage.js");
     const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
     const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b)) : [];
-    const allBlocks = [...globalBlocks, ...projectBlocks];
-    if (allBlocks.length > 0) {
-      const staticChars =
-        prefix.length + EXTRACTION_INSTRUCTIONS.length + 400;
-      const perBlockChars = await computeBlockCharBudget(allBlocks.length, staticChars, ctxSize, maxTokens);
-      const summaries = allBlocks
-        .map((b) => `- ${b.name}: ${b.content.slice(0, perBlockChars)}`)
-        .join("\n");
-      blockContext = `\n\n## Existing Knowledge Blocks\nThe following memory blocks already contain relevant context — do NOT extract information that is already covered here:\n${summaries}\n`;
-    }
-  } catch { /* non-critical */ }
+    return formatBlockDigest([...globalBlocks, ...projectBlocks]);
+  } catch {
+    return { text: "", hash: "", blockCount: 0 };
+  }
+}
 
-  return `${prefix}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
+/**
+ * Build the extraction system prompt: the user's extraction prefix + the
+ * task instructions. Byte-stable across block edits — the block digest lives
+ * in the session's user turn (carried only when its hash changes, see
+ * processImmediateExtractionJobs), so editing a memory block never
+ * invalidates the cached KV prefix of a warm extraction session.
+ *
+ * Exported for tests. `_projectId` is retained for signature compatibility —
+ * the prompt no longer depends on project blocks.
+ */
+export async function buildExtractionSystemPrompt(_projectId?: string): Promise<string> {
+  const prefix = await loadExtractionPrefix();
+  return `${prefix}\n\n${EXTRACTION_INSTRUCTIONS}`;
 }
 
 const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
@@ -2164,6 +2178,8 @@ interface ImmediateExtractionSession {
   systemPrompt: string;
   history: ExtractionDialogueMessage[];
   nextExchangeSequence: number;
+  /** shortHash of the block digest last carried into this session's user turn. */
+  lastDigestHash?: string;
 }
 
 interface ImmediateExtractionQueueState {
@@ -2491,6 +2507,9 @@ async function runImmediateBatch(input: {
   projectId?: string;
   systemPrompt: string;
   identityKey: string;
+  /** Block digest carried into this batch's user turn (first batch only, and
+   *  only when its hash changed since the session last saw it). */
+  digestText: string;
   settings: Settings;
   extractionSettings: ResolvedExtractionSettings;
   maxInputChars: number;
@@ -2499,7 +2518,7 @@ async function runImmediateBatch(input: {
   isTurnComplete?: boolean;
 }): Promise<void> {
   const projectHeader = await resolveProjectHeader(input.projectId);
-  const userPrompt = `${projectHeader}${buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false)}`;
+  const userPrompt = `${input.digestText}${projectHeader}${buildImmediateBatchUserPrompt(input.batch, input.isTurnComplete ?? false)}`;
   const newUserOnly: ExtractionDialogueMessage[] = [{ role: "user", content: userPrompt }];
   const nextUserTooLarge = estimateDialogueChars(newUserOnly) > input.maxInputChars;
   let session = input.session;
@@ -2548,7 +2567,7 @@ async function runImmediateBatch(input: {
       ? await extractInChunks({
           modelId: input.modelId,
           systemPrompt: input.systemPrompt,
-          userPromptHeader: `${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
+          userPromptHeader: `${input.digestText}${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
           segments: input.batch.map(immediateExchangeToSegment),
           contextLabel: `immediateExtraction chat=${input.chatId}`,
           assumeMutexHeld: input.assumeMutexHeld,
@@ -2693,15 +2712,26 @@ async function processImmediateExtractionJobs(
     opts.extractionSettings.ctxSize,
     { maxTokens: opts.extractionSettings.maxTokens },
   );
+  // The block digest rides in the first batch's user turn, and only while
+  // its hash has changed since the session last saw it — a block edit costs
+  // one ordinary new turn instead of invalidating the cached prefix (and
+  // resetting the session identity) the way the old system-prompt digest did.
+  const digest = await buildBlockDigest(first.projectId);
+  const carryDigest = digest.text.length > 0 && session.lastDigestHash !== digest.hash;
+  const effectiveMaxInputChars = carryDigest
+    ? Math.max(1000, maxInputChars - digest.text.length)
+    : maxInputChars;
   // Immediate extraction fires at turn end — signal this so the extraction
   // model synthesizes higher-level patterns rather than just concrete facts.
-  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars, true);
+  const batches = splitImmediateExchangesIntoBatches(exchanges, effectiveMaxInputChars, true);
 
-  for (const batch of batches) {
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
     await runImmediateBatch({
       state,
       session,
       batch,
+      digestText: i === 0 && carryDigest ? digest.text : "",
       queueDepth: jobs.length,
       modelId: first.modelId,
       effectiveModelId,
@@ -2712,12 +2742,13 @@ async function processImmediateExtractionJobs(
       identityKey,
       settings: opts.settings,
       extractionSettings: opts.extractionSettings,
-      maxInputChars,
+      maxInputChars: effectiveMaxInputChars,
       assumeMutexHeld: opts.assumeMutexHeld,
       freshSessionReason,
       isTurnComplete: true,
     });
     session = state.session ?? session;
+    if (i === 0 && carryDigest) session.lastDigestHash = digest.hash;
     freshSessionReason = undefined;
   }
 }

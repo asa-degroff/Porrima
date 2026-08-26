@@ -7,7 +7,7 @@ import MemoryGraphView from "./MemoryGraphView";
 
 // ── Extraction types ──────────────────────────────────────────────────────
 // Kept aligned with server/src/services/memory-extraction-observability.ts.
-type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "notebook" | "other";
+type ExtractionTrigger = "immediate" | "delayed" | "pre-compaction" | "mid-turn-pulse" | "index-gen" | "notebook" | "other";
 type ExtractionStatus = "running" | "success" | "error";
 
 interface ExtractionMessageView {
@@ -127,6 +127,8 @@ function triggerColor(trigger: ExtractionTrigger): string {
     case "immediate":      return "text-purple-300/70 border-purple-400/20 bg-purple-500/5";
     case "delayed":        return "text-sky-300/70 border-sky-400/20 bg-sky-500/5";
     case "pre-compaction": return "text-amber-300/70 border-amber-400/20 bg-amber-500/5";
+    case "mid-turn-pulse": return "text-rose-300/70 border-rose-400/20 bg-rose-500/5";
+    case "index-gen":      return "text-cyan-300/70 border-cyan-400/20 bg-cyan-500/5";
     case "notebook":       return "text-emerald-300/70 border-emerald-400/20 bg-emerald-500/5";
     default:               return "text-white/50 border-white/10 bg-white/5";
   }

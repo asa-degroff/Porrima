@@ -2,6 +2,7 @@ import type { Chat, ChatMessage } from "../types.js";
 import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, withChatWriteLock, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
 import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
+import { startExtractionRun } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
 import { resolveExtractionRequestSettings } from "./extraction-settings.js";
@@ -1613,60 +1614,80 @@ async function runIndexGeneration(
     let outputText = "";
 
     if (extractionUrl) {
-      outputText = await withExtractionMutex(async () => {
-        const extractionModelId = normalizeRouterModelId(settings.extractionModelId || "index-gen");
-        // Router-mode preflight: ensure the configured extraction model is the
-        // active one before issuing the chat completion. Single-model mode
-        // returns "not-router" and we proceed with whatever the slot launched.
-        await ensureRouterModelLoaded(extractionUrl, extractionModelId, {
-          contextWindow: extractionSettings.ctxSize,
-        });
-        const requestSignal = AbortSignal.timeout(extractionSettings.timeoutMs);
-        const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
-        const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: extractionModelId,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: inputParts },
-            ],
-            max_tokens: Math.min(extractionSettings.maxTokens, ARCHIVE_INDEX_MAX_TOKENS),
-            temperature: 0.3,
-            stream: true,
-            stream_options: { include_usage: true },
-            ...(cachePrompt ? { cache_prompt: true } : {}),
-          }),
-          signal: requestSignal,
-        });
-        if (res.ok && res.body) {
-          const streamResult = await readOpenAIContentStream(res.body, requestSignal);
-          if (streamResult.timings) {
-            // Canonical cached-token resolution happens inside recordModelStats.
-            const reportedPromptTokens = streamResult.usagePromptTokens;
-            const promptEvalTokens = streamResult.timings.prompt_n;
-            try {
-              recordModelStats(
-                extractionModelId,
-                "llamacpp-extraction",
-                streamResult.timings,
-                cachePrompt ? {
-                  cachePrompt: true,
-                  cacheMode: "cache_prompt",
-                  reportedPromptTokens,
-                  promptEvalTokens,
-                  reportedCachedTokens: streamResult.usageCachedTokens,
-                } : undefined,
-              );
-            } catch (e) {
-              console.warn("[compaction] Failed to record extraction model stats:", e);
-            }
-          }
-          return streamResult.content;
-        }
-        return "";
+      const indexRun = startExtractionRun({
+        trigger: "index-gen",
+        model: normalizeRouterModelId(settings.extractionModelId || "index-gen"),
+        priorMemoryCount: 0,
+        messages: [{ role: "user", content: inputParts }],
+        systemPrompt,
+        userPrompt: inputParts,
+        metadata: {
+          promptChars: systemPrompt.length + inputParts.length,
+          estimatedPromptTokens: Math.ceil((systemPrompt.length + inputParts.length) / 4),
+          context: "compaction archive index",
+        },
       });
+      try {
+        outputText = await withExtractionMutex(async () => {
+          const extractionModelId = normalizeRouterModelId(settings.extractionModelId || "index-gen");
+          // Router-mode preflight: ensure the configured extraction model is the
+          // active one before issuing the chat completion. Single-model mode
+          // returns "not-router" and we proceed with whatever the slot launched.
+          await ensureRouterModelLoaded(extractionUrl, extractionModelId, {
+            contextWindow: extractionSettings.ctxSize,
+          });
+          const requestSignal = AbortSignal.timeout(extractionSettings.timeoutMs);
+          const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
+          const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: extractionModelId,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: inputParts },
+              ],
+              max_tokens: Math.min(extractionSettings.maxTokens, ARCHIVE_INDEX_MAX_TOKENS),
+              temperature: 0.3,
+              stream: true,
+              stream_options: { include_usage: true },
+              ...(cachePrompt ? { cache_prompt: true } : {}),
+            }),
+            signal: requestSignal,
+          });
+          if (res.ok && res.body) {
+            const streamResult = await readOpenAIContentStream(res.body, requestSignal);
+            if (streamResult.timings) {
+              // Canonical cached-token resolution happens inside recordModelStats.
+              const reportedPromptTokens = streamResult.usagePromptTokens;
+              const promptEvalTokens = streamResult.timings.prompt_n;
+              try {
+                recordModelStats(
+                  extractionModelId,
+                  "llamacpp-extraction",
+                  streamResult.timings,
+                  cachePrompt ? {
+                    cachePrompt: true,
+                    cacheMode: "cache_prompt",
+                    reportedPromptTokens,
+                    promptEvalTokens,
+                    reportedCachedTokens: streamResult.usageCachedTokens,
+                  } : undefined,
+                );
+              } catch (e) {
+                console.warn("[compaction] Failed to record extraction model stats:", e);
+              }
+            }
+            return streamResult.content;
+          }
+          return "";
+        });
+        indexRun.attachOutput(outputText);
+        indexRun.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+      } catch (e) {
+        indexRun.fail(e);
+        throw e;
+      }
 
       // A configured extraction server is intentional isolation from the main
       // chat model. If it fails or emits no content, use mechanical archive
