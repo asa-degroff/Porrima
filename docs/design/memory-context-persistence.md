@@ -275,16 +275,31 @@ stays valid.)
 | Restart after a passive-recall injection | `markMemoryDeltaInjected` persists `delta_ids` (write point 5) → no double injection on the next Case 3. |
 | Global corpus change after restart, before any turn | `invalidateAllMemoriesCaches` bulk-updates rows (write point 4) → later hydration restores `dirty=true` → Case 3 delta, prefix-safe. |
 
-### 4.4 Secondary change (Phase 2, verify first): cache-warm stops re-rolling
+### 4.4 Secondary change (Phase 2): cache-warm stops re-rolling
 
 With persistence, the send path restores the *user's actual* frozen section, so
 cache-warm's `resetMemoryContext` + fresh Case 1 (cache-warm.ts:294) is no longer
 needed for alignment — and for established chats it is actively harmful (warms a
 re-rolled prompt the user's next turn won't match). Dropping the reset makes the
 warm bake `stablePrefix + restored frozen section` = the user's actual next-turn
-prompt = a warm that can actually hit. One-line change; verify warm-queue timing
-against the send path before shipping (the warm must not race a concurrent turn
-that mutates state).
+prompt = a warm that can actually hit. One-line change; the warm-queue timing
+check against the send path was completed 08-25:
+
+**Timing check (verified 08-25 against live code):** the send path
+(send/resume/repair/edit in chat.ts) acquires the turn gate; warm does not — it
+is gated only by the warm-queue mutex, `llm-activity.waitForIdle`, and deferral
+while synthesis/wake/automation is active. `isCacheWarmOrLlamaRuntimeBusy`
+covers the reverse direction: the scheduler yields to a busy warm. Residual
+window: an interactive turn arriving after the idle check and before the
+prefill POST runs concurrently with the warm. Bounded, not corrupting: a Case 2
+build is row-read-only and the frozen section is invariant under Case 3, so the
+warm bakes `stablePrefix + frozen section` — a byte-prefix of the concurrent
+turn's Case 3 prompt (worst case a warm miss; best case the turn rides the
+warmed prefix) — and the dirty mark (line 309) preserves the "next turn
+retrieves for the new message" contract either way. Decision at PR time:
+accept (matches the dirty-leak lean), or add a yield-to-waiters deferral in
+`drainQueue` — check `turnGateStatus(job.chatId)`, defer with 30s backoff as
+for automations — ~5 lines, closes the window without priority inversion.
 
 **Sub-case analysis (v1.1).** The change is dropping the `resetMemoryContext`
 call only; the trailing `invalidateMemoriesCache` stays, which preserves the
