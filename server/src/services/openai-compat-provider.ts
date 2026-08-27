@@ -923,7 +923,12 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
           type: "function",
           function: {
             name: tc.name,
-            arguments: JSON.stringify(tc.arguments || {}),
+            // Arguments are replayed verbatim by the chat template, so a tool
+            // call whose arguments contain media marker text (e.g. write_file
+            // with template content) must be sanitized like any other text.
+            // Stripping only removes non-JSON-structural characters, so the
+            // arguments stay valid JSON.
+            arguments: sanitizeProviderText(JSON.stringify(tc.arguments || {})),
           },
         }));
       }

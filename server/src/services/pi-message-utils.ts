@@ -206,6 +206,18 @@ export function sanitizeSurrogates(text: string): string {
 
 const PROVIDER_UNSAFE_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
+// When an mmproj (vision projector) is loaded, llama.cpp's mtmd tokenizer
+// treats these media placeholder tokens as image anchors in the rendered
+// prompt. If one appears as literal text — e.g. a tool result that dumped a
+// Qwen chat template containing `<|vision_start|><|image_pad|><|vision_end|>`
+// — the request fails hard with "number of media markers in text (N) exceeds
+// number of bitmaps (0)" before generating anything. Strip them from all
+// provider-bound text; real images are attached as image_url parts and the
+// template inserts the markers itself at render time.
+const PROVIDER_MEDIA_MARKERS = /<\|vision_start\|>|<\|vision_end\|>|<\|(?:image|video|audio)_pad\|>|<__(?:image|video|audio)__>/g;
+
 export function sanitizeProviderText(text: string): string {
-  return sanitizeSurrogates(text).replace(PROVIDER_UNSAFE_CONTROL_CHARS, "");
+  return sanitizeSurrogates(text)
+    .replace(PROVIDER_UNSAFE_CONTROL_CHARS, "")
+    .replace(PROVIDER_MEDIA_MARKERS, "");
 }

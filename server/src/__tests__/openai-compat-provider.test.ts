@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   estimatePromptTokensForProgress,
   promptWorkTokens,
@@ -287,6 +290,89 @@ describe("prefill progress computation", () => {
 
     // Progress reaches ~65% when actual prefill completes,
     // then transitions to decode phase — much better than always 100%
+  });
+});
+
+describe("buildOpenAICompatChatBody", () => {
+  // chat-storage opens app.db relative to the OS homedir at import time, so
+  // redirect homedir to a temp dir before dynamically importing the provider.
+  let tempHomeDir: string | null = null;
+
+  afterEach(() => {
+    vi.doUnmock("os");
+    vi.resetModules();
+    if (tempHomeDir) {
+      rmSync(tempHomeDir, { recursive: true, force: true });
+      tempHomeDir = null;
+    }
+  });
+
+  async function loadProviderWithTempHome() {
+    tempHomeDir = mkdtempSync(join(tmpdir(), "porrima-oai-compat-"));
+    mkdirSync(join(tempHomeDir, ".porrima"), { recursive: true });
+    vi.doMock("os", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("os")>();
+      return {
+        ...actual,
+        homedir: () => tempHomeDir!,
+      };
+    });
+    return import("../services/openai-compat-provider.js");
+  }
+
+  it("strips media markers from replayed tool-call arguments and results", async () => {
+    const { buildOpenAICompatChatBody } = await loadProviderWithTempHome();
+    const model = {
+      id: "test-model",
+      api: "openai-completions",
+      provider: "openai-completions",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      input: ["text"],
+      reasoning: false,
+    };
+    const context = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        {
+          role: "assistant",
+          provider: "openai-completions",
+          api: "openai-completions",
+          model: "test-model",
+          stopReason: "toolUse",
+          usage: { input: 0, output: 0 },
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "write_file",
+              arguments: {
+                path: "template.txt",
+                content: "img: <|vision_start|><|image_pad|><|vision_end|>",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "write_file",
+          content: [{ type: "text", text: "wrote <__image__> ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+
+    const { body } = await buildOpenAICompatChatBody(model as any, context as any);
+
+    const assistantMsg = body.messages.find((m: any) => m.role === "assistant");
+    const argsJson = assistantMsg.tool_calls[0].function.arguments;
+    expect(argsJson).not.toContain("<|image_pad|>");
+    // Arguments stay valid JSON after stripping.
+    expect(JSON.parse(argsJson).content).toBe("img: ");
+
+    const toolMsg = body.messages.find((m: any) => m.role === "tool");
+    expect(toolMsg.content).toBe("wrote  ok");
   });
 });
 
