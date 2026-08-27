@@ -1196,6 +1196,7 @@ export async function truncateBeforeSend(
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
+    _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
@@ -2263,6 +2264,7 @@ export async function truncateChatHistory(
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
+    _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIndex, 0, summaryMessage);

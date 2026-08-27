@@ -282,6 +282,7 @@ export const MessageBubble = memo(function MessageBubble({
       <CompactionIndicator
         compaction={{
           removedCount: message._compactedMessageCount,
+          splitCount: message._compactedSplitCount ?? 0,
           summary: message.content,
           messageIndex: messageIndex ?? 0,
           timestamp: message.timestamp,

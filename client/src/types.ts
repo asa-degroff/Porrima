@@ -132,6 +132,8 @@ export interface ChatMessage {
   _outOfContext?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
+  /** How many of _compactedMessageCount were partial-turn splits, not whole removed messages */
+  _compactedSplitCount?: number;
   /** Archive IDs represented by this compaction summary (used by deferred enrichment) */
   _archiveIds?: string[];
   /** Marks this message as in-progress (streaming/tool execution not yet complete) */

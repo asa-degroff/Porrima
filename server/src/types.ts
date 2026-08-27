@@ -77,6 +77,13 @@ export interface ChatMessage {
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
   /**
+   * How many of _compactedMessageCount's units were partial-turn splits
+   * (mid-message archive heads) rather than whole removed messages. Lets the
+   * UI present "3 messages compacted · 1 partial" instead of an inflated
+   * whole-message count.
+   */
+  _compactedSplitCount?: number;
+  /**
    * Archive IDs represented by this compaction summary. Used by deferred LLM
    * enrichment to locate the summary and rewrite its content with upgraded
    * descriptions once the (CPU) extraction model finishes.
