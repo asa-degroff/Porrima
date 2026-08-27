@@ -2312,7 +2312,7 @@ function renderImmediateExchange(exchange: ImmediateExchange): string {
 function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplete: boolean = false): string {
   const ids = exchanges.map((exchange) => exchange.exchangeId).join(", ");
   const turnMarker = isTurnComplete
-    ? "[TURN COMPLETE] The agent turn has finished. Extract memories focusing on higher-level patterns, decisions, and insights — not just concrete facts. What emerged from the full trajectory of this turn?\n\n"
+    ? "[TURN COMPLETE] Your recent turn has finished. Extract memories focusing on higher-level patterns, decisions, and insights — not just concrete facts. What emerged from the full trajectory of this turn?\n\n"
     : "";
   return `${turnMarker}Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
 
@@ -2928,10 +2928,10 @@ function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
 }
 
 function buildMidTurnBatchHeader(pulseIndex: number): string {
-  return `[MID-TURN PULSE #${pulseIndex}] Review the agent's partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
+  return `[MID-TURN PULSE #${pulseIndex}] Review the partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
 
 Output a JSON object with two fields:
-- "subject": A brief topic line (5-15 words) describing what the agent is working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
+- "subject": A brief topic line (5-15 words) describing what you are working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
 - "memories": A JSON array. Each item:
   - "text": A standalone statement with sufficient context (1-3 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
