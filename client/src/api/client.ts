@@ -260,6 +260,14 @@ export interface StreamCallbacks {
   onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
+  /** A tool call began composing: the model is streaming its arguments.
+   *  `index` is the call's position in the assistant message; `id` arrives
+   *  with the first chunk from the provider (llama.cpp includes it). */
+  onToolCallStart?: (info: { index: number; name: string; id?: string }) => void;
+  /** Raw JSON fragment of a tool call's arguments, streamed as generated.
+   *  The client accumulates fragments per `index`; the authoritative
+   *  arguments arrive with the `segment` (tool_call) at execution start. */
+  onToolCallDelta?: (info: { index: number; delta: string }) => void;
   onArtifact?: (artifact: Artifact) => void;
   onVisual?: (visual: InlineVisual) => void;
   onGeneratedImage?: (image: GeneratedImage) => void;
@@ -645,6 +653,12 @@ function processSSEEvent(
       break;
     case "tool_status":
       callbacks.onToolStatus?.(data);
+      break;
+    case "tool_call_start":
+      callbacks.onToolCallStart?.(data);
+      break;
+    case "tool_call_delta":
+      callbacks.onToolCallDelta?.(data);
       break;
     case "segment":
       callbacks.onSegment?.(data);

@@ -18,6 +18,19 @@ export interface TurnQueueInfo {
   queuedCount: number;
 }
 
+/** A tool call whose arguments are still streaming in. Accumulated from
+ *  `tool_call_start` / `tool_call_delta` events and replaced in place by the
+ *  authoritative `segment` when the call begins executing. */
+interface ToolCallPreview {
+  index: number;
+  id?: string;
+  name: string;
+  /** Accumulated raw JSON argument string. */
+  rawArgs: string;
+  /** seq of the provisional segment this preview owns. */
+  segmentSeq: number;
+}
+
 /** Per-chat streaming state stored when the chat is not actively displayed */
 interface BackgroundStream {
   content: string;
@@ -44,6 +57,10 @@ interface BackgroundStream {
   /** Client-side segments built during streaming for interleaved rendering */
   segments: MessageSegment[];
   seqCounter: number;
+  /** Live tool-call argument previews, keyed by the call's index in the
+   *  assistant message. Ephemeral: each is replaced by the authoritative
+   *  tool_call segment at execution start, or swept at turn end. */
+  toolPreviews: Map<number, ToolCallPreview>;
   /** Thinking duration tracking */
   thinkingActive: boolean;
   thinkingAccumulatedMs: number;
@@ -170,10 +187,53 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     messageTotal,
     segments: [],
     seqCounter: 0,
+    toolPreviews: new Map(),
     thinkingActive: false,
     thinkingAccumulatedMs: 0,
     thinkingLastStart: 0,
   };
+}
+
+/** Remove a preview's provisional segment from the live segment list. */
+function dropPreviewSegment(bg: BackgroundStream, preview: ToolCallPreview): void {
+  const idx = bg.segments.findIndex((s) => s.seq === preview.segmentSeq);
+  if (idx >= 0) bg.segments.splice(idx, 1);
+  bg.toolPreviews.delete(preview.index);
+}
+
+/** Consume the provisional preview for a tool call that just began executing,
+ *  so the authoritative segment can replace it in place. Match by id when
+ *  known (llama.cpp sends the id with the first chunk); fall back to the
+ *  oldest unconsumed preview — calls are streamed and executed in message
+ *  order, so oldest is the right one. */
+function consumeToolPreview(bg: BackgroundStream, callId?: string): ToolCallPreview | null {
+  if (callId) {
+    for (const preview of bg.toolPreviews.values()) {
+      if (preview.id && preview.id === callId) {
+        bg.toolPreviews.delete(preview.index);
+        return preview;
+      }
+    }
+  }
+  let oldest: ToolCallPreview | null = null;
+  for (const preview of bg.toolPreviews.values()) {
+    if (!oldest || preview.segmentSeq < oldest.segmentSeq) oldest = preview;
+  }
+  if (oldest) bg.toolPreviews.delete(oldest.index);
+  return oldest;
+}
+
+/** Sweep all live previews (turn end, error, resync). Defensive against
+ *  provisional segments that outlived their map entry. */
+function clearToolPreviews(bg: BackgroundStream): void {
+  if (bg.toolPreviews.size > 0) {
+    for (const preview of Array.from(bg.toolPreviews.values())) {
+      dropPreviewSegment(bg, preview);
+    }
+  }
+  if (bg.segments.some((s) => s._preview)) {
+    bg.segments = bg.segments.filter((s) => !s._preview);
+  }
 }
 
 function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -646,6 +706,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
 
+        // Live previews are ephemeral by definition — a turn that ended with
+        // a call still composing must not leave a stuck "running" chip.
+        clearToolPreviews(bg);
         const finalSegments = segments || (bg.segments.length > 0 ? bg.segments.map((s) => ({ ...s })) : undefined);
 
         // Finalize the last non-steering assistant message with full metadata.
@@ -800,6 +863,70 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setActiveTools([...bg.tools]);
         }
       },
+      onToolCallStart: (info) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        // A preview at the same index from an earlier fragment (a call the
+        // model abandoned before it executed) is stale — replace it outright.
+        const stale = bg.toolPreviews.get(info.index);
+        if (stale) dropPreviewSegment(bg, stale);
+
+        const segment: MessageSegment = {
+          seq: bg.seqCounter++,
+          type: "tool_call",
+          toolCall: { id: info.id || `preview-${info.index}`, name: info.name, arguments: {} },
+          _preview: true,
+          previewRaw: "",
+        };
+        bg.segments.push(segment);
+        bg.toolPreviews.set(info.index, {
+          index: info.index,
+          id: info.id,
+          name: info.name,
+          rawArgs: "",
+          segmentSeq: segment.seq,
+        });
+
+        if (activeChatIdRef.current === streamChatId) {
+          // Track it like a real tool_call segment so the scrollable tool
+          // container knows streaming is active.
+          setStreamingSegmentIndex(bg.segments.length - 1);
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
+        }
+      },
+      onToolCallDelta: (info) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        let preview = bg.toolPreviews.get(info.index);
+        if (!preview) {
+          // Deltas without a start (reconnect landed mid-generation): start a
+          // nameless preview so the generation stays visible; the
+          // authoritative segment names it when it arrives.
+          const segment: MessageSegment = {
+            seq: bg.seqCounter++,
+            type: "tool_call",
+            toolCall: { id: `preview-${info.index}`, name: "", arguments: {} },
+            _preview: true,
+            previewRaw: "",
+          };
+          bg.segments.push(segment);
+          preview = { index: info.index, id: undefined, name: "", rawArgs: "", segmentSeq: segment.seq };
+          bg.toolPreviews.set(info.index, preview);
+        }
+        preview.rawArgs += info.delta;
+        const seg = bg.segments.find((s) => s.seq === preview.segmentSeq);
+        if (seg && seg.type === "tool_call") seg.previewRaw = preview.rawArgs;
+
+        if (activeChatIdRef.current === streamChatId) {
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
+        }
+      },
       onSegment: (segment) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
@@ -817,6 +944,18 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           );
           if (callIdx >= 0) {
             bg.segments.splice(callIdx + 1, 0, segment);
+          } else {
+            bg.segments.push(segment);
+          }
+        } else if (segment.type === "tool_call") {
+          // Replace the provisional preview in place (if one exists) so the
+          // chip keeps its position and the React key carries the real tool
+          // call id across the preview → live transition.
+          const preview = consumeToolPreview(bg, segment.toolCall?.id);
+          if (preview) {
+            const idx = bg.segments.findIndex((s) => s.seq === preview.segmentSeq);
+            if (idx >= 0) bg.segments[idx] = segment;
+            else bg.segments.push(segment);
           } else {
             bg.segments.push(segment);
           }
@@ -924,7 +1063,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
 
         bg.content = msg?.content ?? "";
         bg.thinking = msg?.thinking ?? "";
-        bg.segments = (msg?.segments ?? []).map((s) => ({ ...s }));
+        // The snapshot is built from the server's committed segments — any
+        // in-flight preview is by definition not in it, so drop ours too
+        // (the call will re-appear as a live preview if its generation is
+        // still streaming, or as the authoritative segment at execution).
+        bg.segments = (msg?.segments ?? []).map((s) => ({ ...s })).filter((s) => !s._preview);
+        bg.toolPreviews = new Map();
         bg.seqCounter = bg.segments.reduce((max, s) => Math.max(max, (s.seq ?? 0) + 1), bg.seqCounter);
         const resyncToolResults = msg?.toolResults ?? [];
         bg.tools = (msg?.toolCalls ?? []).map((tc): ToolStatus => {
@@ -1298,6 +1442,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           bg.generatedImages = [];
           bg.segments = [];
           bg.seqCounter = 0;
+          bg.toolPreviews = new Map();
           bg.inferenceActivityPhase = meta?.continues ? "prefill" : null;
         };
         const syncResetToReact = () => {
@@ -1520,6 +1665,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
               // Reconnect failed — clear the indicator and let the user know.
               // The message is already persisted on the server.
               if (bgStreams.get(streamChatId) === bg) {
+                clearToolPreviews(bg);
                 bg.streaming = false;
                 bg.modelProgress = null;
                 bg.inferenceActivityPhase = null;
@@ -1550,6 +1696,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             ? "Network unavailable — response may be incomplete"
             : "Network unavailable — message queued";
           if (bg) {
+            clearToolPreviews(bg);
             bg.streaming = false;
             bg.error = errorMsg;
             bg.modelProgress = null;
@@ -1598,6 +1745,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         } else {
           // Non-offline error (could be Connection error, auth error, model error, etc.)
           if (bg) {
+            clearToolPreviews(bg);
             bg.streaming = false;
             bg.error = displayErr;
             bg.modelProgress = null;

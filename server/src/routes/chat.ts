@@ -4,7 +4,7 @@ import { randomUUID, createHash } from "crypto";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
-import type { AgentContext } from "@earendil-works/pi-agent-core";
+import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
@@ -1517,6 +1517,47 @@ async function handleChatStream(
   }
 
   /**
+   * Forward a streamed assistant-message delta to the client. Shared by every
+   * runAgentLoop site (main loop, continuation, stranded recovery, mid-turn
+   * resume) so their delta handling cannot drift. Text and thinking are
+   * accumulated and streamed as before; tool-call argument generation is
+   * streamed as `tool_call_start` / `tool_call_delta` preview events so the
+   * UI can watch a call being composed (the arguments are still only
+   * authoritative at tool_execution_start — previews are live-only and are
+   * never persisted or replayed). Returns true when the delta produced
+   * visible output.
+   */
+  function forwardAssistantDelta(event: Extract<AgentEvent, { type: "message_update" }>): boolean {
+    const ame = event.assistantMessageEvent;
+    if (ame.type === "text_delta") {
+      return appendTextDelta(ame.delta);
+    }
+    if (ame.type === "thinking_delta") {
+      return appendThinkingDelta(ame.delta);
+    }
+    if (ame.type === "toolcall_start") {
+      const block = ((event.message as AssistantMessage).content?.[ame.contentIndex] ?? {}) as {
+        name?: string;
+        id?: string;
+      };
+      res.write(`event: tool_call_start\ndata: ${JSON.stringify({
+        index: ame.contentIndex,
+        name: block.name ?? "",
+        id: block.id || undefined,
+      })}\n\n`);
+      return true;
+    }
+    if (ame.type === "toolcall_delta") {
+      res.write(`event: tool_call_delta\ndata: ${JSON.stringify({
+        index: ame.contentIndex,
+        delta: ame.delta,
+      })}\n\n`);
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Density-aware signal-token size of the uncovered mid-turn window (content
    * streamed since the last successful pulse cursor). Recomputed from the
    * cursors at each check point — rollback after a failed pulse is implicit
@@ -2288,12 +2329,7 @@ async function handleChatStream(
         }
 
         case "message_update": {
-          const ame = event.assistantMessageEvent;
-          if (ame.type === "text_delta") {
-            appendTextDelta(ame.delta);
-          } else if (ame.type === "thinking_delta") {
-            appendThinkingDelta(ame.delta);
-          }
+          forwardAssistantDelta(event);
           break;
         }
 
@@ -2868,11 +2904,52 @@ async function handleChatStream(
           logPrefix: "chat:continuation",
           onEvent: async (event) => {
           if (event.type === "message_update") {
-            const ame = event.assistantMessageEvent;
-            if (ame.type === "text_delta") {
-              continuationProducedContent = appendTextDelta(ame.delta) || continuationProducedContent;
-            } else if (ame.type === "thinking_delta") {
-              continuationProducedContent = appendThinkingDelta(ame.delta) || continuationProducedContent;
+            continuationProducedContent = forwardAssistantDelta(event) || continuationProducedContent;
+          } else if (event.type === "tool_execution_start") {
+            // Tool calls can be emitted by a continuation (the model does more
+            // work after a pressure stop). Commit them like the main loop does,
+            // or they execute invisibly and are lost from persistence — and
+            // the tool_call_start preview streamed above would never resolve.
+            continuationProducedContent = true;
+            flushThinkingTimer();
+            if (ttsEnabled) {
+              ttsTextQueue.flush();
+            }
+            flushTextSegment();
+            const toolCall: ChatToolCall = {
+              id: event.toolCallId,
+              name: event.toolName,
+              arguments: event.args,
+            };
+            state.allToolCalls.push(toolCall);
+            if (event.toolName !== "ask_user") {
+              const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
+              state.segments.push(segment);
+              res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
+            }
+          } else if (event.type === "tool_execution_end") {
+            if (event.toolName !== "ask_user") {
+              const resultText = event.result?.content?.[0]?.text || "";
+              const toolResult: ChatToolResult = {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                content: resultText,
+                isError: event.isError,
+              };
+              state.allToolResults.push(toolResult);
+              maybeDispatchMidTurnPulse({ source: "continuation_tool_result" });
+              const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
+              const callIdx = state.segments.findIndex(
+                s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
+              );
+              if (callIdx >= 0) {
+                state.segments.splice(callIdx + 1, 0, resultSegment);
+              } else {
+                state.segments.push(resultSegment);
+              }
+              res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: event.isError ? "error" : "done", result: resultText })}\n\n`);
             }
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
@@ -2965,12 +3042,7 @@ async function handleChatStream(
           logPrefix: "chat:stranded-recovery",
           onEvent: async (event) => {
           if (event.type === "message_update") {
-            const ame = event.assistantMessageEvent;
-            if (ame.type === "text_delta") {
-              strandedProducedSomething = appendTextDelta(ame.delta) || strandedProducedSomething;
-            } else if (ame.type === "thinking_delta") {
-              strandedProducedSomething = appendThinkingDelta(ame.delta) || strandedProducedSomething;
-            }
+            strandedProducedSomething = forwardAssistantDelta(event) || strandedProducedSomething;
           } else if (event.type === "tool_execution_start") {
             strandedProducedSomething = true;
             // Tool call was recovered — reset the flag and let the normal tool loop continue
@@ -3333,12 +3405,7 @@ async function handleChatStream(
           logPrefix: "chat:mid-turn-resume",
           onEvent: async (event) => {
           if (event.type === "message_update") {
-            const ame = event.assistantMessageEvent;
-            if (ame.type === "text_delta") {
-              appendTextDelta(ame.delta);
-            } else if (ame.type === "thinking_delta") {
-              appendThinkingDelta(ame.delta);
-            }
+            forwardAssistantDelta(event);
           } else if (event.type === "tool_execution_start") {
             flushThinkingTimer();
             if (ttsEnabled) {

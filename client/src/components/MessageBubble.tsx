@@ -1206,6 +1206,8 @@ function SegmentRenderer({
           toolCall={segment.toolCall}
           toolResult={matchingResult?.toolResult}
           liveStatus={segment.liveStatus}
+          isPreview={segment._preview || undefined}
+          previewRaw={segment.previewRaw}
         />
       ) : null;
     }
