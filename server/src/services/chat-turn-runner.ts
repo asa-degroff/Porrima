@@ -319,8 +319,6 @@ export async function runHeadlessChatTurn(
   let iterations = 0;
   let needsMidTurnCompaction = false;
   let midTurnCompactionOccurred = false;
-  let duplicateToolCallStreak = 0;
-  let lastToolCallSignature: string | null = null;
   let lastPersistedAssistantBoundary = {
     textChunks: 0,
     thinkingChunks: 0,
@@ -780,7 +778,6 @@ export async function runHeadlessChatTurn(
 
             const text = extractTextFromAssistantMessage(msg);
             const thinking = extractThinkingFromAssistantMessage(msg);
-            const turnToolCalls = extractToolCallsFromAssistantMessage(msg);
             if (text) {
               textChunks.push(text);
               emitter.emitTextDelta("\n\n");
@@ -805,26 +802,18 @@ export async function runHeadlessChatTurn(
               projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
             });
 
-            // Dedup + iteration-cap guards (turn-engine phase 1): the shared
-            // pure decision (evaluateTurnGuards) with the chat route; the
-            // emitter expresses it. Precedence: dedup, total cap, segment
-            // cap. The canonical warning text unifies both routes (em dash).
+            // Iteration-cap guard (turn-engine phase 1): the shared pure
+            // decision (evaluateTurnGuards) with the chat route; the emitter
+            // expresses it. Precedence: total cap, segment cap. The canonical
+            // warning text unifies both routes (em dash).
             const guard = evaluateTurnGuards({
-              newToolCalls: turnToolCalls,
-              lastSignature: lastToolCallSignature,
-              streak: duplicateToolCallStreak,
               iterations,
               maxIterations,
               perSegmentIterations: iterations - lastPersistedAssistantBoundary.iterations,
               maxIterationsPerSegment: options.maxIterationsPerAssistantSegment,
             });
-            duplicateToolCallStreak = guard.streak;
-            lastToolCallSignature = guard.lastSignature;
             if (guard.stop) {
-              if (guard.stop.reason === "duplicate_tool_call") {
-                const names = turnToolCalls.map((c) => c.name).join(", ");
-                console.warn(`[${logPrefix}] duplicate tool call streak hit ${guard.streak}: ${names}`);
-              } else if (
+              if (
                 options.maxIterationsPerAssistantSegment &&
                 iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
               ) {

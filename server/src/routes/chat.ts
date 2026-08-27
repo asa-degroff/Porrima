@@ -1089,11 +1089,6 @@ async function handleChatStream(
     hasCommittedToolLoopRows: false,
     pendingFinalAssistantMessage: null as ChatMessage | null,
     pendingPassiveRecallRows: [] as ChatMessage[],
-    // Dedup guard: count of consecutive iterations whose tool calls were
-    // byte-identical to the prior iteration. Breaks loops where the model
-    // re-emits the same tool call instead of moving on.
-    duplicateToolCallStreak: 0,
-    lastIterationToolCallSignature: null as string | null,
     pendingTokenEstimateObservation: null as null | {
       sourceIteration: number;
       sourceStopReason: string;
@@ -1159,8 +1154,6 @@ async function handleChatStream(
     state.hasCommittedToolLoopRows = false;
     state.pendingFinalAssistantMessage = null;
     state.pendingPassiveRecallRows = [];
-    state.duplicateToolCallStreak = 0;
-    state.lastIterationToolCallSignature = null;
     state.pendingTokenEstimateObservation = null;
     // Resync snapshot cursors — see declarations below; reset so a follow-up
     // turn never resyncs stale iteration/progress state from its predecessor.
@@ -2591,11 +2584,6 @@ async function handleChatStream(
             });
           }
 
-          // Snapshot this iteration's new tool calls before the commit below
-          // advances committedToolCallCount — the dedup check further down
-          // needs the per-iteration slice.
-          const newToolCallsThisIter = state.allToolCalls.slice(state.committedToolCallCount);
-
           // Materialize the just-finished assistant turn using the same shape
           // that the live LLM context saw. Tool-use stops are committed
           // immediately so the next iteration and future replays both see:
@@ -2739,26 +2727,15 @@ async function handleChatStream(
             });
           }
 
-          // Dedup + iteration-cap guards (turn-engine phase 1): the shared
-          // pure decision (evaluateTurnGuards) with the headless route;
-          // chat.ts expresses it as SSE warning + abort. Precedence: dedup,
-          // then the iteration cap.
+          // Iteration-cap guard (turn-engine phase 1): the shared pure
+          // decision (evaluateTurnGuards) with the headless route; chat.ts
+          // expresses it as SSE warning + abort.
           const guard = evaluateTurnGuards({
-            newToolCalls: newToolCallsThisIter,
-            lastSignature: state.lastIterationToolCallSignature,
-            streak: state.duplicateToolCallStreak,
             iterations,
             maxIterations: MAX_ITERATIONS,
           });
-          state.duplicateToolCallStreak = guard.streak;
-          state.lastIterationToolCallSignature = guard.lastSignature;
           if (guard.stop) {
-            if (guard.stop.reason === "duplicate_tool_call") {
-              const dupNames = newToolCallsThisIter.map(c => c.name).join(", ");
-              console.warn(`[chat] duplicate tool call streak hit ${guard.streak} (${dupNames}) at iteration ${iterations}, aborting`);
-            } else {
-              console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
-            }
+            console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
             res.write(`event: warning\ndata: ${JSON.stringify({
               type: guard.stop.reason,
               message: guard.stop.warning,

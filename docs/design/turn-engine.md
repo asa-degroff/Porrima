@@ -243,19 +243,22 @@ disagree.
 
 ### 4.3 Guards — `evaluateTurnGuards()`
 
-The duplicate-tool-call dedup (streak ≥ 3 on a JSON signature) and the
-iteration caps exist verbatim in both routes as `turn_end` inline code.
+The iteration caps exist verbatim in both routes as `turn_end` inline code.
 Extract as pure functions:
 
 ```ts
-interface GuardResult { stop?: { reason: "duplicate_tool_call" | "iteration_limit"; warning: string }; streak: number; }
+interface GuardResult { stop?: { reason: "iteration_limit"; warning: string }; }
 
 evaluateTurnGuards({
-  newToolCalls, lastSignature, streak,
   iterations, maxIterations,
   perSegmentIterations?, maxIterationsPerSegment?,
 }): GuardResult
 ```
+
+(The original design also carried a duplicate-tool-call dedup guard — a
+streak ≥ 3 of identical JSON tool-call signatures aborted the loop. It was
+removed after production showed false alarms on legitimate repeated calls,
+e.g. consecutive `bash` invocations.)
 
 Both routes' `turn_end` handlers call this and emit their own warnings
 (SSE `event: warning` vs `emitter.emitWarning`) — the *decision* is shared,

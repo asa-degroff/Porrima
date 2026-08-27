@@ -4,7 +4,7 @@
  * Phase 1 of docs/design/turn-engine.md. One estimator replaces the three
  * dialects that had drifted (chat.ts inline anchor+exact+char; the headless
  * hook's anchor+chars/4; the char-only fallbacks), and one pure function
- * owns the duplicate-tool-call and iteration-cap decisions that existed
+ * owns the iteration-cap decisions that existed
  * verbatim in both routes.
  *
  * The estimate is THREE numbers, not one — and the mapping to triggers is
@@ -255,16 +255,7 @@ export async function estimateContextPressure(params: PressureEstimateParams): P
 // Turn guards
 // ---------------------------------------------------------------------------
 
-/** Consecutive identical tool-call iterations before the loop is aborted. */
-export const DUPLICATE_TOOL_CALL_LIMIT = 3;
-
 export interface TurnGuardInput {
-  /** The tool calls emitted in the turn that just ended. */
-  newToolCalls: Array<{ name: string; arguments: unknown }>;
-  /** The prior iteration's tool-call signature (null = none / reset). */
-  lastSignature: string | null;
-  /** The current consecutive-identical-call streak (0 = fresh). */
-  streak: number;
   iterations: number;
   maxIterations: number;
   /** Iterations since the last assistant-segment boundary (headless). */
@@ -279,59 +270,27 @@ export interface TurnGuardInput {
 
 export interface GuardResult {
   stop?: {
-    reason: "duplicate_tool_call" | "iteration_limit";
+    reason: "iteration_limit";
     /** Canonical warning text — shared by both routes; the *expression*
      *  (SSE `event: warning` vs `emitter.emitWarning`) stays per-transport. */
     warning: string;
   };
-  /** Updated streak — the caller persists it (state field / local var). */
-  streak: number;
-  /** Updated signature — the caller persists it. */
-  lastSignature: string | null;
 }
 
 /**
- * Turn-end guard decisions: duplicate-tool-call dedup (streak ≥
- * DUPLICATE_TOOL_CALL_LIMIT on a JSON signature) and the iteration caps.
+ * Turn-end guard decisions: the iteration caps.
  *
  * Pure — no I/O, no aborts, no emission. Both routes call this and express
- * the decision in their own transport (doc §4.3). Precedence: dedup, then
- * the total iteration cap, then the per-segment cap.
+ * the decision in their own transport (doc §4.3). Precedence: the total
+ * iteration cap, then the per-segment cap.
  */
 export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
   const {
-    newToolCalls,
-    lastSignature,
-    streak,
     iterations,
     maxIterations,
     perSegmentIterations,
     maxIterationsPerSegment,
   } = input;
-
-  // Duplicate-tool-call dedup: a streak of identical JSON signatures.
-  let nextStreak: number;
-  let nextSignature: string | null;
-  if (newToolCalls.length > 0) {
-    const sig = JSON.stringify(newToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
-    nextStreak = sig === lastSignature ? streak + 1 : 1;
-    nextSignature = sig;
-  } else {
-    nextStreak = 0;
-    nextSignature = null;
-  }
-
-  if (nextStreak >= DUPLICATE_TOOL_CALL_LIMIT) {
-    const names = newToolCalls.map((c) => c.name).join(", ");
-    return {
-      stop: {
-        reason: "duplicate_tool_call",
-        warning: `Stopped — model called the same tool ${nextStreak} times in a row (${names})`,
-      },
-      streak: nextStreak,
-      lastSignature: nextSignature,
-    };
-  }
 
   if (iterations >= maxIterations) {
     return {
@@ -339,8 +298,6 @@ export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
         reason: "iteration_limit",
         warning: `Stopped — reached ${maxIterations} iteration limit`,
       },
-      streak: nextStreak,
-      lastSignature: nextSignature,
     };
   }
 
@@ -354,12 +311,10 @@ export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
         reason: "iteration_limit",
         warning: `Stopped — reached ${maxIterationsPerSegment} iteration limit for this phase`,
       },
-      streak: nextStreak,
-      lastSignature: nextSignature,
     };
   }
 
-  return { streak: nextStreak, lastSignature: nextSignature };
+  return {};
 }
 
 // ---------------------------------------------------------------------------

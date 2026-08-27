@@ -24,7 +24,6 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { countLlamaTextTokens, estimateTextTokens } from "../services/token-count.js";
 import {
   comparePressureShadow,
-  DUPLICATE_TOOL_CALL_LIMIT,
   evaluateTurnGuards,
   estimateContextPressure,
   type PressureEstimate,
@@ -371,48 +370,14 @@ describe("end-of-turn trigger mapping — canonical forensics rows", () => {
 });
 
 describe("evaluateTurnGuards", () => {
-  const sameCalls = () => [{ name: "read_file", arguments: { path: "/same" } }];
   const base = {
-    streak: 0,
-    lastSignature: null as string | null,
     iterations: 1,
     maxIterations: 12,
   };
 
-  it("streak boundaries around the duplicate limit", () => {
-    expect(evaluateTurnGuards({ ...base, newToolCalls: sameCalls(), streak: 0, lastSignature: null }).stop).toBeUndefined();
-    expect(evaluateTurnGuards({ ...base, newToolCalls: sameCalls(), streak: 1, lastSignature: null }).streak).toBe(1);
-    // A fresh signature restarts the streak at 1 regardless of prior streak.
-    const r2 = evaluateTurnGuards({ ...base, newToolCalls: sameCalls(), streak: 2, lastSignature: "different" });
-    expect(r2.streak).toBe(1);
-    expect(r2.stop).toBeUndefined();
-    // Streak at the limit: 2 consecutive identical + this one = 3 → stop.
-    const r3 = evaluateTurnGuards({
-      ...base,
-      newToolCalls: sameCalls(),
-      streak: DUPLICATE_TOOL_CALL_LIMIT - 1,
-      lastSignature: JSON.stringify(sameCalls().map((c) => ({ name: c.name, args: c.arguments }))),
-    });
-    expect(r3.stop?.reason).toBe("duplicate_tool_call");
-    expect(r3.streak).toBe(DUPLICATE_TOOL_CALL_LIMIT);
-    expect(r3.stop?.warning).toContain(`same tool ${DUPLICATE_TOOL_CALL_LIMIT} times`);
-  });
-
-  it("empty tool calls reset the streak and the signature", () => {
-    const out = evaluateTurnGuards({
-      ...base,
-      newToolCalls: [],
-      streak: 2,
-      lastSignature: "stale",
-    });
-    expect(out.streak).toBe(0);
-    expect(out.lastSignature).toBeNull();
-    expect(out.stop).toBeUndefined();
-  });
-
   it("total cap boundary: max-1 passes, max stops", () => {
-    expect(evaluateTurnGuards({ ...base, newToolCalls: [], iterations: base.maxIterations - 1 }).stop).toBeUndefined();
-    const out = evaluateTurnGuards({ ...base, newToolCalls: [], iterations: base.maxIterations });
+    expect(evaluateTurnGuards({ ...base, iterations: base.maxIterations - 1 }).stop).toBeUndefined();
+    const out = evaluateTurnGuards({ ...base, iterations: base.maxIterations });
     expect(out.stop?.reason).toBe("iteration_limit");
     expect(out.stop?.warning).toBe(`Stopped — reached ${base.maxIterations} iteration limit`);
   });
@@ -420,7 +385,6 @@ describe("evaluateTurnGuards", () => {
   it("per-segment cap stops below the total cap", () => {
     const out = evaluateTurnGuards({
       ...base,
-      newToolCalls: [],
       iterations: 5,
       perSegmentIterations: 3,
       maxIterationsPerSegment: 3,
@@ -429,21 +393,9 @@ describe("evaluateTurnGuards", () => {
     expect(out.stop?.warning).toBe(`Stopped — reached 3 iteration limit for this phase`);
   });
 
-  it("precedence: dedup beats the total cap", () => {
-    const out = evaluateTurnGuards({
-      ...base,
-      newToolCalls: sameCalls(),
-      streak: 2,
-      lastSignature: JSON.stringify(sameCalls().map((c) => ({ name: c.name, args: c.arguments }))),
-      iterations: base.maxIterations,
-    });
-    expect(out.stop?.reason).toBe("duplicate_tool_call");
-  });
-
   it("precedence: the total cap beats the segment cap", () => {
     const out = evaluateTurnGuards({
       ...base,
-      newToolCalls: [],
       iterations: base.maxIterations,
       perSegmentIterations: 3,
       maxIterationsPerSegment: 3,
