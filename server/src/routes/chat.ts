@@ -3274,9 +3274,26 @@ async function handleChatStream(
         // Emit after prompt rebuild and handoff persistence so the estimated
         // token count reflects the actual prompt used for the resumed call.
         const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+        // Boundary the client can mirror locally: sequences strictly below
+        // this left the context mid-turn, so a live-streaming client (which
+        // skips the full reload to avoid duplicating the in-flight fragment)
+        // can dim exactly those rows it already synced by _rowSequence.
+        // NOTE: this is only correct because saveChat never writes row
+        // sequences back into in-memory messages — the _rowSequence values
+        // above are load-time (pre-compaction) positions, the same values the
+        // client last synced. If saveChat ever renumbers in-memory messages,
+        // the client's dimming/splicing drifts by the summary insertion shift.
+        const summaryIdx = summaryMsg ? chat.messages.indexOf(summaryMsg) : -1;
+        const keptSeqs = summaryIdx >= 0
+          ? chat.messages.slice(summaryIdx + 1)
+              .map(m => m._rowSequence)
+              .filter((s): s is number => typeof s === "number")
+          : [];
+        const firstKeptSequence = keptSeqs.length ? Math.min(...keptSeqs) : undefined;
         const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "mid_turn",
@@ -3284,6 +3301,7 @@ async function handleChatStream(
           midTurn: true,
           cycle: compactionCycle,
           estimatedTokens,
+          firstKeptSequence,
         })}\n\n`);
       }
       // Compaction window closed (success or no-op) — resync no longer reports it.
@@ -3567,7 +3585,7 @@ async function handleChatStream(
             preFlush: preCompactionFlushHook(chat, "end-of-turn flush failed"),
             systemPrompt,
             tools: agentTools,
-            onCompacted: async ({ removedCount }) => {
+            onCompacted: async ({ removedCount, removedSplitCount }) => {
               // The next prefill (a queued follow-up in this request or the
               // next turn) starts from the rebuilt context — arm the indicator.
               postCompactionPrefillPending.add(chat.id);
@@ -3609,6 +3627,7 @@ async function handleChatStream(
               const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
               res.write(`event: compaction\ndata: ${JSON.stringify({
                 removedCount,
+                splitCount: removedSplitCount,
                 remainingCount: chat.messages.filter(m => !m._outOfContext).length,
                 summaryMessage: summaryMsg || null,
                 phase: "end_turn",
@@ -4157,6 +4176,7 @@ router.post("/", async (req, res) => {
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "manual",
@@ -4175,6 +4195,7 @@ router.post("/", async (req, res) => {
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "manual",
@@ -4428,6 +4449,7 @@ router.post("/", async (req, res) => {
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
+              splitCount: compaction.removedSplitCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
               phase: "pre_send",
@@ -4642,6 +4664,7 @@ router.post("/", async (req, res) => {
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
+              splitCount: compaction.removedSplitCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
               phase: "pre_send",
@@ -5282,6 +5305,7 @@ router.post("/edit", async (req, res) => {
           );
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
+            splitCount: compaction.removedSplitCount,
             remainingCount: chat.messages.length,
             phase: "pre_send",
             continues: true,

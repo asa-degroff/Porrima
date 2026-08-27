@@ -63,6 +63,8 @@ type CompactionPhase = "pre_send" | "mid_turn" | "end_turn" | "manual";
 
 interface CompactionInfo {
   removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
   remainingCount: number;
   summaryMessage?: ChatMessage | null;
   phase?: CompactionPhase;
@@ -1116,6 +1118,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             // provisional post-compaction estimate instead of stale
             // pre-compaction usage.
             if (info.summaryMessage && !bg.doneCalled) {
+              const summary = info.summaryMessage;
               bg.content = "";
               bg.thinking = "";
               bg.thinkingActive = false;
@@ -1127,11 +1130,52 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
               bg.generatedImages = [];
               bg.segments = [];
               bg.seqCounter = 0;
-              bg.messages = [
-                ...bg.messages,
-                info.summaryMessage,
-                { role: "assistant", content: "", timestamp: Date.now() },
-              ];
+              // Mirror the server's post-compaction context boundary on rows
+              // already synced locally: everything with a persisted sequence
+              // below the kept tail left the model's context mid-turn and
+              // must render dimmed. Without this the pre-compaction history
+              // stays full-brightness until the next chat load, visually
+              // contradicting what was actually sent to the model. Rows
+              // without a sequence (the in-flight fragment, live locals) sit
+              // at or after the boundary and stay bright; a later reload
+              // reconciles them authoritatively.
+              const boundarySeq =
+                typeof info.firstKeptSequence === "number" ? info.firstKeptSequence : undefined;
+              if (boundarySeq !== undefined) {
+                bg.messages = bg.messages.map((m) =>
+                  typeof m._rowSequence === "number" && m._rowSequence < boundarySeq
+                    ? { ...m, _outOfContext: true }
+                    : m
+                );
+              }
+              // Splice the summary where the server placed it — before the
+              // first kept row — not at the end. Appending left the card (and
+              // the "In context" divider it drives) inside the retained tail
+              // in the live view, then the summary jumped to the head of the
+              // kept window on the next reload. The splice point is the first
+              // local row with a persisted sequence at or after the boundary;
+              // rows without a sequence sit after the summary in the
+              // server's order too. With no kept row loaded locally, fall
+              // back to appending.
+              const placeholder: ChatMessage = { role: "assistant", content: "", timestamp: Date.now() };
+              if (boundarySeq !== undefined) {
+                const spliceIdx = bg.messages.findIndex(
+                  (m) => typeof m._rowSequence === "number" && m._rowSequence >= boundarySeq
+                );
+                const at = spliceIdx === -1 ? bg.messages.length : spliceIdx;
+                bg.messages = [
+                 ...bg.messages.slice(0, at),
+                  summary,
+                 ...bg.messages.slice(at),
+                  placeholder,
+                ];
+              } else {
+                bg.messages = [
+                 ...bg.messages,
+                  summary,
+                  placeholder,
+                ];
+              }
               if (activeChatIdRef.current === streamChatId) {
                 streamingContentRef.current = "";
                 setStreamingThinking("");

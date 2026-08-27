@@ -159,7 +159,30 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
 
   while (i < messages.length) {
     const msg = messages[i];
-    if (msg.role === "system" || (msg._isSystemMessage && msg._isMidTurnCompaction)) {
+    if (msg.role === "system") {
+      i++;
+      continue;
+    }
+
+    // Mid-turn compaction handoff rows (persisted user-role system markers)
+    // pass through as their own display entry so ChatView renders them as a
+    // MidTurnCompactionIndicator at their real position. The model DOES see
+    // these rows' content in replay (they anchor the resumed KV prefix), so
+    // hiding them entirely made the UI diverge from the actual context.
+    // No-op cycles (pressure fired but the budget kept everything) persist a
+    // zero-count handoff that archived nothing — with no summary card to go
+    // with it, a "Context compacted" card would assert a compaction that
+    // didn't happen, so zero-count rows keep the old hidden treatment.
+    // Tool-loop/synthesis grouping still breaks on them below.
+    if (msg._isSystemMessage && msg._isMidTurnCompaction) {
+      if ((msg._compactionRemovedCount ?? 0) > 0) {
+        display.push({
+          message: msg,
+          localStartIdx: i,
+          localEndIdx: i,
+          streamingSegmentOffset: 0,
+        });
+      }
       i++;
       continue;
     }
@@ -259,7 +282,7 @@ interface Props {
   totalUsage: MessageUsage;
   isUsageEstimated?: boolean;
   compacting?: boolean;
-  compaction?: { removedCount: number; remainingCount: number } | null;
+  compaction?: { removedCount: number; splitCount?: number; remainingCount: number } | null;
   modelProgress?: ModelProgress | null;
   inferenceActivityPhase?: InferenceActivityPhase | null;
   turnQueueInfo?: import("../hooks/useChat").TurnQueueInfo | null;
@@ -947,6 +970,7 @@ export function ChatView({
                                 removedCount: msg._compactionRemovedCount,
                                 cycle: msg._compactionCycle,
                                 timestamp: msg.timestamp,
+                                content: msg.content,
                               }}
                             />
                           ) : isSystemMessage ? (

@@ -2,6 +2,8 @@ import { useState, memo } from "react";
 
 export interface CompactionData {
   removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
   summary: string;
   messageIndex: number; // Index in messages array where summary was inserted
   timestamp: number;
@@ -11,6 +13,8 @@ export interface MidTurnCompactionData {
   removedCount?: number;
   cycle?: number;
   timestamp: number;
+  /** The persisted handoff marker text — what the model replay actually sees at this boundary */
+  content?: string;
 }
 
 interface Props {
@@ -27,6 +31,12 @@ interface MidTurnProps {
  */
 export const CompactionIndicator = memo(function CompactionIndicator({ compaction }: Props) {
   const [expanded, setExpanded] = useState(false);
+
+  // removedCount bundles whole removed messages with partial-turn split units;
+  // presenting splits as whole "messages compacted" overstates what was taken
+  // out of context, so surface them separately.
+  const splitCount = Math.min(compaction.splitCount ?? 0, compaction.removedCount);
+  const wholeRemoved = Math.max(0, compaction.removedCount - splitCount);
 
   const formattedDate = new Date(compaction.timestamp).toLocaleDateString(undefined, {
     month: "short",
@@ -74,7 +84,18 @@ export const CompactionIndicator = memo(function CompactionIndicator({ compactio
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-white/70">
-                {compaction.removedCount} message{compaction.removedCount !== 1 ? "s" : ""} compacted
+                {wholeRemoved > 0 ? (
+                  <>
+                    {wholeRemoved} message{wholeRemoved !== 1 ? "s" : ""} compacted
+                    {splitCount > 0 && (
+                      <span className="text-xs font-normal text-white/40 ml-1.5">
+                        · {splitCount} partial
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  "Partial turn archived"
+                )}
               </div>
               <div className="text-xs text-white/40">{formattedDate}</div>
             </div>
@@ -123,7 +144,7 @@ export const CompactionIndicator = memo(function CompactionIndicator({ compactio
                 <line x1="12" y1="16" x2="12" y2="12" />
                 <line x1="12" y1="8" x2="12.01" y2="8" />
               </svg>
-              <span>Previous conversation context preserved above</span>
+              <span>Earlier messages archived with full fidelity — ask the agent to run read_archived_context for details</span>
             </div>
           </div>
         )}
@@ -202,22 +223,37 @@ export const MidTurnCompactionIndicator = memo(function MidTurnCompactionIndicat
               </div>
             </div>
           </div>
-          {/* Expand/collapse chevron */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={`text-white/30 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+          {/* Expand/collapse chevron — only when there is handoff text to reveal */}
+          {midTurn.content && (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`text-white/30 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          )}
         </div>
+
+        {/* Expanded handoff panel — the marker text the model replay sees at
+            this boundary: progress so far, recent tool calls, fresh memories */}
+        {expanded && midTurn.content && (
+          <div
+            className="px-4 pb-3 pt-0 border-t"
+            style={{ borderColor: "rgba(147, 197, 253, 0.15)" }}
+          >
+            <div className="mt-3 max-h-64 overflow-y-auto text-xs text-white/50 leading-relaxed whitespace-pre-wrap">
+              {midTurn.content}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

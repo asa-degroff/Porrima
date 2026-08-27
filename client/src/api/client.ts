@@ -268,16 +268,24 @@ export interface StreamCallbacks {
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
   onCompacting?: () => void;
-  onCompaction?: (info: {
-    removedCount: number;
-    remainingCount: number;
-    summaryMessage?: import("../types").ChatMessage | null;
-    phase?: "pre_send" | "mid_turn" | "end_turn" | "manual";
-    continues?: boolean;
-    midTurn?: boolean;
-    cycle?: number;
-    estimatedTokens?: number;
-  }) => void;
+onCompaction?: (info: {
+  removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
+  remainingCount: number;
+  summaryMessage?: import("../types").ChatMessage | null;
+  phase?: "pre_send" | "mid_turn" | "end_turn" | "manual";
+  continues?: boolean;
+  midTurn?: boolean;
+  cycle?: number;
+  estimatedTokens?: number;
+  /**
+   * Mid-turn only: smallest persisted `_rowSequence` still in context after
+   * compaction. Locally synced rows with a lower sequence left the model's
+   * context and should render as out-of-context without a full reload.
+   */
+  firstKeptSequence?: number;
+}) => void;
   onAgentOutputComplete?: () => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
   onModelFallback?: (info: { chatId: string; modelId: string; modelName?: string; previousModelId: string }) => void;

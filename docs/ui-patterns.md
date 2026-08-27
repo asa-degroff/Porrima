@@ -4,13 +4,14 @@
 
 - Server-Sent Events for real-time token streaming
 - Collapsible thinking blocks for reasoning-capable models (Qwen3+) with live duration timer (100ms updates), user toggle override, accumulated duration tracking
-- Token usage indicator (`TokenIndicator.tsx`) with context window progress bar, compaction warning, removed message count
-- Compaction indicator (`CompactionIndicator.tsx`) — collapsible UI showing where messages were compacted, removed count, timestamp, expandable indexed summary with archive IDs
-- Context boundary visualization — messages before the last compaction point render at 45% opacity ("out of context"), with a green "In context" divider marking where active context resumes
+- Token usage indicator (`TokenIndicator.tsx`) with context window progress bar, compaction warning, and a compacted badge whose tooltip decomposes the removed count the same way the indicator card does — whole messages plus separately counted partial-turn splits, or "Partial turn archived" when nothing whole was removed
+- Compaction indicator (`CompactionIndicator.tsx`) — collapsible UI showing where messages were compacted, removed count (whole removed messages plus separately counted partial-turn splits), timestamp, expandable indexed summary with archive IDs
+- Context boundary visualization — messages before the last compaction point render at 45% opacity ("out of context"), with a green "In context" divider marking where active context resumes. Live mid-turn compaction mirrors the boundary immediately: the SSE `compaction` event carries `firstKeptSequence`, and `useChat` dims locally synced rows with a lower `_rowSequence` and splices the summary card before the first kept row — the position the server uses — instead of waiting for a reload
+- Mid-turn compaction handoff rows (`_isSystemMessage` + `_isMidTurnCompaction`) render as a `MidTurnCompactionIndicator` card at their persisted position — the model replay actually consumes their content, so they are not hidden from the display projection; the chevron expands to show the persisted handoff marker text (progress summary + recent tool calls) that the replayed context actually contains; no-op cycles (zero removedCount, nothing archived) stay hidden, since their card would assert a compaction that didn't happen
 - Messages synced from server after compaction to ensure correct chronological ordering
 - Context window editing restricted to fresh chats (no messages yet) to prevent mid-conversation model reloads
 - Long-history loading: initial chat fetch requests the most recent 200 messages, and `ChatView` loads older windows on scroll-to-top via `GET /api/chats/:id/messages`. Absolute indexes are preserved with `messageOffset`.
-- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text. Hidden system rows, including passive memory recalls, are filtered from the display projection and do not split the bubble.
+- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text. Hidden system rows, including passive memory recalls, are filtered from the display projection and do not split the bubble; mid-turn compaction handoff rows pass through as their own indicator card (grouping still breaks on them)
 
 ## Mobile & Touch
 

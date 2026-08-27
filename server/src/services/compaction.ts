@@ -16,6 +16,12 @@ import { recordToolResultExactTokenEstimate } from "./token-estimate-observabili
 export interface CompactionResult {
   truncated: boolean;
   removedCount: number;
+  /**
+   * How many of removedCount's units were partial-turn splits (mid-message
+   * archive heads) rather than whole removed messages. Lets the UI present
+   * "2 messages compacted · 1 partial" instead of an inflated whole count.
+   */
+  removedSplitCount?: number;
   removedMessages?: ChatMessage[];
   /** Estimated token count of removed messages (chars/4 approximation) */
   estimatedTokenCount?: number;
@@ -1196,6 +1202,7 @@ export async function truncateBeforeSend(
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
+    _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
@@ -1262,6 +1269,7 @@ export async function truncateBeforeSend(
   const primaryResult: CompactionResult = {
     truncated: true,
     removedCount: messagesToMarkCount + splitInfos.length,
+    removedSplitCount: splitInfos.length,
     removedMessages,
     estimatedTokenCount: estimatedRemovedTokens,
   };
@@ -1275,6 +1283,7 @@ export async function truncateBeforeSend(
     return {
       truncated: true,
       removedCount: primaryResult.removedCount + additional.removedCount,
+      removedSplitCount: (primaryResult.removedSplitCount ?? 0) + (additional.removedSplitCount ?? 0),
       removedMessages: [...(primaryResult.removedMessages || []), ...(additional.removedMessages || [])],
       estimatedTokenCount: (primaryResult.estimatedTokenCount || 0) + (additional.estimatedTokenCount || 0),
     };
@@ -2263,6 +2272,7 @@ export async function truncateChatHistory(
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
+    _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIndex, 0, summaryMessage);
@@ -2326,6 +2336,7 @@ export async function truncateChatHistory(
     // Count the split (if any) as 1 compacted unit so user-facing messaging
     // ("Removed N messages") doesn't report 0 when a partial compaction happened.
     removedCount: messagesToMarkCount + splitInfos.length,
+    removedSplitCount: splitInfos.length,
     removedMessages,
     estimatedTokenCount: estimatedRemovedTokens,
   };

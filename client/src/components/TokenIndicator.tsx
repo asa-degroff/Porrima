@@ -6,7 +6,26 @@ import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface CompactionInfo {
   removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
   remainingCount: number;
+}
+
+/**
+ * Tooltip for the "compacted" badge. Decomposes removedCount the same way
+ * CompactionIndicator does: split units are partial turns, not whole removed
+ * messages, so they get their own "· N partial" slot instead of inflating the
+ * whole-message count.
+ */
+function compactionTooltipText(c: CompactionInfo): string {
+  const splitUnits = Math.min(c.splitCount ?? 0, c.removedCount);
+  const whole = c.removedCount - splitUnits;
+  if (whole > 0) {
+    return `${whole} message${whole !== 1 ? "s" : ""} compacted` +
+      (splitUnits > 0 ? ` · ${splitUnits} partial` : "") +
+      `, ${c.remainingCount} remaining`;
+  }
+  return `Partial turn archived, ${c.remainingCount} remaining`;
 }
 
 interface Props {
@@ -370,7 +389,7 @@ export function TokenIndicator({
       ) : compaction ? (
         <span
           className="text-purple-300/60 cursor-default"
-          title={`${compaction.removedCount} messages compacted, ${compaction.remainingCount} remaining`}
+          title={compactionTooltipText(compaction)}
         >
           compacted
         </span>
