@@ -67,7 +67,7 @@ export interface EndOfTurnCompactionOptions {
    * saveChat. chat.ts: prefill indicator, memory-context rebuild, skill
    * re-injection, stale-usage clear, SSE compaction event.
    */
-  onCompacted?: (r: { removedCount: number; remainingCount: number }) => Promise<void> | void;
+  onCompacted?: (r: { removedCount: number; removedSplitCount?: number; remainingCount: number }) => Promise<void> | void;
   /** System prompt for truncateChatHistory's overhead budgeting. */
   systemPrompt?: string;
   /** Tool schemas for truncateChatHistory's overhead budgeting. */
@@ -145,6 +145,7 @@ export async function runEndOfTurnCompaction(
         truncated = true;
         await opts.onCompacted?.({
           removedCount: compaction.removedCount,
+          removedSplitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter((m) => !m._outOfContext).length,
         });
       }

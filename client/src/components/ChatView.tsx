@@ -282,7 +282,7 @@ interface Props {
   totalUsage: MessageUsage;
   isUsageEstimated?: boolean;
   compacting?: boolean;
-  compaction?: { removedCount: number; remainingCount: number } | null;
+  compaction?: { removedCount: number; splitCount?: number; remainingCount: number } | null;
   modelProgress?: ModelProgress | null;
   inferenceActivityPhase?: InferenceActivityPhase | null;
   turnQueueInfo?: import("../hooks/useChat").TurnQueueInfo | null;

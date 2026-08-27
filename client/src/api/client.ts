@@ -270,6 +270,8 @@ export interface StreamCallbacks {
   onCompacting?: () => void;
 onCompaction?: (info: {
   removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
   remainingCount: number;
   summaryMessage?: import("../types").ChatMessage | null;
   phase?: "pre_send" | "mid_turn" | "end_turn" | "manual";

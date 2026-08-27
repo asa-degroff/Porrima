@@ -3293,6 +3293,7 @@ async function handleChatStream(
         const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "mid_turn",
@@ -3584,7 +3585,7 @@ async function handleChatStream(
             preFlush: preCompactionFlushHook(chat, "end-of-turn flush failed"),
             systemPrompt,
             tools: agentTools,
-            onCompacted: async ({ removedCount }) => {
+            onCompacted: async ({ removedCount, removedSplitCount }) => {
               // The next prefill (a queued follow-up in this request or the
               // next turn) starts from the rebuilt context — arm the indicator.
               postCompactionPrefillPending.add(chat.id);
@@ -3626,6 +3627,7 @@ async function handleChatStream(
               const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
               res.write(`event: compaction\ndata: ${JSON.stringify({
                 removedCount,
+                splitCount: removedSplitCount,
                 remainingCount: chat.messages.filter(m => !m._outOfContext).length,
                 summaryMessage: summaryMsg || null,
                 phase: "end_turn",
@@ -4174,6 +4176,7 @@ router.post("/", async (req, res) => {
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "manual",
@@ -4192,6 +4195,7 @@ router.post("/", async (req, res) => {
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
+          splitCount: compaction.removedSplitCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
           phase: "manual",
@@ -4445,6 +4449,7 @@ router.post("/", async (req, res) => {
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
+              splitCount: compaction.removedSplitCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
               phase: "pre_send",
@@ -4659,6 +4664,7 @@ router.post("/", async (req, res) => {
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
+              splitCount: compaction.removedSplitCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
               phase: "pre_send",
@@ -5299,6 +5305,7 @@ router.post("/edit", async (req, res) => {
           );
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
+            splitCount: compaction.removedSplitCount,
             remainingCount: chat.messages.length,
             phase: "pre_send",
             continues: true,

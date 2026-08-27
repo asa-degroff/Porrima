@@ -237,6 +237,44 @@ describe("compaction retention planning", () => {
     expect(active.some((m) => m.role === "assistant" && m.content === finalText)).toBe(true);
   });
 
+  it("decomposes the removed count: the split head is a partial unit, not a whole removed message", async () => {
+    const { truncateBeforeSend } = await import("../services/compaction.js");
+    const hugeWriteContent = "bulk artifact payload line\n".repeat(2400);
+    const finalText = "Final conclusion: the retention planner keeps visible output intact.";
+    const currentUser = "Continue from the retention planner review.";
+    const chat = makeChat([
+      { role: "user", content: "Earlier setup request.", timestamp: 1 },
+      { role: "assistant", content: "Earlier output.", timestamp: 2 },
+      { role: "user", content: currentUser, timestamp: 3 },
+      {
+        role: "assistant",
+        content: finalText,
+        thinking: "Write the artifact, then verify the diff.",
+        timestamp: 4,
+        toolCalls: [
+          { id: "write", name: "write_file", arguments: { path: "/repo/artifact.html", content: hugeWriteContent } },
+          { id: "diff", name: "bash", arguments: { command: "git diff --stat HEAD" } },
+        ],
+        toolResults: [],
+      },
+    ]);
+
+    const result = await truncateBeforeSend(chat, 8000, "You are helpful.", undefined, undefined, []);
+
+    expect(result?.truncated).toBe(true);
+    // Everything except the bulky payload fits in the window, so the planner
+    // keeps the whole older pair and the ONLY removed unit is the split head
+    // of the bulky turn — a pure partial compaction (0 whole messages). This
+    // is the case the old UI misreported as "0 messages compacted"; the
+    // decomposed count renders as "Partial turn archived" instead.
+    expect(result?.removedCount).toBe(1);
+    expect(result?.removedSplitCount).toBe(1);
+    // The summary carries the same decomposition for the UI.
+    const summary = chat.messages.find((m) => m._isCompactionSummary);
+    expect(summary?._compactedMessageCount).toBe(1);
+    expect(summary?._compactedSplitCount).toBe(1);
+  });
+
   it("backfills across a single completed tool-only row by keeping an archived placeholder", async () => {
     const { truncateBeforeSend } = await import("../services/compaction.js");
     const hugeResult = "route handler line with chat compaction and tool loop state\n".repeat(2200);

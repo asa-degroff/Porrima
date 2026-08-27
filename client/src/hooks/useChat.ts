@@ -63,6 +63,8 @@ type CompactionPhase = "pre_send" | "mid_turn" | "end_turn" | "manual";
 
 interface CompactionInfo {
   removedCount: number;
+  /** Units of removedCount that were partial-turn splits (mid-message archive heads) */
+  splitCount?: number;
   remainingCount: number;
   summaryMessage?: ChatMessage | null;
   phase?: CompactionPhase;
