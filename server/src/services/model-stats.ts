@@ -7,6 +7,14 @@ const MAX_RUNS_PER_MODEL = 50;
 // EMA decay factor — recent runs matter more, but we smooth out variance.
 const EMA_ALPHA = 0.3;
 
+// Prefill-rate averaging skips runs whose prompt eval processed fewer than
+// this many tokens. Warm-cache hits process very few tokens over sub-
+// millisecond windows, so llama.cpp's prompt_per_second for them measures
+// launch overhead, not throughput (a single-token probe can report thousands
+// of t/s and drag the "avg prefill" away from real prefill speeds). Every
+// other average (decode, timings, cache) still sees all runs.
+const MIN_PROMPT_TOKENS_FOR_RATE_EMA = 32;
+
 export interface LlamaTimings {
   prompt_n: number;
   prompt_ms: number;
@@ -395,7 +403,7 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
 
   // Compute EMA from all runs (chronological order for proper EMA)
   const selectAll = `
-    SELECT promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs,
+    SELECT promptTokens, promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs,
       inferredCacheHitRatio, inferredCachedTokens
     FROM model_stats
   `;
@@ -417,17 +425,25 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
     const dMs = row.predictedMs as number;
     const cacheHitRatio = row.inferredCacheHitRatio as number | null;
     const cachedTokens = row.inferredCachedTokens as number | null;
-    if (avgPromptTokensPerSec === null) {
-      avgPromptTokensPerSec = ptps;
+
+    if (avgPredictedTokensPerSec === null) {
       avgPredictedTokensPerSec = dtps;
       avgPromptMs = pMs;
       avgPredictedMs = dMs;
     } else {
-      avgPromptTokensPerSec = EMA_ALPHA * ptps + (1 - EMA_ALPHA) * avgPromptTokensPerSec;
-      avgPredictedTokensPerSec = EMA_ALPHA * dtps + (1 - EMA_ALPHA) * avgPredictedTokensPerSec!;
+      avgPredictedTokensPerSec = EMA_ALPHA * dtps + (1 - EMA_ALPHA) * avgPredictedTokensPerSec;
       avgPromptMs = EMA_ALPHA * pMs + (1 - EMA_ALPHA) * avgPromptMs!;
       avgPredictedMs = EMA_ALPHA * dMs + (1 - EMA_ALPHA) * avgPredictedMs!;
     }
+
+    // Prefill-rate EMA: exclude micro-runs (see MIN_PROMPT_TOKENS_FOR_RATE_EMA).
+    const promptN = row.promptTokens as number | undefined;
+    if (typeof promptN === "number" && promptN >= MIN_PROMPT_TOKENS_FOR_RATE_EMA) {
+      avgPromptTokensPerSec = avgPromptTokensPerSec === null
+        ? ptps
+        : EMA_ALPHA * ptps + (1 - EMA_ALPHA) * avgPromptTokensPerSec;
+    }
+
     if (typeof cacheHitRatio === "number") {
       avgInferredCacheHitRatio = avgInferredCacheHitRatio === null
         ? cacheHitRatio
