@@ -14,3 +14,5 @@ server/.env
 server/.env.*
 !.env.example
 !server/.env.example
+
+/*.md
