@@ -148,27 +148,37 @@ async function checkAndRunEnrichment() {
  * Criteria:
  * - Chat type is "agent"
  * - lastModified < now - threshold (inactive for N minutes)
- * - (lastDelayedExtractionAt IS NULL OR lastDelayedExtractionAt < lastModified)
- *   (extraction hasn't run since last activity)
+ * - AND (one of):
+ *   - lastDelayedExtractionAt IS NULL (never extracted)
+ *   - lastDelayedExtractionAt < lastModified (new activity since last run)
+ *   - lastDelayedExtractionMessageIndex < lastDelayedExtractionTailIndex
+ *     (over-cap window still draining — the watermark lags the tail the last
+ *     run persisted; re-select until the backlog is processed)
  */
-async function findChatsNeedingDelayedExtraction(thresholdMs: number): Promise<string[]> {
+export async function findChatsNeedingDelayedExtraction(thresholdMs: number): Promise<string[]> {
   const db = getDb();
   const now = new Date().toISOString();
   const thresholdDate = new Date(Date.now() - thresholdMs).toISOString();
-  
+
   const rows = db.prepare(`
     SELECT id, lastModified, lastDelayedExtractionAt
     FROM chats
     WHERE type IN ('agent', 'system')
       AND lastModified < ?
-      AND (lastDelayedExtractionAt IS NULL OR lastDelayedExtractionAt < lastModified)
+      AND (
+        lastDelayedExtractionAt IS NULL
+        OR lastDelayedExtractionAt < lastModified
+        OR (lastDelayedExtractionMessageIndex IS NOT NULL
+            AND lastDelayedExtractionTailIndex IS NOT NULL
+            AND lastDelayedExtractionMessageIndex < lastDelayedExtractionTailIndex)
+      )
     ORDER BY lastModified DESC
   `).all(thresholdDate) as Array<{
     id: string;
     lastModified: string;
     lastDelayedExtractionAt: string | null;
   }>;
-  
+
   return rows.map(r => r.id);
 }
 

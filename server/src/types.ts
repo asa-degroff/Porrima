@@ -174,6 +174,9 @@ export interface Chat {
   // Delayed extraction tracking
   lastDelayedExtractionAt?: string;
   lastDelayedExtractionMessageIndex?: number;
+  /** Chat message count tail (messages.length - 1) at the last delayed run.
+   *  When the watermark lags this, an over-cap window is still draining. */
+  lastDelayedExtractionTailIndex?: number;
   // Zeitgeist synthesis tracking
   lastZeitgeistSynthesisAt?: string;
 

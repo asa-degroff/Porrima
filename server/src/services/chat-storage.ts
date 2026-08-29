@@ -103,6 +103,7 @@ interface ChatMetadataRow {
   lastModified: string;
   lastDelayedExtractionAt: string | null;
   lastDelayedExtractionMessageIndex: number | null;
+  lastDelayedExtractionTailIndex: number | null;
   lastZeitgeistSynthesisAt: string | null;
 }
 
@@ -418,6 +419,9 @@ export function getDb(): Database.Database {
   if (!cols.some((c) => c.name === "lastDelayedExtractionMessageIndex")) {
     db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionMessageIndex INTEGER");
   }
+  if (!cols.some((c) => c.name === "lastDelayedExtractionTailIndex")) {
+    db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionTailIndex INTEGER");
+  }
 
   // Auto-add zeitgeist synthesis tracking column
   if (!cols.some((c) => c.name === "lastZeitgeistSynthesisAt")) {
@@ -547,7 +551,7 @@ export async function getChat(id: string): Promise<Chat | null> {
     SELECT
       id, title, type, modelId, systemPrompt, contextWindow, projectId,
       activeSkills, createdAt, lastModified,
-      lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt,
+      lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
       CASE WHEN json_valid(messages) THEN json_array_length(messages) ELSE NULL END AS legacyMessageCount
     FROM chats
     WHERE id = ?
@@ -701,7 +705,7 @@ export async function getChatWithWindow(
   const row = db.prepare(
     `SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
             activeSkills, createdAt, lastModified,
-            lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt
+            lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt
      FROM chats WHERE id = ?`
   ).get(id) as ChatMetadataRow | undefined;
 
@@ -755,6 +759,7 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
             lastModified = ?,
             lastDelayedExtractionAt = ?,
             lastDelayedExtractionMessageIndex = ?,
+            lastDelayedExtractionTailIndex = ?,
             preview = ?
         WHERE id = ?
       `).run(
@@ -768,6 +773,7 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
         chat.lastModified,
         chat.lastDelayedExtractionAt ?? null,
         chat.lastDelayedExtractionMessageIndex ?? null,
+        chat.lastDelayedExtractionTailIndex ?? null,
         preview,
         chat.id
       );
@@ -816,7 +822,7 @@ export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate
     const row = db.prepare(`
       SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
              activeSkills, createdAt, lastModified,
-             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt
+             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt
       FROM chats
       WHERE id = ?
     `).get(id) as ChatMetadataRow | undefined;
@@ -828,14 +834,15 @@ export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate
 export async function updateChatExtractionState(
   chatId: string,
   extractionAt: string,
-  messageIndex: number
+  messageIndex: number,
+  tailIndex: number
 ): Promise<void> {
   const db = getDb();
   db.prepare(`
     UPDATE chats
-    SET lastDelayedExtractionAt = ?, lastDelayedExtractionMessageIndex = ?
+    SET lastDelayedExtractionAt = ?, lastDelayedExtractionMessageIndex = ?, lastDelayedExtractionTailIndex = ?
     WHERE id = ?
-  `).run(extractionAt, messageIndex, chatId);
+  `).run(extractionAt, messageIndex, tailIndex, chatId);
 }
 
 export async function updateChatTitle(
@@ -875,10 +882,10 @@ export async function createChat(chat: Chat): Promise<void> {
       INSERT INTO chats (
         id, title, type, modelId, systemPrompt,
         contextWindow, projectId, activeSkills, messages,
-        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex,
         preview
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       chat.id,
       chat.title,
@@ -893,6 +900,7 @@ export async function createChat(chat: Chat): Promise<void> {
       chat.lastModified,
       chat.lastDelayedExtractionAt ?? null,
       chat.lastDelayedExtractionMessageIndex ?? null,
+      chat.lastDelayedExtractionTailIndex ?? null,
       preview
     );
 
@@ -1515,6 +1523,7 @@ function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
     ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
     ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
     ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
+    ...(row.lastDelayedExtractionTailIndex !== null && row.lastDelayedExtractionTailIndex !== undefined ? { lastDelayedExtractionTailIndex: row.lastDelayedExtractionTailIndex } : {}),
     ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
   };
 }
@@ -2087,9 +2096,9 @@ function migrateChatsFromJson(db: Database.Database): void {
       INSERT OR REPLACE INTO chats (
         id, title, type, modelId, systemPrompt,
         contextWindow, projectId, activeSkills, messages,
-        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
+        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const migrate = db.transaction(() => {
@@ -2114,7 +2123,8 @@ function migrateChatsFromJson(db: Database.Database): void {
             chat.createdAt,
             chat.lastModified,
             chat.lastDelayedExtractionAt ?? null,
-            chat.lastDelayedExtractionMessageIndex ?? null
+            chat.lastDelayedExtractionMessageIndex ?? null,
+            chat.lastDelayedExtractionTailIndex ?? null
           );
           count++;
         } catch (e) {

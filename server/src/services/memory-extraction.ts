@@ -3885,17 +3885,29 @@ export function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean
  * grows both sides without limit and re-extracts the same trailing window
  * each run.
  *
+ * Window cap is FIFO: when more than `messageCap` substantive messages have
+ * accumulated, the OLDEST cap-many are processed and `truncated` is set.
+ * The caller must then stop the watermark at the last processed index (not
+ * the tail) and persist the tail separately, so the scheduler re-selects
+ * the chat and the remainder drains on subsequent runs. LIFO would silently
+ * drop the oldest unprocessed content — a cursor that passes over what the
+ * model never saw (same invariant the mid-turn pulse cursors enforce).
+ *
  * Returns `hasNewContent=false` when no substantive messages have been added
  * since the watermark — the caller should bump the watermark and skip the LLM
  * call entirely.
  */
-async function buildDelayedExtractionContext(
+export async function buildDelayedExtractionContext(
   chat: Chat,
   messageCap: number = DEFAULT_MESSAGE_CAP
 ): Promise<{
   messages: IndexedChatMessage[];
   previousMemories: Omit<Memory, "embedding">[];
   hasNewContent: boolean;
+  /** True when the substantive window exceeded messageCap (oldest-first slice taken). */
+  truncated: boolean;
+  /** Substantive message count before the cap (full pending window size). */
+  windowSize: number;
 }> {
   const watermark = chat.lastDelayedExtractionMessageIndex ?? -1;
 
@@ -3904,10 +3916,12 @@ async function buildDelayedExtractionContext(
     .filter(({ message }) => isSubstantiveForDelayedExtraction(message));
 
   // Only include messages added since the last extraction. Cap as a safety
-  // net for chats that have accumulated a huge burst of activity between runs.
+  // net for chats that have accumulated a huge burst of activity between
+  // runs — FIFO, so the backlog drains across runs instead of dropping.
   const newMessages = substantiveMessages.filter(({ index }) => index > watermark);
-  const messages = newMessages.length > messageCap
-    ? newMessages.slice(-messageCap)
+  const truncated = newMessages.length > messageCap;
+  const messages = truncated
+    ? newMessages.slice(0, messageCap)
     : newMessages;
 
   // Align previousMemories with the message window. Cutoff is the timestamp
@@ -3932,7 +3946,13 @@ async function buildDelayedExtractionContext(
     previousMemories = previousMemories.slice(-MAX_PREVIOUS_MEMORIES);
   }
 
-  return { messages, previousMemories, hasNewContent: newMessages.length > 0 };
+  return {
+    messages,
+    previousMemories,
+    hasNewContent: newMessages.length > 0,
+    truncated,
+    windowSize: newMessages.length,
+  };
 }
 
 /**
@@ -3990,12 +4010,27 @@ export async function extractDelayedMemories(
     console.log(
       `[memory-delayed] No new substantive messages since last extraction for chat ${chatId}, bumping watermark`
     );
-    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+    const emptyTail = chat.messages.length - 1;
+    await updateChatExtractionState(chatId, new Date().toISOString(), emptyTail, emptyTail);
     return;
   }
 
   const startIndex = context.messages[0]?.index ?? 0;
   const endIndex = context.messages[context.messages.length - 1]?.index ?? -1;
+
+  // Cursor invariant: the watermark = end of what the extraction model
+  // actually saw. A truncated window stops at the last processed index; the
+  // tail is persisted separately so the scheduler re-selects this chat and
+  // the remaining substantive messages drain on subsequent runs.
+  const tailIndex = chat.messages.length - 1;
+  const nextWatermark = context.truncated ? endIndex : tailIndex;
+  if (context.truncated) {
+    console.log(
+      `[memory-delayed] Window over cap: processing oldest ${context.messages.length} of ${context.windowSize} ` +
+        `substantive messages for chat ${chatId} (${startIndex}-${endIndex}); ` +
+        `${context.windowSize - context.messages.length} deferred to subsequent runs (watermark=${nextWatermark}, tail=${tailIndex})`
+    );
+  }
 
   console.log(
     `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${endIndex}) with ${context.previousMemories.length} previous memories`
@@ -4056,7 +4091,7 @@ export async function extractDelayedMemories(
     if (facts.length === 0) {
       console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
       // Still update tracking fields to mark extraction as run
-      await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+      await updateChatExtractionState(chatId, new Date().toISOString(), nextWatermark, tailIndex);
       runHandle.complete({
         facts: [],
         subject: chunkResult.subjects[0],
@@ -4211,7 +4246,7 @@ export async function extractDelayedMemories(
     }
 
     // Update chat tracking fields without touching lastModified
-    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+    await updateChatExtractionState(chatId, new Date().toISOString(), nextWatermark, tailIndex);
 
     console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
     runHandle.complete({
