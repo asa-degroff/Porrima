@@ -3384,6 +3384,21 @@ Output a JSON object with two fields:
 
 If nothing is significant, output: {"subject": "", "memories": []}`;
 
+/**
+ * Synthetic automation prompt rows: wake-cycle and custom-automation trigger
+ * messages are persisted as user-role messages so the model sees them as task
+ * instructions, but they are boilerplate re-sent verbatim on every run —
+ * extracting them turns scheduler config into memories that repeat cycle
+ * after cycle. Same rationale as the _isSynthesisMessage exclusion below
+ * (re-extracting the cycle itself as memory). Assistant-side automation
+ * output (also _isAutomationMessage, role assistant) stays extractable —
+ * those are real findings, and the extraction prefix attributes them to me
+ * in first person.
+ */
+export function isSyntheticAutomationPrompt(message: ChatMessage): boolean {
+  return message.role === "user" && message._isAutomationMessage === true;
+}
+
 export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): boolean {
   return (
     !message._isCompactionSummary &&
@@ -3393,6 +3408,7 @@ export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): b
     // and stripped by an earlier compaction. Only the latter are skipped.
     (!message._outOfContext || message._isSplitHead === true) &&
     !message._isSynthesisMessage &&
+    !isSyntheticAutomationPrompt(message) &&
     message.role !== "system"
   );
 }
@@ -3434,10 +3450,13 @@ export async function preCompactionFlush(
   const skippedCompaction = removedMessages.filter((m) => m._isCompactionSummary).length;
   const skippedOutOfContext = removedMessages.filter((m) => m._outOfContext && !m._isSplitHead).length;
   const skippedSynthesis = removedMessages.filter((m) => m._isSynthesisMessage).length;
+  const skippedAutomation = removedMessages.filter(
+    (m) => isSyntheticAutomationPrompt(m) && !m._isSynthesisMessage
+  ).length;
   const skippedSystem = removedMessages.filter((m) => m.role === "system").length;
   console.log(
     `[memory] Pre-compaction flush: processing ${substantiveMessages.length} removed messages ` +
-    `(skipped: compaction=${skippedCompaction}, outOfContext=${skippedOutOfContext}, synthesis=${skippedSynthesis}, system=${skippedSystem})`
+    `(skipped: compaction=${skippedCompaction}, outOfContext=${skippedOutOfContext}, synthesis=${skippedSynthesis}, automationPrompts=${skippedAutomation}, system=${skippedSystem})`
   );
 
   const state = getImmediateQueueState(chatId);
@@ -3846,9 +3865,12 @@ interface IndexedChatMessage {
   message: ChatMessage;
 }
 
-function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
+export function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
   // Skip persisted memory-delta messages — they're already memories.
   if (message.role === "system") return false;
+  // Skip synthetic automation trigger prompts — boilerplate re-sent every
+  // run; memorizing them re-extracts the scheduler config as "facts".
+  if (isSyntheticAutomationPrompt(message)) return false;
   return !message._isCompactionSummary && !message._outOfContext && !message._isSynthesisMessage;
 }
 

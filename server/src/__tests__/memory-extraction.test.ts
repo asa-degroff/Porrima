@@ -3,6 +3,7 @@ import {
   estimateMidTurnSignalTokens,
   formatMessageContentForExtraction,
   formatToolArgumentsForExtraction,
+  isSubstantiveForDelayedExtraction,
   isSubstantiveForPreCompactionExtraction,
   parseExtractionResponse,
   readOpenAIContentStream,
@@ -196,8 +197,51 @@ describe("isSubstantiveForPreCompactionExtraction", () => {
     expect(isSubstantiveForPreCompactionExtraction(base({ role: "system" }))).toBe(false);
   });
 
+  it("excludes synthetic automation trigger prompts but keeps assistant automation output", () => {
+    expect(
+      isSubstantiveForPreCompactionExtraction(
+        base({ _isSystemMessage: true, _isAutomationMessage: true, content: "# Wake Cycle — review..." })
+      )
+    ).toBe(false);
+    expect(
+      isSubstantiveForPreCompactionExtraction(
+        base({ role: "assistant", _isAutomationMessage: true, content: "Reviewed corpus, found drift." })
+      )
+    ).toBe(true);
+  });
+
   it("treats split heads as substantive despite _outOfContext so peeled tool payloads still get extracted", () => {
     expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true, _isSplitHead: true }))).toBe(true);
+  });
+});
+
+describe("isSubstantiveForDelayedExtraction", () => {
+  const base = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
+    role: "user",
+    content: "substantive user content",
+    timestamp: 1,
+    ...overrides,
+  });
+
+  it("excludes compaction, out-of-context, synthesis, and system-role rows", () => {
+    expect(isSubstantiveForDelayedExtraction(base())).toBe(true);
+    expect(isSubstantiveForDelayedExtraction(base({ _isSynthesisMessage: true }))).toBe(false);
+    expect(isSubstantiveForDelayedExtraction(base({ _isCompactionSummary: true }))).toBe(false);
+    expect(isSubstantiveForDelayedExtraction(base({ _outOfContext: true }))).toBe(false);
+    expect(isSubstantiveForDelayedExtraction(base({ role: "system" }))).toBe(false);
+  });
+
+  it("excludes synthetic automation trigger prompts but keeps assistant automation output", () => {
+    expect(
+      isSubstantiveForDelayedExtraction(
+        base({ _isSystemMessage: true, _isAutomationMessage: true, content: "# Wake Cycle — review..." })
+      )
+    ).toBe(false);
+    expect(
+      isSubstantiveForDelayedExtraction(
+        base({ role: "assistant", _isAutomationMessage: true, content: "Reviewed corpus, found drift." })
+      )
+    ).toBe(true);
   });
 });
 
