@@ -1,7 +1,12 @@
 import type { AutomationTask, Settings } from "../types.js";
 import { hasActiveChats } from "./memory-extraction.js";
 import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";
-import { isSleepCycleActive as computeSleepCycleActive, parseTimestamp } from "./sleep-cycle.js";
+import {
+  isManualSleepReleaseActive,
+  isSleepCycleActive as computeSleepCycleActive,
+  isWithinAbsentWindow,
+  parseTimestamp,
+} from "./sleep-cycle.js";
 import { getSettings } from "./chat-storage.js";
 import { getMemoryCount } from "./memory-storage.js";
 import {
@@ -43,8 +48,15 @@ async function shouldRunTask(task: AutomationTask, settings: Settings, nowMs: nu
   if (task.activationPolicy === "manual_only") return false;
   if (!taskIsDue(task, nowMs)) return false;
 
-  if (task.activationPolicy === "absent" && !sleepCycleActive(settings)) {
-    return false;
+  if (task.activationPolicy === "absent") {
+    // An optional daily window narrows threshold-based absence to the hours
+    // when the user is predictably away (asleep/at work). An explicit manual
+    // sleep release is a deliberate user action and always bypasses the window.
+    const inWindow =
+      isManualSleepReleaseActive(settings) || isWithinAbsentWindow(task.absentWindow, nowMs);
+    if (!inWindow || !sleepCycleActive(settings)) {
+      return false;
+    }
   }
 
   if (task.id === SYNTHESIS_AUTOMATION_ID || task.kind === "synthesis") {

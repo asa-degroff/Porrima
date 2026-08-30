@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
+  AutomationAbsentWindow,
   AutomationActivationPolicy,
   AutomationKind,
   AutomationNotificationSettings,
@@ -47,6 +48,7 @@ interface AutomationTaskRow {
   chatId: string;
   scheduleJson: string;
   activationPolicy: string;
+  absentWindowJson: string | null;
   promptStepsJson: string;
   promptDispatchMode: string | null;
   nextPromptStepId: string | null;
@@ -164,6 +166,10 @@ function ensureSchema(): void {
     console.log("[automation] Added archived column to automation_tasks");
     console.log("[automation] Added createdBy column to automation_tasks");
   }
+  if (!taskCols.some((c) => c.name === "absentWindowJson")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN absentWindowJson TEXT");
+    console.log("[automation] Added absentWindowJson column to automation_tasks");
+  }
 
   const runCols = db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{ name: string }>;
   if (!runCols.some((c) => c.name === "selectedPromptStepIdsJson")) {
@@ -253,6 +259,18 @@ function normalizeActivationPolicy(value: unknown, fallback: AutomationActivatio
   return value === "absent" || value === "manual_only" || value === "idle" ? value as AutomationActivationPolicy : fallback;
 }
 
+function normalizeAbsentWindow(
+  value: Partial<AutomationAbsentWindow> | null | undefined,
+): AutomationAbsentWindow | undefined {
+  if (!value || typeof value.start !== "string" || typeof value.end !== "string") return undefined;
+  const start = value.start.trim();
+  const end = value.end.trim();
+  if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) return undefined;
+  // Equal bounds mean "no restriction" — store as absent.
+  if (start === end) return undefined;
+  return { start, end };
+}
+
 function normalizePromptDispatchMode(
   value: unknown,
   kind: AutomationKind,
@@ -339,6 +357,9 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
       everyMinutes: DEFAULT_CUSTOM_INTERVAL_MINUTES,
     }),
     activationPolicy: normalizeActivationPolicy(row.activationPolicy, "idle"),
+    absentWindow: normalizeAbsentWindow(
+      row.absentWindowJson ? parseJson<Partial<AutomationAbsentWindow> | null>(row.absentWindowJson, null) : null,
+    ),
     promptSteps: parseJson<AutomationPromptStep[]>(row.promptStepsJson, []),
     promptDispatchMode: normalizePromptDispatchMode(row.promptDispatchMode, row.kind as AutomationKind, "sequence"),
     nextPromptStepId: normalizeNextPromptStepId(
@@ -395,12 +416,12 @@ function insertTask(task: AutomationTask): void {
     .prepare(
       `INSERT OR REPLACE INTO automation_tasks (
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
-        activationPolicy, promptStepsJson, promptDispatchMode, nextPromptStepId,
+        activationPolicy, absentWindowJson, promptStepsJson, promptDispatchMode, nextPromptStepId,
         notificationsJson, maxIterations,
         timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, archived, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
-        @activationPolicy, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
+        @activationPolicy, @absentWindowJson, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
         @notificationsJson, @maxIterations,
         @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @archived, @createdAt, @updatedAt
       )`,
@@ -415,6 +436,7 @@ function insertTask(task: AutomationTask): void {
       chatId: task.chatId,
       scheduleJson: JSON.stringify(task.schedule),
       activationPolicy: task.activationPolicy,
+      absentWindowJson: task.absentWindow ? JSON.stringify(task.absentWindow) : null,
       promptStepsJson: JSON.stringify(task.promptSteps),
       promptDispatchMode: task.promptDispatchMode,
       nextPromptStepId: task.nextPromptStepId ?? null,
@@ -625,6 +647,7 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
     chatId: input.chatId || `automation:${id}`,
     schedule,
     activationPolicy: normalizeActivationPolicy(input.activationPolicy, "idle"),
+    absentWindow: normalizeAbsentWindow(input.absentWindow),
     promptSteps,
     promptDispatchMode,
     nextPromptStepId: normalizeNextPromptStepId(input.nextPromptStepId, promptSteps, promptDispatchMode),
@@ -731,6 +754,9 @@ export function updateAutomationTask(id: string, patch: Partial<AutomationTask>)
     chatId: existing.builtIn ? existing.chatId : patch.chatId || existing.chatId,
     schedule,
     activationPolicy: normalizeActivationPolicy(patch.activationPolicy, existing.activationPolicy),
+    absentWindow: patch.absentWindow !== undefined
+      ? normalizeAbsentWindow(patch.absentWindow)
+      : existing.absentWindow,
     promptSteps,
     promptDispatchMode,
     nextPromptStepId: normalizeNextPromptStepId(

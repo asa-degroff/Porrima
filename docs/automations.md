@@ -16,8 +16,9 @@ Built-ins can be disabled, reordered, rescheduled, and have their prompt steps e
 Custom automations are user-created tasks with:
 
 - `title`
-- `schedule`: `interval` (`everyMinutes`) or `daily` (`timeOfDay`, local server time)
-- `activationPolicy`: `idle`, `sleep_only`, or `manual_only`
+- `schedule`: `interval` (`everyMinutes`), `daily` (`timeOfDay`, local server time), or `once` (`runAt`)
+- `activationPolicy`: `idle`, `absent`, or `manual_only`
+- optional `absentWindow`: `{ start, end }` as `HH:mm` local server time — when set with the `absent` policy, the inactivity threshold only counts during this daily window (supports midnight-crossing like `22:00`–`07:00`; empty or equal bounds mean unrestricted). A manual sleep release always bypasses the window.
 - ordered `promptSteps`
 - `promptDispatchMode`: `sequence`, `random`, or `cycle`
 - optional push notifications
@@ -44,7 +45,7 @@ Synthesis automations always use `sequence` because their prompt steps are phase
 - skips while another automation, synthesis, wake cycle, or user chat is active
 - requires a short idle grace after the latest chat activity, assistant completion, or foreground user interaction
 - skips while cache-warm work or llama.cpp slot processing is active
-- honors `manual_only` and `sleep_only` activation policies
+- honors `manual_only` and `absent` activation policies; `absent` also respects the optional per-task `absentWindow` (see Custom Tasks)
 - skips synthesis if there are no memories or the sleep-mode cooldown is active
 
 The legacy `checkAndRunSynthesis()` / wake helper functions still exist in `scheduler.ts`, but startup scheduling is owned by `automation-scheduler.ts`.

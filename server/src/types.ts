@@ -247,6 +247,16 @@ export interface AutomationPromptStep {
   prompt: string;
 }
 
+/**
+ * Optional daily window restricting when "absent" activation counts, as
+ * "HH:mm" in local server time. Supports midnight-crossing windows
+ * (start > end). Unset or equal start/end means no window restriction.
+ */
+export interface AutomationAbsentWindow {
+  start: string;
+  end: string;
+}
+
 export interface AutomationNotificationSettings {
   enabled: boolean;
   titleTemplate?: string;
@@ -262,6 +272,8 @@ export interface AutomationTask {
   chatId: string;
   schedule: AutomationSchedule;
   activationPolicy: AutomationActivationPolicy;
+  /** Optional daily window gating "absent" activation. Ignored unless policy is "absent". */
+  absentWindow?: AutomationAbsentWindow;
   promptSteps: AutomationPromptStep[];
   promptDispatchMode: AutomationPromptDispatchMode;
   nextPromptStepId?: string;

@@ -871,6 +871,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
   const [automationConfirmDeleteId, setAutomationConfirmDeleteId] = useState<string | null>(null);
   const [automationIntervalDraft, setAutomationIntervalDraft] = useState<Record<string, string>>({});
+  const [automationAbsentWindowDraft, setAutomationAbsentWindowDraft] = useState<Record<string, { start: string; end: string }>>({});
   const automationTimeoutOriginalRef = useRef<number>(0);
   const automationMaxItersOriginalRef = useRef<number>(0);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
@@ -2319,6 +2320,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     if (automationEditorTaskId === id) {
       setAutomationEditorTaskId(null);
       setAutomationIntervalDraft({});
+      setAutomationAbsentWindowDraft({});
       return;
     }
     setAutomationEditorTaskId(id);
@@ -2402,6 +2404,47 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     };
     updateAutomationDraft(task.id, { schedule });
     await saveAutomationPatch(task.id, { schedule });
+  };
+
+  const handleAutomationAbsentWindowChange = (
+    task: AutomationTask,
+    field: "start" | "end",
+    value: string,
+  ) => {
+    setAutomationAbsentWindowDraft((prev) => {
+      const base = prev[task.id] ?? {
+        start: task.absentWindow?.start ?? "",
+        end: task.absentWindow?.end ?? "",
+      };
+      return { ...prev, [task.id]: { ...base, [field]: value } };
+    });
+  };
+
+  const handleAutomationAbsentWindowBlur = async (task: AutomationTask) => {
+    const draft = automationAbsentWindowDraft[task.id];
+    if (!draft) return;
+    // Empty → cleared. Partial/invalid/identical bounds keep the draft so the
+    // other field can still be filled without losing the first edit.
+    if (draft.start === "" && draft.end === "") {
+      setAutomationAbsentWindowDraft((prev) => {
+        const next = { ...prev };
+        delete next[task.id];
+        return next;
+      });
+      if (task.absentWindow) {
+        await saveAutomationPatch(task.id, { absentWindow: null });
+      }
+      return;
+    }
+    if (!/^\d{2}:\d{2}$/.test(draft.start) || !/^\d{2}:\d{2}$/.test(draft.end) || draft.start === draft.end) {
+      return;
+    }
+    setAutomationAbsentWindowDraft((prev) => {
+      const next = { ...prev };
+      delete next[task.id];
+      return next;
+    });
+    await saveAutomationPatch(task.id, { absentWindow: { start: draft.start, end: draft.end } });
   };
 
   const handleAutomationPromptDispatchChange = async (
@@ -6694,6 +6737,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                          </div>
 	                          <p className="text-[11px] text-white/30 mt-1">
 	                            {formatAutomationSchedule(task)}
+	                            {task.activationPolicy === "absent" && task.absentWindow ? ` · Absent ${task.absentWindow.start}–${task.absentWindow.end}` : ""}
 	                            {task.lastRunAt ? ` · Last ran ${formatAutomationDate(task.lastRunAt)}` : " · Not run yet"}
 	                            {task.nextRunAt ? ` · Next ${formatAutomationDate(task.nextRunAt)}` : ""}
 	                            {task.lastStatus ? ` · ${task.lastStatus}` : ""}
@@ -6880,6 +6924,32 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            </button>
 	                          </Dropdown>
 	                        </label>
+
+	                        {task.activationPolicy === "absent" && (
+	                          <label className="space-y-1">
+	                            <span className="block text-[11px] text-white/45">Absent window</span>
+	                            <div className="flex items-center gap-1">
+	                              <input
+	                                type="time"
+	                                step={300}
+	                                value={automationAbsentWindowDraft[task.id]?.start ?? (task.absentWindow?.start ?? "")}
+	                                onChange={(e) => handleAutomationAbsentWindowChange(task, "start", e.target.value)}
+	                                onBlur={() => handleAutomationAbsentWindowBlur(task)}
+	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                              />
+	                              <span className="text-[11px] text-white/35 shrink-0">to</span>
+	                              <input
+	                                type="time"
+	                                step={300}
+	                                value={automationAbsentWindowDraft[task.id]?.end ?? (task.absentWindow?.end ?? "")}
+	                                onChange={(e) => handleAutomationAbsentWindowChange(task, "end", e.target.value)}
+	                                onBlur={() => handleAutomationAbsentWindowBlur(task)}
+	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                              />
+	                            </div>
+	                            <span className="block text-[10px] text-white/30">Only count absence within this daily window. End past start crosses midnight. Empty = anytime.</span>
+	                          </label>
+	                        )}
 
 	                        <div className="flex items-end justify-between gap-2">
 	                          <label className="flex items-center gap-2 pb-1">

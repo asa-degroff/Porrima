@@ -1,4 +1,4 @@
-import type { Settings } from "../types.js";
+import type { AutomationAbsentWindow, Settings } from "../types.js";
 
 type SleepCycleSettings = Pick<
   Settings,
@@ -80,4 +80,49 @@ export function isSleepCycleActive(settings: SleepCycleSettings, options: SleepC
   const elapsedMinutes = ((options.nowMs ?? Date.now()) - anchorMs) / (1000 * 60);
 
   return elapsedMinutes >= effectiveThreshold;
+}
+
+function minutesOfDay(hour: string, minute: string): number | null {
+  const h = Number(hour);
+  const m = Number(minute);
+  if (!Number.isFinite(h) || !Number.isFinite(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  return h * 60 + m;
+}
+
+function parseWindowMinutes(value: string | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  return minutesOfDay(match[1], match[2]);
+}
+
+function localMinutesOfDay(nowMs: number): number {
+  const d = new Date(nowMs);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/**
+ * Whether a local timestamp falls within a task's optional "absent" window.
+ * - No window (or equal start/end) → always true (unrestricted).
+ * - Normal window (start < end, e.g. 09:00–17:00): start inclusive, end exclusive.
+ * - Midnight-crossing window (start > end, e.g. 22:00–07:00): true at/after start
+ *   OR before end.
+ */
+export function isWithinAbsentWindow(
+  window: AutomationAbsentWindow | undefined | null,
+  nowMs: number,
+): boolean {
+  if (!window) return true;
+  const startMin = parseWindowMinutes(window.start);
+  const endMin = parseWindowMinutes(window.end);
+  if (startMin === null || endMin === null || startMin === endMin) return true;
+
+  const nowMin = localMinutesOfDay(nowMs);
+  if (startMin < endMin) {
+    return nowMin >= startMin && nowMin < endMin;
+  }
+  // Midnight-crossing window.
+  return nowMin >= startMin || nowMin < endMin;
 }
