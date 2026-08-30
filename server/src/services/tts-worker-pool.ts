@@ -8,6 +8,18 @@
  * Protocol: JSON lines over stdin/stdout.
  * Request:  {"id": number, "text": string, ...params}
  * Response: {"id": number, "audio": "<base64 wav>", "duration": number}
+ *
+ * Resilience model:
+ *  - initialize() is idempotent under concurrency (memoized init promise),
+ *    so a dead/cold worker can never be double-spawned.
+ *  - Every init's process handlers are bound to the specific process they
+ *    spawned; a stale close event from a superseded process can never
+ *    touch the current one.
+ *  - A request that exceeds the per-backend timeout is treated as a wedged
+ *    worker (the Python loop is sequential, so one stuck request blocks
+ *    every later one): the process is killed, pending requests are
+ *    rejected, and a fresh worker is respawned. Callers fall back to the
+ *    subprocess path in the meantime.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -75,6 +87,13 @@ interface TTSWorkerResult {
   size: number;
 }
 
+export interface TTSWorkerOptions {
+  /** Override the worker script path (test seam; defaults to the backend script). */
+  scriptPath?: string;
+  /** Override the per-request timeout in ms (test seam; defaults per backend). */
+  requestTimeoutMs?: number;
+}
+
 class TTSWorker {
   private proc: ChildProcess | null = null;
   private _ready = false;
@@ -84,58 +103,104 @@ class TTSWorker {
   private pythonPath: string | null = null;
   private _drainTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  private _initPromise: Promise<void> | null = null;
+  private _readyResolver: (() => void) | null = null;
+  private scriptPath: string | null = null;
+  private requestTimeoutMs: number;
 
-  constructor(private backend: TTSWorkerBackend) {}
+  constructor(backend: TTSWorkerBackend, options?: TTSWorkerOptions) {
+    this.backend = backend;
+    this.scriptPath = options?.scriptPath ?? null;
+    this.requestTimeoutMs = options?.requestTimeoutMs ?? REQUEST_TIMEOUT_MS[backend];
+  }
+  private readonly backend: TTSWorkerBackend;
 
+  /**
+   * Spawn (or re-join an in-flight spawn of) the worker process.
+   * Safe to call concurrently: all callers share one init promise, so a
+   * dead or cold worker is never double-spawned.
+   */
   async initialize(): Promise<void> {
     if (this._ready) return;
+    if (this._initPromise) return this._initPromise;
 
+    const promise = this.doInitialize();
+    this._initPromise = promise;
+    try {
+      await promise;
+    } finally {
+      // Clear on settle (success OR failure) so a later initialization —
+      // after a crash, reset, or failed init — starts a fresh spawn
+      // instead of re-joining a stale promise.
+      this._initPromise = null;
+    }
+  }
+
+  private async doInitialize(): Promise<void> {
     const { pythonPath } = await resolveTtsPython(this.backend);
     this.pythonPath = pythonPath;
 
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       if (this.destroyed) {
         reject(new Error("Worker destroyed during initialization"));
         return;
       }
 
-      this.proc = spawn(pythonPath, [WORKER_SCRIPTS[this.backend]], {
+      const proc = spawn(pythonPath, [this.scriptPath ?? WORKER_SCRIPTS[this.backend]], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
           MIOPEN_FIND_MODE: "FAST",
         },
       });
+      this.proc = proc;
 
       const readyTimeout = setTimeout(() => {
-        cleanupOnFail(new Error(`TTS worker (${this.backend}) did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
+        fail(new Error(`TTS worker (${this.backend}) did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
       }, READY_TIMEOUT_MS);
-      let pollInterval: ReturnType<typeof setInterval> | null = null;
-      const cleanupOnFail = (err: Error) => {
+      const fail = (err: Error) => {
         clearTimeout(readyTimeout);
-        if (pollInterval) clearInterval(pollInterval);
-        if (this.proc && !this.proc.killed) {
-          this.proc.kill();
+        this._readyResolver = null;
+        if (this.proc === proc && !proc.killed) {
+          proc.kill();
         }
-        this.proc = null;
+        if (this.proc === proc) {
+          this.proc = null;
+        }
         reject(err);
       };
 
-      this.proc.on("error", (err) => cleanupOnFail(err));
+      proc.on("error", (err) => {
+        if (this.proc === proc) fail(err);
+      });
 
-      this.proc.on("close", (code) => {
+      proc.on("close", (code) => {
+        // Superseded: a newer spawn already owns this worker. A stale
+        // close from the old process must never reject or kill the new one.
+        if (this.proc !== proc) return;
         clearTimeout(readyTimeout);
-        if (pollInterval) clearInterval(pollInterval);
+        if (this.destroyed) {
+          // Intentional teardown: destroy() owns cleanup, nothing to report.
+          this.proc = null;
+          return;
+        }
         if (!this._ready) {
-          cleanupOnFail(new Error(`TTS worker exited with code ${code}`));
+          this.proc = null;
+          reject(new Error(`TTS worker exited with code ${code}`));
         } else {
           this.handleUnexpectedExit(code);
         }
       });
 
-      this.startReading();
+      // Resolved directly from the ready line in startReading — no polling.
+      this._readyResolver = () => {
+        clearTimeout(readyTimeout);
+        resolve();
+      };
 
-      this.proc.stderr?.on("data", (data) => {
+      this.startReading(proc);
+
+      proc.stderr?.on("data", (data) => {
         const text = data.toString();
         for (const line of text.split("\n")) {
           if (line.trim()) {
@@ -143,25 +208,14 @@ class TTSWorker {
           }
         }
       });
-
-      // Resolve when ready message arrives
-      const checkReady = () => {
-        if (this._ready) {
-          clearTimeout(readyTimeout);
-          if (pollInterval) clearInterval(pollInterval);
-          resolve();
-        }
-      };
-      // Poll briefly for ready state (set in startReading)
-      pollInterval = setInterval(checkReady, 100);
     });
   }
 
-  private startReading() {
-    if (!this.proc?.stdout) return;
+  private startReading(proc: ChildProcess) {
+    if (!proc.stdout) return;
 
     let buffer = "";
-    this.proc.stdout.on("data", (data) => {
+    proc.stdout.on("data", (data) => {
       buffer += data.toString();
       while (true) {
         const newlineIdx = buffer.indexOf("\n");
@@ -176,8 +230,14 @@ class TTSWorker {
           const resp: WorkerResponse = JSON.parse(line);
 
           if (resp.ready) {
+            // Ignore ready from a superseded process.
+            if (this.proc !== proc) continue;
             this._ready = true;
             console.log(`[TTS-Worker:${this.backend}] Worker ready`);
+            // Resolve the in-flight init promise immediately (no polling),
+            // so `_ready` and the init promise can never disagree.
+            this._readyResolver?.();
+            this._readyResolver = null;
             // Flush any pending requests that were queued during startup
             this.flushPendingOnReady();
             continue;
@@ -226,15 +286,29 @@ class TTSWorker {
 
     const id = ++this.requestCounter;
     const req: WorkerRequest = this.buildRequest(id, params.text, params.settings);
+    const sentToProc = this.proc;
 
     const result = new Promise<TTSWorkerResult>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
-      // Auto-timeout per request
+      // Auto-timeout per request. A sequential worker that cannot answer
+      // within the timeout is wedged for every later request too, so the
+      // timeout escalates to a process reset + respawn (below) — the
+      // fallback in tts.ts keeps the caller served in the meantime.
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`TTS worker request ${id} timed out after ${REQUEST_TIMEOUT_MS[this.backend] / 1000}s`));
-      }, REQUEST_TIMEOUT_MS[this.backend]);
+        reject(new Error(`TTS worker request ${id} timed out after ${this.requestTimeoutMs / 1000}s`));
+
+        // Only the worker this request was actually sent to gets replaced;
+        // a late timer from an earlier generation must not kill its successor.
+        if (!this.destroyed && this.proc === sentToProc) {
+          console.warn(`[TTS-Worker:${this.backend}] Request ${id} timed out — resetting wedged worker process`);
+          this.resetAfterStall();
+          void this.initialize().catch((err) => {
+            console.error(`[TTS-Worker:${this.backend}] Respawn after timeout failed:`, err);
+          });
+        }
+      }, this.requestTimeoutMs);
 
       // Clear timer when resolved
       const originalResolve = resolve;
@@ -255,6 +329,36 @@ class TTSWorker {
     }
 
     return result;
+  }
+
+  /**
+   * Kill the current (wedged) process and return to a cold state.
+   * Non-terminal: the worker object is reused and the next initialize()
+   * spawns a fresh process. Unlike destroy(), it does not set `destroyed`.
+   *
+   * SIGKILL directly — a process that ignored a request for the full
+   * timeout will not reliably answer SIGTERM (PEP 475: a signal handler
+   * cannot wake a blocked readline, and a wedged synthesis never returns
+   * to check the shutdown flag). Any ffmpeg child dies on its own when
+   * the pipes close.
+   */
+  private resetAfterStall(): void {
+    this._ready = false;
+    if (this._drainTimer) {
+      clearTimeout(this._drainTimer);
+      this._drainTimer = null;
+    }
+    const proc = this.proc;
+    this.proc = null;
+    if (proc && !proc.killed) {
+      proc.kill("SIGKILL");
+    }
+    // Reject everything queued behind the wedge so callers fall back
+    // immediately instead of waiting out their own timeouts.
+    for (const [id, { reject }] of this.pending) {
+      reject(new Error(`TTS worker reset after request timeout (request ${id})`));
+      this.pending.delete(id);
+    }
   }
 
   private buildRequest(id: number, text: string, settings: TTSSettings): WorkerRequest {
@@ -286,6 +390,9 @@ class TTSWorker {
   private handleUnexpectedExit(code: number | null) {
     console.error(`[TTS-Worker:${this.backend}] Unexpected exit with code ${code}`);
     this._ready = false;
+    if (this.proc) {
+      this.proc = null;
+    }
     // Reject all pending requests
     for (const [id, { reject }] of this.pending) {
       reject(new Error(`TTS worker exited unexpectedly (code ${code})`));
@@ -306,12 +413,15 @@ class TTSWorker {
 
   destroy() {
     this.destroyed = true;
+    this._ready = false;
     if (this._drainTimer) clearTimeout(this._drainTimer);
     if (this.proc) {
       this.proc.kill("SIGTERM");
+      // unref: this backstop must never hold the event loop open — on a
+      // clean shutdown the worker also self-terminates on stdin EOF.
       setTimeout(() => {
         if (!this.proc?.killed) this.proc?.kill("SIGKILL");
-      }, 5000);
+      }, 5000).unref();
     }
     for (const [id, { reject }] of this.pending) {
       reject(new Error("Worker destroyed"));
