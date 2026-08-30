@@ -39,6 +39,13 @@ interface ExtractionSupersessionResolution {
   reason?: string;
 }
 
+interface ExtractionJsonHealth {
+  invalid: number;
+  repaired: number;
+  retries: number;
+  unrecovered: number;
+}
+
 interface ExtractionResults {
   facts: ExtractionParsedFact[];
   saved: number;
@@ -50,6 +57,7 @@ interface ExtractionResults {
   comparisonSuperseded?: number;
   comparisonSeparate?: number;
   chunks?: ExtractionChunkInfo;
+  jsonHealth?: ExtractionJsonHealth;
 }
 
 interface ExtractionRunMetadata {
@@ -578,6 +586,12 @@ function ExtractionTab({
                       : `${run.results.chunks.count} calls${run.results.chunks.failures > 0 ? ` (${run.results.chunks.failures} fail)` : ""}`}
                   </span>
                 )}
+                {run.results?.jsonHealth && (
+                  <span className={`shrink-0 ${run.results.jsonHealth.unrecovered > 0 ? "text-red-300/70" : "text-amber-300/60"}`}>
+                    json: {run.results.jsonHealth.invalid} bad{run.results.jsonHealth.repaired > 0 ? `, ${run.results.jsonHealth.repaired} repaired` : ""}
+                    {run.results.jsonHealth.unrecovered > 0 ? `, ${run.results.jsonHealth.unrecovered} lost` : ""}
+                  </span>
+                )}
                 {run.metadata?.batchedExchangeCount && run.metadata.batchedExchangeCount > 1 && (
                   <span className="shrink-0 text-purple-300/50">{run.metadata.batchedExchangeCount} exchanges</span>
                 )}
@@ -620,6 +634,20 @@ function RunDetail({ run }: { run: ExtractionRun }) {
             <span>superseded: <span className="text-sky-300/70">{run.results.superseded}</span></span>
             <span>skipped: <span className="text-white/40">{run.results.skippedDuplicates}</span></span>
           </>
+        )}
+        {run.results?.jsonHealth && (
+          <span>
+            json health:{" "}
+            <span className="text-amber-300/70">{run.results.jsonHealth.invalid} invalid</span>
+            {run.results.jsonHealth.retries > 0 && (
+              <> · <span className="text-white/60">{run.results.jsonHealth.retries} repair tries</span></>
+            )}
+            {" · "}
+            <span className={run.results.jsonHealth.unrecovered > 0 ? "text-red-300/70" : "text-emerald-300/70"}>
+              {run.results.jsonHealth.repaired > 0 ? `${run.results.jsonHealth.repaired} recovered` : "all valid"}
+              {run.results.jsonHealth.unrecovered > 0 ? ` (${run.results.jsonHealth.unrecovered} lost)` : ""}
+            </span>
+          </span>
         )}
       </div>
       {run.results?.chunks && <ChunkBreakdown chunks={run.results.chunks} />}

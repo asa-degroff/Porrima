@@ -31,6 +31,18 @@ export interface ExtractionChunkInfo {
   timingsMs: number[];
 }
 
+/** Aggregated JSON validation/repair health across a run's LLM calls. */
+export interface ExtractionJsonHealthResults {
+  /** Raw outputs that failed strict JSON parsing before repair. */
+  invalid: number;
+  /** Outputs recovered via deterministic repair or feedback retry. */
+  repaired: number;
+  /** Feedback-retry LLM calls issued. */
+  retries: number;
+  /** Outputs still unparseable after all recovery tiers. */
+  unrecovered: number;
+}
+
 export interface ExtractionSupersessionResolution {
   newFactIndex: number;
   newFactText: string;
@@ -58,6 +70,8 @@ export interface ExtractionResults {
   comparisonSeparate?: number;
   /** Chunking metadata — present only when chunkCount > 1. */
   chunks?: ExtractionChunkInfo;
+  /** JSON parse/repair health — present only when invalid outputs were seen. */
+  jsonHealth?: ExtractionJsonHealthResults;
 }
 
 export interface ExtractionRunMetadata {

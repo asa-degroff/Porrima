@@ -21,6 +21,7 @@ import {
   startExtractionRun,
   type ExtractionRunMetadata,
   type ExtractionSupersessionResolution,
+  type ExtractionJsonHealthResults,
 } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
@@ -259,7 +260,7 @@ export async function readOpenAIContentStream(
  * otherwise falls back to streamChat with the main model.
  * The dedicated model avoids GPU VRAM contention and KV cache invalidation.
  */
-interface ExtractionDialogueMessage {
+export interface ExtractionDialogueMessage {
   role: "user" | "assistant";
   content: string;
 }
@@ -467,6 +468,14 @@ const extractionMetrics = {
   totalFactsExtracted: 0,
   lastExtractionAt: null as string | null,
   lastFailureAt: null as string | null,
+  /** Raw model outputs that failed strict JSON parsing (before repair). */
+  invalidJsonResponses: 0,
+  /** Invalid outputs rescued deterministically without a second LLM call. */
+  locallyRepairedResponses: 0,
+  /** Feedback-retry LLM calls issued for invalid JSON. */
+  jsonRepairRetries: 0,
+  /** Invalid outputs that a feedback retry turned into parseable JSON. */
+  jsonRepairRecoveries: 0,
 };
 
 export function getExtractionMetrics() {
@@ -765,9 +774,29 @@ interface ExtractedFact {
   subject: string;
 }
 
+type ExtractionParseStatus = "ok" | "empty" | "invalid";
+
 interface ParsedExtraction {
   facts: ExtractedFact[];
   subject: string;
+  /**
+   * Parse health of the raw model output:
+   * - "ok" — valid JSON with at least one usable memory
+   * - "empty" — well-formed, intentional empty result (e.g. {"memories": []})
+   * - "invalid" — no candidate parsed/validated; output was malformed,
+   *   truncated, or missing entirely. Callers should attempt repair/retry.
+   */
+  status: ExtractionParseStatus;
+  /** Concise failure reasons when status is "invalid" (used for repair feedback). */
+  errors: string[];
+}
+
+const DEFAULT_EXTRACTION_IMPORTANCE = 5;
+
+function normalizeExtractionImportance(value: unknown): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return DEFAULT_EXTRACTION_IMPORTANCE;
+  return Math.min(10, Math.max(1, Math.round(n)));
 }
 
 function cleanJsonArrayOutput(text: string): string {
@@ -823,11 +852,42 @@ export function parseExtractionResponse(text: string): ParsedExtraction {
   // the entire raw output can corrupt an otherwise valid final JSON object.
   const cleaned = cleanJsonArrayOutput(text);
 
+  const errors: string[] = [];
+  let sawIntentionalEmpty = false;
+
+  const mapFactItems = (items: unknown[], fallbackSubject: string): ExtractedFact[] => {
+    const facts: ExtractedFact[] = [];
+    for (const raw of items) {
+      const f = raw as any;
+      if (!f || typeof f !== "object") continue;
+      if (typeof f.text !== "string" || f.text.length === 0) continue;
+      const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+        ? f.category as MemoryCategory
+        : FALLBACK_MEMORY_CATEGORY;
+      if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+        console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+      }
+      const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+        ? f.sourceExchangeId.trim()
+        : undefined;
+      const subject = typeof f.subject === "string" && f.subject.trim() ? f.subject.trim() : fallbackSubject;
+      facts.push({
+        text: f.text,
+        category,
+        importance: normalizeExtractionImportance(f.importance),
+        sourceExchangeId,
+        subject,
+      });
+    }
+    return facts;
+  };
+
   const parseCandidate = (candidate: string): ParsedExtraction | null => {
     let obj: unknown;
     try {
       obj = JSON.parse(candidate);
-    } catch {
+    } catch (e) {
+      errors.push(`JSON syntax error: ${e instanceof Error ? e.message : String(e)}`);
       return null;
     }
 
@@ -836,45 +896,33 @@ export function parseExtractionResponse(text: string): ParsedExtraction {
       const wrapper = obj as any;
       const subject = typeof wrapper.subject === "string" ? wrapper.subject.trim() : "";
       const memories = wrapper.memories;
-      if (!Array.isArray(memories)) return null;
-      const facts = memories
-        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
-        .map((f: any) => {
-          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
-            ? f.category as MemoryCategory
-            : FALLBACK_MEMORY_CATEGORY;
-          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
-            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
-          }
-          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
-            ? f.sourceExchangeId.trim()
-            : undefined;
-          const factSubject = typeof f.subject === "string" ? f.subject.trim() : subject;
-          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject: factSubject };
-        });
-      return { facts, subject };
+      if (!Array.isArray(memories)) {
+        errors.push(`"memories" must be a JSON array, got ${typeof memories}`);
+        return null;
+      }
+      const facts = mapFactItems(memories, subject);
+      if (facts.length === 0 && memories.length > 0) {
+        errors.push(`"memories" had ${memories.length} item(s) but none with usable "text"`);
+        return null;
+      }
+      if (facts.length === 0) sawIntentionalEmpty = true;
+      return { facts, subject, status: facts.length > 0 ? "ok" : "empty", errors: [] };
     }
 
     // Legacy flat array format: [{...}, {...}]
     if (Array.isArray(obj)) {
-      const facts = obj
-        .filter((f: any) => typeof f.text === "string" && f.text.length > 0)
-        .map((f: any) => {
-          const category = VALID_MEMORY_CATEGORIES.includes(f.category)
-            ? f.category as MemoryCategory
-            : FALLBACK_MEMORY_CATEGORY;
-          if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
-            console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
-          }
-          const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
-            ? f.sourceExchangeId.trim()
-            : undefined;
-          const subject = typeof f.subject === "string" ? f.subject.trim() : "";
-          return { text: f.text, category, importance: f.importance, sourceExchangeId, subject };
-        });
-      return { facts, subject: "" };
+      const facts = mapFactItems(obj, "");
+      if (facts.length === 0 && obj.length > 0) {
+        errors.push(`array had ${obj.length} item(s) but none with usable "text"`);
+        return null;
+      }
+      if (facts.length === 0) sawIntentionalEmpty = true;
+      return { facts, subject: "", status: facts.length > 0 ? "ok" : "empty", errors: [] };
     }
 
+    if (typeof obj === "object" && obj !== null) {
+      errors.push(`object candidate has no "memories" field`);
+    }
     return null;
   };
 
@@ -883,26 +931,36 @@ export function parseExtractionResponse(text: string): ParsedExtraction {
 
   for (const candidate of objectCandidates.reverse()) {
     const parsed = parseCandidate(candidate);
-    if (parsed && parsed.facts.length > 0) return parsed;
+    if (parsed && parsed.status === "ok") return parsed;
   }
 
   // Fallback: look for flat arrays (legacy format)
   const arrayCandidates = findJsonArrayCandidates(cleaned);
   for (const candidate of arrayCandidates.reverse()) {
     const parsed = parseCandidate(candidate);
-    if (parsed && parsed.facts.length > 0) return parsed;
+    if (parsed && parsed.status === "ok") return parsed;
   }
 
-  // Preserve the explicit empty response
-  const allCandidates = [...objectCandidates, ...arrayCandidates];
-  if (allCandidates.some((candidate) => {
-    const parsed = parseCandidate(candidate);
-    return parsed !== null && parsed.facts.length === 0;
-  })) {
-    return { facts: [], subject: "" };
+  // Preserve the explicit empty response — a candidate parsed cleanly but
+  // intentionally held no memories. Distinct from unparseable output, which
+  // is classified "invalid" so callers can trigger repair/retry.
+  if (sawIntentionalEmpty) {
+    return { facts: [], subject: "", status: "empty", errors: [] };
   }
 
-  return { facts: [], subject: "" };
+  if (objectCandidates.length === 0 && arrayCandidates.length === 0) {
+    const reason = cleaned.length === 0
+      ? "model produced no output"
+      : "no JSON object or array found in output";
+    return { facts: [], subject: "", status: "invalid", errors: [reason] };
+  }
+
+  return {
+    facts: [],
+    subject: "",
+    status: "invalid",
+    errors: [...new Set(errors)].slice(0, 4),
+  };
 }
 
 /**
@@ -947,6 +1005,233 @@ function findJsonObjectCandidates(cleaned: string): string[] {
     }
   }
   return candidates;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic JSON repair
+// ---------------------------------------------------------------------------
+// Small local models occasionally emit near-valid JSON: output truncated by
+// max_tokens, trailing commas, raw newlines inside string values, or smart
+// quotes. These are all fixable without spending another LLM call, so we
+// attempt them before falling back to the feedback-retry loop. Every
+// generated variant is validated with JSON.parse — a failed repair simply
+// means we fall through to the next variant or the retry path.
+// ---------------------------------------------------------------------------
+
+interface JsonStructureScan {
+  /** Brackets still open at end of text, outermost first ("{" or "["). */
+  stack: string[];
+  inString: boolean;
+  /** Index of the opening quote of the unterminated string, if any. */
+  unterminatedStringStart: number;
+  /** Positions where a "}" or "]" closed a container, with the stack after the pop. */
+  completions: Array<{ index: number; stackAfter: string[] }>;
+}
+
+function scanJsonStructure(text: string): JsonStructureScan {
+  const stack: string[] = [];
+  const completions: JsonStructureScan["completions"] = [];
+  let inString = false;
+  let stringStart = -1;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      stringStart = i;
+    } else if (ch === "{" || ch === "[") {
+      stack.push(ch);
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      completions.push({ index: i, stackAfter: [...stack] });
+    }
+  }
+
+  return { stack, inString, unterminatedStringStart: inString ? stringStart : -1, completions };
+}
+
+function closersForStack(stack: string[]): string {
+  return stack
+    .slice()
+    .reverse()
+    .map((b) => (b === "{" ? "}" : "]"))
+    .join("");
+}
+
+/**
+ * Trim a dangling tail (unterminated string, trailing comma, half-written
+ * "key":) so appended closers can complete a valid document.
+ */
+function stripDanglingTail(text: string, scan: JsonStructureScan): string {
+  let t = text;
+  if (scan.inString && scan.unterminatedStringStart >= 0) {
+    t = t.slice(0, scan.unterminatedStringStart);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const trimmed = t.replace(/\s+$/, "");
+    if (trimmed.endsWith(",")) {
+      t = trimmed.slice(0, -1);
+      changed = true;
+      continue;
+    }
+    const danglingKey = trimmed.match(/"((?:\\.|[^"\\])*")\s*:$/);
+    if (danglingKey) {
+      t = trimmed.slice(0, danglingKey.index);
+      changed = true;
+      continue;
+    }
+    t = trimmed;
+  }
+  return t;
+}
+
+/**
+ * Build a closable variant from a prefix: optionally terminate an open
+ * string, then append closers for whatever the (re)scan finds still open.
+ */
+function buildCloseVariant(prefix: string, closeString: boolean): string {
+  let p = prefix;
+  if (closeString) {
+    p = p.replace(/(\\)+$/, "");
+    p += "\"";
+  }
+  const scan = scanJsonStructure(p);
+  if (scan.inString) return "";
+  return p + closersForStack(scan.stack);
+}
+
+/**
+ * String-aware syntax cleanup: escape raw control characters inside string
+ * literals and drop commas that sit directly before a closing bracket.
+ */
+function fixStringAwareSyntax(text: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        out += ch;
+      } else if (ch === "\\") {
+        escaped = true;
+        out += ch;
+      } else if (ch === "\"") {
+        inString = false;
+        out += ch;
+      } else if (ch === "\n") {
+        out += "\\n";
+      } else if (ch === "\r") {
+        out += "\\r";
+      } else if (ch === "\t") {
+        out += "\\t";
+      } else if (ch < " ") {
+        // Drop other control characters inside strings.
+      } else {
+        out += ch;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (j < text.length && (text[j] === "}" || text[j] === "]")) continue; // drop trailing comma
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function normalizeSmartQuotes(text: string): string {
+  return text
+    .replace(/[\u201C\u201D\u201E\u201F]/g, "\"")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'");
+}
+
+function isJsonParseable(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempt a deterministic repair of malformed extraction JSON. Returns the
+ * repaired text if any variant parses as JSON, otherwise null. Callers must
+ * still run the result through parseExtractionResponse for schema validation.
+ */
+export function repairExtractionJson(text: string): string | null {
+  const cleaned = cleanJsonArrayOutput(text);
+  if (!cleaned || (!cleaned.includes("{") && !cleaned.includes("["))) return null;
+
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  const push = (v: string) => {
+    const fixed = fixStringAwareSyntax(v);
+    if (fixed && !seen.has(fixed)) {
+      seen.add(fixed);
+      variants.push(fixed);
+    }
+  };
+
+  // Two bases: the cleaned text as-is, plus a smart-quote-normalized version.
+  // The normalized version is riskier (curly quotes may be legitimate content
+  // inside memory text) so it is tried after the plain one — JSON.parse on
+  // each variant is the arbiter.
+  const bases = [cleaned];
+  const normalized = normalizeSmartQuotes(cleaned);
+  if (normalized !== cleaned) bases.push(normalized);
+
+  for (const base of bases) {
+    push(base);
+    const scan = scanJsonStructure(base);
+    if (scan.stack.length === 0 && !scan.inString && scan.completions.length > 0) continue;
+
+    // Close-everything variants: for truncation mid-string / mid-value, either
+    // terminate the open string (keeps the partial memory text) or discard the
+    // incomplete element entirely, then close all still-open brackets.
+    if (scan.inString) {
+      push(buildCloseVariant(base, true));
+      push(buildCloseVariant(stripDanglingTail(base, scan), false));
+    } else if (scan.stack.length > 0) {
+      push(buildCloseVariant(stripDanglingTail(base, scan), false));
+      push(buildCloseVariant(base, false));
+    }
+    // Last-completed-element variants: cut at the most recent closed container
+    // (innermost complete memory objects survive) and close what remains open.
+    for (let i = scan.completions.length - 1; i >= 0 && i >= scan.completions.length - 15; i--) {
+      const c = scan.completions[i];
+      if (c.stackAfter.length === 0) continue;
+      push(`${base.slice(0, c.index + 1)}${closersForStack(c.stackAfter)}`);
+    }
+  }
+
+  for (const variant of variants) {
+    if (isJsonParseable(variant)) return variant;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1273,6 +1558,8 @@ interface ExtractChunkedResult {
   /** Per-chunk timing and failure count for debug observability. */
   chunkTimingsMs: number[];
   chunkFailures: number;
+  /** Aggregate JSON validation/repair health across all chunk calls. */
+  jsonHealth: ExtractionJsonHealth;
 }
 
 const OVERLAP_CHARS = 500;
@@ -1400,9 +1687,9 @@ function formatPriorFactsPreamble(facts: ExtractedFact[]): string {
  * single-call path and the per-chunk loop so transient failures retry at
  * the right granularity (one call, not the whole run).
  */
-async function callExtractionLLMWithRetry(
+async function callExtractionLLMWithMessagesRetry(
   modelId: string,
-  userContent: string,
+  messages: ExtractionDialogueMessage[],
   systemPrompt: string,
   retryContext: string,
   signal?: AbortSignal,
@@ -1410,9 +1697,192 @@ async function callExtractionLLMWithRetry(
 ): Promise<string> {
   let result = "";
   await withRetry(async () => {
-    result = await callExtractionLLM(modelId, userContent, systemPrompt, signal, opts);
+    result = await callExtractionLLMWithMessages(modelId, messages, systemPrompt, { ...opts, signal });
   }, retryContext, 2, (err) => !isExtractionContextOverflowError(err));
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// JSON health: validate → deterministic repair → feedback retry
+// ---------------------------------------------------------------------------
+// The extraction models occasionally emit unparseable JSON (truncation at
+// max_tokens, stray prose, broken string escapes). parseExtractionResponse
+// classifies those as "invalid" (vs. a legitimate empty result), and this
+// layer recovers them in tiers: first a free deterministic repair
+// (repairExtractionJson), then a single feedback turn that echoes the broken
+// output and asks the model to re-emit valid JSON. The feedback turn rides
+// the warm KV prefix (system prompt + original content stay cached), so a
+// retry costs roughly one short generation.
+// ---------------------------------------------------------------------------
+
+/** Max feedback-retry LLM calls per extraction call for invalid JSON. */
+const JSON_REPAIR_RETRY_LIMIT = 2;
+/** Cap on the echoed broken output in a repair-feedback turn. */
+const JSON_REPAIR_ECHO_MAX_CHARS = 3000;
+
+interface ExtractionJsonHealth {
+  /** Responses that failed strict parsing before any repair. */
+  invalidResponses: number;
+  /** Responses rescued by deterministic repair without a second LLM call. */
+  localRepairs: number;
+  /** Feedback-retry calls issued. */
+  repairRetries: number;
+  /** Feedback-retry calls that produced parseable JSON. */
+  repairRecoveries: number;
+  /** Responses still invalid after all recovery tiers. */
+  unrecovered: number;
+}
+
+function emptyJsonHealth(): ExtractionJsonHealth {
+  return { invalidResponses: 0, localRepairs: 0, repairRetries: 0, repairRecoveries: 0, unrecovered: 0 };
+}
+
+function mergeJsonHealth(target: ExtractionJsonHealth, source: ExtractionJsonHealth): void {
+  target.invalidResponses += source.invalidResponses;
+  target.localRepairs += source.localRepairs;
+  target.repairRetries += source.repairRetries;
+  target.repairRecoveries += source.repairRecoveries;
+  target.unrecovered += source.unrecovered;
+}
+
+function jsonHealthForResults(h: ExtractionJsonHealth): ExtractionJsonHealthResults | undefined {
+  if (h.invalidResponses === 0 && h.repairRetries === 0) return undefined;
+  return {
+    invalid: h.invalidResponses,
+    repaired: h.localRepairs + h.repairRecoveries,
+    retries: h.repairRetries,
+    unrecovered: h.unrecovered,
+  };
+}
+
+function buildExtractionJsonRepairFeedback(errors: string[]): string {
+  const reason = errors.length > 0 ? errors.join("; ") : "unparseable output";
+  return `Your previous reply could not be parsed as JSON (${reason}).\nRe-emit the COMPLETE corrected JSON object only — {"subject": "...", "memories": [...]} — with no prose, no markdown fences, no trailing commas, and escaped newlines inside strings. Every string must be closed and every bracket balanced. If there is nothing to extract, output {"subject": "", "memories": []}.`;
+}
+
+/**
+ * Parse raw output with the deterministic repair fallback applied when strict
+ * parsing fails. Mutates the shared health counters and metrics. The returned
+ * `text` is the source the accepted parse came from (repaired text when the
+ * deterministic repair won) so session history stays anchored on valid JSON.
+ */
+function parseExtractionOutputWithRepair(
+  raw: string,
+  retryContext: string,
+  health: ExtractionJsonHealth,
+): { parse: ParsedExtraction; text: string } {
+  const parse = parseExtractionResponse(raw);
+  if (parse.status !== "invalid") return { parse, text: raw };
+
+  health.invalidResponses++;
+  extractionMetrics.invalidJsonResponses++;
+
+  const repairedText = repairExtractionJson(raw);
+  if (repairedText) {
+    const repaired = parseExtractionResponse(repairedText);
+    if (repaired.status !== "invalid") {
+      health.localRepairs++;
+      extractionMetrics.locallyRepairedResponses++;
+      console.warn(
+        `[memory] ${retryContext}: locally repaired malformed extraction JSON (${parse.errors[0] ?? "unparseable"})`,
+      );
+      return { parse: repaired, text: repairedText };
+    }
+  }
+  return { parse, text: raw };
+}
+
+interface ParsedExtractionCall {
+  /** The output that produced the returned parse (repaired text if repair won). */
+  rawOutput: string;
+  parse: ParsedExtraction;
+  health: ExtractionJsonHealth;
+}
+
+/**
+ * Call the extraction LLM and guarantee a validated parse result, escalating
+ * through: strict parse → deterministic repair → feedback-retry calls. The
+ * feedback turns are ephemeral — they never touch the caller's session
+ * history, so only the final accepted output is anchored in the dialogue.
+ *
+ * Exported for tests (callWithMessages is injected, so no LLM is required).
+ */
+export async function callExtractionLLMParsed(
+  input: {
+    callWithMessages: (messages: ExtractionDialogueMessage[], retryContext: string) => Promise<string>;
+    messages: ExtractionDialogueMessage[];
+    retryContext: string;
+    maxRepairRetries?: number;
+  },
+): Promise<ParsedExtractionCall> {
+  const health = emptyJsonHealth();
+  const maxRepairRetries = input.maxRepairRetries ?? JSON_REPAIR_RETRY_LIMIT;
+
+  const raw0 = await input.callWithMessages(input.messages, input.retryContext);
+  let raw = raw0;
+  let parsed = parseExtractionOutputWithRepair(raw, input.retryContext, health);
+  let parse = parsed.parse;
+  let acceptedRaw = parsed.text;
+
+  let attempt = 0;
+  while (parse.status === "invalid" && attempt < maxRepairRetries) {
+    attempt++;
+    health.repairRetries++;
+    extractionMetrics.jsonRepairRetries++;
+
+    const echo = raw.length > JSON_REPAIR_ECHO_MAX_CHARS
+      ? `${raw.slice(0, JSON_REPAIR_ECHO_MAX_CHARS)}\n[output truncated]`
+      : raw;
+    const repairMessages: ExtractionDialogueMessage[] = [
+      ...input.messages,
+      { role: "assistant", content: echo },
+      { role: "user", content: buildExtractionJsonRepairFeedback(parse.errors) },
+    ];
+
+    let retryRaw: string;
+    try {
+      retryRaw = await input.callWithMessages(
+        repairMessages,
+        `${input.retryContext} [json-repair ${attempt}/${maxRepairRetries}]`,
+      );
+    } catch (e) {
+      // A failed repair call (server hiccup, context overflow from the extra
+      // turns) must be no worse than the pre-retry status quo: keep the
+      // original invalid parse and let the caller's existing handling apply.
+      console.warn(
+        `[memory] ${input.retryContext}: JSON repair attempt ${attempt} failed:`,
+        e instanceof Error ? e.message : e,
+      );
+      break;
+    }
+
+    raw = retryRaw;
+    parsed = parseExtractionOutputWithRepair(retryRaw, input.retryContext, health);
+    parse = parsed.parse;
+    acceptedRaw = parsed.text;
+    if (parse.status !== "invalid") {
+      if (health.invalidResponses > 0) {
+        health.repairRecoveries++;
+        extractionMetrics.jsonRepairRecoveries++;
+      }
+      console.warn(
+        `[memory] ${input.retryContext}: JSON repair attempt ${attempt} recovered ` +
+        `(${parse.facts.length} fact(s))`,
+      );
+      break;
+    }
+  }
+
+  if (parse.status === "invalid") {
+    health.unrecovered++;
+    console.error(
+      `[memory] ${input.retryContext}: extraction JSON unparseable after ${attempt} repair attempt(s): ` +
+      `${parse.errors.join("; ") || "unknown error"} — raw: ${raw.slice(0, 300)}`,
+    );
+    await logExtractionError(input.retryContext, new Error(`Unparseable extraction JSON: ${parse.errors.join("; ")}`));
+  }
+
+  return { rawOutput: acceptedRaw, parse, health };
 }
 
 async function extractInChunks(
@@ -1423,28 +1893,35 @@ async function extractInChunks(
   const header = opts.userPromptHeader ? opts.userPromptHeader.trimEnd() : "";
   const retryContext = opts.contextLabel ?? "extractInChunks";
 
+  const callWithMessages = (messages: ExtractionDialogueMessage[], ctx: string) =>
+    callExtractionLLMWithMessagesRetry(
+      opts.modelId,
+      messages,
+      opts.systemPrompt,
+      ctx,
+      opts.signal,
+      { assumeMutexHeld: opts.assumeMutexHeld },
+    );
+
   // Fallback path: no dedicated extraction server — single call, let the main
   // model handle the full content. Its context is assumed to be large.
   if (!extractionUrl) {
     const body = opts.segments.map(renderSegment).join("\n\n");
     const combined = header ? `${header}\n\n${body}` : body;
     const t0 = Date.now();
-    const raw = await callExtractionLLMWithRetry(
-      opts.modelId,
-      combined,
-      opts.systemPrompt,
+    const call = await callExtractionLLMParsed({
+      callWithMessages,
+      messages: [{ role: "user", content: combined }],
       retryContext,
-      opts.signal,
-      { assumeMutexHeld: opts.assumeMutexHeld },
-    );
-    const parsed1 = parseExtractionResponse(raw);
+    });
     return {
-      facts: parsed1.facts,
-      subjects: parsed1.subject ? [parsed1.subject] : [],
-      rawOutput: raw,
+      facts: call.parse.facts,
+      subjects: call.parse.subject ? [call.parse.subject] : [],
+      rawOutput: call.rawOutput,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
       chunkFailures: 0,
+      jsonHealth: call.health,
     };
   }
 
@@ -1462,22 +1939,19 @@ async function extractInChunks(
   const combined = header ? `${header}\n\n${body}` : body;
   if (combined.length <= singleBudget) {
     const t0 = Date.now();
-    const raw = await callExtractionLLMWithRetry(
-      opts.modelId,
-      combined,
-      opts.systemPrompt,
+    const call = await callExtractionLLMParsed({
+      callWithMessages,
+      messages: [{ role: "user", content: combined }],
       retryContext,
-      opts.signal,
-      { assumeMutexHeld: opts.assumeMutexHeld },
-    );
-    const parsed1 = parseExtractionResponse(raw);
+    });
     return {
-      facts: parsed1.facts,
-      subjects: parsed1.subject ? [parsed1.subject] : [],
-      rawOutput: raw,
+      facts: call.parse.facts,
+      subjects: call.parse.subject ? [call.parse.subject] : [],
+      rawOutput: call.rawOutput,
       chunkCount: 1,
       chunkTimingsMs: [Date.now() - t0],
       chunkFailures: 0,
+      jsonHealth: call.health,
     };
   }
 
@@ -1492,7 +1966,7 @@ async function extractInChunks(
 
   const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
   if (chunks.length === 0) {
-    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
+    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0, jsonHealth: emptyJsonHealth() };
   }
 
   if (chunks.length > 1 && opts.contextLabel) {
@@ -1506,6 +1980,7 @@ async function extractInChunks(
   const allSubjects: string[] = [];
   const rawOutputs: string[] = [];
   const chunkTimingsMs: number[] = [];
+  const jsonHealth = emptyJsonHealth();
   let lastChunkContent = "";
   let successCount = 0;
   let lastError: unknown;
@@ -1537,19 +2012,17 @@ async function extractInChunks(
     parts.push(chunkContent);
     const userContent = parts.join("\n\n");
 
-    let raw = "";
+    let chunkCall: ParsedExtractionCall | null = null;
     const chunkT0 = Date.now();
     try {
       // Retry per-chunk so a transient failure in chunk N doesn't force us
-      // to redo chunks 1..N-1 from scratch.
-      raw = await callExtractionLLMWithRetry(
-        opts.modelId,
-        userContent,
-        opts.systemPrompt,
-        `${retryContext} [chunk ${i + 1}/${chunks.length}]`,
-        opts.signal,
-        { assumeMutexHeld: opts.assumeMutexHeld },
-      );
+      // to redo chunks 1..N-1 from scratch. JSON repair retries happen at
+      // the same granularity inside callExtractionLLMParsed.
+      chunkCall = await callExtractionLLMParsed({
+        callWithMessages,
+        messages: [{ role: "user", content: userContent }],
+        retryContext: `${retryContext} [chunk ${i + 1}/${chunks.length}]`,
+      });
       chunkTimingsMs.push(Date.now() - chunkT0);
       successCount++;
     } catch (e) {
@@ -1565,11 +2038,11 @@ async function extractInChunks(
       continue;
     }
 
-    rawOutputs.push(raw);
-    const chunkParsed = parseExtractionResponse(raw);
-    if (chunkParsed.facts.length > 0) {
-      allFacts.push(...chunkParsed.facts);
-      if (chunkParsed.subject) allSubjects.push(chunkParsed.subject);
+    rawOutputs.push(chunkCall.rawOutput);
+    mergeJsonHealth(jsonHealth, chunkCall.health);
+    if (chunkCall.parse.facts.length > 0) {
+      allFacts.push(...chunkCall.parse.facts);
+      if (chunkCall.parse.subject) allSubjects.push(chunkCall.parse.subject);
     }
     lastChunkContent = chunkContent;
   }
@@ -1594,6 +2067,7 @@ async function extractInChunks(
     chunkCount: chunks.length,
     chunkTimingsMs,
     chunkFailures: chunks.length - successCount,
+    jsonHealth,
   };
 }
 
@@ -2563,37 +3037,41 @@ async function runImmediateBatch(input: {
 
   try {
     const t0 = Date.now();
-    const chunkResult = chunkedFallback
-      ? await extractInChunks({
+    let chunkResult: ExtractChunkedResult;
+    if (chunkedFallback) {
+      chunkResult = await extractInChunks({
+        modelId: input.modelId,
+        systemPrompt: input.systemPrompt,
+        userPromptHeader: `${input.digestText}${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
+        segments: input.batch.map(immediateExchangeToSegment),
+        contextLabel: `immediateExtraction chat=${input.chatId}`,
+        assumeMutexHeld: input.assumeMutexHeld,
+      });
+    } else {
+      const call = await callExtractionLLMParsed({
+        callWithMessages: (msgs, ctx) => callImmediateSessionLLMWithRetry({
           modelId: input.modelId,
+          messages: msgs,
           systemPrompt: input.systemPrompt,
-          userPromptHeader: `${input.digestText}${buildImmediateBatchHeader(input.batch, input.isTurnComplete ?? false)}\n\nEXCHANGES:`,
-          segments: input.batch.map(immediateExchangeToSegment),
-          contextLabel: `immediateExtraction chat=${input.chatId}`,
+          retryContext: ctx,
+          settings: input.settings,
+          extractionSettings: input.extractionSettings,
           assumeMutexHeld: input.assumeMutexHeld,
-        })
-      : {
-          rawOutput: await callImmediateSessionLLMWithRetry({
-            modelId: input.modelId,
-            messages,
-            systemPrompt: input.systemPrompt,
-            retryContext: `immediateExtraction chat=${input.chatId}`,
-            settings: input.settings,
-            extractionSettings: input.extractionSettings,
-            assumeMutexHeld: input.assumeMutexHeld,
-          }),
-          facts: [] as ExtractedFact[],
-          chunkCount: 1,
-          chunkTimingsMs: [Date.now() - t0],
-          chunkFailures: 0,
-        subjects: [] as string[],
-        };
-
-    if (!chunkedFallback) {
-      const parsed = parseExtractionResponse(chunkResult.rawOutput);
-      chunkResult.facts = parsed.facts;
-      chunkResult.subjects = parsed.subject ? [parsed.subject] : [];
+        }),
+        messages,
+        retryContext: `immediateExtraction chat=${input.chatId}`,
+      });
+      chunkResult = {
+        facts: call.parse.facts,
+        subjects: call.parse.subject ? [call.parse.subject] : [],
+        rawOutput: call.rawOutput,
+        chunkCount: 1,
+        chunkTimingsMs: [Date.now() - t0],
+        chunkFailures: 0,
+        jsonHealth: call.health,
+      };
     }
+    const jsonHealthMeta = jsonHealthForResults(chunkResult.jsonHealth);
 
     runHandle.attachOutput(chunkResult.rawOutput);
 
@@ -2615,6 +3093,7 @@ async function runImmediateBatch(input: {
         skippedDuplicates: 0,
         errors: 0,
         chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+        jsonHealth: jsonHealthMeta,
       });
       input.batch.forEach((exchange) => exchange.job.resolve());
       return;
@@ -2658,6 +3137,7 @@ async function runImmediateBatch(input: {
       skippedDuplicates: outcome.skippedDuplicates,
       errors: 0,
       chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      jsonHealth: jsonHealthMeta,
     });
     input.batch.forEach((exchange) => exchange.job.resolve());
   } catch (e) {
@@ -3254,17 +3734,29 @@ export async function triggerMidTurnExtractionPulse(opts: {
 
     try {
       let rawOutput: string;
+      let parsed: ParsedExtraction;
+      let jsonHealthMeta: ExtractionJsonHealthResults | undefined;
       try {
-        rawOutput = await callImmediateSessionLLMWithRetry({
-          modelId,
+        const call = await callExtractionLLMParsed({
+          callWithMessages: (msgs, ctx) => callImmediateSessionLLMWithRetry({
+            modelId,
+            messages: msgs,
+            systemPrompt,
+            retryContext: ctx,
+            settings,
+            extractionSettings,
+            assumeMutexHeld: false,
+            signal: timeoutController.signal,
+          }),
           messages,
-          systemPrompt,
           retryContext: `midTurnPulse #${pulseIndex} chat=${chatId}`,
-          settings,
-          extractionSettings,
-          assumeMutexHeld: false,
-          signal: timeoutController.signal,
+          // Pulses share the main agent's timeline — keep recovery to one
+          // feedback turn so we never double the worst-case pulse latency.
+          maxRepairRetries: 1,
         });
+        rawOutput = call.rawOutput;
+        parsed = call.parse;
+        jsonHealthMeta = jsonHealthForResults(call.health);
       } catch (e) {
         runHandle.fail(e);
         throw e;
@@ -3272,14 +3764,13 @@ export async function triggerMidTurnExtractionPulse(opts: {
 
       timeoutController.signal.throwIfAborted();
       runHandle.attachOutput(rawOutput);
-      const parsed = parseExtractionResponse(rawOutput);
       const facts = parsed.facts;
 
       if (facts.length === 0) {
         console.log(`[extraction:mid-turn] Pulse #${pulseIndex}: no facts extracted`);
         // Still append to session history for KV cache continuity
         session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: rawOutput || "[]" });
-        runHandle.complete({ facts: [], subject: parsed.subject, saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] } });
+        runHandle.complete({ facts: [], subject: parsed.subject, saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: 1, failures: 0, timingsMs: [0] }, jsonHealth: jsonHealthMeta });
         extractionMetrics.successfulExtractions++;
         extractionMetrics.lastExtractionAt = new Date().toISOString();
         return { added: 0, superseded: 0, skippedDuplicates: 0, completed: true, coverage };
@@ -3328,6 +3819,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
         skippedDuplicates: outcome.skippedDuplicates,
         errors: 0,
         chunks: { count: 1, failures: 0, timingsMs: [0] },
+        jsonHealth: jsonHealthMeta,
       });
 
       extractionMetrics.successfulExtractions++;
@@ -3496,6 +3988,8 @@ interface PreCompactionSessionResult {
   chunkFailures: number;
   /** User/assistant pairs appended during the run, for session history. */
   exchanges: ExtractionDialogueMessage[];
+  /** Aggregate JSON validation/repair health across all calls. */
+  jsonHealth: ExtractionJsonHealth;
 }
 
 /**
@@ -3546,16 +4040,20 @@ async function runPreCompactionSession(opts: {
   if (estimateDialogueChars(singleMessages) <= maxInputChars) {
     try {
       const t0 = Date.now();
-      const raw = await callLLM(singleMessages, contextLabel);
-      const parsed = parseExtractionResponse(raw);
+      const call = await callExtractionLLMParsed({
+        callWithMessages: callLLM,
+        messages: singleMessages,
+        retryContext: contextLabel,
+      });
       return {
-        facts: parsed.facts,
-        subjects: parsed.subject ? [parsed.subject] : [],
-        rawOutput: raw,
+        facts: call.parse.facts,
+        subjects: call.parse.subject ? [call.parse.subject] : [],
+        rawOutput: call.rawOutput,
         chunkCount: 1,
         chunkTimingsMs: [Date.now() - t0],
         chunkFailures: 0,
-        exchanges: [{ role: "user", content: singleUser }, { role: "assistant", content: raw || "[]" }],
+        exchanges: [{ role: "user", content: singleUser }, { role: "assistant", content: call.rawOutput || "[]" }],
+        jsonHealth: call.health,
       };
     } catch (e) {
       // A failed fast path (extraction server hiccup, OOM, router blip)
@@ -3578,7 +4076,7 @@ async function runPreCompactionSession(opts: {
   const maxChunkChars = Math.max(1000, chunkedBudget);
   const chunks = packSegmentsIntoChunks(segments, maxChunkChars);
   if (chunks.length === 0) {
-    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0, exchanges: [] };
+    return { facts: [], subjects: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0, exchanges: [], jsonHealth: emptyJsonHealth() };
   }
 
   console.log(
@@ -3592,6 +4090,7 @@ async function runPreCompactionSession(opts: {
   const allSubjects: string[] = [];
   const rawOutputs: string[] = [];
   const chunkTimingsMs: number[] = [];
+  const jsonHealth = emptyJsonHealth();
   let chunkFailures = 0;
   let attempted = 0;
 
@@ -3615,9 +4114,13 @@ async function runPreCompactionSession(opts: {
 
     attempted++;
     const chunkT0 = Date.now();
-    let raw = "";
+    let chunkCall: ParsedExtractionCall;
     try {
-      raw = await callLLM(nextMessages, `${contextLabel} [chunk ${i + 1}/${chunks.length}]`);
+      chunkCall = await callExtractionLLMParsed({
+        callWithMessages: callLLM,
+        messages: nextMessages,
+        retryContext: `${contextLabel} [chunk ${i + 1}/${chunks.length}]`,
+      });
       chunkTimingsMs.push(Date.now() - chunkT0);
     } catch (e) {
       chunkTimingsMs.push(Date.now() - chunkT0);
@@ -3630,13 +4133,13 @@ async function runPreCompactionSession(opts: {
       break; // leave the failed chunk unconsumed so the remainder below includes it
     }
 
-    rawOutputs.push(raw);
-    const parsed = parseExtractionResponse(raw);
-    if (parsed.facts.length > 0) {
-      allFacts.push(...parsed.facts);
-      if (parsed.subject) allSubjects.push(parsed.subject);
+    rawOutputs.push(chunkCall.rawOutput);
+    mergeJsonHealth(jsonHealth, chunkCall.health);
+    if (chunkCall.parse.facts.length > 0) {
+      allFacts.push(...chunkCall.parse.facts);
+      if (chunkCall.parse.subject) allSubjects.push(chunkCall.parse.subject);
     }
-    const assistantContent = raw || "[]";
+    const assistantContent = chunkCall.rawOutput || "[]";
     messages = [...nextMessages, { role: "assistant", content: assistantContent }];
     exchanges.push({ role: "user", content: userContent }, { role: "assistant", content: assistantContent });
   }
@@ -3660,6 +4163,7 @@ async function runPreCompactionSession(opts: {
     chunkTimingsMs.push(...remainderResult.chunkTimingsMs);
     chunkFailures += remainderResult.chunkFailures;
     callCount += remainderResult.chunkCount;
+    mergeJsonHealth(jsonHealth, remainderResult.jsonHealth);
   }
 
   const rawOutput = rawOutputs.length <= 1
@@ -3674,6 +4178,7 @@ async function runPreCompactionSession(opts: {
     chunkTimingsMs,
     chunkFailures,
     exchanges,
+    jsonHealth,
   };
 }
 
@@ -3776,11 +4281,12 @@ async function processPreCompactionJob(
     runHandle.attachOutput(result.rawOutput);
 
     const chunksMeta = { count: result.chunkCount, failures: result.chunkFailures, timingsMs: result.chunkTimingsMs };
+    const jsonHealthMeta = jsonHealthForResults(result.jsonHealth);
     const facts = result.facts;
     if (facts.length === 0) {
       console.log("[memory] Pre-compaction flush: no facts extracted");
       appendFlushExchangesToSession(state, session, result.exchanges, maxInputChars);
-      runHandle.complete({ facts: [], subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta });
+      runHandle.complete({ facts: [], subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta, jsonHealth: jsonHealthMeta });
       job.resolve();
       return;
     }
@@ -3807,7 +4313,7 @@ async function processPreCompactionJob(
     const chatStillExists = await getChat(job.chatId).catch(() => null);
     if (!chatStillExists) {
       console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
-      runHandle.complete({ facts, subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta });
+      runHandle.complete({ facts, subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta, jsonHealth: jsonHealthMeta });
       job.resolve();
       return;
     }
@@ -3835,6 +4341,7 @@ async function processPreCompactionJob(
       skippedDuplicates: outcome.skippedDuplicates,
       errors: 0,
       chunks: chunksMeta,
+      jsonHealth: jsonHealthMeta,
     });
     job.resolve();
   } catch (e) {
@@ -4087,6 +4594,7 @@ export async function extractDelayedMemories(
     }
     runHandle.attachOutput(chunkResult.rawOutput);
 
+    const delayedJsonHealthMeta = jsonHealthForResults(chunkResult.jsonHealth);
     const facts = chunkResult.facts;
     if (facts.length === 0) {
       console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
@@ -4100,6 +4608,7 @@ export async function extractDelayedMemories(
         skippedDuplicates: 0,
         errors: 0,
         chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+        jsonHealth: delayedJsonHealthMeta,
       });
       return;
     }
@@ -4132,6 +4641,7 @@ export async function extractDelayedMemories(
         skippedDuplicates: 0,
         errors: 0,
         chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+        jsonHealth: delayedJsonHealthMeta,
       });
       return;
     }
@@ -4260,6 +4770,7 @@ export async function extractDelayedMemories(
       comparisonSuperseded,
       comparisonSeparate,
       chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      jsonHealth: delayedJsonHealthMeta,
     });
   } catch (e) {
     runHandle.fail(e);
