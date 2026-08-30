@@ -8,6 +8,7 @@ import { extractTextForTTS } from "./tts-text-preprocessor.js";
 import { generateQwen3TTS, getQwen3Voices, checkQwen3Availability } from "./tts-qwen3.js";
 import { generateSupertonicTTS, getSupertonicVoices, checkSupertonicAvailability } from "./tts-supertonic.js";
 import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
+import { getWorker } from "./tts-worker-pool.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
@@ -65,9 +66,34 @@ function cleanupCache(): void {
 }
 
 /**
- * Run Kokoro TTS via Python subprocess
+ * Run Kokoro TTS via persistent worker, falling back to a subprocess spawn.
  */
 async function runKokoro(
+  text: string,
+  settings: TTSSettings
+): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
+  try {
+    const worker = await getWorker("kokoro");
+    const result = await worker.synthesize({ text, settings });
+    const audio = Buffer.from(result.audioBase64, "base64");
+    console.log(`[TTS] Kokoro worker generated ${Math.round(audio.length / 1024)}KB, ${result.duration.toFixed(2)}s`);
+    return { audio, duration: result.duration, sampleRate: result.sampleRate };
+  } catch (workerErr) {
+    console.warn(`[TTS] Kokoro worker failed, falling back to subprocess: ${workerErr}`);
+    return runKokoroSubprocess(
+      text,
+      settings.voice,
+      settings.speed,
+      settings.pitch,
+      settings.kokoroPitchShiftProcessor ?? "resample"
+    );
+  }
+}
+
+/**
+ * Run Kokoro TTS via Python subprocess
+ */
+async function runKokoroSubprocess(
   text: string,
   voice: string,
   speed: number,
@@ -199,7 +225,7 @@ export async function generateTTS(request: TTSGenerateRequest, settings: TTSSett
     return result; // Supertonic handles its own caching
   } else {
     // Kokoro backend
-    const result = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch, settings.kokoroPitchShiftProcessor ?? "resample");
+    const result = await runKokoro(cleanText, settings);
     audio = result.audio;
     duration = result.duration;
     

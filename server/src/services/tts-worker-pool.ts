@@ -15,9 +15,22 @@ import { resolveTtsPython } from "./tts-python.js";
 import { join } from "node:path";
 import type { TTSSettings } from "../types/tts.js";
 
-const WORKER_SCRIPT = join(process.cwd(), "src", "tts", "supertonic_worker.py");
+export type TTSWorkerBackend = "supertonic-3" | "kokoro";
 
-interface WorkerRequest {
+const WORKER_SCRIPTS: Record<TTSWorkerBackend, string> = {
+  "supertonic-3": join(process.cwd(), "src", "tts", "supertonic_worker.py"),
+  "kokoro": join(process.cwd(), "src", "tts", "kokoro_worker.py"),
+};
+
+const READY_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS: Record<TTSWorkerBackend, number> = {
+  "supertonic-3": 30_000,
+  // Kokoro handles full (potentially long) messages through the worker,
+  // so allow more headroom than per-chunk Supertonic requests.
+  "kokoro": 120_000,
+};
+
+interface SupertonicWorkerRequest {
   id: number;
   text: string;
   voice: string;
@@ -30,6 +43,18 @@ interface WorkerRequest {
   silenceDuration: number;
   trailingSilence: number;
 }
+
+interface KokoroWorkerRequest {
+  id: number;
+  text: string;
+  voice: string;
+  speed: number;
+  pitch: number;
+  pitchProcessor: string;
+  lang?: string;
+}
+
+type WorkerRequest = SupertonicWorkerRequest | KokoroWorkerRequest;
 
 interface WorkerResponse {
   id?: number;
@@ -60,10 +85,12 @@ class TTSWorker {
   private _drainTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
+  constructor(private backend: TTSWorkerBackend) {}
+
   async initialize(): Promise<void> {
     if (this._ready) return;
 
-    const { pythonPath } = await resolveTtsPython("supertonic-3");
+    const { pythonPath } = await resolveTtsPython(this.backend);
     this.pythonPath = pythonPath;
 
     return new Promise((resolve, reject) => {
@@ -72,7 +99,7 @@ class TTSWorker {
         return;
       }
 
-      this.proc = spawn(pythonPath, [WORKER_SCRIPT], {
+      this.proc = spawn(pythonPath, [WORKER_SCRIPTS[this.backend]], {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
@@ -81,8 +108,8 @@ class TTSWorker {
       });
 
       const readyTimeout = setTimeout(() => {
-        cleanupOnFail(new Error("TTS worker did not become ready within 60s"));
-      }, 60_000);
+        cleanupOnFail(new Error(`TTS worker (${this.backend}) did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
+      }, READY_TIMEOUT_MS);
       let pollInterval: ReturnType<typeof setInterval> | null = null;
       const cleanupOnFail = (err: Error) => {
         clearTimeout(readyTimeout);
@@ -112,7 +139,7 @@ class TTSWorker {
         const text = data.toString();
         for (const line of text.split("\n")) {
           if (line.trim()) {
-            console.log(`[TTS-Worker] ${line.trim()}`);
+            console.log(`[TTS-Worker:${this.backend}] ${line.trim()}`);
           }
         }
       });
@@ -150,7 +177,7 @@ class TTSWorker {
 
           if (resp.ready) {
             this._ready = true;
-            console.log("[TTS-Worker] Worker ready");
+            console.log(`[TTS-Worker:${this.backend}] Worker ready`);
             // Flush any pending requests that were queued during startup
             this.flushPendingOnReady();
             continue;
@@ -161,7 +188,7 @@ class TTSWorker {
           if (resp.id !== undefined) {
             const pending = this.pending.get(resp.id);
             if (!pending) {
-              console.warn(`[TTS-Worker] Unexpected response id=${resp.id}`);
+              console.warn(`[TTS-Worker:${this.backend}] Unexpected response id=${resp.id}`);
               continue;
             }
             this.pending.delete(resp.id);
@@ -178,7 +205,7 @@ class TTSWorker {
             }
           }
         } catch (e) {
-          console.error(`[TTS-Worker] Failed to parse response: ${line.substring(0, 100)}`, e);
+          console.error(`[TTS-Worker:${this.backend}] Failed to parse response: ${line.substring(0, 100)}`, e);
         }
       }
     });
@@ -198,28 +225,16 @@ class TTSWorker {
     }
 
     const id = ++this.requestCounter;
-    const req: WorkerRequest = {
-      id,
-      text: params.text,
-      voice: params.settings.voice || "M1",
-      speed: params.settings.speed ?? 1.05,
-      pitchSemitones: params.settings.supertonicPitchSemitones ?? 0,
-      pitchProcessor: params.settings.supertonicPitchShiftProcessor ?? "rubberband",
-      lang: params.settings.supertonicLanguage ?? "en",
-      steps: params.settings.supertonicSteps ?? 8,
-      maxChunkLength: params.settings.supertonicMaxChunkLength ?? 300,
-      silenceDuration: params.settings.supertonicSilenceDuration ?? 0.3,
-      trailingSilence: params.settings.supertonicTrailingSilence ?? 0.1,
-    };
+    const req: WorkerRequest = this.buildRequest(id, params.text, params.settings);
 
     const result = new Promise<TTSWorkerResult>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
-      // Auto-timeout per request (30s)
+      // Auto-timeout per request
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`TTS worker request ${id} timed out after 30s`));
-      }, 30_000);
+        reject(new Error(`TTS worker request ${id} timed out after ${REQUEST_TIMEOUT_MS[this.backend] / 1000}s`));
+      }, REQUEST_TIMEOUT_MS[this.backend]);
 
       // Clear timer when resolved
       const originalResolve = resolve;
@@ -242,8 +257,34 @@ class TTSWorker {
     return result;
   }
 
+  private buildRequest(id: number, text: string, settings: TTSSettings): WorkerRequest {
+    if (this.backend === "kokoro") {
+      return {
+        id,
+        text,
+        voice: settings.voice || "af_heart",
+        speed: settings.speed ?? 1.0,
+        pitch: settings.pitch ?? 1.0,
+        pitchProcessor: settings.kokoroPitchShiftProcessor ?? "resample",
+      };
+    }
+    return {
+      id,
+      text,
+      voice: settings.voice || "M1",
+      speed: settings.speed ?? 1.05,
+      pitchSemitones: settings.supertonicPitchSemitones ?? 0,
+      pitchProcessor: settings.supertonicPitchShiftProcessor ?? "rubberband",
+      lang: settings.supertonicLanguage ?? "en",
+      steps: settings.supertonicSteps ?? 8,
+      maxChunkLength: settings.supertonicMaxChunkLength ?? 300,
+      silenceDuration: settings.supertonicSilenceDuration ?? 0.3,
+      trailingSilence: settings.supertonicTrailingSilence ?? 0.1,
+    };
+  }
+
   private handleUnexpectedExit(code: number | null) {
-    console.error(`[TTS-Worker] Unexpected exit with code ${code}`);
+    console.error(`[TTS-Worker:${this.backend}] Unexpected exit with code ${code}`);
     this._ready = false;
     // Reject all pending requests
     for (const [id, { reject }] of this.pending) {
@@ -280,16 +321,16 @@ class TTSWorker {
 }
 
 // Singleton pool — one worker per backend
-const workers = new Map<string, TTSWorker>();
+const workers = new Map<TTSWorkerBackend, TTSWorker>();
 
 export async function getWorker(backend: string): Promise<TTSWorker> {
-  if (backend !== "supertonic-3") {
+  if (backend !== "supertonic-3" && backend !== "kokoro") {
     throw new Error(`Persistent worker not available for backend: ${backend}`);
   }
 
   let worker = workers.get(backend);
   if (!worker) {
-    worker = new TTSWorker();
+    worker = new TTSWorker(backend);
     workers.set(backend, worker);
   }
 
@@ -300,7 +341,7 @@ export async function getWorker(backend: string): Promise<TTSWorker> {
   return worker;
 }
 
-export function destroyWorker(backend: string): void {
+export function destroyWorker(backend: TTSWorkerBackend): void {
   const worker = workers.get(backend);
   if (worker) {
     worker.destroy();
