@@ -152,7 +152,7 @@ export async function regenerateTitle(
   const systemContent =
     "Generate a short title (2-5 words) summarizing this conversation. " +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation. " +
-    "Focus on the current topic being discussed.";
+    "Focus on the current topic being discussed. Avoid generic descriptions like 'Code Review', focus on the content.";
 
   const title = postProcess(
     await callServer(config, systemContent, `Recent conversation:\n${context}`, "regeneration")
@@ -183,9 +183,9 @@ export async function generateSystemCycleTitle(
   const truncatedResponse = assistantResponse.slice(0, 1200);
 
   const systemContent =
-    `Generate a short sidebar title (2-5 words) for the latest ${cycleLabel}. ` +
+    `Generate a short title (2-5 words) for the latest ${cycleLabel}. ` +
     "Focus on the concrete topic, outcome, or theme. " +
-    "Avoid generic titles like 'Daily Synthesis' or 'Wake Cycle' unless there is no better subject. " +
+    "Avoid generic titles like 'Daily Synthesis', 'Wake Cycle', or 'Code Review' unless there is no better subject. Focus on the actual content." +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation.";
   const userContent = `Latest ${cycleLabel} output:\n\n${truncatedResponse}`;
 
