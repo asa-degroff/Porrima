@@ -137,6 +137,60 @@ export function chatMessagesToPiMessages(
     model: message._model ?? defaultAssistantIdentity.model,
   });
 
+  // Defense-in-depth: tool-call IDs are unique per call instance, so
+  // an ID seen twice in persisted rows marks a re-persisted duplicate turn
+  // (mid-loop steering reset re-arms persistence while the in-flight iteration
+  // still commits). resultIds tracks which calls already have a emitted tool
+  // result so duplicates can be dropped without leaving dangling calls.
+  const seenCallIds = new Set<string>();
+  const resultIds = new Set<string>();
+
+  const emitToolResult = (
+    tr: NonNullable<ChatMessage["toolResults"]>[number],
+    timestamp: number
+  ): void => {
+    // For tool results, the content should be the text + images array
+    // This matches how pi-ai expects ToolResultMessage content
+    //
+    // IMPORTANT: Do NOT truncate tool results here during replay.
+    // If a tool result was sent at full length on the original turn, the
+    // KV cache already contains its tokens. Truncating on replay creates
+    // a token-level divergence at the truncation point, breaking the LCP
+    // prefix match.
+    //
+    // Context budget management is handled by compaction (compaction.ts),
+    // which truncates tool results in the DB when the conversation needs
+    // to be compacted. After compaction, the DB version is already
+    // truncated, so this code path sees the shorter version naturally.
+    //
+    // Log oversized results for monitoring — if context overflow occurs,
+    // the pre-send compaction will handle it.
+    const LOG_TOOL_RESULT_CHARS = 60_000;
+    const trText = tr.content || "";
+    if (trText.length > LOG_TOOL_RESULT_CHARS) {
+      console.log(`[agent] Oversized tool result in replay: ${tr.toolName} ${(trText.length / 1024).toFixed(0)}KB (threshold: ${(LOG_TOOL_RESULT_CHARS / 1024).toFixed(0)}KB). Not truncating to preserve KV cache prefix.`);
+    }
+    const content: any[] = [{ type: "text" as const, text: trText }];
+    // Attach images if present (for generate_and_review tool)
+    if (tr.images?.length) {
+      console.log(`[agent] Attaching ${tr.images.length} image(s) to tool result ${tr.toolCallId} (${tr.toolName})`);
+      console.log(`[agent] Image sizes: ${tr.images.map(img => `${(((img.data?.length ?? 0) / 1024).toFixed(1))}KB ${img.mimeType}`).join(", ")}`);
+      for (const img of tr.images) {
+        if (!img.data) continue;
+        content.push({ type: "image" as const, data: img.data, mimeType: img.mimeType });
+      }
+    }
+    console.log(`[agent] ToolResultMessage created with ${content.length} content items (${content.filter(c => c.type === "image").length} images)`);
+    result.push({
+      role: "toolResult" as const,
+      toolCallId: tr.toolCallId,
+      toolName: tr.toolName,
+      content,
+      isError: tr.isError,
+      timestamp,
+    } as ToolResultMessage);
+  };
+
   const takePendingSystemContext = () => {
     const content = pendingSystemContexts.splice(0);
     const timestamp = pendingSystemTimestamp;
@@ -188,6 +242,38 @@ export function chatMessagesToPiMessages(
       const assistantIdentity = assistantIdentityFor(m);
 
       if (m.toolCalls?.length) {
+        // Defense-in-depth: skip re-persisted duplicate assistant
+        // rows (same tool-call IDs already emitted). The duplicate row is
+        // often the copy holding the tool result, so salvage any results for
+        // calls that would otherwise dangle. Text-only rows are NOT deduped —
+        // identical prose alone is a legitimate model repeat. Partial overlaps
+        // (some calls new, some seen) are kept as-is and only logged.
+        const callIds = m.toolCalls.map((tc) => tc.id);
+        const dupCount = callIds.filter((cid) => seenCallIds.has(cid)).length;
+        if (dupCount > 0) {
+          if (dupCount === callIds.length) {
+            let salvaged = 0;
+            if (m.toolResults) {
+              for (const tr of m.toolResults) {
+                if (resultIds.has(tr.toolCallId)) continue;
+                resultIds.add(tr.toolCallId);
+                emitToolResult(tr, m.timestamp);
+                salvaged++;
+              }
+            }
+            console.warn(
+              `[agent] Dedup: skipped re-persisted duplicate assistant row ` +
+              `(calls: ${callIds.join(",")}, salvaged ${salvaged} tool result(s)) — issue #10`
+            );
+            continue;
+          }
+          console.warn(
+            `[agent] Partial tool-call overlap with already-emitted rows ` +
+            `(${dupCount}/${callIds.length}) — keeping row un-deduped (issue #10)`
+          );
+        }
+        for (const cid of callIds) seenCallIds.add(cid);
+
         const isCanonicalToolFragment = m._toolLoopFragment === true;
         // Canonical split rows mirror the live tool loop: any text emitted
         // before a tool call belongs in the same assistant message as the call.
@@ -223,49 +309,8 @@ export function chatMessagesToPiMessages(
         // Tool results follow the tool-calling assistant message
         if (m.toolResults) {
           for (const tr of m.toolResults) {
-            // For tool results, the content should be the text + images array
-            // This matches how pi-ai expects ToolResultMessage content
-            //
-            // IMPORTANT: Do NOT truncate tool results here during replay.
-            // If a tool result was sent at full length on the original turn, the
-            // KV cache already contains its tokens. Truncating on replay creates
-            // a token-level divergence at the truncation point, breaking the LCP
-            // prefix match and forcing full re-evaluation of all tokens after the
-            // truncated result (potentially tens of thousands of tokens across
-            // multiple checkpoints). This caused a ~180-second prompt eval penalty
-            // in practice when a 65KB read_file result was truncated to 60KB.
-            //
-            // Context budget management is handled by compaction (compaction.ts),
-            // which truncates tool results in the DB when the conversation needs
-            // to be compacted. After compaction, the DB version is already
-            // truncated, so this code path sees the shorter version naturally.
-            //
-            // Log oversized results for monitoring — if context overflow occurs,
-            // the pre-send compaction will handle it.
-            const LOG_TOOL_RESULT_CHARS = 60_000;
-            const trText = tr.content || "";
-            if (trText.length > LOG_TOOL_RESULT_CHARS) {
-              console.log(`[agent] Oversized tool result in replay: ${tr.toolName} ${(trText.length / 1024).toFixed(0)}KB (threshold: ${(LOG_TOOL_RESULT_CHARS / 1024).toFixed(0)}KB). Not truncating to preserve KV cache prefix.`);
-            }
-            const content: any[] = [{ type: "text" as const, text: trText }];
-            // Attach images if present (for generate_and_review tool)
-            if (tr.images?.length) {
-              console.log(`[agent] Attaching ${tr.images.length} image(s) to tool result ${tr.toolCallId} (${tr.toolName})`);
-              console.log(`[agent] Image sizes: ${tr.images.map(img => `${(((img.data?.length ?? 0) / 1024).toFixed(1))}KB ${img.mimeType}`).join(", ")}`);
-              for (const img of tr.images) {
-                if (!img.data) continue;
-                content.push({ type: "image" as const, data: img.data, mimeType: img.mimeType });
-              }
-            }
-            console.log(`[agent] ToolResultMessage created with ${content.length} content items (${content.filter(c => c.type === "image").length} images)`);
-            result.push({
-              role: "toolResult" as const,
-              toolCallId: tr.toolCallId,
-              toolName: tr.toolName,
-              content,
-              isError: tr.isError,
-              timestamp: m.timestamp,
-            } as ToolResultMessage);
+            resultIds.add(tr.toolCallId);
+            emitToolResult(tr, m.timestamp);
           }
         }
 

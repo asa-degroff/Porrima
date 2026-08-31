@@ -396,4 +396,145 @@ describe("chatMessagesToPiMessages", () => {
     expect(toolResult.isError).toBe(true);
     expect(toolResult.content).toEqual([{ type: "text", text: "ENOENT: file not found" }]);
   });
+
+  it("dedupes re-persisted duplicate tool-loop rows and salvages their tool results (issue #10)", () => {
+    // Incident pattern: the same assistant turn re-persisted under a different
+    // _toolLoopId; the duplicate copy is the one holding the tool result.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Fix the seam", timestamp: 1000 },
+      {
+        role: "assistant",
+        content: "Seam check passed.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "check" } }],
+        timestamp: 2000,
+        _toolLoopId: "loop-1",
+        _toolLoopFragment: true,
+      },
+      {
+        role: "assistant",
+        content: "Seam check passed.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "check" } }],
+        toolResults: [
+          { toolCallId: "tc1", toolName: "bash", content: "seam ok", isError: false },
+        ],
+        timestamp: 2500,
+        _toolLoopId: "loop-2",
+        _toolLoopFragment: true,
+      },
+      { role: "assistant", content: "All done.", timestamp: 3000 },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+
+    // user + assistant(tc1) + toolResult(salvaged from duplicate) + assistant(final).
+    // The duplicate assistant turn is skipped but tc1 keeps its result.
+    expect(result).toHaveLength(4);
+    expect(result[0].role).toBe("user");
+    expect(result[1].role).toBe("assistant");
+    expect(result[2].role).toBe("toolResult");
+    expect((result[2] as ToolResultMessage).toolCallId).toBe("tc1");
+    expect((result[2] as ToolResultMessage).content).toEqual([{ type: "text", text: "seam ok" }]);
+    expect(result[3].role).toBe("assistant");
+    const assistantTexts = result
+      .filter((m) => m.role === "assistant")
+      .map((m) => (m as AssistantMessage).content)
+      .map((blocks) => blocks.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join(""));
+    expect(assistantTexts.filter((t) => t.includes("Seam check passed")).length).toBe(1);
+  });
+
+  it("drops a fully duplicated row when the original already carries the tool result", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Check", timestamp: 1000 },
+      {
+        role: "assistant",
+        content: "Checking.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "check" } }],
+        toolResults: [
+          { toolCallId: "tc1", toolName: "bash", content: "ok", isError: false },
+        ],
+        timestamp: 2000,
+        _toolLoopId: "loop-1",
+        _toolLoopFragment: true,
+      },
+      {
+        role: "assistant",
+        content: "Checking.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "check" } }],
+        toolResults: [
+          { toolCallId: "tc1", toolName: "bash", content: "ok", isError: false },
+        ],
+        timestamp: 2500,
+        _toolLoopId: "loop-2",
+        _toolLoopFragment: true,
+      },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+    // user + assistant + toolResult — duplicate row fully dropped, no double result
+    expect(result).toHaveLength(3);
+    expect(result.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect(result.filter((m) => m.role === "assistant")).toHaveLength(1);
+  });
+
+  it("does not dedupe distinct tool calls that repeat with different ids", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Run it twice", timestamp: 1000 },
+      {
+        role: "assistant",
+        content: "Running.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "make" } }],
+        toolResults: [{ toolCallId: "tc1", toolName: "bash", content: "built", isError: false }],
+        timestamp: 2000,
+      },
+      {
+        role: "assistant",
+        content: "Running again.",
+        toolCalls: [{ id: "tc2", name: "bash", arguments: { command: "make" } }],
+        toolResults: [{ toolCallId: "tc2", toolName: "bash", content: "built", isError: false }],
+        timestamp: 3000,
+      },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+    // Legitimate repeats (new call ids) must survive. Rows without
+    // _toolLoopFragment are legacy-collapsed → each expands to
+    // assistant(toolUse) + toolResult + assistant(text): user + 2×3 = 7
+    expect(result).toHaveLength(7);
+    expect(result.filter((m) => m.role === "toolResult")).toHaveLength(2);
+    const assistantTexts = result
+      .filter((m) => m.role === "assistant")
+      .map((m) => (m as AssistantMessage).content)
+      .map((blocks) => blocks.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join(""));
+    expect(assistantTexts.filter((t) => t.includes("Running")).length).toBe(2);
+  });
+
+  it("keeps rows with only partial tool-call overlap (logged, not deduped)", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Go", timestamp: 1000 },
+      {
+        role: "assistant",
+        content: "First call.",
+        toolCalls: [{ id: "tc1", name: "bash", arguments: { command: "a" } }],
+        timestamp: 2000,
+        _toolLoopId: "loop-1",
+        _toolLoopFragment: true,
+      },
+      {
+        role: "assistant",
+        content: "Second call.",
+        toolCalls: [
+          { id: "tc1", name: "bash", arguments: { command: "a" } },
+          { id: "tc2", name: "bash", arguments: { command: "b" } },
+        ],
+        toolResults: [
+          { toolCallId: "tc1", toolName: "bash", content: "ra", isError: false },
+          { toolCallId: "tc2", toolName: "bash", content: "rb", isError: false },
+        ],
+        timestamp: 3000,
+        _toolLoopId: "loop-2",
+        _toolLoopFragment: true,
+      },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+    // Partial overlap is out of dedup scope: both rows kept as-is
+    expect(result.filter((m) => m.role === "assistant")).toHaveLength(2);
+    expect(result.filter((m) => m.role === "toolResult")).toHaveLength(2);
+  });
 });
