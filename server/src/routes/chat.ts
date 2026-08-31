@@ -896,6 +896,19 @@ async function waitForBackgroundAutomation(chatId: string): Promise<void> {
 }
 
 /**
+ * Mutable holder for the turn lease acquired at the route boundary. Shared
+ * into handleChatStream so the loop can release it early (end-of-turn
+ * compaction runs on the dedicated CPU extraction servers and does not need
+ * the GPU slot) and re-acquire it later (a queued follow-up does). The
+ * route's finally block releases whatever is current at completion — the
+ * early release nulls the holder so a later release of the stale lease is a
+ * no-op, and a re-acquired lease is picked up for release instead.
+ */
+interface TurnLeaseRef {
+  current: TurnLease | null;
+}
+
+/**
  * Serialize GPU-bound turns through the global turn gate. The llama.cpp
  * inference server only handles one session at a time — concurrent turns
  * collide on the single slot and fail with provider errors. Opens the SSE
@@ -968,7 +981,7 @@ async function handleChatStream(
   userPiMessage: Message | null,
   req: Request,
   res: Response,
-  options: { hiddenUserMessage?: boolean } = {}
+  options: { hiddenUserMessage?: boolean; leaseRef?: TurnLeaseRef } = {}
 ) {
   if (isChatDeleted(chat.id)) {
     writeDeletedChatEvent(res);
@@ -3581,10 +3594,7 @@ async function handleChatStream(
     // appears complete. Runs after ALL context-generating work — the
     // incomplete-tool-turn continuation, stranded-call recovery, and the
     // mid-turn compaction/resume cycles — so the reading reflects the true
-    // final context. (Before Aug 23 this check ran BEFORE those loops: a
-    // turn ending in a continuation was read on pre-continuation usage and
-    // never re-checked — why this path fired 0x in 14 days while pre-send
-    // caught everything.)
+    // final context. 
     // Gate: needsMidTurnCompaction stays true only when the mid-turn loop
     // exhausted MAX_COMPACTION_CYCLES (context can't be brought under
     // control — one more compaction here can't either; the next turn's
@@ -3594,6 +3604,25 @@ async function handleChatStream(
     // MAX_ITERATIONS / pending input), and compacting a finished turn is
     // always safe.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
+      // The agent loop is over — the next main-model call is at earliest the
+      // follow-up re-acquire below. If end-of-turn compaction fires, its
+      // flush/summary/index work and the prompt rebuild's memory retrieval
+      // run on the dedicated CPU extraction/embed/rerank servers, so holding
+      // the GPU gate through it makes other chats wait behind a session that
+      // is no longer interactive. Release early when that isolation is
+      // configured (without it, runIndexGeneration falls back to the main
+      // model and the lease must stay held). Mid-turn compaction above keeps
+      // the lease on purpose — that session resumes right after extraction.
+      if (options.leaseRef?.current) {
+        const settings = await getSettings();
+        if (settings.extractionModelUrl?.trim()) {
+          releaseTurn(options.leaseRef.current);
+          console.log(
+            `[turn-gate] chat=${chat.id.slice(0, 8)}... released lease for background end-of-turn compaction`,
+          );
+          options.leaseRef.current = null;
+        }
+      }
       try {
         const model = allModels.find((m: InferenceModel) => m.id === chat.modelId);
         if (model) {
@@ -3725,6 +3754,19 @@ async function handleChatStream(
       return;
     }
 
+    // If the lease was released above for background compaction, a queued
+    // follow-up still needs the gate — it starts a fresh main-model turn.
+    // Cancelled waits (abort while queued) leave the message in the queue for
+    // the replacing turn to drain; nothing is lost by bailing here.
+    if (
+      options.leaseRef && !options.leaseRef.current &&
+      !askUserRef.current && !waitingForInput && messageQueue.peek(chat.id)
+    ) {
+      const followUpLease = await acquireTurnGate(chat, req, res);
+      if (!followUpLease) return;
+      options.leaseRef.current = followUpLease;
+    }
+
     const queuedFollowUp = await messageQueue.drainOne(chat.id);
     if (queuedFollowUp && !askUserRef.current && !waitingForInput) {
       console.log(`[chat] post-loop: found queued follow-up message ${queuedFollowUp.id}, processing`);
@@ -3803,6 +3845,7 @@ async function handleChatStream(
       // Recursively handle the follow-up with a fresh turn abort controller
       await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res, {
         hiddenUserMessage: queuedFollowUp.hidden === true,
+        leaseRef: options.leaseRef,
       });
       return; // Exit early since we've recursively handled the follow-up
     }
@@ -4543,10 +4586,11 @@ router.post("/", async (req, res) => {
     // Resume: userPiMessage=null triggers agentLoopContinue
     const resumeLease = await acquireTurnGate(chat, req, res);
     if (!resumeLease) return;
+    const leaseRef: TurnLeaseRef = { current: resumeLease };
     try {
-      await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
+      await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res, { leaseRef });
     } finally {
-      releaseTurn(resumeLease);
+      releaseTurn(leaseRef.current);
     }
   } else {
     // NORMAL: add user message and build fresh context
@@ -4842,10 +4886,11 @@ router.post("/", async (req, res) => {
 
     const sendLease = await acquireTurnGate(chat, req, res);
     if (!sendLease) return;
+    const leaseRef: TurnLeaseRef = { current: sendLease };
     try {
-      await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+      await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res, { leaseRef });
     } finally {
-      releaseTurn(sendLease);
+      releaseTurn(leaseRef.current);
     }
   }
 });
@@ -5054,12 +5099,14 @@ router.post("/artifact-error", async (req, res) => {
   console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
   const repairLease = await acquireTurnGate(chat, req, res);
   if (!repairLease) return;
+  const leaseRef: TurnLeaseRef = { current: repairLease };
   try {
     await handleChatStream(chat, repairPrompt, contextMessages, systemPrompt, userPiMessage, req, res, {
       hiddenUserMessage: true,
+      leaseRef,
     });
   } finally {
-    releaseTurn(repairLease);
+    releaseTurn(leaseRef.current);
   }
 });
 
@@ -5448,10 +5495,11 @@ router.post("/edit", async (req, res) => {
 
   const editLease = await acquireTurnGate(chat, req, res);
   if (!editLease) return;
+  const leaseRef: TurnLeaseRef = { current: editLease };
   try {
-    await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+    await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res, { leaseRef });
   } finally {
-    releaseTurn(editLease);
+    releaseTurn(leaseRef.current);
   }
 });
 
