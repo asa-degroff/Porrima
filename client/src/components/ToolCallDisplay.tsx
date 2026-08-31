@@ -141,7 +141,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
           Shown unconditionally — this is the whole point of the preview. */}
       {isPreview && preview && (
         <div className="border-t border-white/5 px-3 py-2">
-          <div className="text-[10px] text-white/30 mb-1.5 font-medium uppercase tracking-wider flex items-center gap-1.5">
+          <div className="text-[10px] text-white/30 mb-1.5 font-medium flex items-center gap-1.5">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400/60 animate-pulse" />
             {preview.label}
           </div>
@@ -175,7 +175,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
             >
               <polyline points="6 9 12 15 18 9" />
             </svg>
-            <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium shrink-0">
+            <span className="text-[10px] text-white/30 font-medium shrink-0">
               call
             </span>
             {callSummary && (
