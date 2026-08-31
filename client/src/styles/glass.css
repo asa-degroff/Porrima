@@ -119,14 +119,14 @@ body::before {
  * iOS-flakier mix-blend-mode.
  */
 [data-bg-texture="linen"] body::before {
-  background-image: url("/textures/linen-neutral-256.png"), var(--theme-bg-gradient);
-  background-size: 256px 256px, auto;
+  background-image: url("/textures/linen-neutral-1024.png"), var(--theme-bg-gradient);
+  background-size: 1024px 1024px, auto;
   background-blend-mode: soft-light, normal;
 }
 
 [data-flat-bg][data-bg-texture="linen"] body::before {
-  background-image: url("/textures/linen-neutral-256.png");
-  background-size: 256px 256px;
+  background-image: url("/textures/linen-neutral-1024.png");
+  background-size: 1024px 1024px;
   background-color: var(--theme-bg-flat);
   background-blend-mode: soft-light;
 }
@@ -671,8 +671,8 @@ button:hover .trash-icon .trash-lid {
 
 /* Preview tile for the linen background texture (1:1 weave scale, live theme gradient) */
 .bg-texture-preview-linen {
-  background-image: url("/textures/linen-neutral-256.png"), var(--theme-bg-gradient);
-  background-size: 256px 256px, auto;
+  background-image: url("/textures/linen-neutral-1024.png"), var(--theme-bg-gradient);
+  background-size: 1024px 1024px, auto;
   background-blend-mode: soft-light, normal;
 }
 
