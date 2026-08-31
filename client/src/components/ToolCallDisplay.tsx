@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { DiffView } from "./ui/DiffView";
@@ -30,6 +30,12 @@ const statusIcons = {
   ),
 };
 
+/** Bounded tail (source lines) for the streaming preview. Enough real
+ *  scrollback to read context, cheap enough to re-layout on every token
+ *  delta — the complete content is reachable after completion via the
+ *  call layer. */
+const PREVIEW_TAIL_LINES = 150;
+
 interface Props {
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
@@ -44,8 +50,19 @@ interface Props {
 
 export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, previewRaw }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Second tier: whether the full call arguments are revealed under the
+  // one-line call preview row. Independent of `expanded` (the chip itself).
+  // Null = no explicit choice yet, so the default is derived from the props:
+  // edit_file opens with the call revealed — the diff IS the call, and it
+  // was the visible expanded content before this tier existed. (Derived
+  // rather than state-initialized so a preview segment that transitions in
+  // place to an edit_file still gets the default.)
+  const [showCallChoice, setShowCallChoice] = useState<boolean | null>(null);
 
   const name = toolCall?.name || liveStatus?.name || (isPreview ? "" : "unknown");
+  const showCall =
+    showCallChoice ??
+    (name === "edit_file" && toolCall?.arguments?.old_string != null);
   // toolResult (persisted) takes priority over liveStatus (streaming-only) —
   // once the result is available the tool is definitively done/error.
   const status = toolResult
@@ -66,6 +83,19 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
   const preview = isPreview && previewRaw
     ? previewBody(name, previewRaw)
     : null;
+
+  // Call layer (second tier): the authoritative arguments, available once
+  // the preview is replaced by the real segment (or from persisted
+  // messages). Previews never enter this layer — their growing content is
+  // the preview body itself.
+  const callArgs =
+    !isPreview && toolCall?.arguments && Object.keys(toolCall.arguments).length > 0
+      ? toolCall.arguments
+      : undefined;
+  const callSummary = callArgs ? callRowSummary(name, callArgs) : undefined;
+  const callDetail = callArgs ? callDetails(name, callArgs) : undefined;
+  const isEditDiff = name === "edit_file" && toolCall?.arguments?.old_string != null;
+  const showCallLayer = !!callArgs || isEditDiff;
 
   const iconInfo = getToolIcon(name);
 
@@ -110,35 +140,72 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
       {/* Live preview: the model is still composing the call's arguments.
           Shown unconditionally — this is the whole point of the preview. */}
       {isPreview && preview && (
-        <div className="border-t border-white/5 px-3 py-2 max-h-[240px] overflow-hidden">
+        <div className="border-t border-white/5 px-3 py-2">
           <div className="text-[10px] text-white/30 mb-1.5 font-medium uppercase tracking-wider flex items-center gap-1.5">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400/60 animate-pulse" />
             {preview.label}
           </div>
-          <pre className="text-xs whitespace-pre-wrap break-all leading-relaxed text-white/50 max-w-full font-mono">
-            {tailLines(preview.text)}
-          </pre>
+          <AutoFollowPre text={preview.text} />
         </div>
       )}
 
-      {/* Expandable content */}
-      {expanded && name === "edit_file" && toolCall?.arguments?.old_string != null && (
-        <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden">
-          <DiffView
-            oldString={toolCall.arguments.old_string}
-            newString={toolCall.arguments.new_string ?? ""}
-          />
-        </div>
+      {/* Expandable content — two tiers:
+          Tier 1 (the call): a one-line preview row that expands to the full
+          arguments — what was actually asked of the tool, for peeking under
+          the hood or debugging.
+          Tier 2 (the result): what came back — the existing behavior. */}
+      {expanded && showCallLayer && (
+        <>
+          <button
+            onClick={() => setShowCallChoice(!showCall)}
+            className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors min-w-0"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-white/20 transition-transform"
+              style={{ transform: showCall ? "rotate(180deg)" : "rotate(0deg)" }}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+            <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium shrink-0">
+              call
+            </span>
+            {callSummary && (
+              <span className="text-xs text-white/40 truncate min-w-0 flex-1 font-mono">
+                {callSummary}
+              </span>
+            )}
+          </button>
+          {showCall && (
+            isEditDiff ? (
+              <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden">
+                <DiffView
+                  oldString={toolCall!.arguments.old_string}
+                  newString={toolCall!.arguments.new_string ?? ""}
+                />
+              </div>
+            ) : callDetail ? (
+              <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full">
+                {callDetail.label && (
+                  <div className="text-xs text-white/40 mb-1.5 font-medium">{callDetail.label}</div>
+                )}
+                <pre className="text-xs text-white/60 whitespace-pre-wrap break-all font-mono leading-relaxed max-w-full">
+                  {callDetail.text}
+                </pre>
+              </div>
+            ) : null
+          )}
+        </>
       )}
-      {expanded && name === "bash" && toolCall?.arguments?.command && (
-        <div className="border-t border-white/5 px-3 py-2 overflow-x-hidden max-w-full">
-          <div className="text-xs text-white/40 mb-1.5 font-medium">Command</div>
-          <pre className="text-xs text-white/60 whitespace-pre-wrap break-all font-mono leading-relaxed overflow-x-auto max-w-full">
-            {toolCall.arguments.command}
-          </pre>
-        </div>
-      )}
-      {expanded && result && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && !(name === "bash") && (
+      {expanded && result && name !== "bash" && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && (
         <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
           <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed max-w-full">
             {result}
@@ -146,11 +213,13 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
         </div>
       )}
       {expanded && name === "bash" && result && (
-        <div className="border-t border-white/5 px-3 py-2 overflow-x-hidden max-w-full">
+        <div className="border-t border-white/5 px-3 py-2 max-w-full">
           <div className="text-xs text-white/40 mb-1.5 font-medium">Output</div>
-          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed overflow-x-auto max-w-full">
-            {result}
-          </pre>
+          <div className="max-h-[300px] overflow-y-auto overflow-x-hidden custom-scrollbar">
+            <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed max-w-full">
+              {result}
+            </pre>
+          </div>
         </div>
       )}
       {/* Show generated images inline for generate_and_review tool */}
@@ -189,8 +258,122 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
   );
 }
 
+/**
+ * Growing <pre> with auto-follow for the streaming preview. Pinned to the
+ * tail by default so the newest tokens stay visible (the point of the
+ * preview); if the user scrolls up to read earlier content the follow
+ * pauses and a pill offers to jump back. The rendered tail is bounded
+ * (tailLines) so the per-delta re-layout stays cheap on huge writes.
+ */
+function AutoFollowPre({ text }: { text: string }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [paused, setPaused] = useState(false);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16;
+    if (atBottom !== atBottomRef.current) {
+      atBottomRef.current = atBottom;
+      setPaused(!atBottom);
+    }
+  }, []);
+
+  // Follow the tail as new text arrives — but only while the user is at
+  // the bottom; their scroll position is the override.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [text]);
+
+  const jumpToLatest = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setPaused(false);
+  }, []);
+
+  return (
+    <div className="relative">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="max-h-[240px] overflow-y-auto overflow-x-hidden custom-scrollbar"
+      >
+        <pre className="text-xs whitespace-pre-wrap break-all leading-relaxed text-white/50 max-w-full font-mono">
+          {tailLines(text)}
+        </pre>
+      </div>
+      {paused && (
+        <button
+          onClick={jumpToLatest}
+          className="absolute bottom-1.5 right-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm"
+          title="Jump to latest"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14" />
+            <path d="m19 12-7 7-7-7" />
+          </svg>
+          <span className="text-[10px] font-medium">Latest</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 function formatToolName(name: string): string {
   return name.replace(/_/g, " ");
+}
+
+/** One-line preview for the call layer's expand row: the structured field
+ *  (path, command, query…) or, for tools formatArgs doesn't know, the first
+ *  string-valued argument (schema order puts the primary field first in
+ *  practice). */
+function callRowSummary(toolName: string, args: Record<string, any>): string {
+  const formatted = formatArgs(toolName, args);
+  if (formatted) return formatted;
+  for (const value of Object.values(args)) {
+    if (typeof value === "string" && value.trim()) {
+      return value.replace(/\s+/g, " ").slice(0, 120);
+    }
+  }
+  return "";
+}
+
+/** Full detail of a completed call for the call layer. Content-heavy tools
+ *  get a dedicated text view; everything else falls back to pretty JSON.
+ *  edit_file is handled by the caller — its diff IS the call. */
+function callDetails(toolName: string, args: Record<string, any>): { label?: string; text: string } {
+  switch (toolName) {
+    case "write_file":
+      if (args.content != null) return { label: "Content", text: String(args.content) };
+      break;
+    case "bash":
+      if (args.command != null) return { label: "Command", text: String(args.command) };
+      break;
+    case "run_python":
+      if (args.code != null) return { label: "Code", text: String(args.code) };
+      break;
+    case "save_memory":
+      if (args.text != null) return { label: "Memory", text: String(args.text) };
+      break;
+    case "ask_user":
+      if (args.question != null) return { label: "Question", text: String(args.question) };
+      break;
+    case "create_artifact":
+    case "update_artifact":
+      if (args.html != null) return { label: "HTML", text: String(args.html) };
+      break;
+  }
+  try {
+    return { text: JSON.stringify(args, null, 2) };
+  } catch {
+    return { text: String(args) };
+  }
 }
 
 function formatArgs(toolName: string, args: Record<string, any>): string {
@@ -374,9 +557,10 @@ function previewBody(
   }
 }
 
-/** Show the tail of a growing text so the newest lines stay visible without
- *  scroll manipulation. */
-function tailLines(text: string, maxLines = 24): string {
+/** Show the tail of a growing text. Bounded by PREVIEW_TAIL_LINES —
+ *  AutoFollowPre keeps the newest lines in view, so the cap only limits how
+ *  far back the live scroll reaches. */
+function tailLines(text: string, maxLines = PREVIEW_TAIL_LINES): string {
   const lines = text.split("\n");
   if (lines.length <= maxLines) return text;
   return lines.slice(lines.length - maxLines).join("\n");
