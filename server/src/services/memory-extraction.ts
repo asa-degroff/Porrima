@@ -605,12 +605,12 @@ I think beyond surface-level facts, considering:
 - **Lessons**: what worked, what didn't, patterns that emerged
 - **Experiences**: how I approached the situation, what I observed, how I felt about it
 
-Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 3-5 sentences per memory is ideal.
+Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 2-5 sentences per memory is ideal.
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context that produced these memories. Use a noun phrase, not a full sentence. Be specific — name the concrete topic or system discussed, not the activity. Don't use generic labels like "this conversation", "coding session", "debugging", or "project update".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
 
@@ -737,7 +737,7 @@ Previously captured memories are provided alongside the conversation. Those memo
 4. **Thematic context** — higher-level insights that connect multiple exchanges
 5. **Unresolved threads** — ongoing work, open questions, or pending decisions
 
-Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
+Each extracted memory should be self-contained and meaningful (2-5 sentences).
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context. Use a noun phrase. Be specific about what topic or system was discussed. Don't use generic labels like "this conversation" or "coding session".
@@ -2793,7 +2793,7 @@ function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplet
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context. Be specific. Don't use generic labels like "this conversation" or "coding session".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
   - "sourceExchangeId": Use exactly one of these exchange ids: ${ids}. If a memory depends on multiple exchanges, use the exchange that best supports it.
@@ -3408,12 +3408,12 @@ function buildMidTurnAssistantContent(content: MidTurnPulseContent): string {
 }
 
 function buildMidTurnBatchHeader(pulseIndex: number): string {
-  return `[MID-TURN PULSE #${pulseIndex}] Review the partial progress below and extract any significant memories that have emerged so far. Focus on concrete facts revealed by tool results or decisions made in thinking.
+  return `[MID-TURN PULSE #${pulseIndex}] Review the partial progress below and extract any significant memories that have emerged so far. Focus on anything meaningful and interesting revealed by tool results or decisions made in thinking. Not everything needs to be saved.
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing what you are working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (1-3 sentences)
+  - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
   - "sourceExchangeId": Use "midturn-${pulseIndex}" for all memories in this pulse.
@@ -3855,7 +3855,7 @@ export async function triggerMidTurnExtractionPulse(opts: {
  * prefix from earlier pulses/extractions is fully reused and only the removed
  * messages are newly evaluated.
  */
-const PRE_COMPACTION_USER_HEADER = `[PRE-COMPACTION] This conversation is approaching its context limit and the messages below are about to be removed from my context. Review them and extract everything needed to continue effectively after they're gone — write each memory in my own voice.
+const PRE_COMPACTION_USER_HEADER = `[PRE-COMPACTION] This conversation is approaching its context limit and the messages below are about to be removed from my context. Review them and extract everything needed to continue effectively after they're gone.
 
 Memories I already extracted earlier in this session are visible in my own responses above — do not duplicate them. Focus on what the messages below add.
 
