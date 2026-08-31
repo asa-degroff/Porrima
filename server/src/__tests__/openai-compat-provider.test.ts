@@ -9,6 +9,7 @@ import {
   readPromptCacheTokens,
   readPromptTokens,
   extractSlotProgress,
+  resolveOccupiedSlotCacheState,
 } from "../services/openai-compat-provider.js";
 
 describe("estimatePromptTokensForProgress", () => {
@@ -427,5 +428,30 @@ describe("extractSlotProgress", () => {
     const snapshot = extractSlotProgress(payload, undefined, 10000);
 
     expect(snapshot).toBeNull();
+  });
+});
+
+describe("resolveOccupiedSlotCacheState", () => {
+  it("trusts occupancy when no request digest is available (legacy callers)", () => {
+    expect(resolveOccupiedSlotCacheState({ lastRequestDigest: "abc" })).toBe("hot");
+    expect(resolveOccupiedSlotCacheState({})).toBe("hot");
+  });
+
+  it("reports hot only when the resident run matches the outgoing request", () => {
+    expect(
+      resolveOccupiedSlotCacheState({ lastRequestDigest: "abc", requestDigest: "abc" }),
+    ).toBe("hot");
+  });
+
+  it("reports cold when the resident run is a different request", () => {
+    expect(
+      resolveOccupiedSlotCacheState({ lastRequestDigest: "abc", requestDigest: "def" }),
+    ).toBe("cold");
+  });
+
+  it("reports cold when there is no residency record to verify against", () => {
+    expect(
+      resolveOccupiedSlotCacheState({ lastRequestDigest: undefined, requestDigest: "abc" }),
+    ).toBe("cold");
   });
 });

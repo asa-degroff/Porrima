@@ -19,6 +19,7 @@ import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
+import { getLlamaChatLastRequestDigest } from "./llama-cache-residency.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
 import { recordContextObservation } from "./context-high-water.js";
@@ -72,7 +73,13 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 }
 
 const LLAMACPP_STREAM_HEADERS_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_STREAM_HEADERS_TIMEOUT_MS", 7_200_000);
-const LLAMACPP_PREFILL_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_INTERVAL_MS", 10_000);
+// The prefill monitor only lives between request dispatch and the first
+// output delta, so every poll lands inside (or right before) the prefill
+// window — poll fast throughout. The first snapshot sets the progress
+// baseline and locks cache state, so a slow interval skews ETAs and can
+// miss shorter prefills entirely. (Previously 10s, which suppressed the
+// auto-show indicator on fast cold prefills.)
+const LLAMACPP_PREFILL_ACTIVE_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_ACTIVE_POLL_INTERVAL_MS", 1_000);
 const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_TIMEOUT_MS", 120_000);
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS", 8_192);
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS", 2_048);
@@ -617,19 +624,39 @@ async function probeSlotContextTokens(baseUrl: string, modelId: string, slotId: 
   }
 }
 
+/** Resolve cache state for a slot the probe found occupied. Occupancy is not
+ *  a prefix match: the resident KV may belong to another request (unbound
+ *  system-chat calls can land on a bound slot) or to this chat's pre-edit /
+ *  pre-compaction prompt, in which case llama.cpp cold-prefills despite the
+ *  occupied slot. Only trust "hot" when the residency record shows the last
+ *  completed run matches the outgoing request exactly. Warm appends (shared
+ *  prefix, new suffix) resolve cold here too — safe, because the auto-show
+ *  thresholds (prompt >= 8k, processed >= 2k) keep small suffix prefills
+ *  silent while genuine cold prefills surface. Without request context
+ *  (non-UI callers), keep the legacy occupancy behavior. */
+export function resolveOccupiedSlotCacheState(opts: {
+  lastRequestDigest?: string;
+  requestDigest?: string;
+}): "hot" | "cold" {
+  if (opts.requestDigest === undefined) return "hot";
+  return opts.lastRequestDigest === opts.requestDigest ? "hot" : "cold";
+}
+
 /**
  * Determine cache state before the request starts, using explicit signals
  * rather than inferring from prefill progress (which conflates progress with hits).
  *
  * Signals checked in order:
  *  1. Lease eviction — if evictedChatId is set, we just evicted another chat → cold
- *  2. Slot probe — check n_context_tokens on the assigned slot → 0 means cold
+ *  2. Slot probe — check n_context_tokens on the assigned slot → 0 means cold;
+ *     an occupied slot is verified against the chat's last request digest
  *  3. Unknown — fall back to progress-based detection during polling
  */
 async function determineCacheState(
   baseUrl: string,
   modelId: string,
   lease: LlamaSlotLease | null,
+  requestContext?: { chatId?: string; contextWindow?: number; requestDigest?: string },
 ): Promise<ModelProgressEvent["cacheState"]> {
   // Signal 1: eviction is definitive
   if (lease?.evictedChatId) return "cold";
@@ -638,7 +665,19 @@ async function determineCacheState(
   if (lease) {
     const ctxTokens = await probeSlotContextTokens(baseUrl, modelId, lease.slotId);
     if (ctxTokens !== null) {
-      return ctxTokens > 0 ? "hot" : "cold";
+      if (ctxTokens === 0) return "cold";
+      const lastRequestDigest = requestContext?.chatId
+        ? getLlamaChatLastRequestDigest({
+            chatId: requestContext.chatId,
+            baseUrl,
+            modelId,
+            contextWindow: requestContext.contextWindow,
+          })
+        : undefined;
+      return resolveOccupiedSlotCacheState({
+        lastRequestDigest,
+        requestDigest: requestContext?.requestDigest,
+      });
     }
   }
 
@@ -676,9 +715,10 @@ function startLlamaPrefillMonitor(input: {
   onProgress?: ModelProgressCallback;
   signal?: AbortSignal;
   showIndicator?: boolean;
-  /** Cache state determined before the request (eviction/slot probe).
-   *  When "cold" or "hot", overrides the progress-based detection.
-   *  When "unknown", falls back to progress ratio on first snapshot. */
+  /** Cache state determined before the request (eviction/slot probe/digest).
+   *  Seeds the locked cache state; when "unknown", the first snapshot's ratio
+   *  locks it instead. Server-reported cached tokens for the request are
+   *  authoritative and correct the lock once observed (see poll). */
   initialCacheState?: ModelProgressEvent["cacheState"];
 }): () => void {
   const { baseUrl, modelId, slotId, estimatedPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState } = input;
@@ -690,8 +730,9 @@ function startLlamaPrefillMonitor(input: {
   let lastProcessedTokens: number | undefined;
   let firstProcessedTokens: number | undefined;
   let firstProgressAt: number | undefined;
-  // Lock cache state once determined: use the pre-request signal if available,
-  // otherwise fall back to the progress ratio on the first snapshot only.
+  // Locked cache state: seeded from the pre-request signal, falling back to
+  // the first snapshot's progress ratio. Once llama.cpp reports the request's
+  // cached token count, that authoritative value re-locks it (see poll).
   let lockedCacheState: ModelProgressEvent["cacheState"] =
     initialCacheState !== undefined ? initialCacheState : "unknown";
 
@@ -708,9 +749,14 @@ function startLlamaPrefillMonitor(input: {
 
   const schedule = () => {
     if (stopped || signal?.aborted) return;
+    // The monitor only lives between request dispatch and the first output
+    // delta, so every poll lands inside (or right before) the prefill window.
+    // Poll fast throughout: the first snapshot sets the progress baseline
+    // and locks cache state, and a 10s gap can skip past shorter prefills
+    // entirely. /slots is a cheap status endpoint.
     timer = setTimeout(() => {
       void poll();
-    }, LLAMACPP_PREFILL_POLL_INTERVAL_MS);
+    }, LLAMACPP_PREFILL_ACTIVE_POLL_INTERVAL_MS);
   };
 
   const poll = async () => {
@@ -742,10 +788,25 @@ function startLlamaPrefillMonitor(input: {
                 firstProgressAt = now;
               }
             }
-            // Lock cache state on first snapshot if not pre-determined.
-            // Uses raw slot values because cache state depends on the ratio
-            // between cached and total prompt tokens, not on progress.
-            if (lockedCacheState === "unknown") {
+            // Lock cache state. When llama.cpp reports this request's cached
+            // token count, that is authoritative — it reflects actual prefix
+            // reuse for THIS request and corrects the pre-request
+            // determination (slot probe / digest check) whenever the slot was
+            // overwritten server-side. The value is fixed for the request's
+            // lifetime, so re-locking from it is stable. Without it, lock
+            // once on the first snapshot's raw ratio.
+            if (
+              snapshot.cachedPromptTokens !== undefined &&
+              snapshot.fullPromptTokens !== undefined &&
+              snapshot.fullPromptTokens > 0
+            ) {
+              lockedCacheState = cacheStateFromProgress(
+                undefined,
+                undefined,
+                snapshot.fullPromptTokens,
+                snapshot.cachedPromptTokens,
+              );
+            } else if (lockedCacheState === "unknown") {
               lockedCacheState = cacheStateFromProgress(
                 rawProcessedTokens,
                 rawPromptTokens,
@@ -1568,6 +1629,11 @@ export const streamOpenAICompat = (
         model.baseUrl,
         model.id,
         useLlamaSlotLease ? llamaSlotLease : null,
+        {
+          chatId: promptDebugChatId,
+          contextWindow: model.contextWindow,
+          requestDigest: cacheMetadata.requestDigest,
+        },
       );
 
       stopPrefillMonitor = startLlamaPrefillMonitor({

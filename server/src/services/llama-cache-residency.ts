@@ -383,6 +383,20 @@ export function hasLlamaCacheTargetWarmRecord(input: {
   return !!record?.active && record.warm;
 }
 
+/** Returns the request digest of the last completed run for this chat's
+ *  residency record, or undefined when no record exists. The provider uses
+ *  this to verify that the prefix resident in a probed slot actually belongs
+ *  to the outgoing request before trusting a "hot" slot probe. */
+export function getLlamaChatLastRequestDigest(input: {
+  chatId: string;
+  baseUrl: string;
+  modelId: string;
+  contextWindow?: number;
+}): string | undefined {
+  const key = recordKey({ ...input, targetKind: "chat" });
+  return records.get(key)?.lastRequestDigest;
+}
+
 /** Check if any warm cache record exists for this model+contextWindow across all chats.
  *  Used to detect cold starts: if no warm record exists, prefill will be slow and the
  *  progress indicator should be shown. */
