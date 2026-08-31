@@ -601,6 +601,15 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     }
   }, [settings.flatBackground]);
 
+  // Apply linen background (neutral mask blended over the theme background)
+  useEffect(() => {
+    if (settings.backgroundEffect === 'linen') {
+      document.documentElement.setAttribute('data-bg-texture', 'linen');
+    } else {
+      document.documentElement.removeAttribute('data-bg-texture');
+    }
+  }, [settings.backgroundEffect]);
+
   // Apply opaque bubbles toggle
   useEffect(() => {
     if (settings.opaqueBubbles) {

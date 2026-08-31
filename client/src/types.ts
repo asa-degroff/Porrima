@@ -414,7 +414,7 @@ export interface ThemePreset {
   background: string;
   accent: string;
 }
-export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper";
+export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper" | "linen";
 export type CornerRadius = "tiny" | "small" | "default";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 

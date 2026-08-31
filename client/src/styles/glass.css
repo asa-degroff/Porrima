@@ -108,6 +108,29 @@ body::before {
   background: var(--theme-bg-flat);
 }
 
+/*
+ * Linen background effect — a neutral 50%-grey weave blended over the theme's
+ * own background (data-bg-texture is set by App.tsx when backgroundEffect is
+ * "linen"; it renders on body::before rather than as an overlay component).
+ * 50% grey is an identity for soft-light, so the single asset tints itself
+ * with whatever the active theme paints: one texture, every theme. Both
+ * layers live on body::before because background-blend-mode only blends
+ * layers within one element — a separate overlay div would need the heavier,
+ * iOS-flakier mix-blend-mode.
+ */
+[data-bg-texture="linen"] body::before {
+  background-image: url("/textures/linen-neutral-256.png"), var(--theme-bg-gradient);
+  background-size: 256px 256px, auto;
+  background-blend-mode: soft-light, normal;
+}
+
+[data-flat-bg][data-bg-texture="linen"] body::before {
+  background-image: url("/textures/linen-neutral-256.png");
+  background-size: 256px 256px;
+  background-color: var(--theme-bg-flat);
+  background-blend-mode: soft-light;
+}
+
 .app-glass-surface {
   background: rgba(255, 255, 255, 0.03);
   -webkit-backdrop-filter: blur(4px);
@@ -644,6 +667,13 @@ button:hover .trash-icon .trash-lid {
     ),
     var(--theme-bg-gradient);
   background-size: 16px 16px, auto, auto, auto;
+}
+
+/* Preview tile for the linen background texture (1:1 weave scale, live theme gradient) */
+.bg-texture-preview-linen {
+  background-image: url("/textures/linen-neutral-256.png"), var(--theme-bg-gradient);
+  background-size: 256px 256px, auto;
+  background-blend-mode: soft-light, normal;
 }
 
 /* Text label overlay for effect preview tiles */

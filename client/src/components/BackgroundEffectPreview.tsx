@@ -6,6 +6,7 @@ const PREVIEW_CLASS: Record<BackgroundEffect, string> = {
   "scan-lines": "bg-effect-preview-scan-lines",
   "ripple-dots": "bg-effect-preview-ripple-dots",
   "graph-paper": "bg-effect-preview-graph-paper",
+  linen: "bg-texture-preview-linen",
 };
 
 interface Props {

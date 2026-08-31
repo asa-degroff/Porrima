@@ -73,6 +73,7 @@ const BACKGROUND_EFFECT_OPTIONS: Array<{ value: BackgroundEffect; label: string;
   { value: "scan-lines", label: "Scan Lines", description: "CRT-style horizontal line texture." },
   { value: "ripple-dots", label: "Ripple Dots", description: "Animated field of dots with wave distortion." },
   { value: "graph-paper", label: "Graph Paper", description: "Fine static grid overlay." },
+  { value: "linen", label: "Linen", description: "Neutral woven texture, tinted by the active theme." },
 ];
 
 const ACTIVITY_SHAPE_OPTIONS: Array<{ value: ActivityShape; label: string }> = [

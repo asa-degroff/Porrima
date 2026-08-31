@@ -4635,6 +4635,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 { value: "scan-lines" as BackgroundEffect, label: "Scan Lines", description: "CRT-style horizontal line texture." },
                 { value: "ripple-dots" as BackgroundEffect, label: "Ripple Dots", description: "Animated field of dots with wave distortion." },
                 { value: "graph-paper" as BackgroundEffect, label: "Graph Paper", description: "Fine static grid overlay — no animation." },
+                { value: "linen" as BackgroundEffect, label: "Linen", description: "Neutral woven texture, tinted by the active theme." },
               ].map((opt) => (
                 <button
                   key={opt.value}
@@ -4663,6 +4664,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 ? "Ripple Dots adds an animated field of dots with wave distortion."
                 : backgroundEffect === "graph-paper"
                 ? "Graph Paper adds a fine static grid overlay — no animation."
+                : backgroundEffect === "linen"
+                ? "Linen adds a neutral woven texture, blended over and tinted by the active theme."
                 : "Plain static background with gradient overlay."}
             </p>
           </div>
