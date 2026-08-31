@@ -75,11 +75,6 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
     ? formatArgs(name, toolCall.arguments)
     : undefined;
 
-  // While previewing, the parsed arguments are still empty — pull what's
-  // visible out of the raw JSON stream instead.
-  const previewArgsDisplay = isPreview && previewRaw
-    ? formatPreviewArgs(name, previewRaw)
-    : undefined;
   const preview = isPreview && previewRaw
     ? previewBody(name, previewRaw)
     : null;
@@ -113,9 +108,12 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
         <span className="text-xs font-medium text-white/70 shrink-0 whitespace-nowrap">
           {isPreview && !name ? "composing tool call" : formatToolName(name)}
         </span>
-        {(argsDisplay || previewArgsDisplay) && (
+        {/* The one-line argument preview is a resting-state affordance:
+            mid-stream the preview body below IS the argument surface, and
+            echoing its first line in the header would double-print. */}
+        {argsDisplay && (
           <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1">
-            {argsDisplay || previewArgsDisplay}
+            {argsDisplay}
           </span>
         )}
         {!isPreview && (
@@ -482,38 +480,6 @@ function extractPartialStringField(raw: string, field: string): string | null {
     i += 1;
   }
   return out; // value still open
-}
-
-/** One-line header preview, mirroring formatArgs but on the raw stream. */
-function formatPreviewArgs(toolName: string, raw: string): string {
-  switch (toolName) {
-    case "read_file":
-    case "write_file":
-    case "edit_file":
-      return extractPartialStringField(raw, "path") ?? "";
-    case "bash": {
-      const cmd = extractPartialStringField(raw, "command");
-      return cmd ? cmd.split("\n")[0].slice(0, 100) : "";
-    }
-    case "run_python": {
-      const code = extractPartialStringField(raw, "code");
-      return code ? code.split("\n")[0]?.slice(0, 50) : "";
-    }
-    case "save_memory":
-      return extractPartialStringField(raw, "text")?.slice(0, 50) ?? "";
-    case "search_memory":
-    case "search_conversation":
-    case "web_search":
-      return extractPartialStringField(raw, "query") ?? "";
-    case "web_fetch":
-      return extractPartialStringField(raw, "url") ?? "";
-    case "create_artifact":
-      return extractPartialStringField(raw, "title") ?? "";
-    case "ask_user":
-      return extractPartialStringField(raw, "question")?.slice(0, 50) ?? "";
-    default:
-      return "";
-  }
 }
 
 /** Body preview: the argument content that is actually growing. */
