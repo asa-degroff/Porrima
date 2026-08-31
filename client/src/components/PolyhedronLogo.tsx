@@ -1,6 +1,16 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityStyleContext } from '../hooks/useActivityStyle'
 import type { InferenceActivityPhase } from '../types'
+import {
+  POLY_DEFAULT_COUNT,
+  POLY_IDLE_MS,
+  POLY_RETURN_MS,
+  POLY_RETURN_PAUSE_MS,
+  POLY_RETURN_STAGGER_MS,
+  POLY_SPIN_MS,
+  POLY_SPIN_PAUSE_MS,
+  POLY_SPIN_STAGGER_MS,
+} from '../lib/activityTimings'
 
 // ---- Shape type ----
 export type ActivityShape = 'octahedron' | 'cube' | 'tetrahedron'
@@ -338,20 +348,25 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   useEffect(() => {
     if (!isDecodeAnimation) return
     if (phase === 'idle') return
-    const ms = (phase === 'returning' ? 1000 : 950) / speed
+    // Safety net slightly longer than the event-driven path (transitionend
+    // on the last shape + the inter-phase pause), so the event path wins
+    // under normal conditions. Derived from the shared constants.
+    const ms = (phase === 'returning'
+      ? POLY_RETURN_MS + (POLY_DEFAULT_COUNT - 1) * POLY_RETURN_STAGGER_MS + POLY_RETURN_PAUSE_MS + 40
+      : POLY_SPIN_MS + (POLY_DEFAULT_COUNT - 1) * POLY_SPIN_STAGGER_MS + POLY_SPIN_PAUSE_MS + 70) / speed
     fallbackRef.current = setTimeout(() => {
       if (phase === 'spinning') {
         pauseRef.current = setTimeout(() => {
           setPhase('returning')
           setRotations(null)
-        }, 80 / speed)
+        }, POLY_SPIN_PAUSE_MS / speed)
       } else if (phase === 'returning') {
         if (activeRef.current) {
           pauseRef.current = setTimeout(() => {
             setQuadrantIndex((q) => (q + 1) % 4)
             setPhase('spinning')
             setRotations(randomTargets(count).map(t => ({ x: base.x + t.x, y: base.y + t.y })))
-          }, 120 / speed)
+          }, POLY_RETURN_PAUSE_MS / speed)
         } else {
           setPhase('idle')
           setQuadrantIndex(0)
@@ -369,14 +384,14 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       pauseRef.current = setTimeout(() => {
         setPhase('returning')
         setRotations(null)
-      }, 80 / speed)
+      }, POLY_SPIN_PAUSE_MS / speed)
     } else if (phase === 'returning') {
       if (activeRef.current) {
         pauseRef.current = setTimeout(() => {
           setQuadrantIndex((q) => (q + 1) % 4)
           setPhase('spinning')
           setRotations(randomTargets(count).map(t => ({ x: base.x + t.x, y: base.y + t.y })))
-        }, 120 / speed)
+        }, POLY_RETURN_PAUSE_MS / speed)
       } else {
         setPhase('idle')
         setQuadrantIndex(0)
@@ -415,8 +430,8 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
     >
       {Array.from({ length: count }, (_, i) => {
         const r = rotations?.[i] ?? resting[i]
-        const dur = (phase === 'spinning' ? 0.6 : phase === 'returning' ? 0.7 : 0.5) / speed
-        const del = (phase === 'spinning' ? i * 50 : phase === 'returning' ? i * 35 : 0) / speed
+        const dur = (phase === 'spinning' ? POLY_SPIN_MS : phase === 'returning' ? POLY_RETURN_MS : POLY_IDLE_MS) / speed / 1000
+        const del = (phase === 'spinning' ? i * POLY_SPIN_STAGGER_MS : phase === 'returning' ? i * POLY_RETURN_STAGGER_MS : 0) / speed
         if (animation === 'prefill') {
           const wobbleX = 2.5 + (i % 3) * 0.75
           const wobbleZ = 1.4 + (i % 2) * 0.7

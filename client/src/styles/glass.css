@@ -494,6 +494,57 @@ body::before {
   }
 }
 
+/*
+ * Five Beats — tool-call activity indicator (see components/Beats.tsx).
+ * Five squares, each an LED with three states: off, partial, full.
+ * One beat (var(--beat-cycle), default = one polyhedron decode pulse):
+ * the partial fill sweeps left→right, holds, drains left→right — 12
+ * steps, so the wave layer's partial window is the first 50 % of the
+ * cycle and each square is phase-shifted by 1/12 of a cycle (a
+ * negative animation delay of i/12 − 1 cycles).
+ * The marker layer runs a 5-beat rotation: opaque for 20 % (its own
+ * beat), off for the rest, shifted by i − 5 beats. It sits above the
+ * wave layer, so the marker square stays fully opaque while the wave
+ * passes through it. Both layers animate opacity only — no layout, no
+ * movement. The hard 49.99/50 and 19.99/20 stops render as LED-like
+ * steps rather than ramps.
+ */
+.beat-sq {
+  position: relative;
+  border: 1px solid;
+}
+.beats .beat-sq > i {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+  opacity: 0;
+}
+.beats .beat-sq > .beat-wave-layer {
+  animation: beat-wave var(--beat-cycle) linear infinite;
+}
+.beats .beat-sq > .beat-marker-layer {
+  z-index: 1;
+  animation: beat-marker calc(var(--beat-cycle) * 5) linear infinite;
+}
+@keyframes beat-wave {
+  0% { opacity: var(--beat-partial); }
+  49.99% { opacity: var(--beat-partial); }
+  50% { opacity: 0; }
+  100% { opacity: 0; }
+}
+@keyframes beat-marker {
+  0% { opacity: 1; }
+  19.99% { opacity: 1; }
+  20% { opacity: 0; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beats .beat-sq > i { animation: none; }
+  .beats .beat-sq > .beat-wave-layer { opacity: var(--beat-partial); }
+  .beats .beat-sq:first-child > .beat-marker-layer { opacity: 1; }
+}
+
 /* Slide-up drawer animation */
 @keyframes slideUp {
   from {

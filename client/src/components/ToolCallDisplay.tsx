@@ -4,6 +4,7 @@ import type { ToolStatus } from "../api/client";
 import { DiffView } from "./ui/DiffView";
 import { UserImage } from "./UserImage";
 import { ToolIcon, type ToolIconName } from "./ToolIcons";
+import { Beats } from "./Beats";
 
 const statusColors = {
   running: "border-yellow-400/20 bg-yellow-500/5",
@@ -12,11 +13,7 @@ const statusColors = {
 };
 
 const statusIcons = {
-  running: (
-    <svg className="animate-spin shrink-0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  ),
+  running: <Beats />,
   done: (
     <svg className="shrink-0 text-emerald-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12" />
