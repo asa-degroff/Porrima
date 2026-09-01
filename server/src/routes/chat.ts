@@ -3454,6 +3454,17 @@ async function handleChatStream(
           estimatedTokens,
           firstKeptSequence,
         })}\n\n`);
+
+        // The rebuild invalidates everything measured against the
+        // pre-compaction prompt. The resume loop intentionally skips
+        // resetAccumulators (the turn continues), so clear the resync-visible
+        // state by hand: a client attaching mid-resume would otherwise
+        // hydrate pre-compaction usage/progress and show the old context
+        // length until the first resumed iteration lands. state.finalUsage
+        // is re-set by the resume turn_end before any iteration event.
+        state.finalUsage = undefined;
+        lastIterationEvent = null;
+        lastModelProgressEvent = null;
       }
       // Compaction window closed (success or no-op) — resync no longer reports it.
       compactingActive = false;
@@ -3781,6 +3792,11 @@ async function handleChatStream(
               // the next pre-send estimate treats the compacted chat as still
               // near the old limit and immediately compacts again.
               clearPendingAssistantUsageAfterCompaction();
+              // Same staleness for resync snapshots: a client attaching
+              // between compaction and `done` must not hydrate the
+              // pre-compaction iteration/progress state.
+              lastIterationEvent = null;
+              lastModelProgressEvent = null;
 
               // Find the summary message that was inserted. Emit AFTER the
               // systemPrompt rebuild so the estimate reflects the prompt the

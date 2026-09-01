@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  computePrefillProgress,
   estimatePromptTokensForProgress,
   promptWorkTokens,
   readProcessedTokens,
@@ -108,39 +109,24 @@ describe("prefill progress computation", () => {
   function simulateProgressPolls(
     slotData: { processedTokens: number; promptTokens: number; cachedPromptTokens?: number }[],
     estimatedPromptTokens: number | undefined,
-  ): { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] {
-    const results: { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] = [];
+  ): { processedTokens?: number; promptTokens?: number; progress?: number }[] {
+    const results: { processedTokens?: number; promptTokens?: number; progress?: number }[] = [];
     let firstProcessedTokens: number | undefined;
 
-    for (const { processedTokens: raw, promptTokens: rawPrompt, cachedPromptTokens } of slotData) {
+    for (const { processedTokens: raw, promptTokens: slotPromptTokens, cachedPromptTokens } of slotData) {
       // Mimics startLlamaPrefillMonitor: firstProcessedTokens is set BEFORE
       // computing effective delta, so first poll gives delta = 0.
       if (firstProcessedTokens === undefined) {
         firstProcessedTokens = raw;
       }
 
-      // Denominator: stable estimate, adjusted by cached tokens when available
-      // so it represents actual work remaining (uncached suffix).
-      const effectivePromptTokens = estimatedPromptTokens != null
-        ? (cachedPromptTokens != null
-            ? Math.max(1, estimatedPromptTokens - cachedPromptTokens)
-            : estimatedPromptTokens)
-        : rawPrompt;
-
-      // Delta from first observed value (mimics startLlamaPrefillMonitor baseline tracking)
-      const effectiveProcessedTokens = raw !== undefined && firstProcessedTokens !== undefined
-        ? Math.max(0, raw - firstProcessedTokens)
-        : raw;
-
-      const progress = effectiveProcessedTokens !== undefined && effectivePromptTokens !== undefined && effectivePromptTokens > 0
-        ? Math.max(0, Math.min(1, effectiveProcessedTokens / effectivePromptTokens))
-        : undefined;
-
-      results.push({
-        processedTokens: effectiveProcessedTokens,
-        promptTokens: effectivePromptTokens,
-        progress,
-      });
+      results.push(computePrefillProgress({
+        rawProcessedTokens: raw,
+        slotPromptTokens,
+        cachedPromptTokens,
+        estimatedPromptTokens,
+        firstProcessedTokens,
+      }));
     }
 
     return results;
@@ -292,6 +278,54 @@ describe("prefill progress computation", () => {
     // Progress reaches ~65% when actual prefill completes,
     // then transitions to decode phase — much better than always 100%
   });
+
+  it("prefers the slot-reported total over the estimate when it is ahead of the processed count", () => {
+    // The estimate undershot (80K vs a real 88.8K prompt). Once the slot
+    // reports the true total, it becomes the denominator — progress stays
+    // honest instead of pinning at 100% while the estimate is overtaken.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 0, promptTokens: 88816 },
+        { processedTokens: 45000, promptTokens: 88816 },
+        { processedTokens: 88816, promptTokens: 88816 },
+      ],
+      80638, // pre-request char estimate (too low)
+    );
+
+    expect(polls[0].promptTokens).toBe(88816);
+    expect(polls[1].promptTokens).toBe(88816);
+    expect(polls[1].progress).toBeCloseTo(45000 / 88816, 2);
+    // Final poll: slot total equals processed (not strictly ahead) so it is
+    // no longer trustworthy, but the estimate floor keeps the ratio at 1.0
+    // instead of overshooting.
+    expect(polls[2].processedTokens).toBe(88816);
+    expect(polls[2].promptTokens).toBeGreaterThanOrEqual(88816);
+    expect(polls[2].progress).toBeCloseTo(1.0);
+  });
+
+  it("floors the denominator at the processed delta when the estimate undershoots", () => {
+    // No slot total available (build reports nothing during prefill) and the
+    // estimate is 20% low. Without the floor, processed runs past the
+    // denominator and the UI renders "processed > prompt" with progress
+    // pinned at 100%; with it, the denominator tracks the proven minimum.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 0, promptTokens: 0 },
+        { processedTokens: 9000, promptTokens: 0 },
+        { processedTokens: 12000, promptTokens: 0 },
+      ],
+      10000, // estimate; actual prompt turns out to be 12000
+    );
+
+    expect(polls[0].promptTokens).toBe(10000);
+    expect(polls[1].promptTokens).toBe(10000);
+    expect(polls[1].progress).toBeCloseTo(0.9);
+
+    // Processed crossed the estimate: denominator is floored at processed,
+    // so promptTokens >= processedTokens always holds.
+    expect(polls[2].promptTokens).toBe(12000);
+    expect(polls[2].progress).toBeCloseTo(1.0);
+  });
 });
 
 describe("buildOpenAICompatChatBody", () => {
@@ -393,9 +427,29 @@ describe("extractSlotProgress", () => {
     expect(snapshot).not.toBeNull();
     expect(snapshot!.processedTokens).toBe(2048);
     expect(snapshot!.fullPromptTokens).toBe(8192);
+    expect(snapshot!.slotReportedPromptTokens).toBe(8192);
     expect(snapshot!.cachedPromptTokens).toBe(4096);
     // promptTokens = promptWorkTokens(8192, 4096) = 4096
     expect(snapshot!.promptTokens).toBe(4096);
+  });
+
+  it("keeps slotReportedPromptTokens undefined when the slot reports no total", () => {
+    // fullPromptTokens falls back to the pre-request estimate for cache-state
+    // heuristics, but the reported-only field must stay undefined so the
+    // progress math never mistakes the estimate for a server measurement.
+    const payload = [
+      {
+        id: 0,
+        is_processing: true,
+        n_prompt_tokens: 0,
+        n_prompt_tokens_processed: 5477,
+      },
+    ];
+    const snapshot = extractSlotProgress(payload, undefined, 10000);
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.fullPromptTokens).toBe(10000);
+    expect(snapshot!.slotReportedPromptTokens).toBeUndefined();
   });
 
   it("selects the slot with the most processed tokens when no preferred slot", () => {

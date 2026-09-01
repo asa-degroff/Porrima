@@ -1292,6 +1292,17 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
                     : m
                 );
               }
+              // Mirror the server's stale-usage clear (truncateChatHistory):
+              // usage on retained rows was measured against the pre-compaction
+              // prompt. This path skips the full reload, so without clearing
+              // it here the token indicator's message scan finds those old
+              // counts after the summary and shows the pre-compaction length
+              // until the first resumed iteration event lands.
+              bg.messages = bg.messages.map((m) =>
+                m.role === "assistant" && !m._outOfContext && m.usage
+                  ? { ...m, usage: undefined }
+                  : m
+              );
               // Splice the summary where the server placed it — before the
               // first kept row — not at the end. Appending left the card (and
               // the "In context" divider it drives) inside the retained tail

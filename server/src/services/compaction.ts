@@ -950,9 +950,17 @@ export async function truncateBeforeSend(
   // thinking, tool calls, or tool results on system deltas).
   const icEstimates = icIndices.map((idx) => estimateMessageContentTokens(messages[idx]));
 
-  // Apply scaling factor for accurate estimates
+  // Apply scaling factor for accurate estimates. The denominator covers the
+  // same scope as the planning value (system prompt + tool schemas + framing
+  // + message content) — a partial denominator let the tool-schema share of
+  // the actual prompt masquerade as char-estimate error and inflated the
+  // scale factor (the same inconsistency truncateChatHistory fixed with
+  // charEstimateFull).
   const messageContentTokens = icEstimates.reduce((s, t) => s + t, 0);
-  const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
+  const charEstimateTotal = estimateTokens(systemPrompt) +
+    estimateToolSchemaTokens(tools) +
+    icIndices.length * MESSAGE_FRAMING_TOKENS +
+    messageContentTokens;
   const planningTokens = charSafetyExceeded ? estimatedTokens : (hardCapExceeded ? hardCapTokens : displayTokens);
   // The scale factor is a char-vs-actual correction (~0.8-1.3 in steady
   // state). An unbounded ratio means the planner and the char estimate
@@ -964,7 +972,11 @@ export async function truncateBeforeSend(
     console.warn(`[compaction] scaleFactor clamped ${rawScaleFactor.toFixed(2)} -> ${scaleFactor.toFixed(2)} (estimator divergence, chat=${chat.id})`);
   }
   const scaledEstimates = icEstimates.map((t) => Math.ceil(t * scaleFactor));
-  const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
+  // Tool schemas ride along on every request but appear in no message, so the
+  // retention budget must carry them as overhead too — otherwise the kept
+  // tail plus schemas lands a full schema-cost above the target and the next
+  // turn re-triggers compaction immediately.
+  const overheadTokens = Math.ceil((estimateTokens(systemPrompt) + estimateToolSchemaTokens(tools)) * scaleFactor);
 
   // Degenerate case: the fixed overhead (system prompt + tool schemas,
   // scaled) alone exceeds the 30% target. Compaction cannot make overhead
@@ -2036,7 +2048,11 @@ export async function truncateChatHistory(
     if (scaleFactor !== rawScale) {
       console.warn(`[compaction] scaleFactor clamped ${rawScale.toFixed(2)} -> ${scaleFactor.toFixed(2)} (estimator divergence, chat=${chat.id})`);
     }
-    overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
+    // Tool schemas ride along on every request but appear in no message, so
+    // the retention budget must carry them as overhead too — otherwise the
+    // kept tail plus schemas lands a full schema-cost above the target and
+    // the next turn re-triggers compaction immediately.
+    overheadTokens = Math.ceil((estimateTokens(systemPrompt) + estimateToolSchemaTokens(tools)) * scaleFactor);
     effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
   }
 

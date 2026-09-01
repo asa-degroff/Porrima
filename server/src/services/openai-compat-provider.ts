@@ -505,6 +505,10 @@ interface SlotProgressSnapshot {
   processedTokens?: number;
   promptTokens?: number;
   fullPromptTokens?: number;
+  /** Prompt total reported by the slot itself, WITHOUT the pre-request
+   *  estimate fallback — undefined when the slot reports nothing. Lets the
+   *  monitor prefer authoritative server totals over the char estimate. */
+  slotReportedPromptTokens?: number;
   cachedPromptTokens?: number;
   confidence: ModelProgressEvent["confidence"];
 }
@@ -529,6 +533,7 @@ export function extractSlotProgress(
       processing: isSlotProcessing(slot),
       processedTokens: readProcessedTokens(slot),
       fullPromptTokens: readPromptTokens(slot, fallbackPromptTokens),
+      slotReportedPromptTokens: readPromptTokens(slot),
       cachedPromptTokens: readPromptCacheTokens(slot),
     }))
     .filter((candidate) => candidate.processing);
@@ -547,9 +552,84 @@ export function extractSlotProgress(
     processedTokens: selected.processedTokens,
     promptTokens: promptWorkTokens(selected.fullPromptTokens, selected.cachedPromptTokens),
     fullPromptTokens: selected.fullPromptTokens,
+    slotReportedPromptTokens: selected.slotReportedPromptTokens,
     cachedPromptTokens: selected.cachedPromptTokens,
     confidence: preferredSlotId !== undefined && selected.slotId === preferredSlotId ? "matched-slot" : "inferred-active-slot",
   };
+}
+
+export interface PrefillProgressInput {
+  /** Raw processed-token count from the slot (may include cached context
+   *  depending on the field's semantics — the baseline handles the offset). */
+  rawProcessedTokens?: number;
+  /** Slot-reported prompt total, without the estimate fallback. */
+  slotPromptTokens?: number;
+  cachedPromptTokens?: number;
+  /** Pre-request char-based estimate (stable for the request's lifetime). */
+  estimatedPromptTokens?: number;
+  /** First observed raw processed count (baseline for the delta). */
+  firstProcessedTokens?: number;
+}
+
+export interface PrefillProgress {
+  processedTokens?: number;
+  promptTokens?: number;
+  progress?: number;
+}
+
+/**
+ * Compute prefill progress from a slot snapshot.
+ *
+ * Denominator preference:
+ *  1. Slot-reported prompt total — authoritative, but only when it is
+ *     STRICTLY AHEAD of the processed count. Some llama.cpp builds report
+ *     n_prompt_tokens growing in lockstep with n_prompt_tokens_processed
+ *     during prefill; trusting that value divides a number by itself and
+ *     always shows 100%.
+ *  2. The pre-request estimate (stable, minus cached tokens when known).
+ *  3. Whatever the slot reports (degraded, no estimate available).
+ *
+ * The denominator is then floored at the processed delta: processed tokens
+ * are an actual count, so the true prompt cannot be smaller. Without the
+ * floor an underestimated denominator lets the ratio blow past 100% and the
+ * UI render "processed > prompt".
+ */
+export function computePrefillProgress(input: PrefillProgressInput): PrefillProgress {
+  const { rawProcessedTokens, slotPromptTokens, cachedPromptTokens, estimatedPromptTokens, firstProcessedTokens } = input;
+
+  const processedTokens = rawProcessedTokens !== undefined && firstProcessedTokens !== undefined
+    ? Math.max(0, rawProcessedTokens - firstProcessedTokens)
+    : rawProcessedTokens;
+
+  const slotTotalTrustworthy =
+    slotPromptTokens !== undefined &&
+    rawProcessedTokens !== undefined &&
+    slotPromptTokens > rawProcessedTokens;
+
+  let promptTokens: number | undefined;
+  if (slotTotalTrustworthy) {
+    promptTokens = promptWorkTokens(slotPromptTokens, cachedPromptTokens);
+  } else if (estimatedPromptTokens != null) {
+    promptTokens = cachedPromptTokens != null
+      ? Math.max(1, estimatedPromptTokens - Math.min(cachedPromptTokens, estimatedPromptTokens))
+      : estimatedPromptTokens;
+  } else {
+    promptTokens = slotPromptTokens;
+  }
+
+  if (
+    promptTokens !== undefined &&
+    processedTokens !== undefined &&
+    processedTokens > promptTokens
+  ) {
+    promptTokens = processedTokens;
+  }
+
+  const progress = processedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
+    ? clampRatio(processedTokens / promptTokens)
+    : undefined;
+
+  return { processedTokens, promptTokens, progress };
 }
 
 function estimateRemainingMs(input: {
@@ -815,37 +895,26 @@ function startLlamaPrefillMonitor(input: {
               );
             }
 
-            // Use the pre-computed estimated prompt tokens as the STABLE
-            // denominator for progress. llama.cpp's /slots endpoint may report
-            // n_prompt_tokens that grows during prefill (matching
-            // n_prompt_tokens_processed), which makes both raw numerator
-            // and denominator track the same value and always show 100%.
-            // The estimate is computed before the request starts and doesn't
-            // change during prefill, giving a correct progress ratio.
-            // When cached token count is available, subtract it from the
-            // estimate so the denominator represents actual work remaining
-            // (the uncached suffix), not total prompt size. Otherwise the
-            // delta numerator (only newly processed tokens) divides by a
-            // too-large denominator and the bar caps below 100% on warm caches.
-            const effectivePromptTokens = estimatedPromptTokens != null
-              ? (snapshot.cachedPromptTokens != null
-                  ? Math.max(1, estimatedPromptTokens - snapshot.cachedPromptTokens)
-                  : estimatedPromptTokens)
-              : rawPromptTokens;
-
-            // Compute effective processed tokens as a delta from the first
-            // observed value. This correctly handles both:
-            // - n_prompt_tokens_processed: starts at ~0 and grows to total
-            // - n_tokens/n_past fallback: starts at cached context size
-            // Without baseline subtraction, the n_tokens fallback would
-            // include previously cached tokens and overcount progress.
-            const effectiveProcessedTokens = rawProcessedTokens !== undefined && firstProcessedTokens !== undefined
-              ? Math.max(0, rawProcessedTokens - firstProcessedTokens)
-              : rawProcessedTokens;
-
-            const progress = effectiveProcessedTokens !== undefined && effectivePromptTokens !== undefined && effectivePromptTokens > 0
-              ? clampRatio(effectiveProcessedTokens / effectivePromptTokens)
-              : undefined;
+            // Denominator preference (see computePrefillProgress): the slot's
+            // own prompt total when it is trustworthy (strictly ahead of the
+            // processed count — some builds report n_prompt_tokens growing in
+            // lockstep with n_prompt_tokens_processed, which would divide a
+            // number by itself and always show 100%), otherwise the stable
+            // pre-request estimate. Cached tokens come off either one so the
+            // denominator is the uncached work, matching the delta numerator;
+            // without that the bar caps below 100% on warm caches. The delta
+            // baseline handles both n_prompt_tokens_processed (starts ~0) and
+            // the n_tokens/n_past fallback (starts at cached context size).
+            // The denominator is floored at the processed delta so an
+            // underestimated total can never push progress past 100%.
+            const { processedTokens: effectiveProcessedTokens, promptTokens: effectivePromptTokens, progress } =
+              computePrefillProgress({
+                rawProcessedTokens,
+                slotPromptTokens: snapshot.slotReportedPromptTokens,
+                cachedPromptTokens: snapshot.cachedPromptTokens,
+                estimatedPromptTokens,
+                firstProcessedTokens,
+              });
             emit({
               phase: "prefill",
               modelId,

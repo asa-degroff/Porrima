@@ -58,8 +58,10 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
   const percent = typeof progress.progress === "number"
     ? Math.round(progress.progress * 100)
     : undefined;
+  // The server floors the denominator at the processed count, but clamp here
+  // too so a stale/overshot event can never render "processed > prompt".
   const tokenText = progress.processedTokens !== undefined && progress.promptTokens !== undefined
-    ? `${formatProgressNumber(progress.processedTokens)} / ${formatProgressNumber(progress.promptTokens)}`
+    ? `${formatProgressNumber(Math.min(progress.processedTokens, progress.promptTokens))} / ${formatProgressNumber(progress.promptTokens)}`
     : progress.promptTokens !== undefined
       ? `~${formatProgressNumber(progress.promptTokens)} tokens`
       : null;
