@@ -75,6 +75,13 @@ const gracefulShutdown = async () => {
   } catch {
     // Non-fatal
   }
+  try {
+    const { closeAllBrowserSessions } = await import("./services/browser-session.js");
+    await closeAllBrowserSessions();
+    console.log("[shutdown] Browser sessions closed");
+  } catch {
+    // Non-fatal
+  }
   process.exit(0);
 };
 process.on("SIGTERM", gracefulShutdown);

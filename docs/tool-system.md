@@ -11,6 +11,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Memory blocks**: `create_memory_block`, `update_memory_block`, `read_memory_block`, `list_memory_blocks`, `get_block_history` — structured knowledge documents (see [memory-blocks.md](memory-blocks.md))
 - **Workspace tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`, `run_python`, `read_pdf`. They share the same local/SSH workspace adapter, path policy, and cancellation signal.
 - **Web tools**: `web_search`, `web_fetch` — provider-backed web search (Brave, Exa, Tavily) plus rendered page fetch. Large fetches are paginated through `web_fetch` offsets, not server-local file paths.
+- **Browser tools**: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot` — per-chat headless Chrome session (puppeteer-core). Snapshots assign `[eN]` refs to interactive elements; refs are invalidated by navigation and every action, so re-snapshot before further interaction. Runs sequentially (never parallelized), auto-dismisses page dialogs, and is closed on chat deletion and server shutdown.
 - **Artifact tools**: `create_artifact`, `update_artifact`. HTML guidance (including p5 instance-mode checks) is emitted as result-side lint warnings instead of repeated in the tool schema.
 - **Automation tools**: `schedule_reminder`, `list_automations`, `update_automation` (interactive agent chats only).
 - **Skill tools**: `list_skills`, `install_skill`, `remove_skill` (interactive agent chats only).

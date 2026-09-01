@@ -1,3 +1,4 @@
+import { closeBrowserSession } from "./browser-session.js";
 import { cancelQueuedWarms } from "./cache-warm-queue.js";
 import { endLiveStream, liveStreams } from "./live-streams.js";
 import { cancelImmediateExtractionQueue, markChatInactive } from "./memory-extraction.js";
@@ -23,4 +24,5 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   cancelImmediateExtractionQueue(chatId);
   resetMemoryContext(chatId);
   markChatInactive(chatId);
+  await closeBrowserSession(chatId).catch(() => {});
 }

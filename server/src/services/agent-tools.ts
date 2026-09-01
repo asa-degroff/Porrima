@@ -4,6 +4,7 @@ import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
+import { BROWSER_TOOLS, executeBrowserTool } from "./browser-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
 import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
 import { formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
@@ -335,6 +336,7 @@ const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
 const SEQUENTIAL_TOOL_NAMES = new Set([
   "save_memory", "create_memory_block", "update_memory_block", "create_notebook_entry",
   "write_file", "edit_file", "bash", "run_python", "web_fetch",
+  "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot",
   "create_artifact", "update_artifact", "ask_user",
   "schedule_reminder", "update_automation", "install_skill", "remove_skill",
 ]);
@@ -345,7 +347,7 @@ function toolIsAvailable(name: string, chatType?: string): boolean {
 
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...WEB_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
+  const allTools = [...MEMORY_TOOLS, ...WEB_TOOLS, ...BROWSER_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
   return allTools.filter((tool) => toolIsAvailable(tool.name, chatType)).map(t => ({ name: t.name, description: t.description }));
 }
 
@@ -408,6 +410,18 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       execute: async (toolCallId, params, signal) => {
         const args = params as Record<string, any>;
         return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args), signal), tool.name);
+      },
+    });
+  }
+
+  // Browser tools
+  for (const tool of BROWSER_TOOLS) {
+    tools.push({
+      ...tool,
+      label: tool.name,
+      execute: async (toolCallId, params, signal) => {
+        const args = params as Record<string, any>;
+        return wrapResult(await executeBrowserTool(makeToolCall(toolCallId, tool.name, args), chatId, signal), tool.name);
       },
     });
   }
