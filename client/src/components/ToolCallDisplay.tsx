@@ -170,8 +170,8 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
             >
               <polyline points="6 9 12 15 18 9" />
             </svg>
-            <span className="text-[10px] text-white/30 font-medium shrink-0">
-              call
+            <span className="text-[10px] text-white/40 font-medium shrink-0">
+              Call
             </span>
             {callSummary && (
               <span className="text-xs text-white/40 truncate min-w-0 flex-1 font-mono">
