@@ -336,7 +336,7 @@ const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
 const SEQUENTIAL_TOOL_NAMES = new Set([
   "save_memory", "create_memory_block", "update_memory_block", "create_notebook_entry",
   "write_file", "edit_file", "bash", "run_python", "web_fetch",
-  "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot",
+  "browser_navigate", "browser_snapshot", "browser_click", "browser_hover", "browser_type", "browser_screenshot",
   "create_artifact", "update_artifact", "ask_user",
   "schedule_reminder", "update_automation", "install_skill", "remove_skill",
 ]);

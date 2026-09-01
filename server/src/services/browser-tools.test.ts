@@ -16,7 +16,7 @@ function call(name: string, args: Record<string, any>): ToolCall {
 }
 
 describe("browser tool registry", () => {
-  it("registers all five browser tools in sequential mode", () => {
+  it("registers all six browser tools in sequential mode", () => {
     const byName = new Map(getAgentTools("chat-1", effects).map((tool) => [tool.name, tool]));
     for (const name of BROWSER_TOOL_NAMES) {
       expect(byName.get(name)?.executionMode, name).toBe("sequential");
@@ -35,12 +35,14 @@ describe("browser tool registry", () => {
     const snapshotSchema = byName.get("browser_snapshot")!.parameters as any;
     const navSchema = byName.get("browser_navigate")!.parameters as any;
     const clickSchema = byName.get("browser_click")!.parameters as any;
+    const hoverSchema = byName.get("browser_hover")!.parameters as any;
 
     expect(snapshotSchema.properties.limit.maximum).toBe(300);
     expect(snapshotSchema.properties.limit.minimum).toBe(10);
     expect(navSchema.properties.timeout.minimum).toBe(5);
     expect(navSchema.properties.timeout.maximum).toBe(60);
     expect(clickSchema.properties.ref.type).toBe("integer");
+    expect(hoverSchema.properties.ref.type).toBe("integer");
   });
 
   it("keeps the combined browser schema compact", () => {
@@ -57,6 +59,11 @@ describe("browser tool registry", () => {
 
   it("rejects malformed refs without launching a browser", async () => {
     const result = await executeBrowserTool(call("browser_click", { ref: -3 }), "chat-1");
+    expect(result.isError).toBe(true);
+  });
+
+  it("rejects malformed hover refs without launching a browser", async () => {
+    const result = await executeBrowserTool(call("browser_hover", { ref: 0 }), "chat-1");
     expect(result.isError).toBe(true);
   });
 });

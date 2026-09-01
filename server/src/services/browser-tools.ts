@@ -5,8 +5,10 @@ import {
   snapshotPage,
   clickRef,
   typeIntoRef,
+  hoverRef,
   screenshotPage,
   drainDialogNotes,
+  formatElementLine,
   DEFAULT_VIEWPORT,
 } from "./browser-session.js";
 
@@ -39,6 +41,15 @@ const BROWSER_CLICK_TOOL: Tool = {
   }),
 };
 
+const BROWSER_HOVER_TOOL: Tool = {
+  name: "browser_hover",
+  description:
+    "Move the pointer over an element by its [eN] ref and leave it there — no click. Use for hover-driven UI (menus, popups, tooltips). The pointer stays until the next click/type/hover, and the hover may reveal elements — call browser_snapshot afterwards to get refs for what it revealed.",
+  parameters: Type.Object({
+    ref: Type.Integer({ description: "Element ref number (the N in [eN])" }),
+  }),
+};
+
 const BROWSER_TYPE_TOOL: Tool = {
   name: "browser_type",
   description:
@@ -63,6 +74,7 @@ export const BROWSER_TOOLS: Tool[] = [
   BROWSER_NAVIGATE_TOOL,
   BROWSER_SNAPSHOT_TOOL,
   BROWSER_CLICK_TOOL,
+  BROWSER_HOVER_TOOL,
   BROWSER_TYPE_TOOL,
   BROWSER_SCREENSHOT_TOOL,
 ];
@@ -83,6 +95,8 @@ export async function executeBrowserTool(
         return await executeSnapshot(toolCall.arguments, chatId);
       case "browser_click":
         return await executeClick(toolCall.arguments, chatId);
+      case "browser_hover":
+        return await executeHover(toolCall.arguments, chatId);
       case "browser_type":
         return await executeType(toolCall.arguments, chatId);
       case "browser_screenshot":
@@ -133,6 +147,20 @@ async function executeClick(args: Record<string, any>, chatId: string): Promise<
     lines.push("A new tab opened; it is now the active page.");
   }
   lines.push("The element refs are now stale — call browser_snapshot before further interaction.");
+  return { content: `${lines.join("\n")}${drainDialogNotes(session)}`, isError: false };
+}
+
+async function executeHover(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+  const ref = Number(args.ref);
+  if (!Number.isInteger(ref) || ref < 1) {
+    return { content: "browser_hover requires a positive integer ref from browser_snapshot.", isError: true };
+  }
+  const session = await getBrowserSession(chatId);
+  const { descriptor } = await hoverRef(session, ref);
+  const lines = [
+    `Pointer is over ${formatElementLine(descriptor)} and stays there until the next click/type/hover.`,
+    "Refs are stale — if the hover revealed elements, call browser_snapshot to get refs for them.",
+  ];
   return { content: `${lines.join("\n")}${drainDialogNotes(session)}`, isError: false };
 }
 

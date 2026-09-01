@@ -212,7 +212,7 @@ const WALKER_SRC = `() => {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) continue;
     const cs = getComputedStyle(el);
-    if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) === 0) continue;
+    if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) === 0 || cs.pointerEvents === "none") continue;
     const tag = el.tagName.toLowerCase();
     const text = clean(el.innerText).slice(0, 80);
     const name = clean(
@@ -258,7 +258,7 @@ export interface SnapshotResult {
   shown: number;
 }
 
-function formatElementLine(el: SnapshotElement): string {
+export function formatElementLine(el: SnapshotElement): string {
   const parts = [`[e${el.ref}] ${el.role}`];
   if (el.name) parts.push(`"${el.name}"`);
   if (el.value) parts.push(`value="${el.value}"`);
@@ -366,6 +366,22 @@ export async function typeIntoRef(session: BrowserSession, ref: number, text: st
   }
   touch(session);
   return { typed: formatElementLine(descriptor), submitted: submit };
+}
+
+export async function hoverRef(session: BrowserSession, ref: number): Promise<{ descriptor: SnapshotElement }> {
+	const { element, descriptor } = await resolveRef(session, ref);
+	await element.scrollIntoView().catch(() => {});
+	const box = await element.boundingBox().catch(() => null);
+	if (!box) {
+		throw new Error(`Ref e${ref} ("${descriptor.name || descriptor.role}") no longer resolves — the page likely changed. Call browser_snapshot to get fresh refs.`);
+	}
+	await session.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+	// The pointer stays where it is. Hover can reveal elements (menus, popups,
+	// tooltips), so the pre-hover ref map no longer describes the page —
+	// invalidate it like any other action.
+	session.refs.clear();
+	touch(session);
+	return { descriptor };
 }
 
 // --- Screenshot ---
