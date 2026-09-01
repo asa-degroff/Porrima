@@ -49,7 +49,14 @@ export const Beats = memo(function Beats({ size = 6, gap = 2, cycleMs = BEAT_CYC
   const hue = useActivityHue()
   const saturation = useActivitySaturation()
 
-  const fill = `hsl(${hue}, ${saturation}%, ${BEAT_FILL_LIGHTNESS}%)`
+  // Color syntax note: use the CSS Color 4 space syntax throughout
+  // (`hsl(H S% L% / A)`). The mixed legacy-comma + slash form
+  // (`hsl(H, S%, L% / A)`) is rejected by Chromium — the declaration is
+  // dropped at parse time, the border silently falls back to currentColor
+  // (white in the tool row), and the glow vanishes. Verified in headless
+  // Chromium 09-01 (computed border was rgba(255,255,255,0.6) = the row's
+  // text-white/60, box-shadow was "none").
+  const fill = `hsl(${hue} ${saturation}% ${BEAT_FILL_LIGHTNESS}%)`
   const style = {
     gap: `${gap}px`,
     '--beat-cycle': `${cycleMs}ms`,
@@ -72,7 +79,7 @@ export const Beats = memo(function Beats({ size = 6, gap = 2, cycleMs = BEAT_CYC
             // 30 % of the square, scaled with the user's corner-radius
             // preference (--radius-scale, set on <html>).
             borderRadius: `calc(${(size * 0.3).toFixed(2)}px * var(--radius-scale, 1))`,
-            borderColor: `hsl(${hue}, ${saturation}%, ${BEAT_FILL_LIGHTNESS}% / ${BEAT_OUTLINE_OPACITY})`,
+            borderColor: `hsl(${hue} ${saturation}% ${BEAT_FILL_LIGHTNESS}% / ${BEAT_OUTLINE_OPACITY})`,
           }}
         >
           <i
@@ -86,7 +93,7 @@ export const Beats = memo(function Beats({ size = 6, gap = 2, cycleMs = BEAT_CYC
             className="beat-marker-layer"
             style={{
               background: fill,
-              boxShadow: `0 0 ${Math.max(2, Math.round(size * 0.5))}px hsl(${hue}, ${saturation}%, ${BEAT_FILL_LIGHTNESS}% / 0.35)`,
+              boxShadow: `0 0 ${Math.max(2, Math.round(size * 0.5))}px hsl(${hue} ${saturation}% ${BEAT_FILL_LIGHTNESS}% / 0.35)`,
               animationDelay: `calc(var(--beat-cycle) * ${i - BEAT_BEATS_PER_ROTATION})`,
             }}
           />

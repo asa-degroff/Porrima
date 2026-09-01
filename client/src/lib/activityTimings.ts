@@ -39,8 +39,9 @@ export const BEAT_STEPS_PER_BEAT = 12
 export const BEAT_BEATS_PER_ROTATION = 5
 /** Opacity of the "partial" fill state (full = 1, off = 0). */
 export const BEAT_PARTIAL_OPACITY = 0.35
-/** Opacity of the always-visible square outline. */
-export const BEAT_OUTLINE_OPACITY = 0.45
+/** Opacity of the always-visible square outline. Kept low so the fill
+ *  states (partial 35%, full 100%) read clearly against it. */
+export const BEAT_OUTLINE_OPACITY = 0.3
 /** Lightness of the fill, matching the activity-color swatch in
  *  Settings so the strip shows the user's configured hue verbatim. */
 export const BEAT_FILL_LIGHTNESS = 55
