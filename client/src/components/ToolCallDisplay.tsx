@@ -413,12 +413,18 @@ function getToolIcon(name: string): ToolIconName {
     web_fetch: "web_fetch",
     web_search: "web_search",
     search_conversation: "search_conversation",
+    browser_navigate: "browser_navigate",
+    browser_snapshot: "browser_snapshot",
+    browser_click: "browser_click",
+    browser_hover: "browser_hover",
+    browser_type: "browser_type",
+    browser_screenshot: "browser_screenshot",
   };
 
   return svgTools[name] ?? "default";
 }
 
-const MONOSPACE_TOOLS = new Set(["bash", "read_file", "run_python", "list_files", "search_memory"]);
+const MONOSPACE_TOOLS = new Set(["bash", "read_file", "run_python", "list_files", "search_memory", "browser_snapshot"]);
 
 function isMonospaceOutput(name: string): boolean {
   return MONOSPACE_TOOLS.has(name);

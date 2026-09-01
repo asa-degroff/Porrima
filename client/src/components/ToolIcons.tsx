@@ -15,6 +15,12 @@ export type ToolIconName =
   | "web_fetch"
   | "web_search"
   | "search_conversation"
+  | "browser_navigate"
+  | "browser_snapshot"
+  | "browser_click"
+  | "browser_hover"
+  | "browser_type"
+  | "browser_screenshot"
   | "default";
 
 const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactElement> = {
@@ -122,6 +128,56 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
       <path d="M5 22V19H8A3 3 0 0 1 4 16V8A2 2 0 0 1 6 6H20A2 2 0 0 1 22 8V16A3 3 0 0 1 20 19H8Z" />
       <circle cx="13" cy="11" r="2.5" />
       <path d="m14.8 12.8 2.2 2.2" />
+    </svg>
+  ),
+  browser_navigate: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88" />
+    </svg>
+  ),
+  browser_snapshot: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 8h18" />
+      <path d="M5.5 11V9.5H7" />
+      <path d="M17 9.5h1.5V11" />
+      <path d="M18.5 16v1.5H17" />
+      <path d="M7 17.5H5.5V16" />
+      <circle cx="12" cy="13.5" r=".5" />
+    </svg>
+  ),
+  browser_screenshot: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
+  ),
+  browser_click: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M6 6l5.09 12.23 1.79-5.35 5.35-1.79Z" />
+      <path d="M4.9 4.9 3.2 3.2" />
+      <path d="M6 4.9V3.2" />
+      <path d="M4.9 6H3.2" />
+    </svg>
+  ),
+  browser_hover: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M6 6l5.09 12.23 1.79-5.35 5.35-1.79Z" />
+      <path d="M6 3.2A2.8 2.8 0 0 0 3.2 6" />
+      <path d="M6 1.6A4.4 4.4 0 0 0 1.6 6" />
+    </svg>
+  ),
+  browser_type: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="2" y="6" width="20" height="13" rx="2" />
+      <path d="M6 10h.01" />
+      <path d="M10 10h.01" />
+      <path d="M14 10h.01" />
+      <path d="M18 10h.01" />
+      <path d="M6 13.5h.01" />
+      <path d="M18 13.5h.01" />
+      <path d="M9 13.5h6" />
     </svg>
   ),
   default: (props) => (
