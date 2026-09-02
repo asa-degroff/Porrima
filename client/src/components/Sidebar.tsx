@@ -690,8 +690,7 @@ function SelectedProjectPanel({
             <PrefillActivityIcon paused={newChatBaselineQueued} />
           ) : (
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
+              <path d="M12 5v14M5 12h14" />
             </svg>
           )}
         </button>
@@ -1545,8 +1544,7 @@ export function Sidebar({
               aria-label="New project"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
+                <path d="M12 5v14M5 12h14" />
               </svg>
             </button>
           </div>
@@ -1695,8 +1693,7 @@ export function Sidebar({
                 <PrefillActivityIcon paused={newChatBaselineQueued} />
               ) : (
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
+                  <path d="M12 5v14M5 12h14" />
                 </svg>
               )}
             </button>
@@ -1770,8 +1767,7 @@ export function Sidebar({
               className="flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-blue-300/50 transition-colors hover:bg-blue-500/10 hover:text-blue-200 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
+                <path d="M12 5v14M5 12h14" />
               </svg>
             </button>
           </div>

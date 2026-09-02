@@ -209,7 +209,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
         <div className="absolute inset-0 bg-purple-500/10 border-2 border-dashed border-purple-400/40 flex items-center justify-center pointer-events-none z-10">
           <div className="text-center">
             <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-purple-400 mb-2">
-              <path d="M12 5v14" /><path d="M5 12h14" />
+              <path d="M12 5v14M5 12h14" />
             </svg>
             <span className="text-purple-300 text-sm">Drop images here</span>
           </div>
@@ -248,7 +248,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
           {images.length < MAX_IMAGES && (
             <label className="w-16 h-16 rounded-lg border border-dashed border-white/20 flex items-center justify-center text-white/30 hover:text-white/50 hover:border-white/40 transition-colors cursor-pointer">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" /><path d="M5 12h14" />
+                <path d="M12 5v14M5 12h14" />
               </svg>
               <input
                 ref={fileInputRef}
