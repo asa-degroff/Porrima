@@ -499,7 +499,6 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
               expandedLineage={expandedLineage}
               lineageData={lineageData}
               lineageLoading={lineageLoading}
-              onRunSynthesis={handleRunSynthesis}
               onSearch={handleMemorySearch}
               onSortChange={handleMemorySortChange}
               onDeleteMemory={handleDeleteMemory}
@@ -799,7 +798,6 @@ function MemoriesTab({
   expandedLineage,
   lineageData,
   lineageLoading,
-  onRunSynthesis,
   onSearch,
   onSortChange,
   onDeleteMemory,
@@ -821,7 +819,6 @@ function MemoriesTab({
   expandedLineage: string | null;
   lineageData: Record<string, MemoryLineage>;
   lineageLoading: string | null;
-  onRunSynthesis: () => void;
   onSearch: (query: string) => void;
   onSortChange: (sort: string) => void;
   onDeleteMemory: (id: string) => void;
@@ -838,18 +835,6 @@ function MemoriesTab({
           <span className="text-white/50">{memoryStatus.memoryCount} stored</span>
           <span className="text-white/50">Embedding: <span className={memoryStatus.embeddingModelAvailable ? "text-green-400/80" : "text-red-400/80"}>{memoryStatus.embeddingModelAvailable ? "✓" : "✗"}</span></span>
           <span className="text-white/50">Last synthesis: <span className="text-white/70">{memoryStatus.lastSynthesis ? new Date(memoryStatus.lastSynthesis).toLocaleDateString() : "Never"}</span></span>
-          <button
-            onClick={onRunSynthesis}
-            disabled={synthesisRunning || memoryStatus.memoryCount === 0}
-            className="ml-auto px-3 py-1 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed pressable"
-            style={{
-              backgroundColor: `rgba(var(--theme-primary-muted, 140 50 200), 0.15)`,
-              borderColor: `rgba(var(--theme-primary-border, 160 80 240), 0.25)`,
-              color: `rgba(var(--theme-primary-text, 190 130 255))`,
-            }}
-          >
-            {synthesisRunning ? "Running..." : "Run Synthesis"}
-          </button>
         </div>
       )}
 
