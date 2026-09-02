@@ -7,6 +7,7 @@ import {
   estimatePromptTokensForProgress,
   promptWorkTokens,
   readProcessedTokens,
+  readProcessedTokensWithSource,
   readPromptCacheTokens,
   readPromptTokens,
   extractSlotProgress,
@@ -67,6 +68,36 @@ describe("readProcessedTokens", () => {
   });
 });
 
+describe("readProcessedTokensWithSource", () => {
+  it("flags per-request processed fields as non-cumulative", () => {
+    const reading = readProcessedTokensWithSource({
+      n_prompt_tokens_processed: 302,
+      n_tokens: 8192,
+      n_past: 8192,
+    });
+
+    expect(reading.tokens).toBe(302);
+    expect(reading.cumulativeFallback).toBe(false);
+  });
+
+  it("flags the n_tokens/n_past fallback as cumulative", () => {
+    const reading = readProcessedTokensWithSource({
+      n_tokens: 4096,
+      n_prompt_tokens: 8192,
+    });
+
+    expect(reading.tokens).toBe(4096);
+    expect(reading.cumulativeFallback).toBe(true);
+  });
+
+  it("returns no tokens when the slot reports nothing", () => {
+    const reading = readProcessedTokensWithSource({});
+
+    expect(reading.tokens).toBeUndefined();
+    expect(reading.cumulativeFallback).toBe(false);
+  });
+});
+
 describe("readPromptTokens", () => {
   it("uses the fallback estimate when llama.cpp reports zero prompt tokens", () => {
     const promptTokens = readPromptTokens({
@@ -109,6 +140,7 @@ describe("prefill progress computation", () => {
   function simulateProgressPolls(
     slotData: { processedTokens: number; promptTokens: number; cachedPromptTokens?: number }[],
     estimatedPromptTokens: number | undefined,
+    opts: { exactPromptTokens?: number; useDeltaBaseline?: boolean } = {},
   ): { processedTokens?: number; promptTokens?: number; progress?: number }[] {
     const results: { processedTokens?: number; promptTokens?: number; progress?: number }[] = [];
     let firstProcessedTokens: number | undefined;
@@ -125,7 +157,9 @@ describe("prefill progress computation", () => {
         slotPromptTokens,
         cachedPromptTokens,
         estimatedPromptTokens,
+        exactPromptTokens: opts.exactPromptTokens,
         firstProcessedTokens,
+        useDeltaBaseline: opts.useDeltaBaseline,
       }));
     }
 
@@ -326,6 +360,92 @@ describe("prefill progress computation", () => {
     expect(polls[2].promptTokens).toBe(12000);
     expect(polls[2].progress).toBeCloseTo(1.0);
   });
+
+  it("keeps the denominator stable at the exact prompt count while the slot total grows in chunks", () => {
+    // Real llama.cpp behavior (observed on b10617): prefill runs in
+    // batch-sized chunks and n_prompt_tokens only reports the chunk frontier
+    // (42 → 4138 → 8234 → ... → 28714), with n_prompt_tokens_processed
+    // trailing one chunk behind. Without the exact count, the denominator
+    // grows every chunk and the ratio never settles. The exact
+    // /apply-template + /tokenize count is stable from the first poll, and
+    // the per-request processed field is used raw (no delta baseline), so
+    // progress starts at the true value and reaches exactly 100%.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 42, promptTokens: 4138 },
+        { processedTokens: 4138, promptTokens: 8234 },
+        { processedTokens: 8234, promptTokens: 12330 },
+        { processedTokens: 28714, promptTokens: 28714 },
+      ],
+      87000, // char estimate (deliberately far off for this content)
+      { exactPromptTokens: 28714, useDeltaBaseline: false },
+    );
+
+    for (const poll of polls) {
+      expect(poll.promptTokens).toBe(28714);
+    }
+    expect(polls[0].processedTokens).toBe(42);
+    expect(polls[0].progress).toBeCloseTo(42 / 28714, 4);
+    expect(polls[1].progress).toBeCloseTo(4138 / 28714, 3);
+    expect(polls[3].processedTokens).toBe(28714);
+    expect(polls[3].progress).toBeCloseTo(1.0);
+  });
+
+  it("does not undercount the numerator when the first poll lands mid-prefill", () => {
+    // The delta baseline subtracts the first observed count; with an exact
+    // denominator and a per-request processed field that starts at the
+    // request's own work, the raw count is the accurate numerator even when
+    // polling starts late.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 5000, promptTokens: 8234 },
+        { processedTokens: 12330, promptTokens: 16426 },
+      ],
+      10000,
+      { exactPromptTokens: 28714, useDeltaBaseline: false },
+    );
+
+    expect(polls[0].processedTokens).toBe(5000);
+    expect(polls[0].progress).toBeCloseTo(5000 / 28714, 3);
+    expect(polls[1].progress).toBeCloseTo(12330 / 28714, 3);
+  });
+
+  it("subtracts cached tokens from the exact denominator on warm prefills", () => {
+    // Warm request: the processed field counts only the uncached work, so
+    // the denominator must match. Progress reaches 100% when the suffix is
+    // done, not when the full prompt size is re-processed.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 0, promptTokens: 4138, cachedPromptTokens: 23142 },
+        { processedTokens: 468, promptTokens: 4138, cachedPromptTokens: 23142 },
+        { processedTokens: 937, promptTokens: 4138, cachedPromptTokens: 23142 },
+      ],
+      24079,
+      { exactPromptTokens: 24079, useDeltaBaseline: false },
+    );
+
+    expect(polls[0].promptTokens).toBe(937);
+    expect(polls[0].progress).toBeCloseTo(0);
+    expect(polls[1].progress).toBeCloseTo(468 / 937, 2);
+    expect(polls[2].progress).toBeCloseTo(1.0);
+  });
+
+  it("keeps the legacy estimate path untouched when no exact count is available", () => {
+    // Exact count failed (server busy / unsupported): the previous
+    // delta + estimate behavior still applies.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 4100, promptTokens: 4100 },
+        { processedTokens: 7000, promptTokens: 7000 },
+      ],
+      10000,
+    );
+
+    expect(polls[0].processedTokens).toBe(0);
+    expect(polls[0].promptTokens).toBe(10000);
+    expect(polls[1].processedTokens).toBe(2900);
+    expect(polls[1].promptTokens).toBe(10000);
+  });
 });
 
 describe("buildOpenAICompatChatBody", () => {
@@ -426,11 +546,28 @@ describe("extractSlotProgress", () => {
 
     expect(snapshot).not.toBeNull();
     expect(snapshot!.processedTokens).toBe(2048);
+    expect(snapshot!.processedCumulativeFallback).toBe(false);
     expect(snapshot!.fullPromptTokens).toBe(8192);
     expect(snapshot!.slotReportedPromptTokens).toBe(8192);
     expect(snapshot!.cachedPromptTokens).toBe(4096);
     // promptTokens = promptWorkTokens(8192, 4096) = 4096
     expect(snapshot!.promptTokens).toBe(4096);
+  });
+
+  it("surfaces the cumulative-fallback flag when only legacy fields are reported", () => {
+    const payload = [
+      {
+        id: 0,
+        is_processing: true,
+        n_tokens: 4096,
+        n_prompt_tokens: 10000,
+      },
+    ];
+    const snapshot = extractSlotProgress(payload, undefined, 10000);
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.processedTokens).toBe(4096);
+    expect(snapshot!.processedCumulativeFallback).toBe(true);
   });
 
   it("keeps slotReportedPromptTokens undefined when the slot reports no total", () => {

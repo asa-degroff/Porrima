@@ -178,7 +178,7 @@ export async function countLlamaTextTokens(
   baseUrl: string,
   modelId: string,
   text: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ExactTokenCountResult> {
   if (!text) return { tokens: 0, elapsedMs: 0, cached: true };
 
@@ -186,12 +186,14 @@ export async function countLlamaTextTokens(
   const cached = tokenCountCache.get(key);
   if (cached !== undefined) return { tokens: cached, elapsedMs: 0, cached: true };
 
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TOKENIZE_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   const started = Date.now();
   const res = await fetch(`${normalizeBaseUrl(baseUrl)}/tokenize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelId, content: text, add_special: false }),
-    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TOKENIZE_TIMEOUT_MS),
+    signal,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");

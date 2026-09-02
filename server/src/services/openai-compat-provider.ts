@@ -23,6 +23,7 @@ import { getLlamaChatLastRequestDigest } from "./llama-cache-residency.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
 import { recordContextObservation } from "./context-high-water.js";
+import { countLlamaTextTokens } from "./token-count.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -84,6 +85,10 @@ const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_PO
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS", 8_192);
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS", 2_048);
 const LLAMACPP_PROMPT_DEBUG = process.env.LLAMACPP_PROMPT_DEBUG !== "0";
+// /tokenize is CPU-only and fast (~1M tokens/s), but allow headroom for very
+// large contexts so the exact prefill count is rarely lost to a timeout. On
+// failure the monitor falls back to the char estimate.
+const LLAMACPP_PREFILL_EXACT_COUNT_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_EXACT_COUNT_TIMEOUT_MS", 15_000);
 
 const llamaStreamAgent = new UndiciAgent({
   headersTimeout: LLAMACPP_STREAM_HEADERS_TIMEOUT_MS,
@@ -455,8 +460,18 @@ function isSlotProcessing(slot: any): boolean {
   return state.includes("process") || state.includes("busy") || state === "1";
 }
 
-export function readProcessedTokens(slot: any): number | undefined {
-  return readNumberByKeys(slot, [
+export interface ProcessedTokensReading {
+  tokens?: number;
+  /** True when the count came from the slot's cumulative n_tokens/n_past
+   *  counters (legacy builds without per-request progress fields). Those
+   *  include previously cached context, so progress math must baseline them.
+   *  The per-request fields (n_prompt_tokens_processed family) count only the
+   *  current request's work and start near zero. */
+  cumulativeFallback: boolean;
+}
+
+export function readProcessedTokensWithSource(slot: any): ProcessedTokensReading {
+  const direct = readNumberByKeys(slot, [
     "n_prompt_tokens_processed",
     "prompt_tokens_processed",
     "processed_tokens",
@@ -465,12 +480,20 @@ export function readProcessedTokens(slot: any): number | undefined {
     "prompt_tokens_processed",
     "processed_tokens",
     "n_prompt_tokens_processed",
-  ]) ?? readNumberByKeys(slot, [
+  ]);
+  if (direct !== undefined) return { tokens: direct, cumulativeFallback: false };
+  const fallback = readNumberByKeys(slot, [
     "n_tokens",
     "n_past",
   ]) ?? readNumberByKeys(slot?.progress, [
     "n_tokens",
   ]);
+  if (fallback !== undefined) return { tokens: fallback, cumulativeFallback: true };
+  return { tokens: undefined, cumulativeFallback: false };
+}
+
+export function readProcessedTokens(slot: any): number | undefined {
+  return readProcessedTokensWithSource(slot).tokens;
 }
 
 export function readPromptTokens(slot: any, fallback?: number): number | undefined {
@@ -503,6 +526,9 @@ export function readPromptCacheTokens(slot: any): number | undefined {
 interface SlotProgressSnapshot {
   slotId?: number;
   processedTokens?: number;
+  /** True when processedTokens came from the cumulative n_tokens/n_past
+   *  fallback instead of a per-request processed field. */
+  processedCumulativeFallback?: boolean;
   promptTokens?: number;
   fullPromptTokens?: number;
   /** Prompt total reported by the slot itself, WITHOUT the pre-request
@@ -528,14 +554,18 @@ export function extractSlotProgress(
   if (!slots.length) return null;
 
   const candidates = slots
-    .map((slot) => ({
-      slotId: getSlotId(slot),
-      processing: isSlotProcessing(slot),
-      processedTokens: readProcessedTokens(slot),
-      fullPromptTokens: readPromptTokens(slot, fallbackPromptTokens),
-      slotReportedPromptTokens: readPromptTokens(slot),
-      cachedPromptTokens: readPromptCacheTokens(slot),
-    }))
+    .map((slot) => {
+      const processedReading = readProcessedTokensWithSource(slot);
+      return {
+        slotId: getSlotId(slot),
+        processing: isSlotProcessing(slot),
+        processedTokens: processedReading.tokens,
+        processedCumulativeFallback: processedReading.cumulativeFallback,
+        fullPromptTokens: readPromptTokens(slot, fallbackPromptTokens),
+        slotReportedPromptTokens: readPromptTokens(slot),
+        cachedPromptTokens: readPromptCacheTokens(slot),
+      };
+    })
     .filter((candidate) => candidate.processing);
 
   if (!candidates.length) return null;
@@ -550,6 +580,7 @@ export function extractSlotProgress(
   return {
     slotId: selected.slotId,
     processedTokens: selected.processedTokens,
+    processedCumulativeFallback: selected.processedCumulativeFallback,
     promptTokens: promptWorkTokens(selected.fullPromptTokens, selected.cachedPromptTokens),
     fullPromptTokens: selected.fullPromptTokens,
     slotReportedPromptTokens: selected.slotReportedPromptTokens,
@@ -567,8 +598,21 @@ export interface PrefillProgressInput {
   cachedPromptTokens?: number;
   /** Pre-request char-based estimate (stable for the request's lifetime). */
   estimatedPromptTokens?: number;
+  /** Exact prompt token count from /apply-template + /tokenize, taken before
+   *  dispatch. Authoritative and stable for the request's lifetime — unlike
+   *  the slot-reported total, which llama.cpp grows in batch-sized chunks
+   *  during prefill (each poll's n_prompt_tokens is only the frontier, not
+   *  the final total). */
+  exactPromptTokens?: number;
   /** First observed raw processed count (baseline for the delta). */
   firstProcessedTokens?: number;
+  /** When false, rawProcessedTokens is used as-is. Per-request processed
+   *  fields (n_prompt_tokens_processed family) count only the current
+   *  request's work, so no baseline is needed and subtracting the first poll
+   *  would undercount by whatever was processed before polling started.
+   *  Defaults to true: the cumulative n_tokens/n_past fallback needs the
+   *  delta to exclude previously cached context. */
+  useDeltaBaseline?: boolean;
 }
 
 export interface PrefillProgress {
@@ -581,23 +625,27 @@ export interface PrefillProgress {
  * Compute prefill progress from a slot snapshot.
  *
  * Denominator preference:
- *  1. Slot-reported prompt total — authoritative, but only when it is
- *     STRICTLY AHEAD of the processed count. Some llama.cpp builds report
- *     n_prompt_tokens growing in lockstep with n_prompt_tokens_processed
- *     during prefill; trusting that value divides a number by itself and
- *     always shows 100%.
- *  2. The pre-request estimate (stable, minus cached tokens when known).
- *  3. Whatever the slot reports (degraded, no estimate available).
+ *  1. The exact pre-request token count (/apply-template + /tokenize) —
+ *     authoritative and stable. This is the only reliable total: llama.cpp
+ *     grows the slot-reported n_prompt_tokens in batch-sized chunks during
+ *     prefill, so the slot value is a moving frontier until the last chunk.
+ *  2. Slot-reported prompt total — only when it is STRICTLY AHEAD of the
+ *     processed count AND no exact count is available. Some builds report
+ *     n_prompt_tokens growing in lockstep with n_prompt_tokens_processed;
+ *     trusting that value divides a number by itself and always shows 100%.
+ *  3. The pre-request estimate (stable, minus cached tokens when known).
+ *  4. Whatever the slot reports (degraded, no estimate available).
  *
- * The denominator is then floored at the processed delta: processed tokens
+ * The denominator is then floored at the processed count: processed tokens
  * are an actual count, so the true prompt cannot be smaller. Without the
  * floor an underestimated denominator lets the ratio blow past 100% and the
  * UI render "processed > prompt".
  */
 export function computePrefillProgress(input: PrefillProgressInput): PrefillProgress {
-  const { rawProcessedTokens, slotPromptTokens, cachedPromptTokens, estimatedPromptTokens, firstProcessedTokens } = input;
+  const { rawProcessedTokens, slotPromptTokens, cachedPromptTokens, estimatedPromptTokens, exactPromptTokens, firstProcessedTokens } = input;
+  const useDeltaBaseline = input.useDeltaBaseline !== false;
 
-  const processedTokens = rawProcessedTokens !== undefined && firstProcessedTokens !== undefined
+  const processedTokens = useDeltaBaseline && rawProcessedTokens !== undefined && firstProcessedTokens !== undefined
     ? Math.max(0, rawProcessedTokens - firstProcessedTokens)
     : rawProcessedTokens;
 
@@ -607,7 +655,11 @@ export function computePrefillProgress(input: PrefillProgressInput): PrefillProg
     slotPromptTokens > rawProcessedTokens;
 
   let promptTokens: number | undefined;
-  if (slotTotalTrustworthy) {
+  if (exactPromptTokens !== undefined) {
+    promptTokens = cachedPromptTokens != null
+      ? Math.max(1, exactPromptTokens - Math.min(cachedPromptTokens, exactPromptTokens))
+      : exactPromptTokens;
+  } else if (slotTotalTrustworthy) {
     promptTokens = promptWorkTokens(slotPromptTokens, cachedPromptTokens);
   } else if (estimatedPromptTokens != null) {
     promptTokens = cachedPromptTokens != null
@@ -791,6 +843,9 @@ function startLlamaPrefillMonitor(input: {
   modelId: string;
   slotId?: number;
   estimatedPromptTokens?: number;
+  /** Exact prompt token count (see computePrefillProgress). Stabilizes the
+   *  denominator across the whole prefill. */
+  exactPromptTokens?: number;
   containsImages?: boolean;
   onProgress?: ModelProgressCallback;
   signal?: AbortSignal;
@@ -801,7 +856,7 @@ function startLlamaPrefillMonitor(input: {
    *  authoritative and correct the lock once observed (see poll). */
   initialCacheState?: ModelProgressEvent["cacheState"];
 }): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState } = input;
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, exactPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState } = input;
   if (!onProgress) return () => {};
 
   let stopped = false;
@@ -895,25 +950,32 @@ function startLlamaPrefillMonitor(input: {
               );
             }
 
-            // Denominator preference (see computePrefillProgress): the slot's
+            // Denominator preference (see computePrefillProgress): the exact
+            // pre-request token count when available, otherwise the slot's
             // own prompt total when it is trustworthy (strictly ahead of the
-            // processed count — some builds report n_prompt_tokens growing in
-            // lockstep with n_prompt_tokens_processed, which would divide a
-            // number by itself and always show 100%), otherwise the stable
-            // pre-request estimate. Cached tokens come off either one so the
-            // denominator is the uncached work, matching the delta numerator;
-            // without that the bar caps below 100% on warm caches. The delta
-            // baseline handles both n_prompt_tokens_processed (starts ~0) and
-            // the n_tokens/n_past fallback (starts at cached context size).
-            // The denominator is floored at the processed delta so an
+            // processed count — llama.cpp grows n_prompt_tokens in
+            // batch-sized chunks during prefill, so the slot value is a
+            // moving frontier, not the final total), otherwise the stable
+            // char estimate. Cached tokens come off so the denominator is the
+            // uncached work, matching the processed count; without that the
+            // bar caps below 100% on warm caches. The delta baseline is only
+            // applied for the cumulative n_tokens/n_past fallback (which
+            // includes previously cached context) or when there is no exact
+            // total to anchor against; per-request processed fields already
+            // start at the request's own work, and subtracting the first poll
+            // would undercount by whatever was processed before polling
+            // began. The denominator is floored at the processed count so an
             // underestimated total can never push progress past 100%.
+            const useDeltaBaseline = exactPromptTokens === undefined || snapshot.processedCumulativeFallback === true;
             const { processedTokens: effectiveProcessedTokens, promptTokens: effectivePromptTokens, progress } =
               computePrefillProgress({
                 rawProcessedTokens,
                 slotPromptTokens: snapshot.slotReportedPromptTokens,
                 cachedPromptTokens: snapshot.cachedPromptTokens,
                 estimatedPromptTokens,
+                exactPromptTokens,
                 firstProcessedTokens,
+                useDeltaBaseline,
               });
             emit({
               phase: "prefill",
@@ -954,7 +1016,7 @@ function startLlamaPrefillMonitor(input: {
     modelId,
     baseUrl: normalizeBaseUrl(baseUrl),
     slotId,
-    promptTokens: estimatedPromptTokens,
+    promptTokens: exactPromptTokens ?? estimatedPromptTokens,
     elapsedMs: 0,
     cacheState: lockedCacheState,
     confidence: slotId !== undefined ? "matched-slot" : "unknown",
@@ -1664,28 +1726,52 @@ export const streamOpenAICompat = (
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
       const promptDebugChatId = getPromptDebugChatId(options);
-      if (LLAMACPP_PROMPT_DEBUG && promptDebugChatId) {
+      const onModelProgress = getModelProgressCallback(options);
+      const showIndicator = getShowIndicatorFromOptions(options);
+
+      // Render the outgoing prompt once. Prompt-cache debugging compares it
+      // against the resident KV prefix, and /tokenize turns it into the exact
+      // prefill length for the progress indicator — the slot-reported
+      // n_prompt_tokens grows in batch-sized chunks during prefill, so it
+      // cannot anchor the denominator. Image requests stay on the char
+      // estimate: vision tokens are injected by mtmd outside the rendered
+      // text, so a text-only count would undercount them.
+      let renderedPrompt: string | undefined;
+      const wantsExactCount = showIndicator !== false && !cacheMetadata.containsImages;
+      if ((LLAMACPP_PROMPT_DEBUG && promptDebugChatId) || wantsExactCount) {
         try {
-          const renderedPrompt = await renderPromptForDebug(model.baseUrl, body, options?.signal);
-          compareWithWarmPrompt({
-            chatId: promptDebugChatId,
-            modelId: model.id,
-            payloadDigest: cacheMetadata.requestDigest,
-            promptDigest: digestPromptText(renderedPrompt),
-            promptChars: renderedPrompt.length,
-            prompt: renderedPrompt,
-            messageCount: cacheMetadata.requestMessageCount,
-            requestChars: cacheMetadata.requestCharCount,
-          });
+          renderedPrompt = await renderPromptForDebug(model.baseUrl, body, options?.signal);
         } catch (err) {
           console.warn(
-            `[prompt-debug] chat=${promptDebugChatId} failed to render chat prompt:`,
+            `[prompt-debug] chat=${promptDebugChatId ?? "?"} failed to render chat prompt:`,
             err instanceof Error ? err.message : err,
           );
         }
       }
-      const onModelProgress = getModelProgressCallback(options);
-      const showIndicator = getShowIndicatorFromOptions(options);
+      if (LLAMACPP_PROMPT_DEBUG && promptDebugChatId && renderedPrompt) {
+        compareWithWarmPrompt({
+          chatId: promptDebugChatId,
+          modelId: model.id,
+          payloadDigest: cacheMetadata.requestDigest,
+          promptDigest: digestPromptText(renderedPrompt),
+          promptChars: renderedPrompt.length,
+          prompt: renderedPrompt,
+          messageCount: cacheMetadata.requestMessageCount,
+          requestChars: cacheMetadata.requestCharCount,
+        });
+      }
+      let exactPromptTokens: number | undefined;
+      if (wantsExactCount && renderedPrompt && !options?.signal?.aborted) {
+        try {
+          exactPromptTokens = (await countLlamaTextTokens(model.baseUrl, model.id, renderedPrompt, {
+            timeoutMs: LLAMACPP_PREFILL_EXACT_COUNT_TIMEOUT_MS,
+            signal: options?.signal,
+          })).tokens;
+        } catch {
+          // Busy server or unsupported endpoint — the char estimate still
+          // drives the indicator.
+        }
+      }
 
       // Three-state gating for the user-facing prefill progress indicator:
       //   true  — always show (first turns)
@@ -1710,6 +1796,7 @@ export const streamOpenAICompat = (
         modelId: model.id,
         slotId: cacheMetadata.slotId,
         estimatedPromptTokens: cacheMetadata.estimatedPromptTokens,
+        exactPromptTokens,
         containsImages: cacheMetadata.containsImages,
         onProgress: onModelProgress,
         signal: options?.signal,
