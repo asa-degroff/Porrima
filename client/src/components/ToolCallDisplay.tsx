@@ -136,8 +136,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
           Shown unconditionally — this is the whole point of the preview. */}
       {isPreview && preview && (
         <div className="border-t border-white/5 px-3 py-2">
-          <div className="text-[10px] text-white/30 mb-1.5 font-medium flex items-center gap-1.5">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400/60 animate-pulse" />
+          <div className="text-[10px] text-white/30 mb-1.5 font-medium">
             {preview.label}
           </div>
           <AutoFollowPre text={preview.text} />
