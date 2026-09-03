@@ -31,7 +31,7 @@ import { runEndOfTurnCompaction } from "../services/turn-compaction.js";
 import {
   evaluateTurnGuards,
   estimateContextPressure,
-  type PressureObservation,
+  type PressureEstimate,
 } from "../services/context-pressure.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, softResetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
@@ -2727,7 +2727,7 @@ async function handleChatStream(
           // reports its estimate through the sink; the pending record below
           // is built from the sink (gates applied there — after the
           // mid-turn guard has had its say).
-          const observation = { estimate: null as PressureObservation | null };
+          const observation = { estimate: null as PressureEstimate | null };
           const pressure = await estimateContextPressure({
             messages: chat.messages,
             systemPrompt,
@@ -2944,14 +2944,6 @@ async function handleChatStream(
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn && !state.strandedToolCall) {
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
     }
-
-    // NOTE (Aug 23): the end-of-turn compaction check moved BELOW the
-    // incomplete-tool-turn continuation, stranded-call recovery, and mid-turn
-    // compaction loops — it must see the true FINAL context, not the
-    // pre-continuation context. It now sits after the MAX_COMPACTION_CYCLES
-    // check. (The old position also had a latent bug: the continuation loops
-    // run on the pre-compaction `context` snapshot, so a compaction here
-    // would be silently ignored by the continuation that followed it.)
 
     // If the last turn ended with toolUse but no final text, continue the loop
     // This handles cases where the LLM signaled tool use but didn't produce the final text response
@@ -3672,7 +3664,10 @@ async function handleChatStream(
     // appears complete. Runs after ALL context-generating work — the
     // incomplete-tool-turn continuation, stranded-call recovery, and the
     // mid-turn compaction/resume cycles — so the reading reflects the true
-    // final context. 
+    // final context. It must not move back above those loops: they run on
+    // the pre-compaction `context` snapshot, so a compaction before them
+    // would be silently ignored by the continuation that followed it
+    // (latent bug found when this check was relocated, Aug 23).
     // Gate: needsMidTurnCompaction stays true only when the mid-turn loop
     // exhausted MAX_COMPACTION_CYCLES (context can't be brought under
     // control — one more compaction here can't either; the next turn's
@@ -3707,21 +3702,18 @@ async function handleChatStream(
           const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
 
-          // Refined estimate — the SAME estimator pre-send uses in
-          // production (exact tokenization of large tool results on top of
-          // the anchor/char estimate). Reading both signals, not just the
-          // raw final usage, closes the asymmetry that let turns land in
-          // the dead band: end-of-turn saw 84.8% (raw usage), the refined
-          // estimate said 85.3%, end-of-turn stayed quiet, and the
-          // compaction landed at pre-send — i.e. while the user was already
-          // waiting for a response. Rows added after usage measurement
-          // (e.g. passive-recall injection) are only visible to the
-          // estimate. The exact-token path self-gates (candidates only at
-          // >=70% of window or >=16k-char results, max 12), so a small
-          // turn costs no extra HTTP.
-          // Unified pressure estimate (turn-engine phase 1) — same numbers:
-          // exact tokenization of large tool results when the llamacpp
-          // capability is present, the breakdown base otherwise.
+          // Refined estimate via the unified pressure estimator (turn-engine
+          // phase 1): exact tokenization of large tool results when the
+          // llamacpp capability is present (self-gating: candidates only at
+          // >=70% of window or >=16k-char results, max 12, so a small turn
+          // costs no extra HTTP), the anchor/char breakdown base otherwise.
+          // Reading both signals — the estimate plus the raw final usage —
+          // closes the asymmetry that let turns land in the dead band:
+          // end-of-turn saw 84.8% (raw usage), the refined estimate said
+          // 85.3%, end-of-turn stayed quiet, and the compaction landed at
+          // pre-send while the user was already waiting for a response.
+          // Rows added after usage measurement (e.g. passive-recall
+          // injection) are only visible to the estimate.
           const pressure = await estimateContextPressure({
             messages: chat.messages,
             systemPrompt,
@@ -3734,15 +3726,13 @@ async function handleChatStream(
           });
           const estimatedTokens = pressure.estimatedTokens;
 
-          // Either signal can drive the trigger (conservative max, never
-          // min), against the earlier end-of-turn threshold (0.80 vs
-          // pre-send's 0.85) — see endOfTurnNeedsCompaction. Pre-send
-          // remains the backstop for anything end-of-turn can't see.
-          // Turn-engine phase 2: the decision, execution ordering, and
-          // logging (including the negative path) live in
+          // Turn-engine phase 2: the decision (which signal drives the 0.80
+          // trigger — conservative max, see endOfTurnNeedsCompaction), the
+          // execution ordering, and the negative-path logging live in
           // runEndOfTurnCompaction; the route-specific aftermath runs in
-          // onCompacted, whose closure owns route-local state. Pure move —
-          // no behavior change (doc §4.4).
+          // onCompacted, whose closure owns route-local state. Pre-send
+          // remains the backstop for anything end-of-turn can't see.
+          // Pure move — no behavior change (doc §4.4).
           await runEndOfTurnCompaction({
             chat,
             contextWindow: effectiveContextWindow,
@@ -3786,11 +3776,13 @@ async function handleChatStream(
               }
               setCachedAugmentedPrompt(chat.id, systemPrompt);
 
-              // The current assistant usage was measured against the
-              // pre-compaction prompt. Once a summary is inserted before the
-              // final assistant row, that usage becomes stale; if persisted,
-              // the next pre-send estimate treats the compacted chat as still
-              // near the old limit and immediately compacts again.
+              // Clear the in-request live usage anchor: state.finalUsage and
+              // the pending assistant row were measured against the
+              // pre-compaction prompt, and a same-request estimate
+              // (continuation or queued follow-up) would take them as a live
+              // anchor. Row-level staleness is already handled by the
+              // estimator's compaction-boundary guards (5dd20ad) — but no
+              // boundary guard sees the in-memory anchor.
               clearPendingAssistantUsageAfterCompaction();
               // Same staleness for resync snapshots: a client attaching
               // between compaction and `done` must not hydrate the

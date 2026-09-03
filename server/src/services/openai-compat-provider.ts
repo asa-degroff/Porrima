@@ -2205,7 +2205,8 @@ export const streamOpenAICompat = (
         (output as any).llamaTimings = llamaTimings;
       }
       (output as any).llamaCache = cacheMetadata;
-      // Context high-water (fix 4, Aug 23): a call that completed with final
+      // Context high-water (Aug 23 compaction rework): a call that completed
+      // with final
       // usage proves the real window is at least totalTokens large. Record it
       // so getEffectiveContextWindow can floor the denominator when discovery
       // reports less (stale default_generation_settings, the fb9cdb6f case).

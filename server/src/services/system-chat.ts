@@ -1134,7 +1134,8 @@ export async function runSystemSynthesis(options?: {
     // 24h synthesis slot; let the scheduler retry on a later tick.
     // --- End-of-turn compaction: if the model hit the context limit, compact ---
     // --- before the next run so it doesn't immediately fail again.         ---
-    // Runs on BOTH the success and failure paths (fix 7, Aug 23): a failed
+    // Runs on BOTH the success and failure paths (Aug 23 compaction rework):
+    // a failed
     // turn can still leave the context above the threshold (it ran many
     // iterations before dying, or the chat was already hot — which is often
     // what caused the failure). The old failure path early-returned before
@@ -1382,7 +1383,8 @@ export async function runWakeCycle(options?: {
 
     // --- End-of-turn compaction: if the model hit the context limit, compact ---
     // --- before the next run so it doesn't immediately fail again.           ---
-    // Runs on BOTH the success and failure paths (fix 7, Aug 23) — see the
+    // Runs on BOTH the success and failure paths (Aug 23 compaction rework)
+    // — see the
     // synthesis note above: a failed turn can still leave the context above
     // the threshold, and the old failure path early-returned before this
     // check, so hot-context failure loops could only be broken by the next

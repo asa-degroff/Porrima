@@ -5,8 +5,8 @@
  * routes had drifted on: the decision (endOfTurnNeedsCompaction), the
  * execution ordering (pulse settle → pre-compaction flush → truncate →
  * save), and the logging — including the negative path, whose observability
- * (the Aug 23 fix that made the 14-day 0-fire gap visible) is now
- * structural rather than per-route diligence.
+ * (added in the Aug 23 compaction rework, after the 14-day 0-fire gap) is
+ * now structural rather than per-route diligence.
  *
  * What stays with the caller:
  *   - the gate (route-specific stop conditions: mid-turn exhaustion,

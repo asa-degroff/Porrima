@@ -39,7 +39,7 @@ export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
 
 /**
- * End-of-turn compaction decision (fix 6, Aug 23).
+ * End-of-turn compaction decision (added in the Aug 23 compaction rework).
  *
  * Two signals, conservative max: `lastUsage` is the measured final call
  * (input+output) and `estimatedTokens` is the refined re-measurement of the

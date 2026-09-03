@@ -379,6 +379,7 @@ describe("evaluateTurnGuards", () => {
     expect(evaluateTurnGuards({ ...base, iterations: base.maxIterations - 1 }).stop).toBeUndefined();
     const out = evaluateTurnGuards({ ...base, iterations: base.maxIterations });
     expect(out.stop?.reason).toBe("iteration_limit");
+    expect(out.stop?.scope).toBe("total");
     expect(out.stop?.warning).toBe(`Stopped — reached ${base.maxIterations} iteration limit`);
   });
 
@@ -390,6 +391,7 @@ describe("evaluateTurnGuards", () => {
       maxIterationsPerSegment: 3,
     });
     expect(out.stop?.reason).toBe("iteration_limit");
+    expect(out.stop?.scope).toBe("segment");
     expect(out.stop?.warning).toBe(`Stopped — reached 3 iteration limit for this phase`);
   });
 
@@ -401,6 +403,7 @@ describe("evaluateTurnGuards", () => {
       maxIterationsPerSegment: 3,
     });
     expect(out.stop?.reason).toBe("iteration_limit");
+    expect(out.stop?.scope).toBe("total"); // not "segment" — total is checked first
     expect(out.stop?.warning).toBe(`Stopped — reached ${base.maxIterations} iteration limit`); // not "for this phase"
   });
 });

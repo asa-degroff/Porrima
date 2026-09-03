@@ -731,7 +731,7 @@ export async function runHeadlessChatTurn(
         config,
         signal: controller.signal,
         // Pass the chat id through so the provider layer can record the
-        // context high-water (fix 4) for headless turns — without this,
+        // context high-water floor for headless turns — without this,
         // system chat and automations (the long-turn workhorses) never
         // feed the floor and its stale-discovery protection.
         streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id }),
@@ -813,18 +813,13 @@ export async function runHeadlessChatTurn(
               maxIterationsPerSegment: options.maxIterationsPerAssistantSegment,
             });
             if (guard.stop) {
-              if (
-                options.maxIterationsPerAssistantSegment &&
-                iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
-              ) {
-                // The segment cap only fires when the total cap didn't
-                // (guard precedence), so this condition identifies it.
-                console.warn(
-                  `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
-                );
-              } else {
-                console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
-              }
+              // guard.stop.scope names the cap that fired (total is checked
+              // first, so "segment" here means the total cap did not fire).
+              console.warn(
+                guard.stop.scope === "segment"
+                  ? `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`
+                  : `[${logPrefix}] hit iteration cap (${maxIterations}), aborting`,
+              );
               emitter.emitWarning({
                 type: guard.stop.reason,
                 message: guard.stop.warning,

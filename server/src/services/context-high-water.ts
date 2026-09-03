@@ -1,7 +1,7 @@
 /**
  * Per-chat high-water mark of observed context size, used as a floor on the
- * context-window denominator (fix 4, Aug 23 — the window-denominator half of
- * the fb9cdb6f analysis).
+ * context-window denominator (Aug 23 compaction rework — the
+ * window-denominator half of the fb9cdb6f analysis).
  *
  * The denominator every ratio in the compaction machinery divides by comes
  * from model discovery (`model.contextWindow`). Discovery reads the server's

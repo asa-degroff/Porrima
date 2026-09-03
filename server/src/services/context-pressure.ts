@@ -68,8 +68,6 @@ export interface PressureEstimate {
   approximateHardCapTokens: number;
 }
 
-export type PressureObservation = PressureEstimate;
-
 export interface PressureEstimateParams {
   messages: Chat["messages"];
   systemPrompt: string;
@@ -95,7 +93,7 @@ export interface PressureEstimateParams {
   exact?: { baseUrl: string; modelId: string; chatId: string; phase: string };
   /** Optional observation sink, called with the final estimate. The return
    *  value is the primary channel; this is for callers that prefer push. */
-  onObservation?: (obs: PressureObservation) => void;
+  onObservation?: (obs: PressureEstimate) => void;
 }
 
 /**
@@ -261,16 +259,15 @@ export interface TurnGuardInput {
   /** Iterations since the last assistant-segment boundary (headless). */
   perSegmentIterations?: number;
   maxIterationsPerSegment?: number;
-  /** Accepted for the contract (doc §4.3 — the implicit-overflow
-   *  classification stays inline in chat.ts) and never computed here. Does
-   *  not gate the decision today: both routes run these guards
-   *  unconditionally. */
-  hitContextLimit?: boolean;
 }
 
 export interface GuardResult {
   stop?: {
     reason: "iteration_limit";
+    /** Which cap fired — the route logs from this instead of re-deriving
+     *  the condition (precedence: total is checked first, so "segment"
+     *  here means the total cap did not fire). */
+    scope: "total" | "segment";
     /** Canonical warning text — shared by both routes; the *expression*
      *  (SSE `event: warning` vs `emitter.emitWarning`) stays per-transport. */
     warning: string;
@@ -296,6 +293,7 @@ export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
     return {
       stop: {
         reason: "iteration_limit",
+        scope: "total",
         warning: `Stopped — reached ${maxIterations} iteration limit`,
       },
     };
@@ -309,6 +307,7 @@ export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
     return {
       stop: {
         reason: "iteration_limit",
+        scope: "segment",
         warning: `Stopped — reached ${maxIterationsPerSegment} iteration limit for this phase`,
       },
     };
