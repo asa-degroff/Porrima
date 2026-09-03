@@ -26,6 +26,7 @@ import {
   comparePressureShadow,
   evaluateTurnGuards,
   estimateContextPressure,
+  midTurnPressureDecision,
   type PressureEstimate,
 } from "../services/context-pressure.js";
 
@@ -405,6 +406,89 @@ describe("evaluateTurnGuards", () => {
     expect(out.stop?.reason).toBe("iteration_limit");
     expect(out.stop?.scope).toBe("total"); // not "segment" — total is checked first
     expect(out.stop?.warning).toBe(`Stopped — reached ${base.maxIterations} iteration limit`); // not "for this phase"
+  });
+});
+
+describe("midTurnPressureDecision — the D1 headless trigger mapping", () => {
+  const emptyBreakdown = () => estimateContextBreakdown([], SYSTEM_PROMPT, TOOLS);
+
+  function pressure(partial: {
+    selectedPath: PressureEstimate["selectedPath"];
+    refinedTokens: number;
+    hardCapTokens?: number;
+  }): PressureEstimate {
+    return {
+      estimatedTokens: partial.refinedTokens,
+      refinedTokens: partial.refinedTokens,
+      hardCapTokens: partial.hardCapTokens ?? partial.refinedTokens,
+      rawUsageTotal: 0,
+      selectedPath: partial.selectedPath,
+      errors: [],
+      contextBreakdown: emptyBreakdown(),
+      exactToolResultCount: 0,
+      exactDelta: 0,
+      signedExactDelta: 0,
+      exactElapsedMs: 0,
+      approximateTokens: partial.refinedTokens,
+      approximateDisplayTokens: partial.refinedTokens,
+      approximateHardCapTokens: partial.hardCapTokens ?? partial.refinedTokens,
+    };
+  }
+
+  it("anchor paths drive the normal trigger via refinedTokens (strict >)", () => {
+    const d = midTurnPressureDecision(
+      pressure({ selectedPath: "usage_anchor", refinedTokens: 85_000 }),
+      WINDOW,
+    );
+    expect(d.threshold).toBe(COMPACTION_TRIGGER_RATIO);
+    expect(d.estimate).toBe(85_000);
+    expect(d.ratio > d.threshold).toBe(false); // exactly 0.85 (identical double) is quiet
+
+    expect(
+      midTurnPressureDecision(
+        pressure({ selectedPath: "usage_anchor", refinedTokens: 85_001 }),
+        WINDOW,
+      ),
+    ).toMatchObject({ estimate: 85_001 });
+  });
+
+  it("a row-scanned anchor (path 3, no live usage) takes the normal trigger — the pinned D1 corner", () => {
+    // Legacy headless arithmetic would have used the char estimate at 0.95
+    // here; the contract feeds the anchor at 0.85 instead.
+    const d = midTurnPressureDecision(
+      pressure({ selectedPath: "usage_anchor", refinedTokens: 90_000, hardCapTokens: 94_000 }),
+      WINDOW,
+    );
+    expect(d.estimate).toBe(90_000); // refinedTokens, NOT hardCapTokens
+    expect(d.threshold).toBe(COMPACTION_TRIGGER_RATIO);
+    expect(d.ratio > d.threshold).toBe(true); // 0.90 > 0.85 — fires where legacy stayed quiet
+  });
+
+  it("the char path drives only the hard cap via hardCapTokens", () => {
+    // 94% char: quiet at 0.95 even though it would have fired at 0.85.
+    const quiet = midTurnPressureDecision(
+      pressure({ selectedPath: "char_estimate", refinedTokens: 94_000, hardCapTokens: 94_000 }),
+      WINDOW,
+    );
+    expect(quiet.threshold).toBe(COMPACTION_HARD_CAP_RATIO);
+    expect(quiet.ratio > quiet.threshold).toBe(false);
+
+    // 96% char: fires.
+    const fires = midTurnPressureDecision(
+      pressure({ selectedPath: "char_estimate", refinedTokens: 90_000, hardCapTokens: 96_000 }),
+      WINDOW,
+    );
+    expect(fires.estimate).toBe(96_000); // hardCapTokens, NOT refinedTokens
+    expect(fires.ratio > fires.threshold).toBe(true);
+  });
+
+  it("zero/unknown window is quiet, never NaN", () => {
+    const d = midTurnPressureDecision(
+      pressure({ selectedPath: "usage_anchor", refinedTokens: 99_000 }),
+      0,
+    );
+    expect(d.ratio).toBe(0);
+    expect(d.ratio > d.threshold).toBe(false);
   });
 });
 

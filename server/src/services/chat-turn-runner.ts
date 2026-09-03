@@ -9,15 +9,13 @@ import { randomUUID } from "crypto";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToHydratedPiMessages, type ReplayModelIdentity } from "./agent.js";
 import {
-  COMPACTION_HARD_CAP_RATIO,
-  COMPACTION_TRIGGER_RATIO,
   estimateContextTokens,
   truncateChatHistory,
 } from "./compaction.js";
 import {
-  comparePressureShadow,
   evaluateTurnGuards,
   estimateContextPressure,
+  midTurnPressureDecision,
 } from "./context-pressure.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
@@ -591,32 +589,14 @@ export async function runHeadlessChatTurn(
         (message.stopReason === "stop" && Boolean(options.getFollowUp));
       if (!willContinue) return false;
       const usageTotal = message.usage?.totalTokens ?? 0;
-      let estimate: number;
-      let threshold = COMPACTION_TRIGGER_RATIO;
-      if (usageTotal > 0) {
-        // usage covers the request that just completed; this turn's tool
-        // results are appended to the next prompt, so add them on top.
-        let postUsageChars = 0;
-        for (const tr of toolResults) {
-          for (const block of tr.content) {
-            if (block.type === "text" && block.text) postUsageChars += block.text.length;
-          }
-        }
-        estimate = usageTotal + Math.ceil(postUsageChars / 4);
-      } else {
-        // No usage anchor: the rows-based char estimate lags the live context
-        // mid-phase, so only fire on the conservative hard-cap ratio.
-        estimate = estimateContextTokens(chat.messages, systemPrompt, tools);
-        threshold = COMPACTION_HARD_CAP_RATIO;
-      }
-
-      // Shadow mode (turn-engine phase 1, doc §4.2 ship condition): the
-      // unified pressure estimate runs side-by-side and is logged against
-      // the legacy arithmetic, but the LEGACY value still acts. The flip to
-      // the unified trigger (delta D1) is gated on the pass criteria in
-      // comparePressureShadow's doc — sample floor, zero trigger-outcome
-      // divergence, no systematic directional bias — evaluable from these
-      // log lines alone (the fire= outcome is part of the line).
+      // D1 flip (09-03): the headless mid-turn trigger acts on the unified
+      // pressure estimate. The legacy inline arithmetic and the shadow week
+      // that validated it (277 samples over 10.5 days, delta=0 on every
+      // line, zero trigger-outcome divergence — verdict in
+      // comparePressureShadow's doc) are retired. The decision mapping is
+      // the pinned contract (doc §4.2): an anchor (live or row-scanned)
+      // feeds the normal trigger via refinedTokens, a pure char estimate
+      // feeds only the hard cap — midTurnPressureDecision.
       const pressure = await estimateContextPressure({
         messages: chat.messages,
         systemPrompt,
@@ -625,21 +605,21 @@ export async function runHeadlessChatTurn(
         lastUsageTotal: usageTotal > 0 ? usageTotal : undefined,
         postUsageToolResults: usageTotal > 0 ? toolResults : undefined,
       });
-      console.log(
-        comparePressureShadow({
-          legacyEstimate: estimate,
-          legacyTriggerRatio: threshold,
-          pressure,
-          contextWindow: cw,
-        }).logLine,
-      );
-
-      const ratio = estimate / cw;
+      const { estimate, threshold, ratio } = midTurnPressureDecision(pressure, cw);
       if (ratio > threshold) {
         needsMidTurnCompaction = true;
+        if (pressure.selectedPath === "char_estimate") {
+          // The char path never fired during the shadow window (every
+          // headless iteration carried a usage anchor) — it is the one
+          // corner where D1 changed trigger semantics, so log it loudly.
+          console.warn(
+            `[${logPrefix}] mid-turn check on the char-estimate path (no usage anchor) — ` +
+            `the D1-semantics corner, ${estimate}/${cw} (${Math.round(ratio * 100)}%)`,
+          );
+        }
         console.warn(
           `[${logPrefix}] mid-turn context overflow: ~${estimate}/${cw} (${Math.round(ratio * 100)}%) ` +
-          `at iteration ${iterations} — stopping for compaction`,
+          `at iteration ${iterations} (path=${pressure.selectedPath}) — stopping for compaction`,
         );
         emitter.emitWarning({
           type: "context_length",

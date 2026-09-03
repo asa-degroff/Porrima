@@ -237,6 +237,16 @@ not pass by default:
   is wrong for that workload, not noisier — investigate before any flip
   (see §8.2).
 
+**Verdict (09-03): PASS — D1 flipped.** The production shadow log
+(Aug 24 – Sep 03, 10.5 days) holds 277 samples — far past the sample floor
+(≥15 anchored turns AND ≥5 days). `delta=0` on every line (the numbers agree
+by construction on the usage-anchor path, as §4.2 predicted);
+`fire=both` 19, `fire=none` 258, zero `fire=legacy`/`fire=unified` — zero
+trigger-outcome divergence, zero directional bias. All three pass criteria
+met. The one unobserved corner (no-usage iteration → path 3/char) is pinned
+in the `comparePressureShadow` fixtures and now guarded by an explicit loud
+log in `chat-turn-runner.ts`.
+
 This is the same "trust the artifact over memory" discipline as the
 high-water fix: we don't guess which estimate is closer, we watch them
 disagree.
@@ -247,7 +257,7 @@ The iteration caps exist verbatim in both routes as `turn_end` inline code.
 Extract as pure functions:
 
 ```ts
-interface GuardResult { stop?: { reason: "iteration_limit"; warning: string }; }
+interface GuardResult { stop?: { reason: "iteration_limit"; scope: "total" | "segment"; warning: string }; }
 
 evaluateTurnGuards({
   iterations, maxIterations,
@@ -434,7 +444,7 @@ Each is a named change with a verification gate. None are silent.
 
 | # | Delta | Route | Risk | Gate |
 |---|---|---|---|---|
-| D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip |
+| D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip — **Done 09-03** (verdict above; `midTurnPressureDecision` owns the mapping, shadow retired) |
 | D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week |
 | D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable |
 | D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference |
@@ -468,6 +478,9 @@ via `onObservation`; the SSE iteration payload fields map 1:1 from the return
 type). Headless `shouldStopAfterTurn` adopts in **shadow mode** (§4.2).
 Guards extracted; both routes' dedup/cap blocks delegate. Exit criteria:
 suite green, one week of clean shadow logs, then the D1 flip.
+**(Done Aug 23–24; D1 flipped 09-03 — the shadow passed on 277 samples /
+10.5 days, §4.2 verdict; the headless check now acts on
+`midTurnPressureDecision`.)**
 
 **Phase 2 — End-of-turn.** `runEndOfTurnCompaction` in `turn-compaction.ts`.
 `chat.ts` adopts (no behavior change — the block moves). System-chat

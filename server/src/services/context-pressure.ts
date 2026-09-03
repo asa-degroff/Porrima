@@ -316,8 +316,30 @@ export function evaluateTurnGuards(input: TurnGuardInput): GuardResult {
   return {};
 }
 
+/**
+ * Headless mid-turn decision (D1 flip, 09-03): maps the pressure estimate to
+ * a ratio against the pinned trigger contract (doc §4.2). A usage anchor
+ * (live or row-scanned) feeds the NORMAL trigger (0.85) via `refinedTokens`;
+ * a pure char estimate feeds only the HARD CAP (0.95) via `hardCapTokens` —
+ * the documented invariant. Strict `>`, like every other trigger here.
+ *
+ * Pure and route-agnostic: the headless `shouldStopAfterTurn` closure calls
+ * this, and the fixtures pin it — including the path-3 corner (no live
+ * usage, row-scanned anchor) where the anchor path takes the 0.85 trigger
+ * that the retired legacy char/hard-cap arithmetic would have slept through.
+ */
+export function midTurnPressureDecision(
+  pressure: PressureEstimate,
+  contextWindow: number,
+): { estimate: number; threshold: number; ratio: number } {
+  const charPath = pressure.selectedPath === "char_estimate";
+  const estimate = charPath ? pressure.hardCapTokens : pressure.refinedTokens;
+  const threshold = charPath ? COMPACTION_HARD_CAP_RATIO : COMPACTION_TRIGGER_RATIO;
+  return { estimate, threshold, ratio: contextWindow > 0 ? estimate / contextWindow : 0 };
+}
+
 // ---------------------------------------------------------------------------
-// Shadow mode (headless ship condition)
+// Shadow mode (post-flip: executable spec of the pinned corner)
 // ---------------------------------------------------------------------------
 
 export interface PressureShadowComparison {
@@ -340,18 +362,17 @@ export interface PressureShadowComparison {
 }
 
 /**
- * Shadow-mode comparison (doc §4.2 ship condition). The headless hook keeps
- * acting on the legacy arithmetic while the unified estimate is computed
- * and logged side-by-side. The flip to the unified trigger is gated on:
+ * Shadow-mode comparison (doc §4.2 ship condition) — retained after the D1
+ * flip (09-03) as the executable spec of the pinned corner: the fixtures in
+ * context-pressure.test.ts assert its fire outcomes, including the
+ * (0.85, 0.95] band where the anchor-driven unified trigger fires and the
+ * legacy char/hard-cap gate stays quiet. No longer called from production.
  *
- * - sample floor — ≥15 headless turns with a non-zero usage anchor AND ≥5
- *   calendar days, whichever comes last;
- * - pass — zero turns where the trigger outcome differs between legacy and
- *   unified (one crosses a ratio boundary the other doesn't, at 0.85 or
- *   0.95), AND no systematic directional bias (unified > legacy on >80% of
- *   turns with median delta > 2% of window);
- * - fail — either condition. A consistent bias means the estimator's model
- *   is wrong for that workload, not noisier — investigate before any flip.
+ * The flip's verdict (evaluated 09-03 from the production shadow log,
+ * Aug 24 – Sep 03): 277 samples — far past the sample floor (≥15 anchored
+ * turns AND ≥5 days); delta=0 on every line; fire=both 19, fire=none 258,
+ * zero fire=legacy/unified — zero trigger-outcome divergence, zero
+ * directional bias. All three pass criteria met.
  *
  * Pinned unified trigger selection (the §4.2 trigger table): an anchor
  * (live or row-scanned) feeds the NORMAL trigger (0.85) via
