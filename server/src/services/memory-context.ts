@@ -117,6 +117,13 @@ async function loadProjectContext(projectId?: string, projectPath?: string): Pro
 // turn (or after compaction). Between turns the system prompt is byte-identical
 // so llama.cpp reuses 100% of the KV cache prefix.
 //
+// Late-freeze rule: the frozen section may only be folded into the system
+// prompt while the chat has no assistant history cached under it. If the first
+// retrieval is empty (clobber guard skips establishment) and a later turn
+// retrieves memories, freezing then would insert the section AHEAD of already
+// cached history and bust the entire prefix — those memories ship as an
+// appended delta and the empty section is locked byte-exact instead.
+//
 // When new memories are extracted, we re-retrieve but only inject memories that
 // aren't already in context (frozen set + previous deltas) as a small delta
 // message appended at the END of conversation history. This keeps invalidation
@@ -700,6 +707,14 @@ function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, b
   return `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${hintsSection}`;
 }
 
+/** Delta message body for memories appended at the END of history (Case 3). */
+function buildMemoriesDelta(memories: RetrievalResult[], projectId?: string, hints?: string): string {
+  if (memories.length === 0) return "";
+  const deltaBlock = memories.map((r) => formatRetrievedMemoryForContext(r, projectId)).join("\n");
+  const hintsBlock = hints ? `\n\n${hints}` : "";
+  return `## Updated context — my newly recalled memories:\n${deltaBlock}${hintsBlock}`;
+}
+
 // ---- Stable prefix builder ----
 
 const GLOBAL_MEMORY_BLOCK_TOKEN_BUDGET = 3000;
@@ -965,13 +980,21 @@ export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
  */
 export interface MemoryAugmentationOptions {
   /** When true, skip memory retrieval entirely — the stable prefix (persona,
-   * user doc, global memory blocks, zeitgeist, project context, and project
-   * memory blocks) is still built, but
-   * no memories are searched or injected. Use this for automation starts where
-   * the trigger message has no meaningful conversational context to search
-   * against; passive recall during the agent run will supply memories as
-   * needed based on the agent's own output. */
+   *  user doc, global memory blocks, zeitgeist, project context, and project
+   *  memory blocks) is still built, but
+   *  no memories are searched or injected. Use this for automation starts where
+   *  the trigger message has no meaningful conversational context to search
+   *  against; passive recall during the agent run will supply memories as
+   *  needed based on the agent's own output. */
   skipMemoryRetrieval?: boolean;
+  /** When true, allow Case 1 to freeze a newly retrieved section into the
+   * system prompt even when the chat already has assistant history cached
+   * without one (late freeze). Callers must own the resulting full-prefix
+   * invalidation — cache warming pre-fills the rebuilt prompt immediately,
+   * so the re-roll is absorbed there. Without this option a late Case 1
+   * delivers the memories as an appended delta and locks the empty frozen
+   * section instead, preserving the warm KV prefix. */
+  allowLateFreeze?: boolean;
 }
 
 export async function buildMemoryAugmentedPrompt(
@@ -1055,9 +1078,15 @@ async function buildMemoryAugmentedPromptInner(
  * - memoriesMessage: delta of NEW memories not already in context (may be empty)
  *
  * Flow:
- * 1. No state yet (first turn, post-hard-reset) → full retrieval into
- *    systemPrompt, memoriesMessage empty. An empty retrieval establishes
- *    nothing (clobber guard — retries next build).
+ * 1. No state yet (first turn, post-hard-reset, or after an empty first
+ *    retrieval skipped establishment) → full retrieval. With no assistant
+ *    history yet, the section is frozen into the systemPrompt and
+ *    memoriesMessage stays empty. An empty retrieval establishes nothing
+ *    (clobber guard — retries next build). When history is ALREADY cached
+ *    under a section-less prompt (late Case 1), freezing would edit the head
+ *    of a warm prefix, so the memories ship as an appended memoriesMessage
+ *    delta instead and the empty section is locked — unless the caller opts
+ *    into `allowLateFreeze` (cache warm) and owns the invalidation.
  *    Post-compaction turns arrive as case 3: compaction soft-resets, keeping
  *    the frozen section byte-exact across history rewrites.
  * 2. State exists, not dirty → return frozen systemPrompt, empty delta.
@@ -1183,6 +1212,37 @@ async function buildSplitAugmentedPromptInner(
 
       updateAccessMetadata(memories);
 
+      // Late-freeze guard: the empty first retrieval above means the whole
+      // turn ran with a section-less prompt, so assistant history is already
+      // cached under stablePrefix. Folding a section in now would edit the
+      // head of a warm prefix and bust it entirely (llama.cpp LCP similarity
+      // drops below the slot threshold → full re-prefill). Deliver the
+      // memories as an appended delta instead and lock the empty section
+      // byte-exact, so this chat behaves like any other from here on
+      // (Case 2/3 against a stable prefix).
+      const lateFreeze = chatId && recentMessages.some((m) => m.role === "assistant");
+      if (lateFreeze && !options?.allowLateFreeze) {
+        const hints = [blockHint, zeitgeistHint].filter(Boolean).join("\n\n");
+        const memoriesMessage = buildMemoriesDelta(memories, projectId, hints || undefined);
+        if (chatId) {
+          contextState.set(chatId, {
+            frozenIds: new Set(),
+            deltaIds: new Set(memories.map((r) => r.memory.id)),
+            frozenMemoriesSection: "",
+            dirty: false,
+          });
+          // Write point 1 (deferred variant) — empty section canonical,
+          // retrieved memories recorded as already delivered on the wire.
+          persistContextState(chatId, contextState.get(chatId)!);
+        }
+        log(`[memory-context] chat=${chatId} late retrieval: ${memories.length} memories appended as delta (history cached without a frozen section — empty section locked)`);
+        return {
+          systemPrompt: stablePrefix,
+          memoriesMessage,
+          combined: memoriesMessage ? `${stablePrefix}\n\n${memoriesMessage}` : stablePrefix,
+        };
+      }
+
       const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
       const systemPrompt = `${stablePrefix}${memoriesSection}`;
 
@@ -1236,8 +1296,7 @@ async function buildSplitAugmentedPromptInner(
 
     let memoriesMessage = "";
     if (newMemories.length > 0) {
-      const deltaBlock = newMemories.map((r) => formatRetrievedMemoryForContext(r, projectId)).join("\n");
-      memoriesMessage = `## Updated context — my newly recalled memories:\n${deltaBlock}`;
+      memoriesMessage = buildMemoriesDelta(newMemories, projectId);
     }
 
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;

@@ -291,6 +291,10 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
     // the current memory context into the system prompt now, so the later send
     // path reuses the same prompt instead of doing a fresh retrieval that shifts
     // the entire prefix and misses the warmed slot.
+    // allowLateFreeze: this chat has assistant history cached without the new
+    // section, so freezing edits the prompt head — but the warm prefill below
+    // immediately rebuilds (and owns) that invalidated prefix, so the normal
+    // late-freeze deferral must not apply here.
     resetMemoryContext(chat.id);
     const project = chat.projectId ? await getProject(chat.projectId) : null;
     const split = await buildSplitAugmentedPrompt(
@@ -300,6 +304,7 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
       chat.projectId,
       chat.type,
       project?.path,
+      { allowLateFreeze: true },
     );
     systemPrompt = split.systemPrompt;
     // Warming has to freeze the current prompt prefix for KV reuse, but it

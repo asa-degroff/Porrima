@@ -586,3 +586,93 @@ describe("clobber guard + soft reset (doc §10)", () => {
     expect(lastCall[1].frozenSection).not.toBe(SECTION); // it's a fresh section string
   });
 });
+
+describe("late-freeze guard (empty first retrieval then mid-chat freeze)", () => {
+  const build = (
+    mod: any,
+    messages: ChatMessage[],
+    options?: { skipMemoryRetrieval?: boolean; allowLateFreeze?: boolean },
+  ) =>
+    mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("defers a late retrieval to an appended delta and locks the empty section", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod, mocks, log } = await loadMemoryContext(rows);
+
+    // Turn 1: empty retrieval — clobber guard establishes nothing, so the
+    // whole turn's history is cached under a section-less prompt.
+    const healthy = (mocks.searchMemories as any).getMockImplementation();
+    (mocks.searchMemories as any).mockResolvedValue([]);
+    const first = await build(mod, [{ role: "user", content: "frozen topic", timestamp: 1000 }]);
+    expect(first.memoriesMessage).toBe("");
+    expect(rows.has("chat-1")).toBe(false);
+    (mocks.searchMemories as any).mockImplementation(healthy);
+
+    // Turn 2: retrieval succeeds AFTER history exists — freezing now would
+    // edit the warm prefix head, so memories must ship as a delta instead.
+    const second = await build(mod, [
+      { role: "user", content: "frozen topic", timestamp: 1000 },
+      { role: "assistant", content: "ok", timestamp: 2000 },
+      { role: "user", content: "new prompt", timestamp: 3000 },
+    ]);
+    expect(second.systemPrompt).not.toContain("Frozen topic memory."); // nothing folded into the prompt
+    expect(second.systemPrompt).not.toContain("New prompt memory.");
+    expect(second.memoriesMessage).toContain("Frozen topic memory."); // delta carries the retrieval
+    expect(second.memoriesMessage).toContain("New prompt memory.");
+    expect(second.combined).toContain(second.memoriesMessage);
+
+    const row = rows.get("chat-1")!;
+    expect(row).toBeDefined();
+    expect(row.frozenSection).toBe(""); // empty section locked byte-exact
+    expect(row.frozenIds).toEqual([]);
+    expect(row.deltaIds).toEqual(["f1", "n1"]); // recorded as delivered on the wire
+    expect(row.dirty).toBe(false);
+    const allLogs = log.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(allLogs).toContain("late retrieval");
+    expect(allLogs).not.toContain("frozen in system prompt");
+
+    // Turn 3: state exists, clean → Case 2 against the SAME prefix — no
+    // re-retrieval, byte-identical system prompt (the invariant the 00:45
+    // incident busted).
+    const beforeCalls = (mocks.searchMemories as any).mock.calls.length;
+    const third = await build(mod, [
+      { role: "user", content: "frozen topic", timestamp: 1000 },
+      { role: "assistant", content: "ok", timestamp: 2000 },
+      { role: "user", content: "new prompt", timestamp: 3000 },
+      { role: "assistant", content: "ok2", timestamp: 4000 },
+      { role: "user", content: "third prompt", timestamp: 5000 },
+    ]);
+    expect(third.systemPrompt).toBe(second.systemPrompt);
+    expect(third.memoriesMessage).toBe("");
+    expect((mocks.searchMemories as any).mock.calls.length).toBe(beforeCalls);
+  });
+
+  it("allowLateFreeze (cache warm) still freezes a late section into the system prompt", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod } = await loadMemoryContext(rows);
+
+    const result = await build(
+      mod,
+      [
+        { role: "user", content: "frozen topic", timestamp: 1000 },
+        { role: "assistant", content: "ok", timestamp: 2000 },
+        { role: "user", content: "new prompt", timestamp: 3000 },
+      ],
+      { allowLateFreeze: true },
+    );
+    expect(result.systemPrompt).toContain("Frozen topic memory.");
+    expect(result.systemPrompt).toContain("New prompt memory.");
+    expect(result.memoriesMessage).toBe("");
+
+    const row = rows.get("chat-1")!;
+    expect(row.frozenIds).toEqual(["f1", "n1"]);
+    expect(row.deltaIds).toEqual([]);
+    expect(row.dirty).toBe(false);
+    expect(result.systemPrompt.endsWith(row.frozenSection)).toBe(true);
+  });
+});
