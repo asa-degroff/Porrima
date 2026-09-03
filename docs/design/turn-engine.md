@@ -445,8 +445,8 @@ Each is a named change with a verification gate. None are silent.
 | # | Delta | Route | Risk | Gate |
 |---|---|---|---|---|
 | D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip — **Done 09-03** (verdict above; `midTurnPressureDecision` owns the mapping, shadow retired) |
-| D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week |
-| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable |
+| D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week — **Done 09-03** (synthesis + wake adopt `runEndOfTurnCompaction` with the usage anchor; the negative-path log now covers headless) |
+| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip) |
 | D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference |
 | D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats |
 | D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B |

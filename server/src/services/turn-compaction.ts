@@ -18,10 +18,16 @@
  *     owns route-local state, including the systemPrompt reassignment the
  *     rest of the turn reads).
  *
- * Adoption status: chat.ts (HTTP) — phase 2a, behavior-identical move.
- * system-chat (synthesis/wake) and automation-runner come as named deltas
- * (D2 trigger 0.85→0.80, D3 automation check, D4 headless flush), each
- * separately reviewable.
+ * Adoption status:
+ *   - chat.ts (HTTP) — phase 2a, behavior-identical move.
+ *   - system-chat (synthesis/wake) — D2, done 09-03: the char-only 0.85
+ *     under-read replaced by the conservative max at 0.80; negative-path
+ *     logging now covers the headless workhorse.
+ *   - automation-runner — D3, log-only since 09-03: the check ships behind
+ *     `logOnly` for its first week; the log lines settle the 0.80 vs 0.85
+ *     question before the flip removes the flag.
+ *   - D4 (headless pre-compaction flush) lands after both are live, into
+ *     this same seam.
  */
 
 import type { Chat, ChatMessage } from "../types.js";
@@ -74,6 +80,14 @@ export interface EndOfTurnCompactionOptions {
   tools?: unknown;
   /** Log prefix. Default "[compaction]". */
   logPrefix?: string;
+  /**
+   * D3 log-only gate (09-03): compute the decision and log it, but do not
+   * execute the truncation. The automation end-of-turn check ships behind
+   * this for its first week — the log lines (driving/usage/estimated, on
+   * both the fire and no-fire paths) settle the 0.80 vs 0.85 trigger
+   * question empirically before the flip removes the flag.
+   */
+  logOnly?: boolean;
 }
 
 export interface EndOfTurnCompactionResult {
@@ -91,6 +105,7 @@ export async function runEndOfTurnCompaction(
   const { chat, contextWindow, lastUsage, estimatedTokens, logPrefix = "[compaction]" } = opts;
   const triggerRatio = opts.triggerRatio ?? END_OF_TURN_COMPACTION_TRIGGER_RATIO;
   const hitContextLimit = opts.hitContextLimit ?? false;
+  const logOnly = opts.logOnly ?? false;
 
   // Either signal can drive the trigger (conservative max, never min),
   // against the earlier end-of-turn threshold (0.80 vs pre-send's 0.85) —
@@ -107,11 +122,26 @@ export async function runEndOfTurnCompaction(
   const usageRatio = decision.ratio;
   const needsCompaction = decision.needsCompaction;
 
+  if (logOnly && needsCompaction) {
+    // The D3 gate: the decision fires but is not executed. The line is
+    // formatted like the positive-path log (driving/usage/estimated all
+    // rendered) so the log-only week's data is directly comparable to the
+    // post-flip behavior.
+    console.log(
+      `${logPrefix} End-of-turn check (log-only, D3 gate): WOULD trigger ` +
+        `(chat=${chat.id}, driving=${drivingTokens}/${contextWindow} ` +
+        `(${(usageRatio * 100).toFixed(1)}%, trigger=${triggerRatio * 100}%) ` +
+        `[usage=${lastUsage}, estimated=${estimatedTokens}]) — computed, not executed`,
+    );
+    return { triggered: true, truncated: false, drivingTokens, ratio: usageRatio };
+  }
+
   if (!needsCompaction) {
     // The negative path is logged unconditionally — a check that only
     // speaks when it fires is unobservable (the 14-day 0-fire gap).
     console.log(
-      `${logPrefix} End-of-turn check: no compaction (chat=${chat.id}, driving=${drivingTokens}/${contextWindow} ` +
+      `${logPrefix} End-of-turn check${logOnly ? " (log-only, D3 gate)" : ""}: no compaction ` +
+        `(chat=${chat.id}, driving=${drivingTokens}/${contextWindow} ` +
         `(${(usageRatio * 100).toFixed(1)}%, trigger=${triggerRatio * 100}%) ` +
         `[usage=${lastUsage}, estimated=${estimatedTokens}]`,
     );

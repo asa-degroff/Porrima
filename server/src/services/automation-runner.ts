@@ -158,6 +158,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { estimateContextTokens, truncateBeforeSend } = await import("./compaction.js");
+  const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -316,6 +317,27 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     }
 
     emitter.end();
+
+    // End-of-turn compaction (D3, 09-03): a NEW check for the automation
+    // path — none existed before (pre-send was the only backstop, and it
+    // runs at 0.85 after the next run has already started). Ships behind
+    // the log-only gate for its first week: the decision is computed and
+    // logged (fire AND no-fire paths) but not executed; the log lines
+    // settle the 0.80 vs 0.85 trigger question before the flip removes
+    // the flag. Runs on both the success and failure paths — a failed run
+    // can leave the row hot for the next scheduled run (the Aug 23
+    // system-chat lesson).
+    await runEndOfTurnCompaction({
+      chat,
+      contextWindow,
+      lastUsage: turn.assistantMessage.usage?.totalTokens ?? 0,
+      hitContextLimit: turn.stopReason === "length",
+      estimatedTokens: estimateContextTokens(chat.messages, systemPrompt, tools),
+      systemPrompt,
+      tools,
+      logOnly: true,
+      logPrefix: `[automation:${task.id}]`,
+    });
 
     if (!turn.success) {
       return {

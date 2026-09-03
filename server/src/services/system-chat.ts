@@ -862,7 +862,8 @@ export async function runSystemSynthesis(options?: {
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
-  const { truncateBeforeSend, truncateChatHistory, estimateContextTokens, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
+  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireSynthesisLock();
@@ -1132,39 +1133,31 @@ export async function runSystemSynthesis(options?: {
     // The headless runner is the authoritative source for this classification.
     // If it failed before producing text, thinking, or tools, do not burn the
     // 24h synthesis slot; let the scheduler retry on a later tick.
-    // --- End-of-turn compaction: if the model hit the context limit, compact ---
-    // --- before the next run so it doesn't immediately fail again.         ---
+    // --- End-of-turn compaction (D2, 09-03): the decision, execution        ---
+    // --- ordering, and logging live in runEndOfTurnCompaction. The          ---
+    // --- conservative max (usage anchor vs char estimate) against 0.80      ---
+    // --- replaces the char-only 0.85 check, which under-read headless       ---
+    // --- context (forensics: 2 of 3 historical fires were over-window) and  ---
+    // --- had no negative-path log (the 14-day 0-fire blind spot).           ---
     // Runs on BOTH the success and failure paths (Aug 23 compaction rework):
-    // a failed
-    // turn can still leave the context above the threshold (it ran many
-    // iterations before dying, or the chat was already hot — which is often
-    // what caused the failure). The old failure path early-returned before
-    // this check, so a hot context failed, skipped compaction, retried hot,
-    // and failed again. The next scheduler tick's pre-send was the only
-    // backstop, and it runs at 0.85 after the retry has already started.
-    const needsCompaction = stopReason === "length" ||
-      (() => {
-        const estimated = estimateContextTokens(chat.messages, synthesisPrompt, tools);
-        const ratio = estimated / contextWindow;
-        return ratio > COMPACTION_TRIGGER_RATIO;
-      })();
-    if (needsCompaction) {
-      console.log(
-        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, synthesisPrompt, tools)}/${contextWindow}`,
-      );
-      try {
-        const cResult = await truncateChatHistory(
-          chat, contextWindow, stopReason === "length",
-          undefined, undefined, undefined, synthesisPrompt, tools,
-        );
-        if (cResult.truncated) {
-          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
-          await saveChat(chat);
-        }
-      } catch (e: any) {
-        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
-      }
-    }
+    // a failed turn can still leave the context above the threshold (it ran
+    // many iterations before dying, or the chat was already hot — which is
+    // often what caused the failure). The old failure path early-returned
+    // before this check, so a hot context failed, skipped compaction,
+    // retried hot, and failed again. The next scheduler tick's pre-send was
+    // the only backstop, and it runs at 0.85 after the retry has already
+    // started. The negative-path log now fires on every run, with both
+    // signals rendered, so the usage-vs-char gap is visible per turn.
+    await runEndOfTurnCompaction({
+      chat,
+      contextWindow,
+      lastUsage: turn.assistantMessage.usage?.totalTokens ?? 0,
+      hitContextLimit: stopReason === "length",
+      estimatedTokens: estimateContextTokens(chat.messages, synthesisPrompt, tools),
+      systemPrompt: synthesisPrompt,
+      tools,
+      logPrefix: "[system-chat]",
+    });
 
     // --- Detect "ran but produced nothing" failure (e.g., upstream LLM error) ---
     // The headless runner is the authoritative source for this classification.
@@ -1233,7 +1226,8 @@ export async function runWakeCycle(options?: {
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
-  const { truncateBeforeSend, truncateChatHistory, estimateContextTokens, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
+  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireWakeCycleLock();
@@ -1381,37 +1375,20 @@ export async function runWakeCycle(options?: {
       `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
     );
 
-    // --- End-of-turn compaction: if the model hit the context limit, compact ---
-    // --- before the next run so it doesn't immediately fail again.           ---
-    // Runs on BOTH the success and failure paths (Aug 23 compaction rework)
-    // — see the
-    // synthesis note above: a failed turn can still leave the context above
-    // the threshold, and the old failure path early-returned before this
-    // check, so hot-context failure loops could only be broken by the next
-    // tick's pre-send (at 0.85, after the retry had already started).
-    const needsCompaction = stopReason === "length" ||
-      (() => {
-        const estimated = estimateContextTokens(chat.messages, wakePrompt, tools);
-        const ratio = estimated / contextWindow;
-        return ratio > COMPACTION_TRIGGER_RATIO;
-      })();
-    if (needsCompaction) {
-      console.log(
-        `[system-chat] End-of-turn compaction triggered: stopReason=${stopReason}, estimatedTokens=${estimateContextTokens(chat.messages, wakePrompt, tools)}/${contextWindow}`,
-      );
-      try {
-        const cResult = await truncateChatHistory(
-          chat, contextWindow, stopReason === "length",
-          undefined, undefined, undefined, wakePrompt, tools,
-        );
-        if (cResult.truncated) {
-          console.log(`[system-chat] End-of-turn compaction removed ${cResult.removedCount} messages`);
-          await saveChat(chat);
-        }
-      } catch (e: any) {
-        console.warn("[system-chat] End-of-turn compaction failed:", e.message);
-      }
-    }
+    // --- End-of-turn compaction (D2, 09-03): same adoption as the           ---
+    // --- synthesis path above — conservative max (usage vs char) against    ---
+    // --- 0.80 via runEndOfTurnCompaction, on BOTH the success and failure   ---
+    // --- paths (Aug 23 rework), with the negative path now logged.          ---
+    await runEndOfTurnCompaction({
+      chat,
+      contextWindow,
+      lastUsage: turn.assistantMessage.usage?.totalTokens ?? 0,
+      hitContextLimit: stopReason === "length",
+      estimatedTokens: estimateContextTokens(chat.messages, wakePrompt, tools),
+      systemPrompt: wakePrompt,
+      tools,
+      logPrefix: "[system-chat]",
+    });
 
     if (!turn.success) {
       const errorMessage = turn.error || `wake cycle produced no visible output (stopReason=${stopReason})`;

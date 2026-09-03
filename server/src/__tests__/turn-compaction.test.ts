@@ -314,4 +314,76 @@ describe("runEndOfTurnCompaction — phase 2a move (doc §4.4, exit criteria §7
     const logs = spyLogs(logSpy);
     expect(logs).toContain("[system-chat] End-of-turn check: no compaction");
   });
+
+  it("D3 log-only gate — fire: decision computed and logged, NOTHING executed", async () => {
+    const chat = makeChat();
+    const onCompacted = vi.fn();
+    const r = await runEndOfTurnCompaction({
+      chat,
+      contextWindow: 100_000,
+      lastUsage: 88_000,
+      estimatedTokens: 90_000,
+      logOnly: true,
+      logPrefix: "[automation:test-task]",
+      onCompacted,
+    });
+    expect(r).toEqual({ triggered: true, truncated: false, drivingTokens: 90_000, ratio: 0.9 });
+    expect(h.truncateCalls).toHaveLength(0); // the gate: no execution
+    expect(h.saveChatCalls).toHaveLength(0);
+    expect(onCompacted).not.toHaveBeenCalled();
+    const logs = spyLogs(logSpy);
+    // Formatted like the positive-path log so the gate-week data is
+    // directly comparable to post-flip behavior.
+    expect(logs).toContain(
+      "[automation:test-task] End-of-turn check (log-only, D3 gate): WOULD trigger " +
+        `(chat=test-chat, driving=90000/100000 (90.0%, trigger=80%) ` +
+        `[usage=88000, estimated=90000]) — computed, not executed`,
+    );
+  });
+
+  it("D3 log-only gate — same input WITHOUT the flag executes: the flip is a one-line removal", async () => {
+    const chat = makeChat();
+    h.truncateResult = { truncated: true, removedCount: 4 };
+    const r = await runEndOfTurnCompaction({
+      chat,
+      contextWindow: 100_000,
+      lastUsage: 88_000,
+      estimatedTokens: 90_000,
+    });
+    expect(r).toEqual({ triggered: true, truncated: true, drivingTokens: 90_000, ratio: 0.9 });
+    expect(h.truncateCalls).toHaveLength(1);
+    expect(h.saveChatCalls).toHaveLength(1);
+  });
+
+  it("D3 log-only gate — quiet path: negative log carries the gate tag, no execution", async () => {
+    const chat = makeChat();
+    const r = await runEndOfTurnCompaction({
+      chat,
+      contextWindow: 100_000,
+      lastUsage: 40_000,
+      estimatedTokens: 42_000,
+      logOnly: true,
+    });
+    expect(r.triggered).toBe(false);
+    expect(h.truncateCalls).toHaveLength(0);
+    const logs = spyLogs(logSpy);
+    expect(logs).toContain("[compaction] End-of-turn check (log-only, D3 gate): no compaction");
+  });
+
+  it("D3 log-only gate — hitContextLimit also computes-and-logs only (the gate covers the forced path)", async () => {
+    const chat = makeChat();
+    const r = await runEndOfTurnCompaction({
+      chat,
+      contextWindow: 100_000,
+      lastUsage: 0,
+      estimatedTokens: 10_000,
+      hitContextLimit: true,
+      logOnly: true,
+    });
+    // Without the gate this would force-compact; with it, the first
+    // stopReason=length automation run of the gate week changes nothing.
+    expect(r).toMatchObject({ triggered: true, truncated: false });
+    expect(h.truncateCalls).toHaveLength(0);
+    expect(h.saveChatCalls).toHaveLength(0);
+  });
 });
