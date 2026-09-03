@@ -495,6 +495,45 @@ body::before {
 }
 
 /*
+ * Prefill label wave — a band of light sweeps left→right across the
+ * "Prefilling context" label (ModelProgressIndicator in ChatView.tsx).
+ * The glyphs are painted by a 250%-wide gradient clipped to the text: the
+ * bright stop is the cluster (~25% of the text width), its soft edges are
+ * the feather. background-position 100%→0% moves the band center from
+ * (1−S/2)·W off the left edge to (S/2)·W off the right (S = background
+ * size), so both loop endpoints are fully off-glyph: a seamless wave with a
+ * rest between passes (~20% of the cycle at S=250%). Phase is spatial, not
+ * index-based, so the label can change underneath the animation (phase
+ * switches, percent ticks) without re-phasing. Paint-only
+ * (background-position) — acceptable at this element's size, unlike the
+ * opacity-only discipline Five Beats needs for its larger surface.
+ */
+.prefill-sweep {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    rgba(var(--theme-accent), 0.75) 45%,
+    color-mix(in srgb, rgb(var(--theme-accent)) 60%, white) 50%,
+    rgba(var(--theme-accent), 0.75) 55%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: prefill-sweep 2.4s linear infinite;
+}
+@keyframes prefill-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prefill-sweep {
+    animation: none;
+    background-image: none;
+    color: rgba(var(--theme-accent), 0.75);
+  }
+}
+
+/*
  * Five Beats — tool-call activity indicator (see components/Beats.tsx).
  * Five squares, each an LED with three states: off, partial, full.
  * One beat (var(--beat-cycle), default = one polyhedron decode pulse):

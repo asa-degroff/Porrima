@@ -81,7 +81,7 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
       style={{ color: "rgba(var(--theme-accent), 0.75)" }}
     >
       <PrefillActivityIcon />
-      <span className="whitespace-nowrap animate-pulse">
+      <span className="whitespace-nowrap prefill-sweep">
         {label}
         {percent !== undefined ? ` ${percent}%` : ""}
       </span>
