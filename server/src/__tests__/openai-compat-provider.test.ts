@@ -2,12 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import {
   computePrefillProgress,
   estimatePromptTokensForProgress,
+  normalizeImageForLlamaCpp,
   promptWorkTokens,
   readProcessedTokens,
   readProcessedTokensWithSource,
+  resolveImagePixelBudget,
   readPromptCacheTokens,
   readPromptTokens,
   extractSlotProgress,
@@ -644,5 +647,143 @@ describe("resolveOccupiedSlotCacheState", () => {
     expect(
       resolveOccupiedSlotCacheState({ lastRequestDigest: undefined, requestDigest: "abc" }),
     ).toBe("cold");
+  });
+});
+
+describe("resolveImagePixelBudget", () => {
+  const STANDARD = 1280 * 784;
+  const DETAILED = 2048 * 784;
+  const MAXIMUM = 4096 * 784;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to the standard preset when the setting is absent or unknown", () => {
+    expect(resolveImagePixelBudget(undefined)).toBe(STANDARD);
+    expect(resolveImagePixelBudget(null)).toBe(STANDARD);
+    expect(resolveImagePixelBudget({})).toBe(STANDARD);
+    expect(resolveImagePixelBudget({ imageCapPreset: "bogus" as any })).toBe(STANDARD);
+  });
+
+  it("resolves each preset to its pixel budget", () => {
+    expect(resolveImagePixelBudget({ imageCapPreset: "standard" })).toBe(STANDARD);
+    expect(resolveImagePixelBudget({ imageCapPreset: "detailed" })).toBe(DETAILED);
+    expect(resolveImagePixelBudget({ imageCapPreset: "maximum" })).toBe(MAXIMUM);
+  });
+
+  it("clamps the budget down by the LLAMACPP_MAX_IMAGE_PIXELS ops ceiling", () => {
+    vi.stubEnv("LLAMACPP_MAX_IMAGE_PIXELS", "500000");
+    expect(resolveImagePixelBudget({ imageCapPreset: "standard" })).toBe(500000);
+    expect(resolveImagePixelBudget({ imageCapPreset: "detailed" })).toBe(500000);
+    expect(resolveImagePixelBudget({ imageCapPreset: "maximum" })).toBe(500000);
+  });
+
+  it("never exceeds the engine hard cap, even if the env asks for more", () => {
+    vi.stubEnv("LLAMACPP_MAX_IMAGE_PIXELS", "999999999");
+    expect(resolveImagePixelBudget({ imageCapPreset: "maximum" })).toBe(MAXIMUM);
+  });
+
+  it("ignores an invalid env value and keeps the hard cap", () => {
+    vi.stubEnv("LLAMACPP_MAX_IMAGE_PIXELS", "not-a-number");
+    expect(resolveImagePixelBudget({ imageCapPreset: "maximum" })).toBe(MAXIMUM);
+  });
+});
+
+describe("normalizeImageForLlamaCpp", () => {
+  const STANDARD = 1280 * 784; // 1,003,520 px
+  const MAXIMUM = 4096 * 784; // 3,211,264 px
+
+  async function pngBase64(width: number, height: number): Promise<string> {
+    return (
+      await sharp({ create: { width, height, channels: 3, background: { r: 80, g: 120, b: 200 } } })
+        .png()
+        .toBuffer()
+    ).toString("base64");
+  }
+
+  async function webpBase64(width: number, height: number): Promise<string> {
+    return (
+      await sharp({ create: { width, height, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+        .webp()
+        .toBuffer()
+    ).toString("base64");
+  }
+
+  async function metadataOf(data: string) {
+    return sharp(Buffer.from(data, "base64")).metadata();
+  }
+
+  it("resizes an oversized supported image to the pixel budget, preserving format", async () => {
+    const data = await pngBase64(3000, 1500); // 4.5 MP
+    const result = await normalizeImageForLlamaCpp(data, "image/png", STANDARD);
+
+    expect(result.mimeType).toBe("image/png");
+    const metadata = await metadataOf(result.data);
+    expect((metadata.width ?? 0) * (metadata.height ?? 0)).toBeLessThanOrEqual(STANDARD);
+    // Not clobbered: still recognizably the original image
+    expect(metadata.width ?? 0).toBeGreaterThanOrEqual(800);
+    expect(metadata.height ?? 0).toBeGreaterThanOrEqual(400);
+  });
+
+  it("aligns resized dimensions to the engine's 28px smart_resize grid", async () => {
+    const data = await pngBase64(3000, 1500);
+    const result = await normalizeImageForLlamaCpp(data, "image/png", STANDARD);
+
+    const metadata = await metadataOf(result.data);
+    expect((metadata.width ?? 0) % 28).toBe(0);
+    expect((metadata.height ?? 0) % 28).toBe(0);
+  });
+
+  it("passes through supported images within the budget byte-identically", async () => {
+    const data = await pngBase64(640, 480);
+    const result = await normalizeImageForLlamaCpp(data, "image/png", STANDARD);
+
+    expect(result).toEqual({ data, mimeType: "image/png" });
+  });
+
+  it("caps an oversized WebP (the 2026-08-28 production crash class)", async () => {
+    const webp = await webpBase64(3000, 2000); // 6 MP
+    const result = await normalizeImageForLlamaCpp(webp, "image/webp", STANDARD);
+
+    expect(result.mimeType).toBe("image/jpeg");
+    const metadata = await metadataOf(result.data);
+    expect((metadata.width ?? 0) * (metadata.height ?? 0)).toBeLessThanOrEqual(STANDARD);
+  });
+
+  it("converts small unsupported formats to jpeg without enlarging", async () => {
+    const webp = await webpBase64(100, 100);
+    const result = await normalizeImageForLlamaCpp(webp, "image/webp");
+
+    expect(result.mimeType).toBe("image/jpeg");
+    const metadata = await metadataOf(result.data);
+    expect(metadata.width).toBe(100);
+    expect(metadata.height).toBe(100);
+  });
+
+  it("clamps a budget above the engine hard cap to the hard cap", async () => {
+    const data = await pngBase64(4000, 4000); // 16 MP
+    const result = await normalizeImageForLlamaCpp(data, "image/png", 999_999_999);
+
+    const metadata = await metadataOf(result.data);
+    expect((metadata.width ?? 0) * (metadata.height ?? 0)).toBeLessThanOrEqual(MAXIMUM);
+  });
+
+  it("normalizes image/jpg to the canonical image/jpeg on re-encode", async () => {
+    const jpeg = (
+      await sharp({ create: { width: 3000, height: 2000, channels: 3, background: { r: 9, g: 9, b: 9 } } })
+        .jpeg({ quality: 90 })
+        .toBuffer()
+    ).toString("base64");
+    const result = await normalizeImageForLlamaCpp(jpeg, "image/jpg", STANDARD);
+
+    expect(result.mimeType).toBe("image/jpeg");
+  });
+
+  it("passes through undecodable payloads instead of throwing", async () => {
+    const garbage = "a".repeat(1000);
+    const result = await normalizeImageForLlamaCpp(garbage, "image/jpeg");
+
+    expect(result).toEqual({ data: garbage, mimeType: "image/jpeg" });
   });
 });

@@ -480,6 +480,9 @@ export interface Settings {
   // "auto" lets llama.cpp select physical slots and restore prompt cache;
   // "enforced" sends app-managed id_slot leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // Vision image size cap preset (total-pixel budget before images reach
+  // llama.cpp). "standard" (default) / "detailed" / "maximum".
+  imageCapPreset?: "standard" | "detailed" | "maximum";
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;       // default 16384 — context window for extraction server
   extractionMaxTokens?: number;     // default 4000 — max output tokens for extraction calls

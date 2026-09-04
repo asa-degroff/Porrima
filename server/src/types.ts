@@ -425,6 +425,13 @@ export interface Settings {
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
   // id_slot based on app-managed leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // Vision image size cap preset — total-pixel budget applied before images are
+  // sent to llama.cpp (chat, tool-result, and vision-analysis paths share it).
+  // "standard" (default, 1280 tokens / ~1 MP) is safe at any context size;
+  // "detailed" (2048 tokens / ~1.6 MP) is for dense documents; "maximum" is the
+  // engine's 4096-token ceiling (small contexts only). The provider clamps any
+  // preset by LLAMACPP_MAX_IMAGE_PIXELS and the engine hard cap.
+  imageCapPreset?: "standard" | "detailed" | "maximum";
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;       // default 16384 — context window for extraction server
   extractionMaxTokens?: number;     // default 4000 — max output tokens for extraction calls

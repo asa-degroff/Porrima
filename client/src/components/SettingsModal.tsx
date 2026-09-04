@@ -256,6 +256,14 @@ const RETRIEVAL_DEPTH_OPTIONS: Array<{ id: RetrievalDepthProfile; label: string;
   { id: "custom", label: "Custom", description: "Use the advanced controls below." },
 ];
 
+type ImageCapPreset = NonNullable<Settings["imageCapPreset"]>;
+
+const IMAGE_CAP_OPTIONS: Array<{ id: ImageCapPreset; label: string; description: string }> = [
+  { id: "standard", label: "Standard · ~1 MP", description: "Small images for efficiency" },
+  { id: "detailed", label: "Detailed · ~1.6 MP", description: "Medium images" },
+  { id: "maximum", label: "Maximum · 3.2 MP", description: "Large images for detail" },
+];
+
 interface RetrievalPresetValues {
   rerankerTimeoutMs: number;
   memoryContextSearchQueryChars: number;
@@ -338,6 +346,10 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
 
 function coerceRetrievalDepthProfile(profile: Settings["retrievalDepthProfile"]): RetrievalDepthProfile {
   return RETRIEVAL_DEPTH_OPTIONS.some((option) => option.id === profile) ? profile! : "balanced";
+}
+
+function coerceImageCapPreset(preset: Settings["imageCapPreset"]): ImageCapPreset {
+  return IMAGE_CAP_OPTIONS.some((option) => option.id === preset) ? preset! : "standard";
 }
 
 function RetrievalRange({
@@ -619,6 +631,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [imageBackend, setImageBackend] = useState<"comfyui" | "sdcpp">(settings.imageBackend ?? "comfyui");
   const [imageSandboxEnabled, setImageSandboxEnabled] = useState(settings.imageSandboxEnabled ?? true);
+  const [imageCapPreset, setImageCapPreset] = useState<ImageCapPreset>(coerceImageCapPreset(settings.imageCapPreset));
   const [sdcppUrl, setSdcppUrl] = useState(settings.sdcppUrl || "http://127.0.0.1:1234");
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [imageSettingsTab, setImageSettingsTab] = useState<ImageSettingsTab>("backend");
@@ -2148,6 +2161,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       sdcppUrl: sdcppUrl.trim() || undefined,
       imageBackend,
       imageSandboxEnabled,
+      imageCapPreset,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
@@ -5562,6 +5576,28 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   accentColor="purple"
                   ariaLabel="Show Image Sandbox workspace"
                 />
+              </div>
+              <div className="border-t border-white/10 px-3 py-3">
+                <div className="text-sm font-medium text-white/60">Vision image size</div>
+                <p className="mt-0.5 text-xs text-white/30">
+                  Max size for images sent to the vision model.
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {IMAGE_CAP_OPTIONS.map((option) => {
+                    const active = imageCapPreset === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setImageCapPreset(option.id)}
+                        className={`text-left rounded-lg border px-3 py-2 transition-all pressable ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
+                      >
+                        <div className="text-xs font-medium">{option.label}</div>
+                        <div className="text-[10px] text-white/35 mt-0.5 leading-snug">{option.description}</div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 

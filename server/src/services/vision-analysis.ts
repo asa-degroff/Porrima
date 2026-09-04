@@ -9,6 +9,7 @@ import {
   ensureModelLoaded,
   isLlamaCppChildConnectionError,
   normalizeImageForLlamaCpp,
+  resolveImagePixelBudget,
 } from "./openai-compat-provider.js";
 import { discoverAllModels } from "./models.js";
 import type { InferenceModel } from "../types.js";
@@ -430,7 +431,10 @@ export async function chatAboutImage(
 
 async function buildImageDataUrl(imageData: string): Promise<string> {
   const { base64, mimeType } = parseImageDataUrl(imageData);
-  const norm = await normalizeImageForLlamaCpp(base64, mimeType);
+  // Same pixel budget as the chat path (settings preset, clamped by ops/engine
+  // ceilings) — vision analysis and chats share the llama server's VRAM.
+  const budget = resolveImagePixelBudget(await getSettings().catch(() => undefined));
+  const norm = await normalizeImageForLlamaCpp(base64, mimeType, budget);
   return `data:${norm.mimeType};base64,${norm.data}`;
 }
 

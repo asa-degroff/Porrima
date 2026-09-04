@@ -24,10 +24,19 @@ import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
 import { recordContextObservation } from "./context-high-water.js";
 import { countLlamaTextTokens } from "./token-count.js";
+import { getSettings } from "./chat-storage.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
 // to JPEG here before forwarding.
+//
+// We also cap TOTAL image pixels before forwarding. Qwen-VL-family encoders yield
+// one image token per 28x28 px block (patch 14, 2x2 spatial merge), and the ViT's
+// full-attention layers allocate per-head buffers that scale with the SQUARE of the
+// patch count. On a saturated VRAM budget, one oversized image makes a one-shot
+// cudaMalloc that fails and abort-processes the whole llama.cpp server (taking down
+// every in-flight slot with it) — calibrated on this rig: a ~3.1 MP photo made a
+// 470.75 MiB allocation that killed the 215k-ctx server (2026-08-28).
 const LLAMACPP_SUPPORTED_IMAGE_MIME = new Set([
   "image/jpeg",
   "image/jpg",
@@ -36,26 +45,128 @@ const LLAMACPP_SUPPORTED_IMAGE_MIME = new Set([
   "image/bmp",
 ]);
 
+// Qwen-VL's mtmd hard default is 4096 image tokens; anything above it is
+// downsampled by llama.cpp's smart_resize anyway, so a budget above this buys
+// nothing. The app-level cap must stay at or below it.
+const IMAGE_TOKEN_PX = 784; // 28x28 px per merged image token
+const LLAMACPP_HARD_CAP_PIXELS = 4096 * IMAGE_TOKEN_PX; // 3,211,264 px
+
+export type ImageCapPreset = "standard" | "detailed" | "maximum";
+
+export const IMAGE_CAP_PRESETS: Record<ImageCapPreset, { label: string; pixels: number; tokens: number }> = {
+  standard: { label: "Standard", pixels: 1280 * IMAGE_TOKEN_PX, tokens: 1280 },  // 1,003,520 px (~1 MP)
+  detailed: { label: "Detailed", pixels: 2048 * IMAGE_TOKEN_PX, tokens: 2048 },  // 1,572,864 px (~1.6 MP)
+  maximum: { label: "Maximum", pixels: 4096 * IMAGE_TOKEN_PX, tokens: 4096 },    // engine ceiling
+};
+
+// Ops ceiling in pixels (hard cap if unset). Wins over presets and settings.
+function readImageCapEnvCeiling(): number {
+  const value = readPositiveIntEnv("LLAMACPP_MAX_IMAGE_PIXELS", LLAMACPP_HARD_CAP_PIXELS);
+  return Math.min(value, LLAMACPP_HARD_CAP_PIXELS);
+}
+
+// Resolve the pixel budget for images about to be forwarded: the user's preset
+// (settings.imageCapPreset, default "standard"), clamped by the ops ceiling
+// (LLAMACPP_MAX_IMAGE_PIXELS) and the engine hard cap. Unavailable or unknown
+// settings fall back to the safe default.
+export function resolveImagePixelBudget(settings?: { imageCapPreset?: string } | null): number {
+  const preset: ImageCapPreset =
+    settings?.imageCapPreset === "detailed" || settings?.imageCapPreset === "maximum"
+      ? settings.imageCapPreset
+      : "standard";
+  return Math.min(IMAGE_CAP_PRESETS[preset].pixels, readImageCapEnvCeiling());
+}
+
 function isPlaceholderEllipsis(text: string | undefined): boolean {
   if (!text) return false;
   const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
   return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
 }
 
+// Resize target for an image that exceeds the pixel budget: aspect-preserving,
+// and each dimension floored to the engine's 28px smart_resize grid. What we
+// forward is then exactly what llama.cpp will use (no second transcode on the
+// server side), and the bytes stay stable across repeated sends of the same
+// image — which keeps the slot cache's image-id matching honest.
+function targetSizeForBudget(width: number, height: number, budget: number): { width: number; height: number } {
+  const scale = Math.sqrt(budget / (width * height));
+  const align = (px: number) => Math.max(28, 28 * Math.floor((px * scale) / 28));
+  return { width: align(width), height: align(height) };
+}
+
+// Re-encode a supported format to itself (PNG stays PNG: the artifact review
+// loop is pixel-strict, and a byte-stable format keeps repeated sends stable).
+async function reencodeSupportedFormat(buf: Buffer, mimeType: string, tw: number, th: number): Promise<Buffer> {
+  const mime = mimeType.toLowerCase();
+  let pipe = sharp(buf).resize(tw, th, { fit: "inside", withoutEnlargement: true });
+  if (mime === "image/png") pipe = pipe.png();
+  else if (mime === "image/gif") pipe = pipe.gif();
+  else pipe = pipe.jpeg({ quality: 90 }); // image/jpeg / image/jpg / image/bmp (BMP is decode-only in sharp)
+  return pipe.toBuffer();
+}
+
 export async function normalizeImageForLlamaCpp(
   data: string,
-  mimeType: string
+  mimeType: string,
+  maxPixels?: number
 ): Promise<{ data: string; mimeType: string }> {
-  if (LLAMACPP_SUPPORTED_IMAGE_MIME.has(mimeType.toLowerCase())) {
-    return { data, mimeType };
+  const budget = Math.min(
+    Math.max(1, Math.floor(maxPixels ?? LLAMACPP_HARD_CAP_PIXELS)),
+    LLAMACPP_HARD_CAP_PIXELS
+  );
+  const isSupported = LLAMACPP_SUPPORTED_IMAGE_MIME.has(mimeType.toLowerCase());
+
+  if (isSupported) {
+    let width = 0;
+    let height = 0;
+    try {
+      const metadata = await sharp(Buffer.from(data, "base64")).metadata();
+      width = metadata.width ?? 0;
+      height = metadata.height ?? 0;
+    } catch (err) {
+      // Unreadable header — forward as-is and let llama.cpp reject it. Log it:
+      // an image that bypassed the size cap is exactly the event that should be loud.
+      console.warn(
+        `[openai-compat] Could not read ${mimeType} image header; forwarding without size cap:`,
+        err instanceof Error ? err.message : err
+      );
+      return { data, mimeType };
+    }
+    if (width === 0 || height === 0 || width * height <= budget) {
+      return { data, mimeType };
+    }
+    try {
+      const { width: tw, height: th } = targetSizeForBudget(width, height, budget);
+      const out = await reencodeSupportedFormat(Buffer.from(data, "base64"), mimeType, tw, th);
+      const lowerMime = mimeType.toLowerCase();
+      const outMime = lowerMime === "image/png" || lowerMime === "image/gif" ? lowerMime : "image/jpeg";
+      return { data: out.toString("base64"), mimeType: outMime };
+    } catch (err) {
+      console.warn(
+        `[openai-compat] Failed to resize ${mimeType} image for llama.cpp:`,
+        err instanceof Error ? err.message : err
+      );
+      return { data, mimeType };
+    }
   }
+
+  // Unsupported format (e.g. WebP): re-encode to JPEG (stb_image cannot decode
+  // WebP), resizing to the budget when the image is oversized.
   try {
     const buf = Buffer.from(data, "base64");
-    const out = await sharp(buf).jpeg({ quality: 90 }).toBuffer();
+    const metadata = await sharp(buf).metadata();
+    let pipe = sharp(buf);
+    const w = metadata.width ?? 0;
+    const h = metadata.height ?? 0;
+    if (w > 0 && h > 0 && w * h > budget) {
+      const { width: tw, height: th } = targetSizeForBudget(w, h, budget);
+      pipe = pipe.resize(tw, th, { fit: "inside", withoutEnlargement: true });
+    }
+    const out = await pipe.jpeg({ quality: 90 }).toBuffer();
     return { data: out.toString("base64"), mimeType: "image/jpeg" };
   } catch (err) {
     console.warn(
-      `[openai-compat] Failed to re-encode ${mimeType} image for llama.cpp:`,
+      `[openai-compat] Failed to normalize ${mimeType} image for llama.cpp:`,
       err instanceof Error ? err.message : err
     );
     return { data, mimeType };
@@ -1036,6 +1147,10 @@ function startLlamaPrefillMonitor(input: {
 async function convertMessages(model: Model<Api>, context: Context): Promise<any[]> {
   const transformed = transformMessagesForProvider(context.messages, model);
   const params: any[] = [];
+  // Vision image pixel budget: user's preset (settings.imageCapPreset) clamped by
+  // the ops ceiling and the engine hard cap. Resolved once per request; a settings
+  // read failure falls back to the safe "standard" default inside the resolver.
+  const imagePixelBudget = resolveImagePixelBudget(await getSettings().catch(() => undefined));
 
   if (context.systemPrompt) {
     // Gemma 4 models need /think directive prepended to reliably enable thinking
@@ -1074,7 +1189,8 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
               const rawMime = (item as any).mimeType || "image/jpeg";
               const { data, mimeType } = await normalizeImageForLlamaCpp(
                 (item as any).data,
-                rawMime
+                rawMime,
+                imagePixelBudget
               );
               parts.push({
                 type: "image_url",
@@ -1151,7 +1267,8 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
               const rawMime = (block as any).mimeType || "image/jpeg";
               const { data, mimeType } = await normalizeImageForLlamaCpp(
                 (block as any).data,
-                rawMime
+                rawMime,
+                imagePixelBudget
               );
               imageParts.push({
                 type: "image_url",
