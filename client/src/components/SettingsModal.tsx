@@ -99,6 +99,7 @@ const SECTIONS = [
   { id: 'presets', label: 'Quick chats' },
   { id: 'api-keys', label: 'API Keys' },
   { id: 'images', label: 'Images' },
+  { id: 'vision', label: 'Vision' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
   { id: 'backups', label: 'Backups' },
@@ -5577,28 +5578,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   ariaLabel="Show Image Sandbox workspace"
                 />
               </div>
-              <div className="border-t border-white/10 px-3 py-3">
-                <div className="text-sm font-medium text-white/60">Vision image size</div>
-                <p className="mt-0.5 text-xs text-white/30">
-                  Max size for images sent to the vision model.
-                </p>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {IMAGE_CAP_OPTIONS.map((option) => {
-                    const active = imageCapPreset === option.id;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => setImageCapPreset(option.id)}
-                        className={`text-left rounded-lg border px-3 py-2 transition-all pressable ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
-                      >
-                        <div className="text-xs font-medium">{option.label}</div>
-                        <div className="text-[10px] text-white/35 mt-0.5 leading-snug">{option.description}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
 
             <div className="flex items-center gap-1 rounded-md border border-white/10 bg-black/10 p-1" role="tablist" aria-label="Image generation settings">
@@ -5752,6 +5731,42 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Vision — how images are sized before they reach the vision model.
+              Separate system from image generation: this cap governs what the
+              model SEES (chat, image sandbox, image analysis), not what the
+              generators produce. */}
+          <div id="vision" className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Vision</h3>
+            <p className="text-white/30 text-xs">
+              Images sent to the vision model are downscaled to the size below. Chat, image sandbox, and image analysis share this cap.
+            </p>
+
+            <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+              <div className="px-3 py-3">
+                <div className="text-sm font-medium text-white/60">Vision image size</div>
+                <p className="mt-0.5 text-xs text-white/30">
+                  Larger images give the model more detail, but each image makes a bigger GPU allocation on the inference server.
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {IMAGE_CAP_OPTIONS.map((option) => {
+                    const active = imageCapPreset === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setImageCapPreset(option.id)}
+                        className={`text-left rounded-lg border px-3 py-2 transition-all pressable ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
+                      >
+                        <div className="text-xs font-medium">{option.label}</div>
+                        <div className="text-[10px] text-white/35 mt-0.5 leading-snug">{option.description}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Skills Section */}
