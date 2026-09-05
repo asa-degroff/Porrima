@@ -437,6 +437,11 @@ export class PassiveMemoryRecallController {
     return this.readyQueue[0];
   }
 
+  /**
+   * In-memory bookkeeping only: the injection left the ready queue and the
+   * live loop context. This does NOT persist the delivery mark — see
+   * markPersisted for the durable half of the invariant.
+   */
   markApplied(injection: PassiveMemoryRecallInjection, iteration: number): void {
     const idx = this.readyQueue.indexOf(injection);
     if (idx >= 0) this.readyQueue.splice(idx, 1);
@@ -446,7 +451,24 @@ export class PassiveMemoryRecallController {
     }
     this.totalInjected += injection.memoryIds.length;
     this.lastInjectionIteration = iteration;
-    markMemoryDeltaInjected(this.chatId, injection.memoryIds);
+  }
+
+  /**
+   * Durable delivery mark for passive recall.
+   *
+   * Invariant (09-05, state/wire divergence audit): deltaIds may claim a
+   * memory delivered ONLY after the recall row carrying it has been durably
+   * persisted (saveChat resolved). Routes call this AFTER the save that
+   * persists the row — never earlier. If a turn dies before that save, the
+   * ids stay unmarked and remain re-recallable on the next turn: a possible
+   * duplicate, never a silent loss. The old markApplied marked at injection
+   * time, so a mid-turn recall whose row never reached the DB (interrupted
+   * turn, deferred persistence) left deltaIds claiming a delivery the wire
+   * never made — the 5c30ddb7 instance (09-04 audit).
+   */
+  markPersisted(memoryIds: string[]): void {
+    if (memoryIds.length === 0) return;
+    markMemoryDeltaInjected(this.chatId, memoryIds);
   }
 
   toReplayUserMessage(injection: PassiveMemoryRecallInjection): AgentMessage | null {
@@ -597,7 +619,9 @@ export class PassiveMemoryRecallController {
         }
         this.totalInjected += memoryIds.length;
         this.lastInjectionIteration = options.iteration;
-        markMemoryDeltaInjected(this.chatId, memoryIds);
+        // persist.onReady resolved — the row is durable — so the delivery
+        // mark is safe (mark-after-persist order).
+        this.markPersisted(memoryIds);
         log(
           `[passive-memory] chat=${this.chatId} post-turn injected ${selected.length} memor${
             selected.length === 1 ? "y" : "ies"

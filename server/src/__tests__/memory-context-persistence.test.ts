@@ -676,3 +676,101 @@ describe("late-freeze guard (empty first retrieval then mid-chat freeze)", () =>
     expect(result.systemPrompt.endsWith(row.frozenSection)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Passive recall delivery marks — the state/wire invariant (09-05)
+//
+// deltaIds may claim a recall delivery ONLY after the recall row is durably
+// persisted. markApplied is in-memory bookkeeping; markPersisted is the
+// durable claim, called by routes after the save that persists the row.
+// Regression pin: the 5c30ddb7 instance (09-04 audit) — a mid-turn recall
+// marked at injection time whose row never reached the DB.
+// ---------------------------------------------------------------------------
+
+describe("passive recall delivery marks (state/wire invariant)", () => {
+  const SECTION = "## Frozen section marker — exact bytes";
+
+  const setup = async () => {
+    const rows = new Map<string, EmulatedRow>();
+    rows.set("chat-1", {
+      frozenSection: SECTION,
+      frozenIds: ["f1"],
+      deltaIds: [],
+      dirty: true,
+    });
+    const { mod } = await loadMemoryContext(rows);
+    // Same module graph as `mod` — the controller's markMemoryDeltaInjected
+    // must hit the same in-memory contextState Map the soft reset hydrates.
+    const pr = await import("../services/passive-memory-recall.js");
+    return {
+      rows,
+      mod,
+      controller: new pr.PassiveMemoryRecallController("chat-1"),
+    };
+  };
+
+  const injection = (ids: string[]) => ({
+    content: "[System context - passively recalled memories]",
+    memoryIds: ids,
+    memories: ids,
+    createdAt: Date.now(),
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("markApplied alone never claims a delivery in memory_context_state", async () => {
+    const { rows, mod, controller } = await setup();
+    mod.softResetMemoryContext("chat-1"); // hydrate the Map from the row
+
+    controller.markApplied(injection(["m1", "m2"]), 1);
+
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+    expect(rows.get("chat-1")!.dirty).toBe(true); // soft-reset state untouched
+  });
+
+  it("markPersisted is the only durable claim — applied then persisted marks", async () => {
+    const { rows, mod, controller } = await setup();
+    mod.softResetMemoryContext("chat-1");
+
+    controller.markApplied(injection(["m1", "m2"]), 1);
+    controller.markPersisted(["m1", "m2"]);
+
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["m1", "m2"]);
+  });
+
+  it("applied-but-never-persisted leaves no claim (the interrupted-turn direction)", async () => {
+    const { rows, mod, controller } = await setup();
+    mod.softResetMemoryContext("chat-1");
+
+    // Mid-turn recall applied; the turn dies before the flush's save, so
+    // markPersisted is never called. The ids must stay re-recallable.
+    controller.markApplied(injection(["m1"]), 1);
+
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+    // And a later, honest re-recall of the same id still lands:
+    controller.markPersisted(["m1"]);
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["m1"]);
+  });
+
+  it("markPersisted without live state is a safe no-op (hard-reset / restart direction)", async () => {
+    const { rows, controller } = await setup();
+    // No softReset: the in-memory Map has no entry for chat-1, as after a
+    // resetMemoryContext or process restart. The row exists but the mark has
+    // nowhere to land — it must not resurrect state or throw.
+    controller.markPersisted(["m1"]);
+
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+  });
+
+  it("markPersisted([]) is a no-op", async () => {
+    const { rows, mod, controller } = await setup();
+    mod.softResetMemoryContext("chat-1");
+
+    controller.markPersisted([]);
+
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+  });
+});

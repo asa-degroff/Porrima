@@ -545,6 +545,8 @@ export async function runHeadlessChatTurn(
     try {
       chat.messages.push(row);
       await saveChat(chat);
+      // Row is durable — safe to claim the delivery in state.
+      passiveRecall.markPersisted(injection.memoryIds);
       messages.push(agentMessage);
       passiveRecall.markApplied(injection, iterations);
       console.log(

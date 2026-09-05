@@ -1225,6 +1225,14 @@ async function handleChatStream(
     state.committedThinkingDurationMs = 0;
     state.hasCommittedToolLoopRows = false;
     state.pendingFinalAssistantMessage = null;
+    if (state.pendingPassiveRecallRows.length > 0) {
+      // Unflushed recall rows are being dropped without their save — and
+      // without their delivery marks. The memories stay re-recallable (no
+      // silent loss), but this should not happen in a healthy turn.
+      console.warn(
+        `[passive-memory] chat=${chat.id} accumulator reset dropped ${state.pendingPassiveRecallRows.length} unflushed recall row(s) — ids left unmarked`,
+      );
+    }
     state.pendingPassiveRecallRows = [];
     state.pendingTokenEstimateObservation = null;
     // Resync snapshot cursors — see declarations below; reset so a follow-up
@@ -1544,10 +1552,41 @@ async function handleChatStream(
     };
   }
 
-  function flushPendingPassiveRecallRows(): void {
+  /**
+   * Move deferred mid-turn recall rows into chat.messages AND persist them.
+   *
+   * The durable delivery mark rides on this save: the rows' _recalledMemoryIds
+   * are marked in memory_context_state only after saveChat resolves, so
+   * deltaIds never claims a recall delivery whose row is not in the DB. If
+   * the save fails (or a turn dies before this flush), the ids stay unmarked
+   * and remain re-recallable next turn — a possible duplicate, never a
+   * silent loss (state/wire divergence audit, 09-05).
+   */
+  async function flushPendingPassiveRecallRows(
+    recall: PassiveMemoryRecallController | null,
+  ): Promise<void> {
     if (state.pendingPassiveRecallRows.length === 0) return;
-    chat.messages.push(...state.pendingPassiveRecallRows);
+    const rows = state.pendingPassiveRecallRows;
+    const ids = rows.flatMap((r) => r._recalledMemoryIds ?? []);
     state.pendingPassiveRecallRows = [];
+    chat.messages.push(...rows);
+    try {
+      await saveChat(chat);
+      if (ids.length > 0) {
+        recall?.markPersisted(ids);
+        console.log(
+          `[passive-memory] chat=${chat.id} ${ids.length} deferred recall id(s) marked delivered after persist`,
+        );
+      }
+    } catch (err) {
+      // Rows are in chat.messages (a later save will persist them) but the
+      // mark is NOT committed — fail safe toward re-recall, not toward a
+      // claimed delivery the wire may never have.
+      console.warn(
+        `[passive-memory] chat=${chat.id} deferred recall rows not persisted — ${ids.length} id(s) left unmarked:`,
+        err,
+      );
+    }
   }
 
   /** Flush any active thinking timer into accumulated duration */
@@ -2195,10 +2234,17 @@ async function handleChatStream(
                 // tool fragment, but chat.messages may not have persisted it
                 // yet. Defer the hidden row until turn_end commits that
                 // fragment so replay preserves the live KV-cache prompt order.
+                // The delivery mark is deferred with it — flushPendingPassiveRecallRows
+                // marks the ids only after the row is durably saved.
                 state.pendingPassiveRecallRows.push(row);
               } else {
                 chat.messages.push(row);
                 await saveChat(chat);
+                // Row is durable — safe to claim the delivery in state.
+                // markPersisted cannot throw (persistContextState warns
+                // internally), so a mark failure here does not trip the
+                // outer catch and roll back the persisted row.
+                passiveRecall.markPersisted(injection.memoryIds);
               }
               messages.push(agentMessage);
               if (messages !== context.messages) {
@@ -2710,7 +2756,7 @@ async function handleChatStream(
           } else {
             state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
           }
-          flushPendingPassiveRecallRows();
+          await flushPendingPassiveRecallRows(passiveRecall);
 
           // Compute a current-context estimate that accounts for accumulated
           // tool results. Raw usage.totalTokens reflects iter=N's (input+output)
@@ -3553,7 +3599,7 @@ async function handleChatStream(
               persistedResumeMsg = buildAssistantMessageFromTurn(msg);
               upsertAssistantMessage(persistedResumeMsg);
               markUncommittedAssistantMessageCommitted(persistedResumeMsg);
-              flushPendingPassiveRecallRows();
+              await flushPendingPassiveRecallRows(passiveRecall);
               try {
                 await saveChat(chat);
                 savedResumeProgress = true;
@@ -3563,7 +3609,7 @@ async function handleChatStream(
               }
             } else {
               state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
-              flushPendingPassiveRecallRows();
+              await flushPendingPassiveRecallRows(passiveRecall);
             }
 
             // Emit iteration event so client updates token indicator in real-time
