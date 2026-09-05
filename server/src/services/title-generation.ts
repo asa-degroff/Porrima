@@ -185,7 +185,7 @@ export async function generateSystemCycleTitle(
   const systemContent =
     `Generate a short title (2-5 words) for the latest ${cycleLabel}. ` +
     "Focus on the concrete topic, outcome, or theme. " +
-    "Avoid generic titles like 'Daily Synthesis', 'Wake Cycle', or 'Code Review' unless there is no better subject. Focus on the actual content." +
+    "Avoid generic titles like 'Daily Synthesis', 'Wake Cycle', or 'Code Review', or 'Type Checks' unless there is no better subject. Focus on the actual substantive content." +
     "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation.";
   const userContent = `Latest ${cycleLabel} output:\n\n${truncatedResponse}`;
 
