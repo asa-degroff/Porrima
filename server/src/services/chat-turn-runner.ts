@@ -208,7 +208,106 @@ function joinChunks(chunks: string[]): string {
 function clampTransientAssistantText(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length <= PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS) return trimmed;
-  return `${trimmed.slice(0, PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS)}\n[truncated]`;
+  // Tail-preserving: the end of an iteration's output is its conclusion, the
+  // strongest signal for where the agent is heading. Head-clamping kept the
+  // opening and discarded the recent reasoning the recall query needs.
+  return `[truncated]\n${trimmed.slice(trimmed.length - PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS)}`;
+}
+
+/**
+ * End-of-iteration indices into the runner's chunk arrays, sealed at each
+ * turn_end since the last persisted boundary. buildTransientIterations turns
+ * them into per-iteration transient assistant messages for passive recall.
+ */
+export interface IterationMarker {
+  textChunks: number;
+  thinkingChunks: number;
+  toolCalls: number;
+  toolResults: number;
+}
+
+function buildTransientAssistantMessage(
+  textChunksRange: string[],
+  thinkingChunksRange: string[],
+  toolCallsRange: ToolCall[],
+  toolResultsRange: ChatToolResult[],
+): ChatMessage | null {
+  const textSummary = joinChunks(textChunksRange);
+  const thinking = thinkingChunksRange.join("\n\n");
+  if (
+    textSummary.length === 0 &&
+    thinking.length === 0 &&
+    toolCallsRange.length === 0 &&
+    toolResultsRange.length === 0
+  ) {
+    return null;
+  }
+  const orderedToolResults = orderToolResultsByToolCalls(toolCallsRange, toolResultsRange);
+  return {
+    role: "assistant",
+    content: clampTransientAssistantText(textSummary),
+    thinking: thinking || undefined,
+    toolCalls: toolCallsRange.length > 0
+      ? toolCallsRange.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      }))
+      : undefined,
+    toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Pure rebuild of the per-iteration transient assistant messages that passive
+ * recall searches against: one message per sealed iteration between the
+ * persisted boundary and the head of the chunk arrays, plus a trailing message
+ * for unsealed in-flight work (empty at the turn_end schedule sites, where the
+ * last marker was just pushed).
+ *
+ * Alignment depends on pi-agent-core's event contract: `turn_end` fires AFTER
+ * tool execution (the event carries `toolResults`), so a marker sealed at
+ * turn_end i already contains iteration i's tool calls and results — each
+ * slice (prev, marker] is exactly one iteration. If that event order ever
+ * changes, these slices silently shift by one iteration.
+ */
+export function buildTransientIterations(
+  boundary: IterationMarker,
+  markers: IterationMarker[],
+  arrays: {
+    textChunks: string[];
+    thinkingChunks: string[];
+    toolCalls: ToolCall[];
+    toolResults: ChatToolResult[],
+  },
+): ChatMessage[] {
+  const transient: ChatMessage[] = [];
+  let prev = {
+    textChunks: boundary.textChunks,
+    thinkingChunks: boundary.thinkingChunks,
+    toolCalls: boundary.toolCalls,
+    toolResults: boundary.toolResults,
+  };
+  for (const marker of markers) {
+    const message = buildTransientAssistantMessage(
+      arrays.textChunks.slice(prev.textChunks, marker.textChunks),
+      arrays.thinkingChunks.slice(prev.thinkingChunks, marker.thinkingChunks),
+      arrays.toolCalls.slice(prev.toolCalls, marker.toolCalls),
+      arrays.toolResults.slice(prev.toolResults, marker.toolResults),
+    );
+    if (message) transient.push(message);
+    prev = marker;
+  }
+  // Trailing in-flight iteration not yet sealed by a turn_end marker.
+  const tail = buildTransientAssistantMessage(
+    arrays.textChunks.slice(prev.textChunks),
+    arrays.thinkingChunks.slice(prev.thinkingChunks),
+    arrays.toolCalls.slice(prev.toolCalls),
+    arrays.toolResults.slice(prev.toolResults),
+  );
+  if (tail) transient.push(tail);
+  return transient;
 }
 
 export function splitAssistantMessageIntoCanonicalToolLoopRows(
@@ -313,6 +412,16 @@ export async function runHeadlessChatTurn(
   const allToolCalls: ToolCall[] = [];
   const allToolResults: ChatToolResult[] = [];
   const memoryUpdates: string[] = [];
+  // Stable identity for this headless turn, mirroring chat.ts's state.toolLoopId.
+  // Passed to passive recall so the same-turn retrieval guard has a turn key on
+  // the headless path too (parity with the HTTP route).
+  const turnId = randomUUID();
+  // End-of-iteration index markers into the chunk arrays, sealed at each
+  // turn_end since the last persisted boundary. Lets passive recall see recent
+  // iterations as distinct messages instead of one collapsed transient blob
+  // whose head gets clamped away (rebuild: buildTransientIterations).
+  // Cleared whenever the boundary advances.
+  const iterationMarkers: IterationMarker[] = [];
   let stopReason: StopReason = "stop";
   let iterations = 0;
   let needsMidTurnCompaction = false;
@@ -385,6 +494,10 @@ export async function runHeadlessChatTurn(
       generatedImages: emitter.state.generatedImages.length,
       segments: emitter.state.segments.length,
     };
+    // The persisted rows now carry this work, so the transient per-iteration
+    // markers are redundant — drop them to keep the search window aligned with
+    // the new boundary.
+    iterationMarkers.length = 0;
   };
 
   const buildAssistantMessageForState = (
@@ -431,34 +544,19 @@ export async function runHeadlessChatTurn(
   };
 
   const buildPassiveRecallSearchMessages = (): ChatMessage[] => {
-    const state = stateSinceLastPersistedBoundary();
-    const toolResults = allToolResults.slice(lastPersistedAssistantBoundary.toolResults);
-    if (
-      state.iterations === 0 &&
-      state.textSummary.length === 0 &&
-      state.thinking.length === 0 &&
-      state.toolCalls.length === 0 &&
-      toolResults.length === 0
-    ) {
-      return chat.messages;
-    }
-
-    const orderedToolResults = orderToolResultsByToolCalls(state.toolCalls, toolResults);
-    const transientAssistant: ChatMessage = {
-      role: "assistant",
-      content: clampTransientAssistantText(state.textSummary),
-      thinking: state.thinking || undefined,
-      toolCalls: state.toolCalls.length > 0
-        ? state.toolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          name: toolCall.name,
-          arguments: toolCall.arguments,
-        }))
-        : undefined,
-      toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
-      timestamp: Date.now(),
-    };
-    return [...chat.messages, transientAssistant];
+    // Emit one transient assistant message per completed iteration since the
+    // last persisted boundary, rather than collapsing the whole turn into a
+    // single blob. This keeps the recent-iteration window in
+    // buildPassiveRecallQuery aligned with actual iteration boundaries, so a
+    // long tool loop queries its latest steps instead of its earliest.
+    const transient = buildTransientIterations(lastPersistedAssistantBoundary, iterationMarkers, {
+      textChunks,
+      thinkingChunks,
+      toolCalls: allToolCalls,
+      toolResults: allToolResults,
+    });
+    if (transient.length === 0) return chat.messages;
+    return [...chat.messages, ...transient];
   };
 
   const persistAssistantSinceLastBoundary = async (): Promise<ChatMessage | null> => {
@@ -767,6 +865,20 @@ export async function runHeadlessChatTurn(
             if (thinking) thinkingChunks.push(thinking);
             emitter.setUsage(usageFromAssistantMessage(msg));
 
+            // Seal this iteration's slice of the chunk arrays so passive recall
+            // can rebuild it as a distinct transient message (fix #2).
+            // CONTRACT: pi-agent-core emits turn_end AFTER tool execution (the
+            // event carries toolResults), so allToolCalls/allToolResults
+            // already include THIS iteration's calls and results — the marker
+            // bounds exactly one iteration. If that event order ever changes,
+            // buildTransientIterations' slices shift by one iteration.
+            iterationMarkers.push({
+              textChunks: textChunks.length,
+              thinkingChunks: thinkingChunks.length,
+              toolCalls: allToolCalls.length,
+              toolResults: allToolResults.length,
+            });
+
             const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, tools);
             emitter.emitIteration({
               iteration: iterations,
@@ -782,6 +894,7 @@ export async function runHeadlessChatTurn(
               chatMessages: buildPassiveRecallSearchMessages(),
               chatType: options.passiveMemoryRecall?.chatType || "system",
               projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
+              turnId,
             });
 
             // Iteration-cap guard (turn-engine phase 1): the shared pure
@@ -916,6 +1029,7 @@ export async function runHeadlessChatTurn(
         chatMessages: chat.messages,
         chatType: options.passiveMemoryRecall?.chatType || chat.type,
         projectId: options.passiveMemoryRecall?.projectId || chat.projectId,
+        turnId,
       });
     }
   } else {
@@ -946,6 +1060,7 @@ export async function runHeadlessChatTurn(
         chatMessages: chat.messages,
         chatType: options.passiveMemoryRecall?.chatType || chat.type,
         projectId: options.passiveMemoryRecall?.projectId || chat.projectId,
+        turnId,
       });
     }
 

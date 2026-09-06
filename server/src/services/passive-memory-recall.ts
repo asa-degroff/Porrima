@@ -56,6 +56,19 @@ function clampText(text: string | undefined, maxChars: number): string {
   return `${trimmed.slice(0, maxChars)}\n[truncated]`;
 }
 
+/**
+ * Tail-preserving clamp. Within a single assistant iteration the most recent
+ * reasoning is the conclusion the agent just reached, so when a thinking block
+ * or response overflows the budget we keep the END rather than the start. This
+ * matters for long turns where one iteration's thinking exceeds the clamp.
+ */
+function clampTextTail(text: string | undefined, maxChars: number): string {
+  if (!text) return "";
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `[truncated]\n${trimmed.slice(trimmed.length - maxChars)}`;
+}
+
 function clampSignal(text: string | undefined, maxChars: number): string {
   if (!text) return "";
   const trimmed = text.replace(/\s+/g, " ").trim();
@@ -165,7 +178,9 @@ function extractToolCallSignal(toolCalls: ChatMessage["toolCalls"], maxChars = 3
     }
   }
   const joined = parts.join(" / ");
-  return joined.length > maxChars ? joined.slice(0, maxChars).trimEnd() : joined;
+  // Tail-biased: in a burst of tool calls the most recent intent is the
+  // strongest signal for where the agent is heading now.
+  return joined.length > maxChars ? joined.slice(joined.length - maxChars).trimStart() : joined;
 }
 
 function activeRecallWindow(messages: ChatMessage[]): ChatMessage[] {
@@ -181,9 +196,23 @@ function isAutomationUserPrompt(message: ChatMessage): boolean {
 }
 
 export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000): string {
-  const recent = messages
-    .filter((message) => !message._outOfContext && message.role !== "system")
-    .slice(-RECENT_MESSAGE_COUNT);
+  const eligible = messages.filter((message) => !message._outOfContext && message.role !== "system");
+
+  // Anchor on the active turn: everything from the latest user message onward.
+  // A long-running tool loop produces many assistant iterations; without this
+  // the fixed message window drags in stale prior-turn history and the query
+  // reflects where the conversation started rather than where the agent is now.
+  const active = activeRecallWindow(eligible);
+
+  // Within the active turn, always keep the originating request (active[0]) so
+  // the task anchor survives even when the turn has more iterations than the
+  // window, then fill the remaining slots with the most recent trajectory.
+  let recent: ChatMessage[];
+  if (active.length > RECENT_MESSAGE_COUNT) {
+    recent = [active[0], ...active.slice(-(RECENT_MESSAGE_COUNT - 1))];
+  } else {
+    recent = active;
+  }
 
   const parts: string[] = [];
   for (const message of recent) {
@@ -196,11 +225,12 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
 
     // Include thinking output — the agent's reasoning trajectory during tool loops.
     // This is the direction the agent is heading, valuable for finding context in
-    // territory the original user message didn't cover.
+    // territory the original user message didn't cover. Tail-clamped so a long
+    // single iteration keeps its conclusion rather than its opening.
     const thinking = message.thinking
-      ? scrubOperationalNoise(clampText(message.thinking, 800)).replace(/\s+/g, " ")
+      ? scrubOperationalNoise(clampTextTail(message.thinking, 800)).replace(/\s+/g, " ")
       : "";
-    const text = scrubOperationalNoise(clampText(message.content, message._isCompactionSummary ? 1600 : 1000));
+    const text = scrubOperationalNoise(clampTextTail(message.content, message._isCompactionSummary ? 1600 : 1000));
 
     // Tool call signal — the agent's intent, not its output.
     // A web_search call's query or read_file's path carries precise semantic signal

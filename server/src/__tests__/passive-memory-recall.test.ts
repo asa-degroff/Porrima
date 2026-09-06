@@ -137,6 +137,54 @@ describe("passive memory recall query building", () => {
     expect(query).not.toContain("old topic old topic old topic old topic old topic");
   });
 
+  it("anchors the broad query on the active turn, dropping stale prior-turn history", () => {
+    // A long tool loop after a fresh user request: the prior turn's topic must
+    // not leak into the recall query once the agent has moved on.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Earlier we discussed the billing webhook retries.", timestamp: 1000 },
+      { role: "assistant", content: "Billing webhook retries use exponential backoff.", timestamp: 2000 },
+      { role: "user", content: "Now refactor the cache invalidation logic.", timestamp: 3000 },
+    ];
+    // Many assistant iterations belonging to the new turn push the window past
+    // the prior turn entirely.
+    for (let i = 0; i < 14; i++) {
+      messages.push({
+        role: "assistant",
+        content: `cache invalidation step ${i}`,
+        timestamp: 4000 + i,
+      });
+    }
+
+    const query = buildPassiveRecallQuery(messages);
+
+    expect(query).not.toContain("billing webhook");
+    expect(query).not.toContain("exponential backoff");
+    expect(query).toContain("refactor the cache invalidation logic");
+    expect(query).toContain("cache invalidation step 13");
+  });
+
+  it("tail-clamps a long thinking block so the recent conclusion survives", () => {
+    const opening = "ZZZ_OPENING_MARKER the agent started here. ";
+    const filler = "intermediate reasoning about the refactor. ";
+    const conclusion = "CONCLUSION the agent just reached about cache invalidation.";
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Refactor the cache invalidation logic.", timestamp: 1000 },
+      {
+        role: "assistant",
+        // Thinking far exceeds the 800-char clamp; the opening marker sits well
+        // before the tail window and must be dropped, the conclusion kept.
+        thinking: opening + filler.repeat(60) + conclusion,
+        content: "",
+        timestamp: 2000,
+      },
+    ];
+
+    const query = buildPassiveRecallQuery(messages);
+
+    expect(query).toContain("CONCLUSION the agent just reached");
+    expect(query).not.toContain("ZZZ_OPENING_MARKER");
+  });
+
   it("builds a compact topical rerank query while preserving agent thinking", () => {
     const messages: ChatMessage[] = [
       {
