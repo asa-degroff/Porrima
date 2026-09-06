@@ -14,6 +14,7 @@ import { SkillSelector } from "./SkillSelector";
 import { PinnedPanel } from "./PinnedPanel";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
+import { ProgressRing } from "./ProgressRing";
 import { useGreeting } from "../hooks/useGreeting";
 
 const hamburgerIconLg = (
@@ -76,15 +77,28 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
 
   return (
     <div
-      className="hidden md:flex items-center gap-2 px-2 py-1 text-[10px]"
+      className="flex items-center gap-2 px-2 py-1 text-[10px]"
       title={title}
       style={{ color: "rgba(var(--theme-accent), 0.75)" }}
     >
       <PrefillActivityIcon />
-      <span className="whitespace-nowrap prefill-sweep">
+      {/* The label has room from md up. On mobile the icon + ring + tokens
+          carry the state; the percent itself stays in the container tooltip. */}
+      <span className="hidden md:inline whitespace-nowrap prefill-sweep">
         {label}
         {percent !== undefined ? ` ${percent}%` : ""}
       </span>
+      {/* Mobile: ring filling with prefill progress — the width-mate of the
+          lg+ bar. Accent-colored, so it reads as "working" rather than as
+          context usage. */}
+      {percent !== undefined && (
+        <ProgressRing
+          pct={percent}
+          color="rgba(var(--theme-accent), 0.55)"
+          track="rgba(var(--theme-accent), 0.1)"
+          className="md:hidden"
+        />
+      )}
       {tokenText && (
         <span className="whitespace-nowrap" style={{ color: "rgba(var(--theme-accent), 0.35)" }}>
           {tokenText}

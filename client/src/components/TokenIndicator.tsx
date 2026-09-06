@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { MessageUsage, ContextBreakdown, ContextBreakdownGroup } from "../types";
 import { fetchContextBreakdown } from "../api/client";
 import { PolyhedronLogo } from "./PolyhedronLogo";
+import { ProgressRing } from "./ProgressRing";
 import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface CompactionInfo {
@@ -335,6 +336,17 @@ export function TokenIndicator({
     };
   }, [breakdown, rescaledToIndicator, usage.input]);
 
+  // One threshold logic feeds both instruments (the mobile ring and the md+
+  // bar) so they can never drift. Fade the fill — not the track — when we're
+  // showing a provisional or missing count.
+  const contextFillColor =
+    pct > 80
+      ? "rgb(248 113 113 / 0.6)"
+      : pct > 50
+        ? "rgb(251 191 36 / 0.5)"
+        : "rgb(96 165 250 / 0.4)";
+  const contextFillOpacity = hasUsageNumber ? (isEstimated ? 0.6 : 1) : 0.3;
+
   return (
     <div
       ref={wrapRef}
@@ -365,19 +377,23 @@ export function TokenIndicator({
           <span>{formatNumber(contextWindow)} max</span>
         )}
       </div>
-      <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
+      {/* Mobile: compact ring — the glance layer for the same fill. The exact
+          numbers stay in the text beside it; the arc replaces a 64px bar whose
+          precision a width-constrained header doesn't use. */}
+      <ProgressRing
+        pct={pct}
+        color={contextFillColor}
+        opacity={contextFillOpacity}
+        className="md:hidden"
+      />
+      {/* md+: the horizontal bar, unchanged. */}
+      <div className="hidden md:block w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-300"
           style={{
             width: `${pct}%`,
-            background:
-              pct > 80
-                ? "rgb(248 113 113 / 0.6)"
-                : pct > 50
-                  ? "rgb(251 191 36 / 0.5)"
-                  : "rgb(96 165 250 / 0.4)",
-            // Fade the bar when we're showing a provisional or missing count.
-            opacity: hasUsageNumber ? (isEstimated ? 0.6 : 1) : 0.3,
+            background: contextFillColor,
+            opacity: contextFillOpacity,
           }}
         />
       </div>
