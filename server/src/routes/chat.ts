@@ -2120,8 +2120,19 @@ async function handleChatStream(
                 _recalledMemoryIds: memoryIds,
                 _mergeIntoNextUserMessage: true,
               };
-              chat.messages.push(row);
-              await saveChat(chat);
+              // This fires seconds after the turn ended (embed → search →
+              // rerank on the CPU servers), long after the gate was released.
+              // The turn's captured `chat` object is stale by then — the user
+              // may have edited a message, and /edit rewrites the row table
+              // from the edit point down. Saving the captured object would
+              // silently revert that edit (syncChatMessageRows deletes and
+              // rewrites every row past the first divergence). The recall row
+              // is a pure tail append, so always base it on the current
+              // persisted state instead.
+              const current = await getChat(chat.id);
+              if (!current) return; // chat deleted while recall was in flight
+              current.messages.push(row);
+              await saveChat(current);
             },
           })
         : null;
