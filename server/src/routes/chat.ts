@@ -880,6 +880,63 @@ function imageExtensionForMimeType(mimeType: string | undefined): string {
   }
 }
 
+/**
+ * Build the persisted ChatToolResult from a tool_execution_end event.
+ *
+ * The ONE constructor for results entering state.allToolResults — every loop
+ * site (main loop, incomplete-tool-turn continuation, stranded recovery,
+ * mid-turn compaction resume) must route through it. Images are extracted
+ * from the event content and persisted to disk; the row references them by
+ * id so replay can hydrate the exact bytes the model saw. A site that skips
+ * this drops the images from persistence while the live wire kept them — the
+ * end-of-turn replay then cannot rebuild the wire shape, the snapshot flags
+ * LIVE-VS-REPLAY DIVERGENCE, and the next send re-prefills the entire
+ * context (2026-09-07: 8 post-compaction screenshots lost this way, ~35.6K
+ * wasted prefill tokens per turn).
+ */
+async function buildPersistedToolResult(event: {
+  toolCallId: string;
+  toolName: string;
+  isError: boolean;
+  result?: { content?: any[] } | null;
+}): Promise<ChatToolResult> {
+  // Accept whatever the event carries — array (normal path), string (a
+  // pre-normalization fallback), or nothing — and degrade instead of
+  // throwing: a string content has no .filter, and this helper is the one
+  // constructor every loop site routes through, so it must never crash the
+  // event handler on an unexpected shape.
+  const rawContent = event.result?.content;
+  const content: any[] = Array.isArray(rawContent)
+      ? rawContent
+      : typeof rawContent === "string"
+        ? [{ type: "text", text: rawContent }]
+        : [];
+
+  const resultText = content[0]?.text || "";
+
+  const extractedImages: ImageAttachment[] | undefined = content
+      .filter((c: any) => c.type === "image")
+      .map((c: any) => ({
+        data: c.data,
+        mimeType: c.mimeType,
+        name: `tool-result-${event.toolCallId}.${imageExtensionForMimeType(c.mimeType)}`,
+      }));
+  const images = extractedImages?.length ? await persistToolResultImages(extractedImages) : undefined;
+
+  if (images?.length) {
+    console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
+    console.log(`[chat] Image sizes: ${images.map(img => `${((img.data?.length ?? 0) / 1024).toFixed(1)}KB`).join(", ")}`);
+  }
+
+  return {
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+    content: resultText,
+    isError: event.isError,
+    images: images?.length ? images : undefined,
+  };
+}
+
 // Keep SSE connections alive while the model or tools are silent.
 const SSE_KEEPALIVE_INTERVAL_MS = 30_000; // 30s keepalive pings to prevent client timeout
 
@@ -2537,29 +2594,8 @@ async function handleChatStream(
 
           // ask_user gets a dedicated SSE event, not tool_status
           if (event.toolName !== "ask_user") {
-            const resultText = event.result?.content?.[0]?.text || "";
-
-            const extractedImages: ImageAttachment[] | undefined = event.result?.content
-                ?.filter((c: any) => c.type === "image")
-                .map((c: any) => ({
-                  data: c.data,
-                  mimeType: c.mimeType,
-                  name: `tool-result-${event.toolCallId}.${imageExtensionForMimeType(c.mimeType)}`,
-                }));
-            const images = extractedImages?.length ? await persistToolResultImages(extractedImages) : undefined;
-
-            if (images?.length) {
-              console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
-              console.log(`[chat] Image sizes: ${images.map(img => `${((img.data?.length ?? 0) / 1024).toFixed(1)}KB`).join(", ")}`);
-            }
-
-            const toolResult: ChatToolResult = {
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              content: resultText,
-              isError: event.isError,
-              images: images?.length ? images : undefined,
-            };
+            const toolResult = await buildPersistedToolResult(event);
+            const resultText = toolResult.content;
             state.allToolResults.push(toolResult);
             console.log(`[chat] Tool result accumulated: ${state.allToolResults.length} total`);
 
@@ -3057,13 +3093,8 @@ async function handleChatStream(
             }
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
-              const resultText = event.result?.content?.[0]?.text || "";
-              const toolResult: ChatToolResult = {
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                content: resultText,
-                isError: event.isError,
-              };
+              const toolResult = await buildPersistedToolResult(event);
+              const resultText = toolResult.content;
               state.allToolResults.push(toolResult);
               maybeDispatchMidTurnPulse({ source: "continuation_tool_result" });
               const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
@@ -3196,13 +3227,8 @@ async function handleChatStream(
             }
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
-              const resultText = event.result?.content?.[0]?.text || "";
-              const toolResult: ChatToolResult = {
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                content: resultText,
-                isError: event.isError,
-              };
+              const toolResult = await buildPersistedToolResult(event);
+              const resultText = toolResult.content;
               state.allToolResults.push(toolResult);
 
               const callIdx = state.segments.findIndex(
@@ -3566,13 +3592,8 @@ async function handleChatStream(
             }
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
-              const resultText = event.result?.content?.[0]?.text || "";
-              const toolResult: ChatToolResult = {
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                content: resultText,
-                isError: event.isError,
-              };
+              const toolResult = await buildPersistedToolResult(event);
+              const resultText = toolResult.content;
               state.allToolResults.push(toolResult);
 
               // Mid-turn extraction on the resumed loop: same signal check

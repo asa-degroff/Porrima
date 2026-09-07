@@ -360,6 +360,59 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
  * stay byte-identical — the KV prefix is never disturbed. With no state the
  * tool array passes through untouched.
  */
+/**
+ * Normalize tool-result content to the strict pi-ai wire shape: an array of
+ * {type:"text",text} / {type:"image",data,mimeType} items, nothing else.
+ *
+ * Tool results enter BOTH the live wire context (pi-agent-core passes the
+ * execute return straight into the ToolResultMessage content) and the
+ * persisted rows (replayed by chatMessagesToPiMessages, which rebuilds
+ * strict {type:"text"}/{type:"image"} items). Any extra field an executor
+ * attaches — e.g. `name` on a browser_screenshot image — rides the wire but
+ * vanishes on replay, so the replayed history can never reproduce the token
+ * sequence the model saw and the KV-cache prefix digest diverges at that
+ * message (full re-prefill on the next send). Normalizing here — the single
+ * choke point every tool's execute flows through — keeps wire and replay
+ * byte-identical.
+ *
+ * String content (a pre-wrapResult executor return) is converted to a single
+ * text item, because the array IS the canonical wire shape: the provider
+ * serializer and the replay reconstruction both require it, and a bare string
+ * would serialize differently from the replay (digest divergence) or not at
+ * all. Idempotent: already-strict items map to themselves.
+ */
+export function normalizeToolResultContent(content: any[]): any[];
+export function normalizeToolResultContent(content: string): { type: "text"; text: string }[];
+export function normalizeToolResultContent(content: any): any {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return content;
+  return content.map((item: any) => {
+    if (!item || typeof item !== "object") return item;
+    if (item.type === "text") return { type: "text", text: item.text };
+    if (item.type === "image") return { type: "image", data: item.data, mimeType: item.mimeType };
+    return item;
+  });
+}
+
+/**
+ * Wrap every tool's execute so returned content is normalized before it
+ * enters the wire context, the tool_execution_end event, or the persisted
+ * row — all three read the execute return value, so one normalization here
+ * keeps them consistent.
+ */
+function wrapToolsWithNormalizedContent(tools: AgentTool[]): AgentTool[] {
+  return tools.map((tool) => {
+    const original = tool.execute;
+    return {
+      ...tool,
+      execute: async (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) => {
+        const result = await original(toolCallId, params, signal, onUpdate);
+        return { ...result, content: normalizeToolResultContent((result as any).content) };
+      },
+    };
+  });
+}
+
 export function wrapToolsWithTimeMarker(tools: AgentTool[], timeMarker: TimeMarkerState | null): AgentTool[] {
   if (!timeMarker) return tools;
   return tools.map((tool) => {
@@ -728,7 +781,7 @@ URL: ${result.url}${warningText}`, {
   const available = tools
     .filter((tool) => toolIsAvailable(tool.name, chatType))
     .map((tool) => SEQUENTIAL_TOOL_NAMES.has(tool.name) ? { ...tool, executionMode: "sequential" as const } : tool);
-  return wrapToolsWithTimeMarker(available, timeMarker ?? null);
+  return wrapToolsWithTimeMarker(wrapToolsWithNormalizedContent(available), timeMarker ?? null);
 }
 
 // --- read_pdf implementation ---
