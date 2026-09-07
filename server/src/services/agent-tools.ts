@@ -360,6 +360,18 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
  * stay byte-identical — the KV prefix is never disturbed. With no state the
  * tool array passes through untouched.
  */
+export function wrapToolsWithTimeMarker(tools: AgentTool[], timeMarker: TimeMarkerState | null): AgentTool[] {
+  if (!timeMarker) return tools;
+  return tools.map((tool) => {
+    const original = tool.execute;
+    return {
+      ...tool,
+      execute: async (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) =>
+        applyTimeMarker(await original(toolCallId, params, signal, onUpdate), timeMarker),
+    };
+  });
+}
+
 /**
  * Normalize tool-result content to the strict pi-ai wire shape: an array of
  * {type:"text",text} / {type:"image",data,mimeType} items, nothing else.
@@ -409,18 +421,6 @@ function wrapToolsWithNormalizedContent(tools: AgentTool[]): AgentTool[] {
         const result = await original(toolCallId, params, signal, onUpdate);
         return { ...result, content: normalizeToolResultContent((result as any).content) };
       },
-    };
-  });
-}
-
-export function wrapToolsWithTimeMarker(tools: AgentTool[], timeMarker: TimeMarkerState | null): AgentTool[] {
-  if (!timeMarker) return tools;
-  return tools.map((tool) => {
-    const original = tool.execute;
-    return {
-      ...tool,
-      execute: async (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) =>
-        applyTimeMarker(await original(toolCallId, params, signal, onUpdate), timeMarker),
     };
   });
 }

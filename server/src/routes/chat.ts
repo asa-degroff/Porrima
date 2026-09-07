@@ -894,11 +894,13 @@ function imageExtensionForMimeType(mimeType: string | undefined): string {
  * context (2026-09-07: 8 post-compaction screenshots lost this way, ~35.6K
  * wasted prefill tokens per turn).
  */
-async function buildPersistedToolResult(event: {
+export async function buildPersistedToolResult(event: {
   toolCallId: string;
   toolName: string;
   isError: boolean;
-  result?: { content?: any[] } | null;
+  /** Array is the normal (post-normalization) shape; string is accepted and
+   *  treated as a single text item — see the guard below. */
+  result?: { content?: string | any[] } | null;
 }): Promise<ChatToolResult> {
   // Accept whatever the event carries — array (normal path), string (a
   // pre-normalization fallback), or nothing — and degrade instead of
@@ -913,6 +915,21 @@ async function buildPersistedToolResult(event: {
         : [];
 
   const resultText = content[0]?.text || "";
+
+  // The persisted row carries exactly ONE text field — content[0].text. Any
+  // text item beyond the first (or text that doesn't come first) is dropped
+  // on replay, which would silently re-break the wire/replay parity this
+  // helper exists to guarantee. The digest check catches it, but only as a
+  // divergence warning on the next send, after the re-prefill already
+  // happened — so make the convention break loudly here, at the source.
+  const textItems = content.filter((c: any) => c.type === "text");
+  if (textItems.length > 1 || (textItems.length > 0 && content[0]?.type !== "text")) {
+    console.warn(
+      `[chat] Tool result ${event.toolName} (${event.toolCallId}) breaks the single-leading-text-item ` +
+      `convention (${textItems.length} text item(s), first item type=${content[0]?.type}) — the persisted ` +
+      `row keeps only the first text item; wire/replay parity is at risk`
+    );
+  }
 
   const extractedImages: ImageAttachment[] | undefined = content
       .filter((c: any) => c.type === "image")
