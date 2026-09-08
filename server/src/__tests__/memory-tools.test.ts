@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function loadMemoryTools(homeDir: string) {
@@ -20,6 +20,10 @@ async function loadMemoryTools(homeDir: string) {
     import("../services/memory-storage.js"),
     import("../services/chat-storage.js"),
   ]);
+  // Vitest 5's mock registry can serve a module instance captured under an
+  // earlier test's (since-removed) temp dir. Guarantee the directory of
+  // whichever DB path the instance actually resolved to exists.
+  mkdirSync(dirname(chatStorage.getChatDbPath()), { recursive: true });
   return { memoryTools, notebookStorage, memoryStorage, chatStorage };
 }
 
