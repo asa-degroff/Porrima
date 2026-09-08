@@ -10,6 +10,9 @@
     "build": "npm run build -w server && npm run build -w client",
     "write-build-info": "node scripts/write-build-info.mjs"
   },
+  "overrides": {
+    "katex": "^0.18.2"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^7.0.2",

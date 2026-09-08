@@ -15,7 +15,7 @@
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
     "idb": "^8.0.3",
-    "katex": "^0.17.0",
+    "katex": "^0.18.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
