@@ -146,7 +146,7 @@ Your synthesis is complete. Now review and maintain your memory blocks, includin
 Archived blocks stay searchable but are excluded from context loading.
 
 ### Zeitgeist Update
-Your zeitgeist (\`blk-zeitgeist-continuity\`) is your continuity narrative — update it via \`update_memory_block\`. It should read as a coherent story, not a compressed changelog:
+Your zeitgeist — the block named \`Zeitgeist - Continuity Block\` — is your continuity narrative; update it via \`update_memory_block\`. It should read as a coherent story, not a compressed changelog:
 
 - **Narrative over inventory** — connect the dots between threads. What is happening, where is it headed, why does it matter?
 - **Context is the point** — the reasoning behind decisions, the landscape of emerging architectures, patterns across cycles
@@ -718,7 +718,7 @@ async function buildMaintenancePhase2Trigger(
     const threshold = Math.floor(maxBlockChars * 0.8);
     zeitgeistStatus = `\n\n**Zeitgeist status:** ${charCount.toLocaleString()} characters (archive threshold: ${threshold.toLocaleString()}).`;
     if (charCount > threshold) {
-      zeitgeistStatus += `\n**Archive first.** The current zeitgeist is over ${threshold.toLocaleString()} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` with a fresh narrative.`;
+      zeitgeistStatus += `\n**Archive first.** The current zeitgeist is over ${threshold.toLocaleString()} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then rewrite the current zeitgeist block with a fresh narrative.`;
     }
   } catch (e: any) {
     console.warn("[system-chat] Failed to check zeitgeist size:", e.message);

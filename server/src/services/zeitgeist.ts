@@ -1,17 +1,18 @@
 import {
-  getMemoryBlock,
+  getActiveZeitgeistBlock,
   getAllMemoryBlocks,
   isHistoricalContextBlock,
 } from "./memory-storage.js";
 
-const ZEITGEIST_BLOCK_ID = "blk-zeitgeist-continuity";
-
 /**
- * Get the zeitgeist block content for injection into system prompts.
+ * Get the zeitgeist continuity block content for injection into system prompts.
  * Used by the system chat context builder and memory context builder.
+ * Resolves the live block by its 'zeitgeist' type marker, never by a stored
+ * ID (09-08 audit: a hardcoded ID kept resolving a superseded snapshot for
+ * two weeks — the trigger number was a faithful measurement of a dead address).
  */
 export function getZeitgeistContent(): string | null {
-  const block = getMemoryBlock(ZEITGEIST_BLOCK_ID);
+  const block = getActiveZeitgeistBlock();
   return block?.content || null;
 }
 

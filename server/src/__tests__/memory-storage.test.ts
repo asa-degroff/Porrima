@@ -273,3 +273,147 @@ describe("memory block storage", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 09-08 dead-address audit: the live zeitgeist must be resolvable by its
+// stable identity (blockType 'zeitgeist'), never by a stored block ID.
+// A hardcoded ID kept resolving a superseded snapshot for two weeks — the
+// Phase 2 trigger number was a faithful measurement of a dead address, and
+// the injected continuity context was two weeks stale.
+// ---------------------------------------------------------------------------
+
+function zeitgeistBlockFields(over: {
+  id: string;
+  content: string;
+  updatedAt?: string;
+  supersededBy?: string;
+  supersedes?: string;
+  blockType?: "note" | "zeitgeist";
+}) {
+  return {
+    id: over.id,
+    name: "Zeitgeist - Continuity Block",
+    description: "test",
+    content: over.content,
+    scope: "global" as const,
+    projectId: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: over.updatedAt ?? new Date().toISOString(),
+    updatedBy: "agent" as const,
+    supersededBy: over.supersededBy,
+    supersedes: over.supersedes,
+    blockType: over.blockType,
+  };
+}
+
+describe("zeitgeist resolution (09-08 dead-address audit)", () => {
+  it("resolves the live zeitgeist by its type marker, never by the legacy ID", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      // The legacy dead address: human-readable ID, already superseded, and
+      // updated MORE RECENTLY than the live block — recency must not win.
+      storage.createMemoryBlock(
+        zeitgeistBlockFields({
+          id: "blk-zeitgeist-continuity",
+          content: "stale legacy narrative",
+          updatedAt: new Date(Date.now() + 86_400_000).toISOString(),
+          supersededBy: "blk-live-zeitgeist",
+          blockType: "note",
+        }),
+      );
+      storage.createMemoryBlock(
+        zeitgeistBlockFields({
+          id: "blk-live-zeitgeist",
+          content: "current narrative",
+          blockType: "zeitgeist",
+        }),
+      );
+
+      expect(storage.getActiveZeitgeistBlock()?.id).toBe("blk-live-zeitgeist");
+
+      const zeitgeist = await import("../services/zeitgeist.js");
+      expect(zeitgeist.getZeitgeistContent()).toBe("current narrative");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the canonical name and warns loudly when the marker is missing", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      storage.createMemoryBlock(
+        zeitgeistBlockFields({ id: "blk-unmarked-zeitgeist", content: "current narrative" }),
+      );
+
+      expect(storage.getActiveZeitgeistBlock()?.id).toBe("blk-unmarked-zeitgeist");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("name fallback"));
+    } finally {
+      warnSpy.mockRestore();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns loudly when a raw ID lookup resolves a superseded block", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      storage.createMemoryBlock(
+        zeitgeistBlockFields({ id: "blk-old", content: "old", supersededBy: "blk-new" }),
+      );
+
+      storage.getMemoryBlock("blk-old");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("SUPERSEDED"));
+    } finally {
+      warnSpy.mockRestore();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the live zeitgeist as system-managed by type, not by the fossil ID", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      expect(
+        storage.isSystemManagedMemoryBlock({ id: "blk-any", scope: "global", blockType: "zeitgeist" }),
+      ).toBe(true);
+      // The fossil ID with a plain type is no longer special-cased.
+      expect(
+        storage.isSystemManagedMemoryBlock({ id: "blk-zeitgeist-continuity", scope: "global", blockType: "note" }),
+      ).toBe(false);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries the zeitgeist marker across supersession", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      storage.createMemoryBlock(
+        zeitgeistBlockFields({
+          id: "blk-current-zeitgeist",
+          content: "current narrative",
+          blockType: "zeitgeist",
+        }),
+      );
+
+      const next = storage.supersedeBlock(
+        "blk-current-zeitgeist",
+        zeitgeistBlockFields({
+          id: "blk-next-zeitgeist",
+          content: "next narrative",
+          supersedes: "blk-current-zeitgeist",
+        }),
+      );
+
+      expect(next.blockType).toBe("zeitgeist");
+      expect(storage.getActiveZeitgeistBlock()?.id).toBe("blk-next-zeitgeist");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});

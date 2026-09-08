@@ -1960,12 +1960,17 @@ export async function getMaxBlockChars(): Promise<number> {
 //     default; exempt from the char cap.
 //   - 'synthesis': agent-authored daily synthesis output from runSystemSynthesis.
 //     Archived by default; exempt from the char cap.
+//   - 'zeitgeist': the live continuity block. Active (injected into context
+//     via its own section, not the generic block list); subject to the char
+//     cap. Exactly one active instance; resolved by this type, never by a
+//     stored ID (09-08 audit: a hardcoded ID kept resolving a superseded
+//     snapshot for two weeks).
 //   - 'zeitgeist-archive': snapshot of the zeitgeist continuity block at a
 //     point in time. Archived.
-export type BlockType = "note" | "notebook" | "synthesis" | "zeitgeist-archive";
+export type BlockType = "note" | "notebook" | "synthesis" | "zeitgeist" | "zeitgeist-archive";
 
 export function isArchivalBlockType(t: BlockType): boolean {
-  return t !== "note";
+  return t !== "note" && t !== "zeitgeist";
 }
 
 export function isHistoricalContextBlock(block: { id: string; name?: string; blockType?: string }): boolean {
@@ -1979,7 +1984,7 @@ export function isHistoricalContextBlock(block: { id: string; name?: string; blo
 }
 
 export function isSystemManagedMemoryBlock(block: { id: string; scope?: string; name?: string; blockType?: string }): boolean {
-  return block.id === "blk-zeitgeist-continuity" ||
+  return block.blockType === "zeitgeist" ||
     block.scope === "archived" ||
     isHistoricalContextBlock(block);
 }
@@ -2126,7 +2131,42 @@ export function getMemoryBlock(id: string): MemoryBlock | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(id) as any;
   if (!row) return null;
+  if (row.supersededBy) {
+    console.warn(
+      `[memory] getMemoryBlock(${id}) resolved a SUPERSEDED block (supersededBy ${row.supersededBy}) — a caller is reading a dead address`,
+    );
+  }
   return mapBlockRow(row);
+}
+
+/**
+ * Resolve the live zeitgeist continuity block by its stable identity:
+ * blockType 'zeitgeist', not superseded. If several match, the most recently
+ * updated wins. If the marker is missing from the live block (e.g. lost in a
+ * supersede migration), fall back to the canonical name and warn — a silent
+ * marker loss is exactly how the injection went stale for two weeks (09-08
+ * audit: a hardcoded block ID kept resolving a superseded snapshot).
+ */
+export function getActiveZeitgeistBlock(): MemoryBlock | null {
+  const db = getDb();
+  let row = db
+    .prepare(
+      "SELECT * FROM memory_blocks WHERE blockType = 'zeitgeist' AND supersededBy IS NULL ORDER BY updatedAt DESC LIMIT 1",
+    )
+    .get() as any;
+  if (!row) {
+    row = db
+      .prepare(
+        "SELECT * FROM memory_blocks WHERE name = 'Zeitgeist - Continuity Block' AND scope = 'global' AND supersededBy IS NULL ORDER BY updatedAt DESC LIMIT 1",
+      )
+      .get() as any;
+    if (row) {
+      console.warn(
+        `[memory] No blockType='zeitgeist' marker found — resolved the zeitgeist by name fallback: ${row.id}. Set the marker on the live block.`,
+      );
+    }
+  }
+  return row ? mapBlockRow(row) : null;
 }
 
 export function getMemoryBlocksByScope(scope: "global" | "project" | "archived", projectId?: string): MemoryBlock[] {
