@@ -53,11 +53,15 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: {
+    // Vite 8 is Rolldown-based: rollupOptions → rolldownOptions, and the
+    // object-form manualChunks is removed — advancedChunks groups replace it.
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          vendor: ["react", "react-dom"],
-          markdown: ["react-markdown", "remark-gfm"],
+        advancedChunks: {
+          groups: [
+            { name: "vendor", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: "markdown", test: /node_modules[\\/](react-markdown|remark-gfm)[\\/]/ },
+          ],
         },
       },
     },
