@@ -1,4 +1,6 @@
-import { execFile, spawn } from "child_process";
+import { execFile } from "child_process";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { sanitizeBinaryOutput } from "@earendil-works/pi-agent-core";
 import { access, mkdir, readFile, readdir, writeFile, stat, unlink, open, appendFile } from "fs/promises";
 import { constants } from "fs";
 import { dirname, join, resolve } from "path";
@@ -142,126 +144,118 @@ function formatReadContent(content: string, args: Record<string, any>, opts: Wor
   return numbered;
 }
 
-function sanitizeBinaryOutput(str: string): string {
-  let out = "";
-  for (const char of Array.from(str)) {
-    const code = char.codePointAt(0);
-    if (code === undefined) continue;
-    if (code === 0x09 || code === 0x0a || code === 0x0d) { out += char; continue; }
-    if (code <= 0x1f) continue;
-    if (code >= 0xfff9 && code <= 0xfffb) continue;
-    out += char;
-  }
-  return out;
-}
-
 function utf8ByteLength(s: string): number {
   return Buffer.byteLength(s, "utf-8");
 }
 
+// Hard cap for model-supplied bash timeouts (seconds). Prevents a runaway
+// `timeout: 86400` from pinning a turn for a day; 600s covers builds/tests.
+const BASH_TIMEOUT_MAX_SEC = 600;
+
 /**
- * Execute a bash command with streaming output capture.
+ * Execute a bash command and capture its output.
  *
- * Mirrors pi-agent-core's `executeShellWithCapture`: keeps a rolling in-memory
- * tail of the output; once the byte cap is crossed, spills the full output to a
- * temp file and returns its path so the model can paginate via `read_file`.
- * Returns the tail (truncated) plus a footer describing where the rest lives.
+ * Process lifecycle (spawn, abort, timeout kill, completion detection) is
+ * delegated to pi-agent-core's NodeExecutionEnv, which spawns the shell
+ * detached (own process group), resolves on process exit with a short
+ * post-exit stdio grace instead of waiting for pipe EOF, and kills the whole
+ * process group on timeout/abort. A command that daemonizes a grandchild
+ * (e.g. `cd dir && server & disown`) therefore can no longer hang the tool
+ * forever — the orphaned process holding the stdout/stderr pipes is reaped by
+ * the grace timer instead of blocking resolution.
  *
- * `cwd` is the working directory; `timeoutSec` clamps the run.
+ * Output shaping stays local: `[stderr] ` tagging, binary sanitization, a
+ * rolling in-memory tail, and a spill file once the byte cap is crossed, with
+ * a footer the model can follow via `read_file`.
+ *
+ * `cwd` is the working directory; `timeoutSec` must already be clamped.
  */
-function runStreamingBash(
+async function runStreamingBash(
   command: string,
   cwd: string,
   timeoutSec: number,
   signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
-  return new Promise((resolveResult) => {
-    if (signal?.aborted) {
-      resolveResult({ content: "Command aborted", isError: true });
-      return;
-    }
-    const proc = spawn("/bin/bash", ["-c", command], {
-      cwd,
-      env: { ...process.env, HOME },
-    });
+  if (signal?.aborted) {
+    return { content: "Command aborted", isError: true };
+  }
 
-    const chunks: string[] = [];
-    let windowBytes = 0;
-    let totalBytes = 0;
-    let fullOutputPath: string | null = null;
-    let writeChain: Promise<void> = Promise.resolve();
-    let captureError: unknown = null;
+  const chunks: string[] = [];
+  let windowBytes = 0;
+  let totalBytes = 0;
+  let fullOutputPath: string | null = null;
+  let writeChain: Promise<void> = Promise.resolve();
+  let captureError: unknown = null;
 
-    const onChunk = (raw: string, stream: "stdout" | "stderr") => {
-      try {
-        const text = (stream === "stderr" ? "[stderr] " : "") + sanitizeBinaryOutput(raw).replace(/\r/g, "");
-        totalBytes += utf8ByteLength(raw);
-        if (totalBytes > BASH_OUTPUT_BYTE_CAP && !fullOutputPath) {
-          // First spill: write everything captured so far, then this chunk.
-          const path = join(tmpdir(), `${BASH_OUTPUT_TEMP_PREFIX}${process.pid}-${Date.now()}.log`);
-          writeChain = writeChain
-            .then(() => open(path, "w").then(h => { fullOutputPath = path; return h; }))
-            .then(handle => handle.writeFile(chunks.join("") + text, "utf-8").then(() => handle.close()));
-        } else if (fullOutputPath) {
-          const path = fullOutputPath;
-          writeChain = writeChain.then(() => appendFile(path, text));
-        }
-        chunks.push(text);
-        windowBytes += text.length;
-        while (windowBytes > BASH_OUTPUT_WINDOW_BYTES && chunks.length > 1) {
-          const removed = chunks.shift()!;
-          windowBytes -= removed.length;
-        }
-      } catch (e) {
-        captureError = e;
+  const onChunk = (raw: string, stream: "stdout" | "stderr") => {
+    try {
+      const text = (stream === "stderr" ? "[stderr] " : "") + sanitizeBinaryOutput(raw).replace(/\r/g, "");
+      totalBytes += utf8ByteLength(raw);
+      if (totalBytes > BASH_OUTPUT_BYTE_CAP && !fullOutputPath) {
+        // First spill: write everything captured so far, then this chunk.
+        const path = join(tmpdir(), `${BASH_OUTPUT_TEMP_PREFIX}${process.pid}-${Date.now()}.log`);
+        writeChain = writeChain
+          .then(() => open(path, "w").then(h => { fullOutputPath = path; return h; }))
+          .then(handle => handle.writeFile(chunks.join("") + text, "utf-8").then(() => handle.close()));
+      } else if (fullOutputPath) {
+        const path = fullOutputPath;
+        writeChain = writeChain.then(() => appendFile(path, text));
       }
-    };
-
-    proc.stdout.on("data", (b: Buffer) => onChunk(b.toString("utf-8"), "stdout"));
-    proc.stderr.on("data", (b: Buffer) => onChunk(b.toString("utf-8"), "stderr"));
-    proc.on("error", (e) => {
+      chunks.push(text);
+      windowBytes += text.length;
+      while (windowBytes > BASH_OUTPUT_WINDOW_BYTES && chunks.length > 1) {
+        const removed = chunks.shift()!;
+        windowBytes -= removed.length;
+      }
+    } catch (e) {
       captureError = e;
-    });
+    }
+  };
 
-    let aborted = false;
-    const onAbort = () => {
-      aborted = true;
-      proc.kill("SIGTERM");
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => proc.kill("SIGTERM"), timeoutSec * 1000);
-
-    proc.on("close", async (code, exitSignal) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      try { await writeChain; } catch (e) { captureError = e; }
-
-      if (captureError) {
-        resolveResult({
-          content: `Error capturing bash output: ${captureError instanceof Error ? captureError.message : String(captureError)}`,
-          isError: true,
-        });
-        return;
-      }
-
-      const tail = chunks.join("");
-      const truncated = !!fullOutputPath;
-
-      let content = tail;
-      if (truncated && fullOutputPath) {
-        const footer =
-          `\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. The full output (${(totalBytes / 1024).toFixed(0)}KB) was saved to: ${fullOutputPath}\n` +
-          `Use read_file(path="${fullOutputPath}", offset=N) to read more. The tail is shown above.]`;
-        content = tail + footer;
-      }
-      if (aborted || exitSignal === "SIGTERM" || (code !== 0 && code !== null)) {
-        const prefix = aborted ? "Command aborted\n" : exitSignal === "SIGTERM" ? `Command timed out after ${timeoutSec}s\n` : "";
-        resolveResult({ content: prefix + (content || "(no output)"), isError: true });
-      } else {
-        resolveResult({ content: content || "(no output)", isError: false });
-      }
-    });
+  // Passing an explicit shellPath skips upstream's per-call bash discovery and
+  // keeps the `-c` argv transport the previous local spawn used.
+  const env = new NodeExecutionEnv({ cwd, shellPath: "/bin/bash" });
+  const result = await env.exec(command, {
+    timeout: timeoutSec,
+    abortSignal: signal,
+    onStdout: (chunk) => onChunk(chunk, "stdout"),
+    onStderr: (chunk) => onChunk(chunk, "stderr"),
   });
+
+  try { await writeChain; } catch (e) { captureError = e; }
+
+  if (captureError) {
+    return {
+      content: `Error capturing bash output: ${captureError instanceof Error ? captureError.message : String(captureError)}`,
+      isError: true,
+    };
+  }
+
+  const tail = chunks.join("");
+  let content = tail;
+  if (fullOutputPath) {
+    const footer =
+      `\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. The full output (${(totalBytes / 1024).toFixed(0)}KB) was saved to: ${fullOutputPath}\n` +
+      `Use read_file(path="${fullOutputPath}", offset=N) to read more. The tail is shown above.]`;
+    content = tail + footer;
+  }
+
+  if (!result.ok) {
+    if (result.error.code === "timeout") {
+      return { content: `Command timed out after ${timeoutSec}s\n${content || "(no output)"}`, isError: true };
+    }
+    if (result.error.code === "aborted" || signal?.aborted) {
+      return { content: `Command aborted\n${content || "(no output)"}`.trimEnd(), isError: true };
+    }
+    // spawn_error / shell_unavailable / callback_error — nothing ran or
+    // nothing was captured; surface the message itself.
+    return { content: result.error.message || "Command failed to start", isError: true };
+  }
+
+  if (result.value.exitCode !== 0) {
+    return { content: content || "(no output)", isError: true };
+  }
+  return { content: content || "(no output)", isError: false };
 }
 
 export class LocalWorkspaceAdapter implements WorkspaceAdapter {
@@ -334,7 +328,10 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   }
 
   async bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
-    const timeout = (args.timeout || 30);
+    const requested = typeof args.timeout === "number" && Number.isFinite(args.timeout) && args.timeout > 0
+      ? args.timeout
+      : 30;
+    const timeout = Math.min(BASH_TIMEOUT_MAX_SEC, Math.max(1, Math.floor(requested)));
     return runStreamingBash(args.command, this.root, timeout, signal);
   }
 
