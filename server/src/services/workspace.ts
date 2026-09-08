@@ -1,10 +1,11 @@
 import { execFile } from "child_process";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { sanitizeBinaryOutput } from "@earendil-works/pi-agent-core";
-import { access, mkdir, readFile, readdir, writeFile, stat, unlink, open, appendFile } from "fs/promises";
+import { applyShellOutputUpdate, BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-core";
+import type { ShellOutputView } from "@earendil-works/pi-agent-core";
+import { access, mkdir, readFile, readdir, writeFile, stat, unlink } from "fs/promises";
 import { constants } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir, tmpdir } from "os";
+import { homedir } from "os";
 import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
@@ -14,12 +15,14 @@ const HOME = homedir();
 const SSH_MUX_DIR = appDataPath("ssh-mux");
 const SSH_KNOWN_HOSTS = appDataPath("ssh-known-hosts");
 
-// Bash output streaming thresholds — mirrors pi-agent-core's shell-output defaults.
-// Keep a rolling in-memory window; once the cap is crossed, spill the full output
-// to a temp file and only return the tail plus a pointer the model can read_file.
-const BASH_OUTPUT_BYTE_CAP = 50 * 1024;
-const BASH_OUTPUT_WINDOW_BYTES = BASH_OUTPUT_BYTE_CAP * 2;
-const BASH_OUTPUT_TEMP_PREFIX = "porrima-bash-";
+// Bash output capture thresholds. The in-memory tail window the model sees is
+// bounded upstream by pi-agent-core's OutputCapture; once the window is
+// crossed the full output is spilled to a file the model can read_file.
+const BASH_OUTPUT_WINDOW_BYTES = 100 * 1024;
+const BASH_OUTPUT_MAX_LINES = 1_000_000;
+// Remote (SSH) spill threshold — the wrapped remote script spills when the
+// captured output exceeds this and prints only the tail.
+const SSH_BASH_OUTPUT_BYTE_CAP = 50 * 1024;
 
 /**
  * Initialize SSH infrastructure: create mux directory and clean stale sockets.
@@ -144,10 +147,6 @@ function formatReadContent(content: string, args: Record<string, any>, opts: Wor
   return numbered;
 }
 
-function utf8ByteLength(s: string): number {
-  return Buffer.byteLength(s, "utf-8");
-}
-
 // Hard cap for model-supplied bash timeouts (seconds). Prevents a runaway
 // `timeout: 86400` from pinning a turn for a day; 600s covers builds/tests.
 const BASH_TIMEOUT_MAX_SEC = 600;
@@ -155,18 +154,15 @@ const BASH_TIMEOUT_MAX_SEC = 600;
 /**
  * Execute a bash command and capture its output.
  *
- * Process lifecycle (spawn, abort, timeout kill, completion detection) is
- * delegated to pi-agent-core's NodeExecutionEnv, which spawns the shell
- * detached (own process group), resolves on process exit with a short
- * post-exit stdio grace instead of waiting for pipe EOF, and kills the whole
- * process group on timeout/abort. A command that daemonizes a grandchild
- * (e.g. `cd dir && server & disown`) therefore can no longer hang the tool
- * forever — the orphaned process holding the stdout/stderr pipes is reaped by
- * the grace timer instead of blocking resolution.
- *
- * Output shaping stays local: `[stderr] ` tagging, binary sanitization, a
- * rolling in-memory tail, and a spill file once the byte cap is crossed, with
- * a footer the model can follow via `read_file`.
+ * Process lifecycle (spawn, abort, timeout kill, completion detection) AND
+ * bounded output capture (rolling tail window, spill file, truncation
+ * metadata) are delegated to pi-agent-core's NodeExecutionEnv, which spawns
+ * the shell detached (own process group), resolves on process exit with a
+ * short post-exit stdio grace instead of waiting for pipe EOF, and kills the
+ * whole process group on timeout/abort. A command that daemonizes a
+ * grandchild (e.g. `cd dir && server & disown`) therefore can no longer hang
+ * the tool forever. Output text arrives via onUpdate as incremental bounded
+ * view changes; stdout and stderr are merged untagged by upstream.
  *
  * `cwd` is the working directory; `timeoutSec` must already be clamped.
  */
@@ -180,63 +176,29 @@ async function runStreamingBash(
     return { content: "Command aborted", isError: true };
   }
 
-  const chunks: string[] = [];
-  let windowBytes = 0;
-  let totalBytes = 0;
-  let fullOutputPath: string | null = null;
-  let writeChain: Promise<void> = Promise.resolve();
-  let captureError: unknown = null;
-
-  const onChunk = (raw: string, stream: "stdout" | "stderr") => {
-    try {
-      const text = (stream === "stderr" ? "[stderr] " : "") + sanitizeBinaryOutput(raw).replace(/\r/g, "");
-      totalBytes += utf8ByteLength(raw);
-      if (totalBytes > BASH_OUTPUT_BYTE_CAP && !fullOutputPath) {
-        // First spill: write everything captured so far, then this chunk.
-        const path = join(tmpdir(), `${BASH_OUTPUT_TEMP_PREFIX}${process.pid}-${Date.now()}.log`);
-        writeChain = writeChain
-          .then(() => open(path, "w").then(h => { fullOutputPath = path; return h; }))
-          .then(handle => handle.writeFile(chunks.join("") + text, "utf-8").then(() => handle.close()));
-      } else if (fullOutputPath) {
-        const path = fullOutputPath;
-        writeChain = writeChain.then(() => appendFile(path, text));
-      }
-      chunks.push(text);
-      windowBytes += text.length;
-      while (windowBytes > BASH_OUTPUT_WINDOW_BYTES && chunks.length > 1) {
-        const removed = chunks.shift()!;
-        windowBytes -= removed.length;
-      }
-    } catch (e) {
-      captureError = e;
-    }
-  };
-
   // Passing an explicit shellPath skips upstream's per-call bash discovery and
   // keeps the `-c` argv transport the previous local spawn used.
   const env = new NodeExecutionEnv({ cwd, shellPath: "/bin/bash" });
+  const context = signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT;
+
+  let view: ShellOutputView | undefined;
   const result = await env.exec(command, {
     timeout: timeoutSec,
-    abortSignal: signal,
-    onStdout: (chunk) => onChunk(chunk, "stdout"),
-    onStderr: (chunk) => onChunk(chunk, "stderr"),
-  });
+    capture: {
+      limits: { maxBytes: BASH_OUTPUT_WINDOW_BYTES, maxLines: BASH_OUTPUT_MAX_LINES, retain: "tail" },
+      spill: true,
+    },
+    onUpdate: (update) => {
+      view = applyShellOutputUpdate(view, update);
+    },
+  }, context);
 
-  try { await writeChain; } catch (e) { captureError = e; }
-
-  if (captureError) {
-    return {
-      content: `Error capturing bash output: ${captureError instanceof Error ? captureError.message : String(captureError)}`,
-      isError: true,
-    };
-  }
-
-  const tail = chunks.join("");
+  const tail = view?.text ?? "";
   let content = tail;
-  if (fullOutputPath) {
+  if (result.ok && result.value.spillPath) {
     const footer =
-      `\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. The full output (${(totalBytes / 1024).toFixed(0)}KB) was saved to: ${fullOutputPath}\n` +
-      `Use read_file(path="${fullOutputPath}", offset=N) to read more. The tail is shown above.]`;
+      `\n\n[Output exceeded ${BASH_OUTPUT_WINDOW_BYTES / 1024}KB. The full output (${(result.value.truncation.totalBytes / 1024).toFixed(0)}KB) was saved to: ${result.value.spillPath}\n` +
+      `Use read_file(path="${result.value.spillPath}", offset=N) to read more. The tail is shown above.]`;
     content = tail + footer;
   }
 
@@ -921,9 +883,9 @@ else:
       `/bin/bash -lc ${shellQuote(args.command)} > ${shellQuote(outputPath)} 2>&1`,
       "status=$?",
       `size=$(wc -c < ${shellQuote(outputPath)})`,
-      `if [ "$size" -gt ${BASH_OUTPUT_BYTE_CAP} ]; then`,
+      `if [ "$size" -gt ${SSH_BASH_OUTPUT_BYTE_CAP} ]; then`,
       `  tail -c ${BASH_OUTPUT_WINDOW_BYTES} -- ${shellQuote(outputPath)}`,
-      `  printf '\n\n[Output exceeded ${BASH_OUTPUT_BYTE_CAP / 1024}KB. Full output was saved in the remote workspace at: ${outputPath}\nUse read_file(path="${outputPath}", offset=N) to read more. The tail is shown above.]\n'`,
+      `  printf '\n\n[Output exceeded ${SSH_BASH_OUTPUT_BYTE_CAP / 1024}KB. Full output was saved in the remote workspace at: ${outputPath}\nUse read_file(path="${outputPath}", offset=N) to read more. The tail is shown above.]\n'`,
       "else",
       `  cat -- ${shellQuote(outputPath)}`,
       `  rm -f -- ${shellQuote(outputPath)}`,

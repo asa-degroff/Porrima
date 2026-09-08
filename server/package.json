@@ -10,8 +10,8 @@
     "analyze:token-estimates": "tsx src/scripts/analyze-token-estimates.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.83.0",
-    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
     "@mozilla/readability": "^0.6.0",
     "@simplewebauthn/server": "^14.0.1",
     "better-sqlite3": "^13.0.2",
