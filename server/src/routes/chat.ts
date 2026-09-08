@@ -5,12 +5,12 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation } from "../services/chat-storage.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
-import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
+import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
 import {
   DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
   DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
@@ -37,7 +37,7 @@ import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor,
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
-import { acquireTurn, releaseTurn, isTurnGateBusy, turnGateStatus, type TurnLease } from "../services/turn-gate.js";
+import { acquireTurn, releaseTurn, heartbeatTurnLease, isTurnGateBusy, turnGateStatus, type TurnLease } from "../services/turn-gate.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
@@ -2273,6 +2273,14 @@ async function handleChatStream(
     const safeStreamFn = createSafeStreamFn(llamaSlotLease, {
       promptDebugChatId: chat.id,
       onModelProgress: emitModelProgress,
+      // Heartbeat the turn-gate lease on every LLM activity sign — a healthy
+      // streaming turn must never look like a hung holder to staleness steal.
+      // Same touch keeps the chat's active-chats entry fresh so a hung
+      // request cannot block automations/extraction forever.
+      onActivity: () => {
+        heartbeatTurnLease(options.leaseRef?.current);
+        touchChatActivity(chat.id);
+      },
       modelProgressShowIndicator: (iteration) => {
         // A compaction just rebuilt the context (mid-turn resume arms this
         // directly; end-of-turn / pre-send / manual /compact arm it via
@@ -3003,6 +3011,8 @@ async function handleChatStream(
           // Incremental persistence: save progress after each iteration.
           // The chat.messages mutation already happened above; here we just
           // persist to disk and record pending state for crash recovery.
+          heartbeatTurnLease(options.leaseRef?.current);
+          touchChatActivity(chat.id);
           try {
             await saveChat(chat);
 
@@ -3391,7 +3401,13 @@ async function handleChatStream(
         compactingActive = true;
         res.write(`event: compacting\ndata: {}\n\n`);
       };
-      const emitKeepalive = () => res.write(`: keepalive\n\n`);
+      // Mid-turn compaction holds the lease across slow LLM/embed steps with
+      // no loop iterations — keep the heartbeat alive during its keepalives.
+      const emitKeepalive = () => {
+        heartbeatTurnLease(options.leaseRef?.current);
+        touchChatActivity(chat.id);
+        res.write(`: keepalive\n\n`);
+      };
       // Wrap all compaction work in a keepalive ping loop so the client's
       // 95s inactivity timeout doesn't fire during slow LLM/embed steps.
       let compactionAborted = false;
@@ -4560,14 +4576,41 @@ router.post("/", async (req, res) => {
     const lastMsg = chat.messages[chat.messages.length - 1];
     const hasInProgressMsg = lastMsg?.role === "assistant" && (lastMsg._inProgress || lastMsg.toolCalls?.length);
 
-    if (!hasInProgressMsg && pendingState!.toolCalls?.length) {
-      // No in-progress message saved (pre-fix crash) — reconstruct from accumulators
+    // The lastMsg-only check above misfires whenever a post-turn injection row
+    // (passive-recall role:"system", memory delta) lands after the last
+    // assistant row: recovery then re-added the ENTIRE turn from the pending
+    // accumulators, which are cumulative. The duplicate rows inflated the
+    // context estimate (~60k phantom tokens) until pre-send compaction fired
+    // with the LLM's real context far below the trigger. Verify row
+    // representation by tool call id before trusting the accumulators —
+    // see scanRecoveryRowRepresentation.
+    const pendingToolCalls = pendingState!.toolCalls ?? [];
+    const { missingToolCalls, staleInProgressRowIdx } = scanRecoveryRowRepresentation(
+      chat.messages,
+      pendingToolCalls,
+    );
+
+    if (!hasInProgressMsg && pendingToolCalls.length > 0 && missingToolCalls.length === 0) {
+      // The in-progress turn is already represented across committed rows —
+      // reconstructing would duplicate it. Just finalize any stale
+      // in-progress row left behind by the dead turn.
+      console.log(`[chat] recovery: in-progress turn already persisted across committed rows — skipping reconstruction`);
+      if (staleInProgressRowIdx >= 0) {
+        delete chat.messages[staleInProgressRowIdx]._inProgress;
+        await saveChat(chat);
+      }
+    } else if (!hasInProgressMsg && missingToolCalls.length > 0) {
+      // Genuinely unpersisted tail — reconstruct ONLY the missing pairs.
+      // Text/thinking stay cumulative here (the rows and accumulators have
+      // diverged; a bounded duplication beats losing the tail).
+      const missingIds = new Set(missingToolCalls.map((tc) => tc.id));
+      const missingResults = pendingState!.toolResults?.filter((tr) => missingIds.has(tr.toolCallId));
       const partialMsg: ChatMessage = {
         role: "assistant",
         content: pendingState!.fullText || "",
         thinking: pendingState!.thinkingText || undefined,
-        toolCalls: pendingState!.toolCalls?.length ? pendingState!.toolCalls : undefined,
-        toolResults: pendingState!.toolResults?.length ? pendingState!.toolResults : undefined,
+        toolCalls: missingToolCalls as ChatToolCall[],
+        toolResults: missingResults?.length ? missingResults : undefined,
         timestamp: Date.now(),
       };
       if (lastMsg?.role === "assistant") {
@@ -4576,7 +4619,7 @@ router.post("/", async (req, res) => {
         chat.messages.push(partialMsg);
       }
       await saveChat(chat);
-      console.log(`[chat] reconstructed in-progress message from pending state accumulators`);
+      console.log(`[chat] reconstructed in-progress message from pending state accumulators (${missingToolCalls.length}/${pendingToolCalls.length} tool calls missing from rows)`);
     } else if (hasInProgressMsg) {
       // Strip _inProgress flag — the message is now finalized (partial)
       delete lastMsg._inProgress;
@@ -4678,7 +4721,14 @@ router.post("/", async (req, res) => {
       await withSSEKeepalive(res, async () => {
         try {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model);
-          const emitKeepalive = () => res.write(`: keepalive\n\n`);
+          // The resume path's lease is acquired after this pre-send
+          // compaction, so there is no lease to heartbeat yet — keep the
+          // chat's active-chats entry fresh across the slow embed/rerank
+          // steps.
+          const emitKeepalive = () => {
+            touchChatActivity(chat.id);
+            res.write(`: keepalive\n\n`);
+          };
           // The flush runs as a pre-archive hook so freshly extracted
           // memories are available for the system prompt rebuild below.
           const compaction = await truncateBeforeSend(
@@ -4889,7 +4939,13 @@ router.post("/", async (req, res) => {
       await withSSEKeepalive(res, async () => {
         try {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model);
-          const emitKeepalive = () => res.write(`: keepalive\n\n`);
+          // The send path's lease is acquired after this pre-send compaction,
+          // so there is no lease to heartbeat yet — keep the chat's
+          // active-chats entry fresh across the slow embed/rerank steps.
+          const emitKeepalive = () => {
+            touchChatActivity(chat.id);
+            res.write(`: keepalive\n\n`);
+          };
           // The flush runs as a pre-archive hook so freshly extracted
           // memories are available for the system prompt rebuild below.
           const compaction = await truncateBeforeSend(
@@ -5538,7 +5594,13 @@ router.post("/edit", async (req, res) => {
     await withSSEKeepalive(res, async () => {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model);
-        const emitKeepalive = () => res.write(`: keepalive\n\n`);
+        // The edit path's lease is acquired after this pre-send compaction,
+        // so there is no lease to heartbeat yet — keep the chat's
+        // active-chats entry fresh across the slow embed/rerank steps.
+        const emitKeepalive = () => {
+          touchChatActivity(chat.id);
+          res.write(`: keepalive\n\n`);
+        };
         // The flush runs as a pre-archive hook so freshly extracted
         // memories are available for the system prompt rebuild below.
         const compaction = await truncateBeforeSend(

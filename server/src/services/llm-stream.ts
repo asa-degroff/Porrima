@@ -24,6 +24,10 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 export interface SafeStreamHooks {
   onModelProgress?: ModelProgressCallback;
   promptDebugChatId?: string;
+  /** Called on every sign of LLM activity (progress event, stream event).
+   *  The chat route uses this to heartbeat the turn-gate lease so a healthy
+   *  streaming turn is never mistaken for a hung holder. */
+  onActivity?: () => void;
   /** Controls whether the prefill progress indicator should be shown.
    *  - `true`: always show (first turns)
    *  - `false`: always hide
@@ -154,6 +158,7 @@ export function createSafeStreamFn(
       };
 
       const resetTimer = () => {
+        hooks?.onActivity?.();
         if (timer) clearTimeout(timer);
         const timeout = !receivedFirstEvent && receivedProviderProgress
           ? localNoProgressTimeout

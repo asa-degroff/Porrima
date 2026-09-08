@@ -1378,6 +1378,39 @@ export interface PendingAgentState {
   lastUserMessage?: string;
 }
 
+/**
+ * What mid-turn crash recovery must reconstruct from pending-state
+ * accumulators. Returns the pending tool calls whose ids are NOT represented
+ * in recent rows (the genuinely unpersisted tail), plus the index of any
+ * stale `_inProgress` assistant row in the scan window (-1 when none).
+ *
+ * savePendingState runs immediately after the per-iteration saveChat from
+ * the same accumulators, so under the current persistence scheme the
+ * pending tool call list can never reference content missing from rows — a
+ * fully represented list means reconstruction would duplicate the whole
+ * turn (the accumulators are cumulative). Reconstruction exists only for
+ * pre-fix crash layouts. The trailing-row check alone is not enough: a
+ * post-turn injection row (passive-recall, memory delta) can sit after the
+ * last assistant row and make the turn look unreconstructed.
+ */
+export function scanRecoveryRowRepresentation(
+  rows: Pick<ChatMessage, "role" | "_inProgress" | "toolCalls">[],
+  pendingToolCalls: Array<{ id: string }>,
+  scanWindow = 80,
+): { missingToolCalls: Array<{ id: string }>; staleInProgressRowIdx: number } {
+  const persisted = new Set<string>();
+  let staleInProgressRowIdx = -1;
+  const start = Math.max(0, rows.length - scanWindow);
+  for (let i = rows.length - 1; i >= start; i--) {
+    const m = rows[i];
+    if (m.role !== "assistant") continue;
+    if (m._inProgress && staleInProgressRowIdx < 0) staleInProgressRowIdx = i;
+    for (const tc of m.toolCalls ?? []) persisted.add(tc.id);
+  }
+  const missingToolCalls = pendingToolCalls.filter((tc) => !persisted.has(tc.id));
+  return { missingToolCalls, staleInProgressRowIdx };
+}
+
 export async function savePendingState(chatId: string, state: PendingAgentState): Promise<void> {
   const db = getDb();
   db.prepare(`

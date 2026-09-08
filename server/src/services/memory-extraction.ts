@@ -79,12 +79,31 @@ export function withExtractionMutex<T>(fn: () => Promise<T>): Promise<T> {
 // When a chat is actively running (especially during compaction cycles),
 // the scheduler should skip extraction for that chat to avoid redundant
 // work and memory pressure. The chat route sets/clears this.
+//
+// Entries carry a last-activity timestamp: a hung turn holder never reaches
+// its finally (markChatInactive), which used to block automations and
+// delayed extraction forever. Stale entries (no touch) are treated as
+// inactive. The route touches the entry alongside the turn-gate lease
+// heartbeat, so healthy turns stay active.
 // ---------------------------------------------------------------------------
 
-const _activeChats = new Set<string>();
+const _activeChats = new Map<string, number>();
+
+const DEFAULT_ACTIVE_CHAT_STALE_MS = 15 * 60_000;
+const ACTIVE_CHAT_STALE_MS = (() => {
+  const value = Number(process.env.ACTIVE_CHAT_STALE_MS);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_ACTIVE_CHAT_STALE_MS;
+})();
 
 export function markChatActive(chatId: string): void {
-  _activeChats.add(chatId);
+  _activeChats.set(chatId, Date.now());
+}
+
+/** Refresh the activity timestamp for an in-flight turn. */
+export function touchChatActivity(chatId: string): void {
+  if (_activeChats.has(chatId)) {
+    _activeChats.set(chatId, Date.now());
+  }
 }
 
 export function markChatInactive(chatId: string): void {
@@ -92,7 +111,17 @@ export function markChatInactive(chatId: string): void {
 }
 
 export function isChatActive(chatId: string): boolean {
-  return _activeChats.has(chatId);
+  const lastActivity = _activeChats.get(chatId);
+  if (lastActivity === undefined) return false;
+  return Date.now() - lastActivity <= ACTIVE_CHAT_STALE_MS;
+}
+
+export function hasActiveChats(): boolean {
+  const now = Date.now();
+  for (const lastActivity of _activeChats.values()) {
+    if (now - lastActivity <= ACTIVE_CHAT_STALE_MS) return true;
+  }
+  return false;
 }
 
 export function resolveEffectiveExtractionModelId(
@@ -107,10 +136,6 @@ export function resolveEffectiveExtractionModelId(
 
 async function getEffectiveExtractionModelId(requestedModelId: string): Promise<string> {
   return resolveEffectiveExtractionModelId(requestedModelId, await getSettings());
-}
-
-export function hasActiveChats(): boolean {
-  return _activeChats.size > 0;
 }
 
 /**

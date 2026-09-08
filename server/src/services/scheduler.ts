@@ -7,7 +7,7 @@ import {
   isWakeCycleActive,
   SYSTEM_CHAT_ID,
 } from "./system-chat.js";
-import { acquireTurn, isTurnGateBusy, releaseTurn } from "./turn-gate.js";
+import { acquireTurn, isTurnGateBusy, releaseTurn, reapStaleTurnLease } from "./turn-gate.js";
 import { getDb, getSettings, saveSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
@@ -466,5 +466,11 @@ export function startScheduler(): void {
   // stale cache residency records. The KV cache is process-local — when the
   // process dies and restarts, the old residency data is no longer valid.
   setInterval(checkLlamaServerPids, 30_000);
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s)");
+
+  // Reap stale turn-gate leases every minute: a hung turn holder (no
+  // heartbeat) must not block queued turns indefinitely when no new turn
+  // arrives to trigger the steal-on-acquire path.
+  setInterval(reapStaleTurnLease, 60_000);
+
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s, turn-gate reap every 1min)");
 }

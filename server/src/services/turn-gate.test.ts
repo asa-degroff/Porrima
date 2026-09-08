@@ -3,10 +3,19 @@ import {
   acquireTurn,
   getActiveTurn,
   getQueuedTurns,
+  heartbeatTurnLease,
   isTurnGateBusy,
+  reapStaleTurnLease,
   releaseTurn,
   turnGateStatus,
 } from "./turn-gate.js";
+
+/** Force the active lease's heartbeat into the stale past. */
+function ageActiveLease(ms: number): void {
+  const active = getActiveTurn();
+  if (!active) throw new Error("no active lease");
+  active.lastHeartbeatAt = Date.now() - ms;
+}
 
 describe("turn-gate", () => {
   it("grants immediately when idle and releases back to idle", async () => {
@@ -69,7 +78,7 @@ describe("turn-gate", () => {
   it("ignores stale or foreign lease releases", async () => {
     const first = await acquireTurn("chat-a");
     const second = acquireTurn("chat-b");
-    releaseTurn({ leaseId: "bogus", chatId: "chat-b", acquiredAt: Date.now() });
+    releaseTurn({ leaseId: "bogus", chatId: "chat-b", acquiredAt: Date.now(), lastHeartbeatAt: Date.now() });
     expect(getActiveTurn()?.chatId).toBe("chat-a");
     expect(getQueuedTurns()).toHaveLength(1);
 
@@ -107,5 +116,81 @@ describe("turn-gate", () => {
 
   it("returns null status when idle", () => {
     expect(turnGateStatus()).toBeNull();
+  });
+
+  it("steals a stale lease on the next acquire and serves the queued waiter first", async () => {
+    const first = await acquireTurn("chat-a");
+    const queued = acquireTurn("chat-b");
+    ageActiveLease(20 * 60_000); // past the default 15-min staleness window
+
+    const steal = acquireTurn("chat-c");
+    // The queued waiter is served by the steal release; the new acquirer queues.
+    expect((await queued).chatId).toBe("chat-b");
+    expect(getQueuedTurns().map((t) => t.chatId)).toEqual(["chat-c"]);
+    expect(getActiveTurn()?.chatId).toBe("chat-b");
+
+    // The hung holder's old lease is a no-op if it ever wakes up.
+    releaseTurn(first);
+    expect(getActiveTurn()?.chatId).toBe("chat-b");
+
+    releaseTurn(getActiveTurn()!);
+    expect((await steal).chatId).toBe("chat-c");
+    releaseTurn(getActiveTurn()!);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("reaps a stale lease so the queue drains without a new acquirer", async () => {
+    const first = await acquireTurn("chat-a");
+    const queued = acquireTurn("chat-b");
+    ageActiveLease(20 * 60_000);
+
+    expect(reapStaleTurnLease()).toBe(true);
+    expect((await queued).chatId).toBe("chat-b");
+
+    // Nothing stale left — reap is a no-op.
+    expect(reapStaleTurnLease()).toBe(false);
+    releaseTurn(getActiveTurn()!);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("a fresh heartbeat prevents the steal", async () => {
+    const first = await acquireTurn("chat-a");
+    heartbeatTurnLease(first);
+    const queued = acquireTurn("chat-b");
+
+    ageActiveLease(20 * 60_000);
+    heartbeatTurnLease(first); // holder just showed activity
+    expect(isTurnGateBusy()).toBe(true);
+    expect(turnGateStatus("chat-b")).toEqual({ activeChatId: "chat-a", position: 1, queuedCount: 1 });
+
+    // No steal: the queued waiter stays queued and the holder keeps the lease.
+    const steal = acquireTurn("chat-c");
+    expect(getQueuedTurns().map((t) => t.chatId)).toEqual(["chat-b", "chat-c"]);
+    expect(getActiveTurn()?.chatId).toBe("chat-a");
+    // Clean up: release in FIFO order.
+    releaseTurn(first);
+    expect((await queued).chatId).toBe("chat-b");
+    releaseTurn(getActiveTurn()!);
+    expect((await steal).chatId).toBe("chat-c");
+    releaseTurn(getActiveTurn()!);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("treats a stale lease as not busy and absent from status", async () => {
+    const first = await acquireTurn("chat-a");
+    ageActiveLease(20 * 60_000);
+
+    expect(isTurnGateBusy()).toBe(false);
+    // Only a stale lease remains — the gate is effectively idle for the user
+    // (no active chat to wait on; reap/steal will clear it momentarily).
+    expect(turnGateStatus("chat-a")).toBeNull();
+
+    // A stale lease does not grant false "busy" to background checks, and a
+    // new acquirer takes the slot directly (steal) instead of queueing.
+    const second = await acquireTurn("chat-b");
+    expect(getActiveTurn()?.chatId).toBe("chat-b");
+    expect(first.leaseId).not.toBe(second.leaseId);
+    releaseTurn(second);
+    expect(isTurnGateBusy()).toBe(false);
   });
 });
