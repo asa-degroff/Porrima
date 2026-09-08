@@ -10,7 +10,7 @@
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
     "@react-sigma/layout-forceatlas2": "^5.0.6",
-    "@simplewebauthn/browser": "^13.2.2",
+    "@simplewebauthn/browser": "^14.0.0",
     "@toolwind/corner-shape": "^0.0.8-3",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",

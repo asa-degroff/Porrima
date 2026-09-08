@@ -16,7 +16,6 @@ import {
   getCredentialById,
   updateCredentialCounter,
 } from "../services/auth-storage.js";
-import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 
 const router = Router();
 
@@ -227,7 +226,7 @@ router.post("/register/options", async (req, res) => {
   const store = await loadAuthStore();
   const excludeCredentials = store.credentials.map((c) => ({
     id: c.id,
-    transports: c.transports as AuthenticatorTransportFuture[] | undefined,
+    transports: c.transports,
   }));
 
   const options = await generateRegistrationOptions({
@@ -312,7 +311,7 @@ router.post("/login/options", async (req, res) => {
   const store = await loadAuthStore();
   const allowCredentials = store.credentials.map((c) => ({
     id: c.id,
-    transports: c.transports as AuthenticatorTransportFuture[] | undefined,
+    transports: c.transports,
   }));
 
   let context: WebAuthnRequestContext;
@@ -361,7 +360,7 @@ router.post("/login/verify", async (req, res) => {
         id: stored.id,
         publicKey: isoBase64URL.toBuffer(stored.publicKey),
         counter: stored.counter,
-        transports: stored.transports as AuthenticatorTransportFuture[] | undefined,
+        transports: stored.transports,
       },
     });
 
