@@ -383,6 +383,17 @@ export interface PassiveMemoryRecallPersistOptions {
   onReady?: (content: string, memoryIds: string[]) => Promise<void> | void;
 }
 
+/**
+ * One controller per assistant turn (per user message in HTTP chats, per
+ * headless turn in automations). Volume is NOT capped per turn — a long
+ * autonomous run must keep receiving recall across compactions. What bounds
+ * the flow instead: spacing guards (search every 2 iterations, injections at
+ * least 3 apart), query-hash dedup (no re-search while the trajectory is
+ * stationary), the MIN_RERANK_SCORE precision gate, memoriesPerInjection
+ * (batch size), and the per-chat dedup sets — a memory already in the frozen/
+ * delta context or already injected this turn is never recalled again
+ * (deltaIds re-arms at compaction, matching the context rewrite).
+ */
 export class PassiveMemoryRecallController {
   private inFlight: Promise<void> | null = null;
   private candidates = new Map<string, ScoredMemory>();
@@ -392,8 +403,6 @@ export class PassiveMemoryRecallController {
   private lastQueryHash: string | null = null;
   private lastScheduledIteration = 0;
   private lastInjectionIteration = 0;
-  private totalInjected = 0;
-  private maxMemoriesPerTurn = 12;
 
   constructor(
     private readonly chatId: string,
@@ -432,9 +441,6 @@ export class PassiveMemoryRecallController {
 
     this.inFlight = getRetrievalBudget()
       .then((budget) => {
-        this.maxMemoriesPerTurn = budget.passiveRecall.memoriesPerTurn;
-        if (this.totalInjected >= budget.passiveRecall.memoriesPerTurn) return;
-
         const query = buildPassiveRecallQuery(options.chatMessages, budget.passiveRecall.queryChars);
         if (query.length < MIN_QUERY_CHARS) return;
         const rerankQuery = buildPassiveRerankQuery(options.chatMessages, budget.passiveRecall.rerankQueryChars) ||
@@ -457,7 +463,6 @@ export class PassiveMemoryRecallController {
 
   peekReady(iteration: number): PassiveMemoryRecallInjection | null {
     if (this.readyQueue.length === 0) return null;
-    if (this.totalInjected >= this.maxMemoriesPerTurn) return null;
     if (
       this.lastInjectionIteration > 0 &&
       iteration - this.lastInjectionIteration < MIN_ITERATIONS_BETWEEN_INJECTIONS
@@ -479,7 +484,6 @@ export class PassiveMemoryRecallController {
       this.queuedIds.delete(id);
       this.injectedIds.add(id);
     }
-    this.totalInjected += injection.memoryIds.length;
     this.lastInjectionIteration = iteration;
   }
 
@@ -605,10 +609,7 @@ export class PassiveMemoryRecallController {
     const selected = sortByAdjustedScore(candidates)
       .filter((candidate) => candidate.score >= MIN_RERANK_SCORE)
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
-      .slice(0, Math.min(
-        budget.passiveRecall.memoriesPerInjection,
-        budget.passiveRecall.memoriesPerTurn - this.totalInjected,
-      ));
+      .slice(0, budget.passiveRecall.memoriesPerInjection);
 
     // Record stats after selection so we know which memories were actually injected.
     recordStats(output, options.chatType, formattedQuery, rerankDocuments,
@@ -647,7 +648,6 @@ export class PassiveMemoryRecallController {
           this.queuedIds.delete(id);
           this.injectedIds.add(id);
         }
-        this.totalInjected += memoryIds.length;
         this.lastInjectionIteration = options.iteration;
         // persist.onReady resolved — the row is durable — so the delivery
         // mark is safe (mark-after-persist order).

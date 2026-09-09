@@ -510,7 +510,6 @@ export interface Settings {
   passiveRecallRerankDocumentChars?: number;
   passiveRecallRerankTopN?: number;
   passiveRecallMemoriesPerInjection?: number;
-  passiveRecallMemoriesPerTurn?: number;
   // Title generation server (CPU-only llama.cpp instance, tiny model)
   titleGenerationEnabled?: boolean;  // default true
   titleGenerationUrl?: string;       // default "http://localhost:32104"

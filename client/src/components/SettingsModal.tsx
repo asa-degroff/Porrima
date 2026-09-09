@@ -282,7 +282,6 @@ interface RetrievalPresetValues {
   passiveRecallRerankDocumentChars: number;
   passiveRecallRerankTopN: number;
   passiveRecallMemoriesPerInjection: number;
-  passiveRecallMemoriesPerTurn: number;
 }
 
 const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, RetrievalPresetValues> = {
@@ -303,7 +302,6 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallRerankDocumentChars: 1200,
     passiveRecallRerankTopN: 3,
     passiveRecallMemoriesPerInjection: 1,
-    passiveRecallMemoriesPerTurn: 8,
   },
   balanced: {
     rerankerTimeoutMs: 25_000,
@@ -322,7 +320,6 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallRerankDocumentChars: 1600,
     passiveRecallRerankTopN: 4,
     passiveRecallMemoriesPerInjection: 2,
-    passiveRecallMemoriesPerTurn: 12,
   },
   thorough: {
     rerankerTimeoutMs: 25_000,
@@ -341,7 +338,6 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallRerankDocumentChars: 2000,
     passiveRecallRerankTopN: 6,
     passiveRecallMemoriesPerInjection: 3,
-    passiveRecallMemoriesPerTurn: 18,
   },
 };
 
@@ -918,7 +914,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [passiveRecallRerankDocumentChars, setPassiveRecallRerankDocumentChars] = useState(settings.passiveRecallRerankDocumentChars ?? 1600);
   const [passiveRecallRerankTopN, setPassiveRecallRerankTopN] = useState(settings.passiveRecallRerankTopN ?? 4);
   const [passiveRecallMemoriesPerInjection, setPassiveRecallMemoriesPerInjection] = useState(settings.passiveRecallMemoriesPerInjection ?? 2);
-  const [passiveRecallMemoriesPerTurn, setPassiveRecallMemoriesPerTurn] = useState(settings.passiveRecallMemoriesPerTurn ?? 12);
 
   const applyRetrievalPreset = (preset: RetrievalPresetValues) => {
     setRerankerTimeoutMs(preset.rerankerTimeoutMs);
@@ -937,7 +932,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setPassiveRecallRerankDocumentChars(preset.passiveRecallRerankDocumentChars);
     setPassiveRecallRerankTopN(preset.passiveRecallRerankTopN);
     setPassiveRecallMemoriesPerInjection(preset.passiveRecallMemoriesPerInjection);
-    setPassiveRecallMemoriesPerTurn(preset.passiveRecallMemoriesPerTurn);
   };
 
   const switchToCustom = () => {
@@ -963,7 +957,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       passiveRecallRerankDocumentChars: settings.passiveRecallRerankDocumentChars ?? 1600,
       passiveRecallRerankTopN: settings.passiveRecallRerankTopN ?? 4,
       passiveRecallMemoriesPerInjection: settings.passiveRecallMemoriesPerInjection ?? 2,
-      passiveRecallMemoriesPerTurn: settings.passiveRecallMemoriesPerTurn ?? 12,
     });
   };
 
@@ -2237,7 +2230,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       passiveRecallRerankDocumentLimit,
       passiveRecallRerankTopN,
       passiveRecallMemoriesPerInjection,
-      passiveRecallMemoriesPerTurn,
     };
     
     // Emit TTS settings update event for useTTS hook
@@ -6570,7 +6562,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       <RetrievalRange label="Recall document length" description="Maximum memory text sent to the reranker for scoring." value={passiveRecallRerankDocumentChars} min={400} max={4000} step={100} suffix="chars" onChange={setPassiveRecallRerankDocumentChars} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={8} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} onCommit={switchToCustom} />
-	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} onCommit={switchToCustom} />
 	                    </div>
 	                  </div>
 	                </div>

@@ -27,7 +27,6 @@ export interface RetrievalBudget {
     rerankDocumentChars: number;
     rerankTopN: number;
     memoriesPerInjection: number;
-    memoriesPerTurn: number;
   };
 }
 
@@ -53,7 +52,6 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       rerankDocumentChars: 1200,
       rerankTopN: 3,
       memoriesPerInjection: 1,
-      memoriesPerTurn: 12,
     },
   },
   balanced: {
@@ -77,7 +75,6 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       rerankDocumentChars: 1600,
       rerankTopN: 4,
       memoriesPerInjection: 2,
-      memoriesPerTurn: 18,
     },
   },
   thorough: {
@@ -101,7 +98,6 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       rerankDocumentChars: 2000,
       rerankTopN: 6,
       memoriesPerInjection: 3,
-      memoriesPerTurn: 24,
     },
   },
 };
@@ -166,7 +162,6 @@ export function resolveRetrievalBudget(settings: Settings): RetrievalBudget {
       rerankDocumentChars: clampInt(settings.passiveRecallRerankDocumentChars, base.passiveRecall.rerankDocumentChars, 400, 4000),
       rerankTopN: clampInt(settings.passiveRecallRerankTopN, base.passiveRecall.rerankTopN, 2, passiveRecallRerankDocumentLimit),
       memoriesPerInjection: clampInt(settings.passiveRecallMemoriesPerInjection, base.passiveRecall.memoriesPerInjection, 1, 5),
-      memoriesPerTurn: clampInt(settings.passiveRecallMemoriesPerTurn, base.passiveRecall.memoriesPerTurn, 0, 30),
     },
   };
 }

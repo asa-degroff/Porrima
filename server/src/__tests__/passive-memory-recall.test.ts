@@ -328,3 +328,41 @@ describe("passive memory recall query building", () => {
     });
   });
 });
+
+describe("passive recall volume across a long turn", () => {
+  it("keeps delivering injections after the old per-turn volume was exhausted", () => {
+    // No per-turn cap: a long autonomous run (one user message, many
+    // iterations, possibly compactions) must keep receiving recall. The
+    // old 12/18/24 memoriesPerTurn cap would stop this controller after the
+    // first dozen injections; dedup sets bound the flow instead.
+    const controller = new PassiveMemoryRecallController("chat-1");
+    for (let i = 0; i < 24; i++) {
+      controller.markApplied(
+        {
+          content: "[System context - passively recalled memories]",
+          memoryIds: [`mem-${i}`],
+          memories: ["a memory"],
+          createdAt: Date.now(),
+        },
+        i * 3,
+      );
+    }
+
+    const fresh = {
+      content: "[System context - passively recalled memories]",
+      memoryIds: ["mem-fresh"],
+      memories: ["a memory from new territory"],
+      createdAt: Date.now(),
+    };
+    (controller as unknown as { readyQueue: typeof fresh[] }).readyQueue.push(fresh);
+
+    // Well past the last injection, so the spacing guard is satisfied.
+    const delivered = controller.peekReady(100);
+    expect(delivered).not.toBeNull();
+    expect(delivered?.memoryIds).toEqual(["mem-fresh"]);
+
+    // Delivery bookkeeping still tracks what the loop has seen.
+    controller.markApplied(delivered!, 100);
+    expect(controller.peekReady(110)).toBeNull();
+  });
+});
