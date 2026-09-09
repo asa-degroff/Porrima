@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { DiffView } from "./ui/DiffView";
 import { UserImage } from "./UserImage";
+import { ImageLightbox } from "./ImageLightbox";
 import { ToolIcon, type ToolIconName } from "./ToolIcons";
 import { Beats } from "./Beats";
 
@@ -47,6 +49,10 @@ interface Props {
 
 export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, previewRaw }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Lightbox for tool-returned images (screenshots, generated art…).
+  // Self-owned so every ToolCallDisplay usage site gets the viewer without
+  // threading an open callback down through segment renderers.
+  const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   // Second tier: whether the full call arguments are revealed under the
   // one-line call preview row. Independent of `expanded` (the chip itself).
   // Null = no explicit choice yet, so the default is derived from the props:
@@ -226,6 +232,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
                 <UserImage
                   image={img}
                   maxDimension={300}
+                  onClick={() => setLightboxImage(img)}
                 />
               </div>
             ))}
@@ -242,11 +249,17 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
                 <UserImage
                   image={img}
                   maxDimension={300}
+                  onClick={() => setLightboxImage(img)}
                 />
               </div>
             ))}
           </div>
         </div>
+      )}
+      {/* Image lightbox for tool-returned images */}
+      {lightboxImage && createPortal(
+        <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />,
+        document.body
       )}
     </div>
   );
