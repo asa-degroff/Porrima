@@ -5372,12 +5372,13 @@ router.post("/artifact-error", async (req, res) => {
 
   await waitForBackgroundAutomation(report.chatId);
 
-  chat.messages.push({
+  const repairRow: ChatMessage = {
     role: "system",
     content: repairPrompt,
     timestamp: Date.now(),
     _isSystemMessage: true,
-  });
+  };
+  chat.messages.push(repairRow);
   await saveChat(chat);
 
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
@@ -5411,7 +5412,9 @@ router.post("/artifact-error", async (req, res) => {
     ? `[System context — updated memories]\n${memoriesDelta}`
     : "";
   if (memoryDeltaContext) {
-    const insertAt = Math.max(0, chat.messages.length - 1);
+    // Anchor on the repair row's id, not the tail: a rebase against a
+    // concurrent append may have moved the row off the tail.
+    const insertAt = Math.max(0, resolveCurrentMessageIndex(chat.messages, repairRow));
     chat.messages.splice(insertAt, 0, {
       role: "system",
       content: memoryDeltaContext,
@@ -5422,7 +5425,7 @@ router.post("/artifact-error", async (req, res) => {
 
   setCachedAugmentedPrompt(chat.id, systemPrompt);
 
-  const currentPromptIndex = chat.messages.length - 1;
+  const currentPromptIndex = resolveCurrentMessageIndex(chat.messages, repairRow);
   const persistedHistoryEnd =
     memoryDeltaContext &&
     currentPromptIndex > 0 &&
@@ -5554,11 +5557,12 @@ function isEmptyAssistantPlaceholder(message: ChatMessage | undefined): boolean 
   );
 }
 
-// The /edit route is the only truncating writer, so it is a guarded
-// transaction: every save checks the revision under the write lock, and a
-// concurrent write since the load refuses the edit (409) instead of letting
-// the array-authoritative truncation delete the concurrent writer's rows —
-// and instead of a later rebase resurrecting the rows this truncation removed.
+// The /edit route is the only truncating writer, so its truncation save is
+// guarded: the revision check runs under the write lock and a concurrent write
+// since the load refuses the edit (409) — nothing was written and the
+// concurrent writer's rows are intact. Later saves in the route (pre-send
+// compaction, memory delta) are not truncating and rebase instead; the edited
+// user row is resolved by id, so a rebase moving it is safe.
 function refuseStaleEdit(res: Response, err: RevisionConflictError): void {
   console.warn(
     `[chat] edit refused (revision conflict): base ${err.baseRevision} vs stored ${err.currentRevision} — ` +
@@ -5758,15 +5762,12 @@ router.post("/edit", async (req, res) => {
           turnRequestSignal(res),
         );
         if (compaction && compaction.truncated) {
-          // Guarded: if a concurrent write landed after the truncation save
-          // above, refuse instead of deleting it (or rebasing around it and
-          // breaking the positional context resolution below).
-          try {
-            await saveChat(chat, { allowTruncation: true, rejectOnRevisionConflict: true });
-          } catch (err) {
-            if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
-            throw err;
-          }
+          // Compaction never removes rows (_outOfContext marks + summary
+          // splice), so save unflagged: a concurrent append is preserved by
+          // the rebase, and the edited row below resolves by id so a rebase
+          // moving it is safe. This save also runs after ensureSSEStream, so a
+          // 409 here could not be written cleanly — it must not refuse.
+          await saveChat(chat);
           // The regenerated turn prefills the rebuilt context — arm the indicator.
           postCompactionPrefillPending.add(chat.id);
           // Soft reset after compaction — frozen set retained, next build
@@ -5831,27 +5832,23 @@ router.post("/edit", async (req, res) => {
   // KV cache prefix across turns). Replay merges this hidden row into the
   // following user message, so llama.cpp never sees a mid-transcript system role.
   if (editMemoryDeltaContext) {
-    const insertAt = Math.max(0, chat.messages.length - 1);
+    // Anchor immediately before the edited user row by id: a rebase against a
+    // concurrent append can move the row off the tail, and the replay-merge
+    // invariant requires the delta to sit directly before it.
+    const insertAt = Math.max(0, resolveCurrentMessageIndex(chat.messages, userMsg));
     chat.messages.splice(insertAt, 0, {
       role: "system",
       content: editMemoryDeltaContext,
       timestamp: Date.now(),
     });
-    // Guarded like the truncation save above: a concurrent write here would
-    // rebase the append in after the user row and break the positional
-    // current-message resolution below — refuse instead.
-    try {
-      await saveChat(chat, { rejectOnRevisionConflict: true });
-    } catch (err) {
-      if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
-      throw err;
-    }
+    await saveChat(chat);
   }
 
   // Context = all messages before the current edited user prompt. If this edit
   // has a fresh memory delta, merge that delta into the current user message
   // instead of sending it as a standalone mid-transcript system message.
-  const currentEditUserIndex = chat.messages.length - 1;
+  // Resolve by id, never by position: a rebase may have interleaved rows.
+  const currentEditUserIndex = resolveCurrentMessageIndex(chat.messages, userMsg);
   const editPersistedHistoryEnd =
     editMemoryDeltaContext &&
     currentEditUserIndex > 0 &&

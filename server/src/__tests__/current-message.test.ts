@@ -20,6 +20,13 @@ const ORIGIN_USER = row("u1", "a");
 const ORIGIN_ASSISTANT = row("a1", "b", "assistant");
 const CURRENT_USER = row("u2", "c");
 const PRESERVED_POST = row("[quje from other chat] post", "p");
+const REPAIR_PROMPT = row("repair prompt", "r", "system");
+const MEMORY_DELTA_CONTENT = "[System context — updated memories]";
+
+function appendDeltaBefore(messages: ChatMessage[], anchor: ChatMessage): void {
+  const insertAt = Math.max(0, resolveCurrentMessageIndex(messages, anchor));
+  messages.splice(insertAt, 0, row(MEMORY_DELTA_CONTENT, undefined, "system"));
+}
 
 describe("current-message resolution (id-anchored, route-level)", () => {
   it("resolves the current row by id when a preserved append landed after it (interleaved rebase shape)", () => {
@@ -69,5 +76,34 @@ describe("current-message resolution (id-anchored, route-level)", () => {
     const messages = [ORIGIN_USER, PRESERVED_POST];
     expect(resolveCurrentMessageIndex(messages, CURRENT_USER)).toBe(1);
     expect(resolveTrailingRow(messages, CURRENT_USER)).toBe(PRESERVED_POST);
+  });
+
+  it("resolves a pushed system row (repair route) and keeps the delta before it", () => {
+    const messages = [ORIGIN_USER, ORIGIN_ASSISTANT, REPAIR_PROMPT];
+    appendDeltaBefore(messages, REPAIR_PROMPT);
+
+    expect(messages.map((m) => m.content)).toEqual([
+      "u1",
+      "a1",
+      MEMORY_DELTA_CONTENT,
+      "repair prompt",
+    ]);
+    const repairIdx = messages.indexOf(REPAIR_PROMPT);
+    expect(messages[repairIdx - 1]?.content).toBe(MEMORY_DELTA_CONTENT);
+  });
+
+  it("resolves the repair row when a preserved append landed after it", () => {
+    // The repair row's save rebased around a concurrent append, leaving the
+    // append at the tail; the delta must still land before the repair row.
+    const messages = [ORIGIN_USER, ORIGIN_ASSISTANT, REPAIR_PROMPT, PRESERVED_POST];
+    appendDeltaBefore(messages, REPAIR_PROMPT);
+
+    expect(messages.map((m) => m.content)).toEqual([
+      "u1",
+      "a1",
+      MEMORY_DELTA_CONTENT,
+      "repair prompt",
+      "[quje from other chat] post",
+    ]);
   });
 });

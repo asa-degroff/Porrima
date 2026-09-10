@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "../types.js";
+import { resolveCurrentMessageIndex } from "../services/current-message.js";
 
 async function loadChatStorage(homeDir: string) {
   vi.resetModules();
@@ -569,6 +570,55 @@ describe("chat storage revision + row identity", () => {
         "two",
         "queued message",
         "three (edited)",
+      ]);
+      const ids = final!.messages.map((m) => m._rowId);
+      expect(new Set(ids).size).toBe(ids.length);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebases an edit's later saves around a concurrent append (id-anchored delta)", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-rebase", [
+        { role: "user", content: "u1", timestamp: 1 },
+        { role: "assistant", content: "a1", timestamp: 2 },
+        { role: "user", content: "u2", timestamp: 3 },
+        { role: "assistant", content: "a2", timestamp: 4 },
+      ]));
+
+      // /edit: truncate at the second user row, push the edit, guarded save.
+      const edit = await storage.getChat("edit-rebase");
+      edit!.messages = edit!.messages.slice(0, 2);
+      const editedRow: Chat["messages"][number] = { role: "user", content: "u2 (edited)", timestamp: 5 };
+      edit!.messages.push(editedRow);
+      await storage.saveChat(edit!, { allowTruncation: true, rejectOnRevisionConflict: true });
+
+      // A concurrent append lands after the truncation save.
+      const other = await storage.getChat("edit-rebase");
+      other!.messages.push({ role: "user", content: "concurrent post", timestamp: 6 });
+      await storage.saveChat(other!);
+
+      // /edit's delta splice is id-anchored, and its save now rebases instead
+      // of refusing: the append survives and the delta stays adjacent.
+      const insertAt = Math.max(0, resolveCurrentMessageIndex(edit!.messages, editedRow));
+      edit!.messages.splice(insertAt, 0, {
+        role: "system",
+        content: "[System context — updated memories]",
+        timestamp: 7,
+      });
+      await storage.saveChat(edit!);
+
+      const final = await storage.getChat("edit-rebase");
+      expect(final?.messages.map((m) => m.content)).toEqual([
+        "u1",
+        "a1",
+        "[System context — updated memories]",
+        "u2 (edited)",
+        "concurrent post",
       ]);
       const ids = final!.messages.map((m) => m._rowId);
       expect(new Set(ids).size).toBe(ids.length);
