@@ -52,7 +52,7 @@ export interface HeadlessChatTurnOptions {
   timeoutMs: number;
   keepAlive?: string | number;
   logPrefix: string;
-  saveChat: (chat: Chat) => Promise<void>;
+  saveChat: (chat: Chat, opts?: { allowTruncation?: boolean; removedRowIds?: string[] }) => Promise<void>;
   /** Model context window in tokens. When set, the runner guards long
    * multi-iteration turns against context overflow: once usage crosses the
    * compaction trigger ratio (or the model reports stopReason="length"), the
@@ -449,6 +449,7 @@ export async function runHeadlessChatTurn(
   let assistantMessageIndex = -1;
   let finalAssistantMessage: ChatMessage | null = null;
   const persistedAssistantBoundaries: ChatMessage[] = [];
+  let discardedBoundaryRowIds: string[] = [];
   const persistPostTurnPassiveRecall = async (content: string, memoryIds: string[]) => {
     const rowBase: ChatMessage = {
       role: "system",
@@ -596,7 +597,7 @@ export async function runHeadlessChatTurn(
     chat.messages.push(...rows);
     persistedAssistantBoundaries.push(...rows);
     await saveChat(chat);
-    assistantMessageIndex = chat.messages.length - 1;
+    assistantMessageIndex = rows[rows.length - 1]._rowSequence ?? chat.messages.length - 1;
     finalAssistantMessage = rows[rows.length - 1];
     advancePersistedAssistantBoundary();
     return finalAssistantMessage;
@@ -605,6 +606,12 @@ export async function runHeadlessChatTurn(
   const discardPersistedAssistantBoundaries = () => {
     if (persistedAssistantBoundaries.length === 0) return;
     const boundaries = new Set(persistedAssistantBoundaries);
+    // These rows were persisted earlier in this turn and are now being
+    // replaced by the aggregate. Declare them so a rebase against a concurrent
+    // append drops them instead of preserving them as unclaimed rows.
+    discardedBoundaryRowIds = persistedAssistantBoundaries
+      .map((message) => message._rowId)
+      .filter((id): id is string => !!id);
     const before = chat.messages.length;
     chat.messages = chat.messages.filter((message) => !boundaries.has(message));
     const removed = before - chat.messages.length;
@@ -983,7 +990,7 @@ export async function runHeadlessChatTurn(
           _compactionRemovedCount: compaction.removedCount,
           _compactionCycle: compactionCycle,
         });
-        await saveChat(chat);
+        await saveChat(chat, { allowTruncation: true });
 
         midTurnCompactionOccurred = true;
         activeContext = {
@@ -1057,8 +1064,12 @@ export async function runHeadlessChatTurn(
     const assistantRows = splitAssistantMessageIntoCanonicalToolLoopRows(aggregateAssistantMessage);
     chat.messages.push(...assistantRows);
     assistantMessage = assistantRows[assistantRows.length - 1];
-    await saveChat(chat);
-    assistantMessageIndex = chat.messages.length - 1;
+    await saveChat(
+      chat,
+      discardedBoundaryRowIds.length > 0 ? { removedRowIds: discardedBoundaryRowIds } : undefined,
+    );
+    discardedBoundaryRowIds = [];
+    assistantMessageIndex = assistantMessage._rowSequence ?? chat.messages.length - 1;
 
     // Post-turn passive recall: for conversational stops, schedule an async
     // search now. The onReady callback (if provided) handles persistence after

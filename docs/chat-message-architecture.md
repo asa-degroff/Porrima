@@ -16,7 +16,7 @@ The current design fixes both while keeping the existing `Chat.messages` API sha
 Chat storage has three message-related layers:
 
 - `chats.messages`: legacy JSON snapshot of the current `Chat.messages` array. It is still written by `saveChat()` for compatibility.
-- `chat_message_rows`: full-fidelity row store keyed by `(chat_id, sequence)`. Each row stores the original `ChatMessage` in `payload_json` plus indexed metadata (`role`, `timestamp`, context flags). This is the preferred source when populated.
+- `chat_message_rows`: full-fidelity row store keyed by `(chat_id, sequence)`. Each row stores the original `ChatMessage` in `payload_json` plus indexed metadata (`role`, `timestamp`, context flags, and a durable `row_id`). This is the preferred source when populated.
 - `chat_messages` + `chat_messages_fts`: denormalized search projection for conversation FTS. This is not the full-fidelity message source.
 
 `saveChat()` synchronizes the changed tail of `chat_message_rows` from the provided `Chat.messages` array. `getChat()` reads rows first and falls back to the legacy JSON snapshot if rows are absent or corrupt. Startup migration backfills rows from legacy JSON.
@@ -24,6 +24,18 @@ Chat storage has three message-related layers:
 During the compatibility window, `sequence` is deliberately the absolute `Chat.messages` index. That keeps edit/retry, search jumps, compaction markers, and paged windows aligned.
 
 **Sequence indexes are not durable identifiers.** They are current positions in the live `Chat.messages` array, not stable references across turns. A tool-heavy assistant turn now inserts N canonical rows instead of one collapsed row, so any subsequent message's sequence shifts by `N - 1` relative to where it would have been under the legacy storage. Callers that resolve a sequence to a message (search jumps, edit/retry indexes) should re-resolve after each turn instead of caching across turns.
+
+**Row identity is durable.** `chat_message_rows.row_id` is a stable per-row id (hydrated as `ChatMessage._rowId`, never persisted in `payload_json`). It survives renumbering. Claims, targeted removals, and concurrent-writer reconciliation match by row id; `_rowSequence` stays positional.
+
+## Concurrent Writers and Rebase
+
+Multiple writers can hold the same chat's row array across awaits: a user turn pre-lease, a queued turn, a background recall save, an automation wake. `saveChat()` serializes writes per chat with `withChatWriteLock`, but that is not enough — a writer's snapshot can predate a row appended by someone else, and the array-authoritative sync would delete it.
+
+- `chats.revision` is bumped in the same transaction as every row write. A snapshot records the revision it loaded from (`Chat._baseRevision`).
+- On save with a matching revision, the existing tail sync runs unchanged.
+- On mismatch, `saveChat()` **rebases**: DB rows are walked in sequence order; rows whose `row_id` the writer claims keep the writer's version; unclaimed committed rows (concurrent appends) are preserved; declared removals (`removedRowIds`) and unclaimed `_inProgress` rows are dropped; the writer's new rows are spliced after the emitted position of their nearest preceding claimed row, in array order. The merged array is then synced normally, `_rowSequence` is assigned densely, and `_baseRevision` advances.
+- `appendChatMessageRow(chatId, message)` is the append-only path for writers with no in-memory array (cross-chat posts, background recall). It inserts at `MAX(sequence)+1`, bumps the revision, and mirrors the row into the search projection. In-array writers stay on `saveChat`, whose rebase preserves those appends.
+- Set `PORRIMA_STORAGE_REBASE=0` to fall back to the legacy array-authoritative sync (one-release kill switch).
 
 ## Message Windows
 
@@ -94,6 +106,11 @@ Keep these invariants when changing chat history code:
 - When persisting in-progress output, replace `_inProgress` rows rather than appending duplicates.
 - For UI rendering, group split tool-loop rows visually but keep raw rows in state/cache.
 - When adding hidden context rows, make live injection use the same synthetic user-role message that `chatMessagesToPiMessages()` reconstructs from persisted rows.
+- Match row identity by `_rowId`, never by `_rowSequence` — sequences move when rows are inserted or rebased.
+- Replace an in-memory row with `carryRowIdentity(next, previous)` so `saveChat()` does not treat the replacement as a brand-new row.
+- Writers without an in-memory array append via `appendChatMessageRow()`; writers holding an array save via `saveChat()`, whose rebase preserves concurrent appends.
+- Never call `saveChat()` with a paged window (`getChatWithWindow` result); it refuses, by design.
+- Declare intentional same-turn removals with `saveChat(chat, { removedRowIds })` rather than dropping rows from the array silently.
 
 ## Future Work
 

@@ -42,6 +42,8 @@ export interface MessageSegment {
 export interface ChatMessage {
   /** Absolute chat_message_rows.sequence for UI edit/retry targeting. Never persisted. */
   _rowSequence?: number;
+  /** Durable chat_message_rows.row_id identity. Stable across renumbering. Never persisted. */
+  _rowId?: string;
   role: "user" | "assistant" | "system";
   content: string;
   thinking?: string;
@@ -161,6 +163,9 @@ export interface Chat {
   systemPrompt: string;
   contextWindow?: number;
   messages: ChatMessage[];
+  /** Row-table revision this in-memory snapshot was loaded from. Never persisted.
+   *  saveChat rebases when the stored revision has moved past it. */
+  _baseRevision?: number;
   /** Absolute index of messages[0] when this Chat carries a paged message window. */
   messageOffset?: number;
   /** Total persisted messages for this chat when this Chat carries a paged window. */

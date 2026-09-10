@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "crypto";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import os from "os";
 import { join } from "path";
@@ -23,6 +24,10 @@ const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 
 const DB_PATH = join(BASE_DIR, "app.db");
 const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
+// Upper bound when scanning backwards to find a tool-loop search group's first
+// row during an append. The HTTP loop allows 500 iterations, so 600 covers the
+// largest fragment chain with headroom.
+const MAX_TOOL_LOOP_GROUP_SCAN = 600;
 
 // ---------------------------------------------------------------------------
 // Per-chat write lock — serializes concurrent saveChat / enrichArchive calls
@@ -105,6 +110,7 @@ interface ChatMetadataRow {
   lastDelayedExtractionMessageIndex: number | null;
   lastDelayedExtractionTailIndex: number | null;
   lastZeitgeistSynthesisAt: string | null;
+  revision: number | null;
 }
 
 interface ChatMetadataWithMessageCount extends ChatMetadataRow {
@@ -149,7 +155,8 @@ export function getDb(): Database.Database {
       activeSkills TEXT,
       messages JSON NOT NULL,
       createdAt TEXT NOT NULL,
-      lastModified TEXT NOT NULL
+      lastModified TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0
     );
   `);
 
@@ -268,6 +275,7 @@ export function getDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS chat_message_rows (
       chat_id TEXT NOT NULL,
       sequence INTEGER NOT NULL,
+      row_id TEXT,
       role TEXT NOT NULL,
       timestamp INTEGER,
       payload_json JSON NOT NULL,
@@ -281,6 +289,20 @@ export function getDb(): Database.Database {
       ON chat_message_rows(chat_id, sequence);
     CREATE INDEX IF NOT EXISTS idx_chat_message_rows_chat_role
       ON chat_message_rows(chat_id, role);
+  `);
+
+  // Migration: durable per-row identity. Sequences are positions; row_id is the
+  // stable identity used by saveChat's rebase. Backfill uses the legacy
+  // composite (chat_id, sequence) as an opaque id; never parsed.
+  const rowCols = db.prepare("PRAGMA table_info(chat_message_rows)").all() as Array<{ name: string }>;
+  if (!rowCols.some((c) => c.name === "row_id")) {
+    db.exec("ALTER TABLE chat_message_rows ADD COLUMN row_id TEXT");
+    db.exec("UPDATE chat_message_rows SET row_id = chat_id || ':' || sequence WHERE row_id IS NULL");
+    console.log("[chat-storage] Added row_id column to chat_message_rows and backfilled");
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_message_rows_row_id
+      ON chat_message_rows(chat_id, row_id);
   `);
 
   // ---------------------------------------------------------------------------
@@ -381,6 +403,12 @@ export function getDb(): Database.Database {
   const cols = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "activeSkills")) {
     db.exec("ALTER TABLE chats ADD COLUMN activeSkills TEXT");
+  }
+
+  // Auto-add row-table revision, used by saveChat's optimistic concurrency.
+  if (!cols.some((c) => c.name === "revision")) {
+    db.exec("ALTER TABLE chats ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
+    console.log("[chat-storage] Added revision column to chats");
   }
 
   // Auto-add color column to projects if upgrading from earlier schema
@@ -552,6 +580,7 @@ export async function getChat(id: string): Promise<Chat | null> {
       id, title, type, modelId, systemPrompt, contextWindow, projectId,
       activeSkills, createdAt, lastModified,
       lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
+      revision,
       CASE WHEN json_valid(messages) THEN json_array_length(messages) ELSE NULL END AS legacyMessageCount
     FROM chats
     WHERE id = ?
@@ -605,13 +634,7 @@ export async function getChat(id: string): Promise<Chat | null> {
         );
         rowMessages = legacyMessages;
         try {
-          const firstChanged = syncChatMessageRows(db, row.id, legacyMessages, true);
-          if (firstChanged !== null) {
-            syncChatMessages(db, row.id, legacyMessages, firstChanged);
-            console.log(
-              `[chat-storage] Reconciled ${row.id}: re-synced ${legacyMessages.length} rows from JSON column (firstChanged=${firstChanged})`
-            );
-          }
+          await reconcileChatRowsFromLegacy(db, row.id, legacyMessages, row);
         } catch (err) {
           console.error(`[chat-storage] Failed to reconcile ${row.id} from JSON column:`, err);
         }
@@ -622,13 +645,7 @@ export async function getChat(id: string): Promise<Chat | null> {
         `[chat-storage] getChat ${row.id}: row table is unavailable; using legacy JSON (${legacyMessages.length} messages)`
       );
       try {
-        const firstChanged = syncChatMessageRows(db, row.id, legacyMessages, true);
-        if (firstChanged !== null) {
-          syncChatMessages(db, row.id, legacyMessages, firstChanged);
-          console.log(
-            `[chat-storage] Reconciled ${row.id}: re-synced ${legacyMessages.length} rows from JSON column (firstChanged=${firstChanged})`
-          );
-        }
+        await reconcileChatRowsFromLegacy(db, row.id, legacyMessages, row);
       } catch (err) {
         console.error(`[chat-storage] Failed to reconcile ${row.id} from JSON column:`, err);
       }
@@ -639,7 +656,7 @@ export async function getChat(id: string): Promise<Chat | null> {
   }
 
   const messages = rawMessages.map((message, index) =>
-    message._rowSequence === undefined ? withRowSequence(message, index) : message
+    message._rowSequence === undefined ? withRowIdentity(message, index) : message
   );
   return hydrateChat(row, messages);
 }
@@ -666,16 +683,16 @@ export function getChatMessageWindow(
   const offset = Math.max(0, endExclusive - limit);
 
   const rows = db.prepare(`
-    SELECT sequence, payload_json
+    SELECT sequence, row_id, payload_json
     FROM chat_message_rows
     WHERE chat_id = ? AND sequence >= ? AND sequence < ?
     ORDER BY sequence ASC
-  `).all(chatId, offset, endExclusive) as Array<{ sequence: number; payload_json: string }>;
+  `).all(chatId, offset, endExclusive) as Array<{ sequence: number; row_id: string | null; payload_json: string }>;
 
   const messages: ChatMessage[] = [];
   for (const row of rows) {
     try {
-      messages.push(withRowSequence(JSON.parse(row.payload_json) as ChatMessage, row.sequence));
+      messages.push(withRowIdentity(JSON.parse(row.payload_json) as ChatMessage, row.sequence, row.row_id));
     } catch (e) {
       console.warn(
         `[chat-storage] Skipping corrupt message row ${chatId}:${row.sequence} in window: ${(e as Error).message}`
@@ -705,7 +722,8 @@ export async function getChatWithWindow(
   const row = db.prepare(
     `SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
             activeSkills, createdAt, lastModified,
-            lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt
+            lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
+            revision
      FROM chats WHERE id = ?`
   ).get(id) as ChatMetadataRow | undefined;
 
@@ -726,23 +744,72 @@ export async function getChatWithWindow(
   return chat;
 }
 
-export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean }): Promise<void> {
+export async function saveChat(
+  chat: Chat,
+  opts?: { allowTruncation?: boolean; removedRowIds?: string[] },
+): Promise<void> {
   await withChatWriteLock(chat.id, async () => {
     const db = getDb();
-    const existing = db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chat.id);
+    const existing = db.prepare("SELECT revision FROM chats WHERE id = ?").get(chat.id) as
+      | { revision: number | null }
+      | undefined;
     if (!existing) {
       throw new Error(`Cannot save deleted chat ${chat.id}`);
     }
+    const currentRevision = existing.revision ?? 0;
+    const nextRevision = currentRevision + 1;
+    const baseRevision = chat._baseRevision;
+    const removedRowIds = new Set(opts?.removedRowIds ?? []);
+
+    // A paged window is a partial array; syncing it would rewrite the chat from
+    // the window and delete everything outside it.
+    const isPartialWindow =
+      chat.messageOffset !== undefined && (chat.messageOffset > 0 || chat.hasMoreMessages === true);
+    if (isPartialWindow) {
+      throw new Error(
+        `Refusing to save chat ${chat.id} from a partial message window ` +
+        `(offset=${chat.messageOffset}, hasMore=${chat.hasMoreMessages === true})`,
+      );
+    }
 
     chat.lastModified = new Date().toISOString();
-    const preview = computeChatPreview(chat.messages);
 
     const save = db.transaction(() => {
+      const needsRebase =
+        isRebaseEnabled() &&
+        !opts?.allowTruncation &&
+        baseRevision !== undefined &&
+        baseRevision !== currentRevision;
+
+      if (needsRebase) {
+        const dbRows = db.prepare(`
+          SELECT sequence, row_id, payload_json
+          FROM chat_message_rows
+          WHERE chat_id = ?
+          ORDER BY sequence ASC
+        `).all(chat.id) as ChatMessageRowIdentity[];
+        const result = rebaseMessageArray(dbRows, chat.messages, removedRowIds);
+        chat.messages.splice(0, chat.messages.length, ...result.merged);
+        console.log(
+          `[chat-storage] rebase chat=${chat.id.slice(0, 8)} baseRev=${baseRevision} ` +
+          `currentRev=${currentRevision} preserved=${result.preserved} removed=${result.removed} ` +
+          `ephemeral=${result.droppedEphemeral}`,
+        );
+      }
+
       // Sync row table first — if the row sync encounters an error,
       // the JSON column hasn't been touched yet, so there's no
       // inconsistency to recover from on the next load.
       const firstChanged = syncChatMessageRows(db, chat.id, chat.messages, opts?.allowTruncation ?? false);
       syncChatMessages(db, chat.id, chat.messages, firstChanged);
+
+      // Pin the post-sync positions so callers/readers see the authoritative
+      // sequence for every row, including preserved concurrent appends.
+      for (let i = 0; i < chat.messages.length; i++) {
+        chat.messages[i]._rowSequence = i;
+      }
+
+      const preview = computeChatPreview(chat.messages);
 
       // Row table is authoritative. Keep chats.messages as a stale fallback
       // snapshot from the compatibility window; do not rewrite the full message
@@ -760,7 +827,8 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
             lastDelayedExtractionAt = ?,
             lastDelayedExtractionMessageIndex = ?,
             lastDelayedExtractionTailIndex = ?,
-            preview = ?
+            preview = ?,
+            revision = ?
         WHERE id = ?
       `).run(
         chat.title,
@@ -775,11 +843,75 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
         chat.lastDelayedExtractionMessageIndex ?? null,
         chat.lastDelayedExtractionTailIndex ?? null,
         preview,
+        nextRevision,
         chat.id
       );
     });
 
     save();
+    chat._baseRevision = nextRevision;
+  });
+}
+
+/**
+ * Append a single row to a chat's row table without loading or rewriting the
+ * in-memory array. The insert lands at MAX(sequence)+1 under the per-chat write
+ * lock, bumps the chat revision, and keeps the flattened search projection in
+ * sync. Returns the message with `_rowSequence`/`_rowId` assigned; it does not
+ * mutate any caller's `chat.messages` (an in-array caller that appended across
+ * a concurrent row would gap the array/index invariant — those writers stay on
+ * saveChat, whose rebase preserves this append).
+ */
+export async function appendChatMessageRow(chatId: string, message: ChatMessage): Promise<ChatMessage> {
+  return withChatWriteLock(chatId, async () => {
+    const db = getDb();
+    const existing = db.prepare("SELECT revision FROM chats WHERE id = ?").get(chatId) as
+      | { revision: number | null }
+      | undefined;
+    if (!existing) {
+      throw new Error(`Cannot append to deleted chat ${chatId}`);
+    }
+
+    if (!message._rowId) message._rowId = randomUUID();
+    const rowId = message._rowId;
+
+    const append = db.transaction(() => {
+      const seqRow = db.prepare(
+        "SELECT COALESCE(MAX(sequence) + 1, 0) AS next FROM chat_message_rows WHERE chat_id = ?",
+      ).get(chatId) as { next: number };
+      const seq = seqRow.next;
+
+      const persisted = withoutTransientMessageMetadata(message);
+      db.prepare(`
+        INSERT INTO chat_message_rows (
+          chat_id, sequence, row_id, role, timestamp, payload_json, search_content,
+          out_of_context, is_compaction_summary, is_system_message
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        chatId,
+        seq,
+        rowId,
+        persisted.role,
+        persisted.timestamp || null,
+        JSON.stringify(persisted),
+        buildSearchContent(persisted),
+        persisted._outOfContext ? 1 : 0,
+        persisted._isCompactionSummary ? 1 : 0,
+        persisted._isSystemMessage ? 1 : 0,
+      );
+
+      appendSearchRow(db, chatId, seq, persisted);
+
+      db.prepare(
+        "UPDATE chats SET revision = COALESCE(revision, 0) + 1, lastModified = ? WHERE id = ?",
+      ).run(new Date().toISOString(), chatId);
+
+      message._rowSequence = seq;
+    });
+    append();
+
+    return message;
   });
 }
 
@@ -822,7 +954,8 @@ export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate
     const row = db.prepare(`
       SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
              activeSkills, createdAt, lastModified,
-             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt
+             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
+             revision
       FROM chats
       WHERE id = ?
     `).get(id) as ChatMetadataRow | undefined;
@@ -883,9 +1016,9 @@ export async function createChat(chat: Chat): Promise<void> {
         id, title, type, modelId, systemPrompt,
         contextWindow, projectId, activeSkills, messages,
         createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex,
-        preview
+        preview, revision
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(
       chat.id,
       chat.title,
@@ -909,6 +1042,7 @@ export async function createChat(chat: Chat): Promise<void> {
   });
 
   create();
+  chat._baseRevision = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1510,11 +1644,11 @@ function loadLegacyChatMessages(db: Database.Database, chatId: string): ChatMess
 
 function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage[] | null {
   const rows = db.prepare(`
-    SELECT sequence, payload_json
+    SELECT sequence, row_id, payload_json
     FROM chat_message_rows
     WHERE chat_id = ?
     ORDER BY sequence ASC
-  `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
+  `).all(chatId) as Array<{ sequence: number; row_id: string | null; payload_json: string }>;
 
   const messages: ChatMessage[] = [];
   for (const row of rows) {
@@ -1526,7 +1660,7 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
       return null;
     }
     try {
-      messages.push(withRowSequence(JSON.parse(row.payload_json) as ChatMessage, row.sequence));
+      messages.push(withRowIdentity(JSON.parse(row.payload_json) as ChatMessage, row.sequence, row.row_id));
     } catch (e) {
       console.warn(
         `[chat-storage] Corrupt message row ${chatId}:${row.sequence}; falling back to legacy JSON: ${(e as Error).message}`
@@ -1537,8 +1671,12 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
   return messages;
 }
 
-function withRowSequence(message: ChatMessage, sequence: number): ChatMessage {
-  return { ...message, _rowSequence: sequence };
+function withRowIdentity(message: ChatMessage, sequence: number, rowId?: string | null): ChatMessage {
+  return {
+    ...message,
+    _rowSequence: sequence,
+    ...(rowId ? { _rowId: rowId } : {}),
+  };
 }
 
 function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
@@ -1550,6 +1688,7 @@ function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
     messages,
+    _baseRevision: row.revision ?? 0,
     createdAt: row.createdAt,
     lastModified: row.lastModified,
     ...(row.projectId ? { projectId: row.projectId } : {}),
@@ -1562,8 +1701,47 @@ function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
 }
 
 function withoutTransientMessageMetadata(message: ChatMessage): ChatMessage {
-  const { _rowSequence, ...persisted } = message;
+  const { _rowSequence, _rowId, ...persisted } = message;
   return persisted;
+}
+
+/**
+ * Copy durable row identity from a replaced message onto its replacement. A
+ * replacement that drops `_rowId` would look like a new row on the next rebase,
+ * duplicating the row it was meant to replace. Both fields are transient and
+ * never persisted.
+ */
+export function carryRowIdentity(next: ChatMessage, previous: ChatMessage): ChatMessage {
+  return {
+    ...next,
+    ...(previous._rowId ? { _rowId: previous._rowId } : {}),
+    ...(previous._rowSequence !== undefined ? { _rowSequence: previous._rowSequence } : {}),
+  };
+}
+
+/**
+ * Re-sync the row table from the legacy JSON snapshot after a row/JSON count
+ * divergence. Runs under the per-chat write lock and bumps the revision so
+ * in-flight snapshots rebase instead of clobbering the repair.
+ */
+async function reconcileChatRowsFromLegacy(
+  db: Database.Database,
+  chatId: string,
+  legacyMessages: ChatMessage[],
+  row: ChatMetadataRow,
+): Promise<void> {
+  await withChatWriteLock(chatId, async () => {
+    const firstChanged = syncChatMessageRows(db, chatId, legacyMessages, true);
+    if (firstChanged === null) return;
+    syncChatMessages(db, chatId, legacyMessages, firstChanged);
+    const nextRevision = (row.revision ?? 0) + 1;
+    db.prepare("UPDATE chats SET revision = ? WHERE id = ?").run(nextRevision, chatId);
+    row.revision = nextRevision;
+    console.log(
+      `[chat-storage] Reconciled ${chatId}: re-synced ${legacyMessages.length} rows from JSON column ` +
+      `(firstChanged=${firstChanged}, revision=${nextRevision})`
+    );
+  });
 }
 
 function buildSearchContent(msg: ChatMessage): string {
@@ -1584,6 +1762,104 @@ function buildSearchContent(msg: ChatMessage): string {
   return parts.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Rebase — merge a stale writer's array with rows appended after it loaded
+// ---------------------------------------------------------------------------
+
+interface ChatMessageRowIdentity {
+  sequence: number;
+  row_id: string | null;
+  payload_json: string;
+}
+
+function isRebaseEnabled(): boolean {
+  return process.env.PORRIMA_STORAGE_REBASE !== "0";
+}
+
+function parseRowPayload(payloadJson: string): ChatMessage | null {
+  try {
+    return JSON.parse(payloadJson) as ChatMessage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Merge a writer's in-memory array with the current row table. The invariant:
+ * every row the writer loaded keeps the writer's version; every row appended
+ * after it loaded (unclaimed committed rows) is preserved; declared removals
+ * and unclaimed `_inProgress` ephemera are dropped; the writer's new rows are
+ * spliced after the emitted position of their nearest preceding claimed row,
+ * in array order. Callers renumber densely after this returns.
+ */
+function rebaseMessageArray(
+  dbRows: ChatMessageRowIdentity[],
+  messages: ChatMessage[],
+  removedRowIds: Set<string>,
+): { merged: ChatMessage[]; preserved: number; removed: number; droppedEphemeral: number } {
+  const byId = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    if (!message._rowId) message._rowId = randomUUID();
+    byId.set(message._rowId, message);
+  }
+
+  const base: ChatMessage[] = [];
+  const baseIndexById = new Map<string, number>();
+  let preserved = 0;
+  let removed = 0;
+  let droppedEphemeral = 0;
+
+  for (const row of dbRows) {
+    if (row.row_id && removedRowIds.has(row.row_id)) {
+      removed++;
+      continue;
+    }
+    const claimed = row.row_id ? byId.get(row.row_id) : undefined;
+    if (claimed) {
+      baseIndexById.set(row.row_id!, base.length);
+      base.push(claimed);
+      continue;
+    }
+    const payload = parseRowPayload(row.payload_json);
+    if (!payload) {
+      console.warn(`[chat-storage] rebase dropped corrupt row ${row.sequence} (${row.row_id ?? "no id"})`);
+      continue;
+    }
+    if (payload._inProgress) {
+      droppedEphemeral++;
+      continue;
+    }
+    if (row.row_id) {
+      payload._rowId = row.row_id;
+      baseIndexById.set(row.row_id, base.length);
+    }
+    preserved++;
+    base.push(payload);
+  }
+
+  const buckets = new Map<number, ChatMessage[]>();
+  let lastAnchor = -1;
+  for (const message of messages) {
+    const anchorIndex = message._rowId ? baseIndexById.get(message._rowId) : undefined;
+    if (anchorIndex !== undefined) {
+      lastAnchor = anchorIndex;
+      continue;
+    }
+    const bucket = buckets.get(lastAnchor);
+    if (bucket) bucket.push(message);
+    else buckets.set(lastAnchor, [message]);
+  }
+
+  const merged: ChatMessage[] = [];
+  for (const message of buckets.get(-1) ?? []) merged.push(message);
+  for (let i = 0; i < base.length; i++) {
+    merged.push(base[i]);
+    for (const message of buckets.get(i) ?? []) merged.push(message);
+  }
+
+  return { merged, preserved, removed, droppedEphemeral };
+}
+
 /**
  * Mirror Chat.messages into per-message rows. Returns the first changed
  * sequence, or null when the row table already matches the provided array.
@@ -1597,12 +1873,20 @@ function syncChatMessageRows(
   messages: ChatMessage[],
   allowTruncation: boolean = false
 ): number | null {
+  // Ensure durable identity for every in-memory row before diffing. The id is
+  // transient metadata (stripped from payload_json) but is written to the
+  // row_id column and pinned on the object so later saves and rebases match it.
+  for (const msg of messages) {
+    if (!msg._rowId) msg._rowId = randomUUID();
+  }
+  const rowIds = messages.map((msg) => msg._rowId!);
+
   const existing = db.prepare(`
-    SELECT sequence, payload_json
+    SELECT sequence, row_id, payload_json
     FROM chat_message_rows
     WHERE chat_id = ?
     ORDER BY sequence ASC
-  `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
+  `).all(chatId) as Array<{ sequence: number; row_id: string | null; payload_json: string }>;
 
   // Safety guard: detect and log significant message shrinkage when in-memory
   // state may have been corrupted (e.g., shrunk to 1 message after a model
@@ -1647,7 +1931,11 @@ function syncChatMessageRows(
   let firstChanged = commonLength;
 
   for (let i = 0; i < commonLength; i++) {
-    if (existing[i].sequence !== i || existing[i].payload_json !== serialized[i]) {
+    if (
+      existing[i].sequence !== i ||
+      existing[i].row_id !== rowIds[i] ||
+      existing[i].payload_json !== serialized[i]
+    ) {
       firstChanged = i;
       break;
     }
@@ -1677,10 +1965,10 @@ function syncChatMessageRows(
 
   const insert = db.prepare(`
     INSERT INTO chat_message_rows (
-      chat_id, sequence, role, timestamp, payload_json, search_content,
+      chat_id, sequence, row_id, role, timestamp, payload_json, search_content,
       out_of_context, is_compaction_summary, is_system_message
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (let i = firstChanged; i < messages.length; i++) {
@@ -1688,6 +1976,7 @@ function syncChatMessageRows(
     insert.run(
       chatId,
       i,
+      rowIds[i],
       msg.role,
       msg.timestamp || null,
       serialized[i],
@@ -1736,37 +2025,26 @@ function findToolLoopGroupStart(messages: ChatMessage[], index: number): number 
 }
 
 /**
- * Sync the flattened chat_messages search table from a changed message tail.
- *
- * Edits, compaction rewrites, and truncation delete stale search rows before
- * re-indexing. Consecutive `_toolLoopId` rows are merged into one FTS document
- * keyed at the group's first sequence, so a multi-tool visible turn surfaces
- * as one search hit instead of N. When the changed tail starts inside an
- * existing group, the rebuild window is widened to that group's first row so
- * the merged document is rewritten rather than left stale.
+ * Write flattened search rows for a contiguous message slice. Consecutive
+ * assistant rows with the same `_toolLoopId` merge into one document keyed at
+ * the group's first sequence, so a multi-tool visible turn surfaces as one
+ * search hit instead of N. `messages` is indexed by absolute sequence; holes
+ * below `fromIndex` are never read.
  */
-function syncChatMessages(
+function writeChatSearchRows(
   db: Database.Database,
   chatId: string,
   messages: ChatMessage[],
-  firstChanged: number | null
+  fromIndex: number,
+  toIndex: number,
 ): void {
-  if (firstChanged === null) return;
-
-  const effectiveFirst = findToolLoopGroupStart(messages, firstChanged);
-
-  db.prepare(`
-    DELETE FROM chat_messages
-    WHERE chat_id = ? AND message_index >= ?
-  `).run(chatId, effectiveFirst);
-
   const insert = db.prepare(`
     INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  let i = effectiveFirst;
-  while (i < messages.length) {
+  let i = fromIndex;
+  while (i < toIndex) {
     const msg = messages[i];
 
     if (msg.role === "assistant" && msg._toolLoopId) {
@@ -1774,7 +2052,7 @@ function syncChatMessages(
       const groupStart = i;
       const parts: string[] = [];
       while (
-        i < messages.length &&
+        i < toIndex &&
         messages[i].role === "assistant" &&
         messages[i]._toolLoopId === loopId
       ) {
@@ -1803,6 +2081,96 @@ function syncChatMessages(
     insert.run(chatId, i, msg.role, content, msg.timestamp || null);
     i++;
   }
+}
+
+/**
+ * Keep the flattened search projection current for a single appended row.
+ * Regular rows insert one `chat_messages` document; assistant tool-loop rows
+ * merge into the document keyed at their group's first sequence.
+ */
+function appendSearchRow(
+  db: Database.Database,
+  chatId: string,
+  seq: number,
+  message: ChatMessage,
+): void {
+  const loopId = message.role === "assistant" ? message._toolLoopId : undefined;
+  if (!loopId) {
+    const content = buildSearchContent(message);
+    if (!content.trim()) return;
+    db.prepare(`
+      INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(chatId, seq, message.role, content, message.timestamp || null);
+    return;
+  }
+
+  // Walk backwards over consecutive assistant fragments of the same group.
+  const previousRows = db.prepare(`
+    SELECT sequence, payload_json
+    FROM chat_message_rows
+    WHERE chat_id = ? AND sequence < ?
+    ORDER BY sequence DESC
+    LIMIT ?
+  `).all(chatId, seq, MAX_TOOL_LOOP_GROUP_SCAN) as Array<{ sequence: number; payload_json: string }>;
+
+  let groupStart = seq;
+  let scanned = 0;
+  for (const row of previousRows) {
+    const payload = parseRowPayload(row.payload_json);
+    if (!payload || payload.role !== "assistant" || payload._toolLoopId !== loopId) break;
+    groupStart = row.sequence;
+    scanned++;
+  }
+  if (previousRows.length >= MAX_TOOL_LOOP_GROUP_SCAN && scanned === previousRows.length) {
+    console.warn(
+      `[chat-storage] append search group scan hit the ${MAX_TOOL_LOOP_GROUP_SCAN}-row cap ` +
+      `for chat ${chatId}; an earlier fragment may index separately`,
+    );
+  }
+
+  const groupRows = db.prepare(`
+    SELECT sequence, payload_json
+    FROM chat_message_rows
+    WHERE chat_id = ? AND sequence >= ? AND sequence <= ?
+    ORDER BY sequence ASC
+  `).all(chatId, groupStart, seq) as Array<{ sequence: number; payload_json: string }>;
+
+  const slice: ChatMessage[] = [];
+  for (const row of groupRows) {
+    const payload = parseRowPayload(row.payload_json);
+    if (payload) slice[row.sequence] = payload;
+  }
+  slice[seq] = message;
+
+  db.prepare("DELETE FROM chat_messages WHERE chat_id = ? AND message_index = ?").run(chatId, groupStart);
+  writeChatSearchRows(db, chatId, slice, groupStart, seq + 1);
+}
+
+/**
+ * Sync the flattened chat_messages search table from a changed message tail.
+ *
+ * Edits, compaction rewrites, and truncation delete stale search rows before
+ * re-indexing. When the changed tail starts inside an existing tool-loop group,
+ * the rebuild window is widened to that group's first row so the merged
+ * document is rewritten rather than left stale.
+ */
+function syncChatMessages(
+  db: Database.Database,
+  chatId: string,
+  messages: ChatMessage[],
+  firstChanged: number | null
+): void {
+  if (firstChanged === null) return;
+
+  const effectiveFirst = findToolLoopGroupStart(messages, firstChanged);
+
+  db.prepare(`
+    DELETE FROM chat_messages
+    WHERE chat_id = ? AND message_index >= ?
+  `).run(chatId, effectiveFirst);
+
+  writeChatSearchRows(db, chatId, messages, effectiveFirst, messages.length);
 }
 
 /**

@@ -5,7 +5,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity } from "../services/chat-storage.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -1506,8 +1506,12 @@ async function handleChatStream(
         break;
       }
     }
-    if (inProgressIdx >= 0) chat.messages[inProgressIdx] = row;
-    else chat.messages.push(row);
+    if (inProgressIdx >= 0) {
+      const carried = carryRowIdentity(row, chat.messages[inProgressIdx]);
+      chat.messages[inProgressIdx] = carried;
+      return carried;
+    }
+    chat.messages.push(row);
     return row;
   }
 
@@ -3402,6 +3406,10 @@ async function handleChatStream(
     // a single user turn. Each cycle archives the overflow, compacts, and resumes.
     const MAX_COMPACTION_CYCLES = 5;
     let compactionCycle = 0;
+    // Client-space context boundary for the mid-turn compaction event. Captured
+    // before the compaction save renumbers `_rowSequence` so it matches the
+    // sequences the live client last synced (see the event comment below).
+    let midTurnFirstKeptSequence: number | undefined;
 
     while (state.needsMidTurnCompaction && !connectionClosed && !askUserRef.current && !waitingForInput && compactionCycle < MAX_COMPACTION_CYCLES) {
       compactionCycle++;
@@ -3475,6 +3483,21 @@ async function handleChatStream(
               `[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, ` +
               `estimated ${compaction.estimatedTokenCount} tokens removed`
             );
+
+            // Capture the first kept row's sequence in client space before the
+            // save below renumbers in-memory sequences. The live client skipped
+            // the reload and still holds the pre-renumber values, so the
+            // boundary it receives must be in that space.
+            if (midTurnFirstKeptSequence === undefined) {
+              const boundarySummary = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+              const boundarySummaryIdx = boundarySummary ? chat.messages.indexOf(boundarySummary) : -1;
+              const boundarySeqs = boundarySummaryIdx >= 0
+                ? chat.messages.slice(boundarySummaryIdx + 1)
+                    .map(m => m._rowSequence)
+                    .filter((s): s is number => typeof s === "number")
+                : [];
+              midTurnFirstKeptSequence = boundarySeqs.length ? Math.min(...boundarySeqs) : undefined;
+            }
 
             await saveChat(chat, { allowTruncation: true });
 
@@ -3573,19 +3596,12 @@ async function handleChatStream(
         // Boundary the client can mirror locally: sequences strictly below
         // this left the context mid-turn, so a live-streaming client (which
         // skips the full reload to avoid duplicating the in-flight fragment)
-        // can dim exactly those rows it already synced by _rowSequence.
-        // NOTE: this is only correct because saveChat never writes row
-        // sequences back into in-memory messages — the _rowSequence values
-        // above are load-time (pre-compaction) positions, the same values the
-        // client last synced. If saveChat ever renumbers in-memory messages,
-        // the client's dimming/splicing drifts by the summary insertion shift.
-        const summaryIdx = summaryMsg ? chat.messages.indexOf(summaryMsg) : -1;
-        const keptSeqs = summaryIdx >= 0
-          ? chat.messages.slice(summaryIdx + 1)
-              .map(m => m._rowSequence)
-              .filter((s): s is number => typeof s === "number")
-          : [];
-        const firstKeptSequence = keptSeqs.length ? Math.min(...keptSeqs) : undefined;
+        // can dim exactly those rows it already synced by _rowSequence, and
+        // splice the summary before the first row at or after the boundary.
+        // This value was captured BEFORE the compaction save renumbered
+        // in-memory sequences (see midTurnFirstKeptSequence), so it is in the
+        // same sequence space as the rows the client last synced locally.
+        const firstKeptSequence = midTurnFirstKeptSequence;
         const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
@@ -4162,7 +4178,9 @@ async function handleChatStream(
         try {
           const recap = await generateRecap(logicalAssistantContent);
           if (recap) {
-            const msgIdx = chat.messages.length - 1;
+            const msgIdx = chat.messages.indexOf(assistantMsg) >= 0
+              ? chat.messages.indexOf(assistantMsg)
+              : chat.messages.length - 1;
             chat.messages[msgIdx] = { ...chat.messages[msgIdx], recap };
             await saveChat(chat);
             assistantMsg.recap = recap;
@@ -4233,12 +4251,15 @@ async function handleChatStream(
     // should not reset the user-idle window.
     await stampAssistantCompletion(chat);
 
-    const assistantSequence = hasContent ? chat.messages.length - 1 : undefined;
+    const assistantSequence = hasContent
+      ? (assistantMsg._rowSequence ?? chat.messages.length - 1)
+      : undefined;
     let userMessageSequence: number | undefined;
     if (assistantSequence !== undefined) {
-      for (let i = assistantSequence - 1; i >= 0; i--) {
+      const assistantIdx = chat.messages.indexOf(assistantMsg);
+      for (let i = (assistantIdx >= 0 ? assistantIdx : chat.messages.length) - 1; i >= 0; i--) {
         if (chat.messages[i]?.role === "user") {
-          userMessageSequence = i;
+          userMessageSequence = chat.messages[i]._rowSequence ?? i;
           break;
         }
       }
@@ -4532,7 +4553,7 @@ router.post("/", async (req, res) => {
         _isSystemMessage: true,
       };
       chat.messages.push(confirmMsg);
-      await saveChat(chat);
+      await saveChat(chat, { allowTruncation: true });
 
       // If there's a follow-up message, process it; otherwise send confirmation
       if (compactResult.followUpMessage) {
@@ -4683,7 +4704,7 @@ router.post("/", async (req, res) => {
         timestamp: Date.now(),
       };
       if (lastMsg?.role === "assistant") {
-        chat.messages[chat.messages.length - 1] = partialMsg;
+        chat.messages[chat.messages.length - 1] = carryRowIdentity(partialMsg, lastMsg);
       } else {
         chat.messages.push(partialMsg);
       }
@@ -4902,6 +4923,10 @@ router.post("/", async (req, res) => {
       (m.images?.length ?? 0) === incomingImageCount &&
       (Date.now() - (m.timestamp || 0)) < 60_000
     );
+    // Identity of the row this request pushed, resolved by _rowId below so an
+    // interleaved rebase (another writer appending while this turn was queued)
+    // cannot make us treat a different row as "the current message".
+    let currentUserRow: ChatMessage | undefined;
 
     if (isLikelyDuplicate) {
       console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message found in recent history within 60s`);
@@ -4936,6 +4961,7 @@ router.post("/", async (req, res) => {
         timeAnchor,
       };
       chat.messages.push(userMsg);
+      currentUserRow = userMsg;
     }
 
     // Auto-generate title from first message
@@ -5103,8 +5129,18 @@ router.post("/", async (req, res) => {
     // reprocessed each turn instead of the entire prior turn. Replay merges
     // this hidden row into the following user message, so llama.cpp never sees
     // a mid-transcript system role.
+    // Resolve the current user row by identity, never by position: a rebase
+    // against a concurrent append may have inserted rows after it.
+    const findCurrentUserIndex = (): number => {
+      if (currentUserRow?._rowId) {
+        const idx = chat.messages.findIndex((m) => m._rowId === currentUserRow!._rowId);
+        if (idx >= 0) return idx;
+      }
+      return chat.messages.length - 1;
+    };
+
     if (memoryDeltaContext) {
-      const insertAt = Math.max(0, chat.messages.length - 1);
+      const insertAt = Math.max(0, findCurrentUserIndex());
       chat.messages.splice(insertAt, 0, {
         role: "system",
         content: memoryDeltaContext,
@@ -5118,7 +5154,7 @@ router.post("/", async (req, res) => {
     // delta), exclude those hidden rows here and merge them into the current
     // user message below. Future replays reconstruct the same shape by merging
     // the persisted system rows with the following persisted user row.
-    const currentUserIndex = chat.messages.length - 1;
+    const currentUserIndex = findCurrentUserIndex();
     const nextUserContext = splitNextUserContext({
       messages: chat.messages,
       currentUserIndex,
@@ -5180,8 +5216,11 @@ router.post("/", async (req, res) => {
 
     const userImagesForModel = await hydrateUserImageAttachments(images?.length ? images : persistedImages);
     // Reuse the anchor frozen on the just-pushed row (never rebuild it) so the
-    // wire prompt and the persisted history stay byte-identical.
-    const trailingRow = chat.messages[chat.messages.length - 1];
+    // wire prompt and the persisted history stay byte-identical. Resolve the row
+    // by identity in case a rebase moved it.
+    const trailingRow = currentUserRow && chat.messages.includes(currentUserRow)
+      ? currentUserRow
+      : chat.messages[chat.messages.length - 1];
     const sendTimeAnchor = trailingRow?.role === "user" ? trailingRow.timeAnchor : undefined;
     const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, sendTimeAnchor);
 

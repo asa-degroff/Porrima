@@ -206,10 +206,15 @@ export async function migrateInlineImagePayloads(
       SET payload_json = ?
       WHERE chat_id = ? AND sequence = ?
     `);
+    const bumpRevision = db.prepare("UPDATE chats SET revision = COALESCE(revision, 0) + 1 WHERE id = ?");
+    const touchedChats = new Set(updates.map((item) => item.chatId));
     const transaction = db.transaction((items: typeof updates) => {
       for (const item of items) {
         update.run(item.payloadJson, item.chatId, item.sequence);
       }
+      // Row payloads changed without going through saveChat — bump the revision
+      // so any in-flight snapshot rebases instead of overwriting the migration.
+      for (const chatId of touchedChats) bumpRevision.run(chatId);
     });
     transaction(updates);
   }
