@@ -3825,11 +3825,19 @@ async function handleChatStream(
           // pre-send while the user was already waiting for a response.
           // Rows added after usage measurement (e.g. passive-recall
           // injection) are only visible to the estimate.
+          // When a fresh usage anchor exists, anchorPrecedence makes it win
+          // outright over the conservative char estimate (09-09 incident:
+          // usage said 64%, the char path said 81% and fired compaction
+          // while the model reported plenty of room). totalTokens covers
+          // prompt + completion, so only the small delta injections are
+          // unmeasured; pre-send remains the backstop for any drift.
           const pressure = await estimateContextPressure({
             messages: chat.messages,
             systemPrompt,
             tools: agentTools,
             contextWindow: effectiveContextWindow,
+            lastUsageTotal: lastUsage > 0 ? lastUsage : undefined,
+            anchorPrecedence: lastUsage > 0,
             exact:
               inferenceModel?.provider === "llamacpp" && piModel.baseUrl
                 ? { baseUrl: piModel.baseUrl, modelId: piModel.id, chatId: chat.id, phase: "end_of_turn" }
@@ -3850,6 +3858,7 @@ async function handleChatStream(
             lastUsage,
             hitContextLimit,
             estimatedTokens,
+            selectedPath: pressure.selectedPath,
             emitCompacting: () => {
               compactingActive = true;
               res.write(`event: compacting\ndata: {}\n\n`);

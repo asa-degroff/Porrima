@@ -35,6 +35,8 @@ import {
   type ContextEstimateBreakdown,
 } from "./compaction.js";
 
+export type PressurePath = "exact" | "usage_anchor" | "char_estimate";
+
 export interface PressureEstimate {
   /** Conservative estimate (positive-delta-only). Drives END-OF-TURN, maxed
    *  with the last measured usage (`endOfTurnNeedsCompaction`). */
@@ -51,7 +53,7 @@ export interface PressureEstimate {
    *  estimate. Callers must treat "char_estimate" as conservative — it
    *  drives the hard-cap ratio (0.95), never the normal trigger (0.85/0.80).
    *  The documented invariant (doc §4.2 semantics, path 3). */
-  selectedPath: "exact" | "usage_anchor" | "char_estimate";
+  selectedPath: PressurePath;
   errors: string[];
   /** The anchor/char breakdown underneath — observation logging. */
   contextBreakdown: ContextEstimateBreakdown;
@@ -91,6 +93,14 @@ export interface PressureEstimateParams {
    *  `lastUsageTotal` is set: the exact path scans its anchor from the
    *  rows, which would be stale relative to a live anchor. */
   exact?: { baseUrl: string; modelId: string; chatId: string; phase: string };
+  /** When a live anchor exists, trust it exclusively for the conservative
+   *  estimate instead of maxing with the row/char breakdown. Opt-in for the
+   *  end-of-turn HTTP site, where the anchor is from the just-completed call
+   *  (totalTokens = prompt + completion, so it already covers the final
+   *  assistant row) and the only post-usage additions are small delta
+   *  injections. The headless mid-turn site keeps the max: its rows can
+   *  legitimately exceed the anchor via persisted segment boundaries. */
+  anchorPrecedence?: boolean;
   /** Optional observation sink, called with the final estimate. The return
    *  value is the primary channel; this is for callers that prefer push. */
   onObservation?: (obs: PressureEstimate) => void;
@@ -122,6 +132,7 @@ export async function estimateContextPressure(params: PressureEstimateParams): P
     lastUsageTotal,
     postUsageToolResults,
     exact,
+    anchorPrecedence,
     onObservation,
   } = params;
 
@@ -186,7 +197,11 @@ export async function estimateContextPressure(params: PressureEstimateParams): P
     const anchorEstimate = liveAnchor + Math.ceil(postUsageChars / 4);
     // Conservative = the max of the live anchor arithmetic and whatever the
     // rows say (a persisted segment boundary may already have grown them).
-    const conservative = Math.max(breakdown.estimatedTokens, anchorEstimate);
+    // anchorPrecedence opts out of that max: the anchor is fresher than the
+    // rows by construction, so it wins outright.
+    const conservative = anchorPrecedence
+      ? anchorEstimate
+      : Math.max(breakdown.estimatedTokens, anchorEstimate);
     estimate = {
       estimatedTokens: conservative,
       refinedTokens: anchorEstimate,

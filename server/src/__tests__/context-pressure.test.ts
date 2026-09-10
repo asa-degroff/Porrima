@@ -181,6 +181,39 @@ describe("estimateContextPressure — path selection", () => {
     expect(est.selectedPath).toBe("usage_anchor");
     expect(est.refinedTokens).toBe(60_000 + Math.ceil(big.length / 4));
   });
+
+  it("anchorPrecedence: the live anchor wins outright even when the row/char breakdown is higher (path 2)", async () => {
+    // The 09-09 incident shape: the rows' char estimate (~25% over real
+    // tokenization) exceeded the fresh usage anchor and drove the end-of-turn
+    // trigger. anchorPrecedence is the end-of-turn site's opt-out of that max.
+    const big = proseResult(20_000);
+    const messages: ChatMessage[] = [
+      userMsg("Read the big file."),
+      assistantWithUsage(10_000, [textResult(big)]),
+    ];
+    const common = {
+      messages,
+      systemPrompt: SYSTEM_PROMPT,
+      tools: TOOLS,
+      contextWindow: WINDOW,
+      lastUsageTotal: 10_000,
+    };
+
+    const breakdown = estimateContextBreakdown(messages, SYSTEM_PROMPT, TOOLS);
+    expect(breakdown.estimatedTokens).toBeGreaterThan(10_000);
+
+    const without = await estimateContextPressure(common);
+    expect(without.selectedPath).toBe("usage_anchor");
+    expect(without.estimatedTokens).toBe(Math.max(breakdown.estimatedTokens, 10_000)); // legacy max
+
+    const withPrecedence = await estimateContextPressure({ ...common, anchorPrecedence: true });
+    expect(withPrecedence.selectedPath).toBe("usage_anchor");
+    expect(withPrecedence.rawUsageTotal).toBe(10_000);
+    expect(withPrecedence.estimatedTokens).toBe(10_000);
+    expect(withPrecedence.refinedTokens).toBe(10_000);
+    expect(withPrecedence.hardCapTokens).toBe(estimateHardCapTokens(10_000, 10_000, true));
+    expect(mockCount).not.toHaveBeenCalled();
+  });
 });
 
 describe("estimateContextPressure — exact path (path 1)", () => {

@@ -31,6 +31,7 @@
  */
 
 import type { Chat, ChatMessage } from "../types.js";
+import type { PressurePath } from "./context-pressure.js";
 import {
   END_OF_TURN_COMPACTION_TRIGGER_RATIO,
   endOfTurnNeedsCompaction,
@@ -51,6 +52,13 @@ export interface EndOfTurnCompactionOptions {
    * caller passes it in — this module does not own model capability.
    */
   estimatedTokens: number;
+  /**
+   * Which estimator path produced estimatedTokens (PressureEstimate.
+   * selectedPath). Rendered in the log lines when present so a future
+   * incident is self-explaining — the 09-09 trigger looked like a
+   * usage-anchor fire until the journal showed the char path drove it.
+   */
+  selectedPath?: PressurePath;
   /**
    * Default END_OF_TURN_COMPACTION_TRIGGER_RATIO (0.80). Named deltas pass
    * their own (D2: headless 0.85→0.80; D3: automation 0.80 vs 0.85 pending
@@ -106,6 +114,9 @@ export async function runEndOfTurnCompaction(
   const triggerRatio = opts.triggerRatio ?? END_OF_TURN_COMPACTION_TRIGGER_RATIO;
   const hitContextLimit = opts.hitContextLimit ?? false;
   const logOnly = opts.logOnly ?? false;
+  // Rendered only when the caller identified the estimator path (the
+  // estimateContextPressure callers); bare char-estimate callers omit it.
+  const pathSuffix = opts.selectedPath ? `, path=${opts.selectedPath}` : "";
 
   // Either signal can drive the trigger (conservative max, never min),
   // against the earlier end-of-turn threshold (0.80 vs pre-send's 0.85) —
@@ -131,7 +142,7 @@ export async function runEndOfTurnCompaction(
       `${logPrefix} End-of-turn check (log-only, D3 gate): WOULD trigger ` +
         `(chat=${chat.id}, driving=${drivingTokens}/${contextWindow} ` +
         `(${(usageRatio * 100).toFixed(1)}%, trigger=${triggerRatio * 100}%) ` +
-        `[usage=${lastUsage}, estimated=${estimatedTokens}]) — computed, not executed`,
+        `[usage=${lastUsage}, estimated=${estimatedTokens}${pathSuffix}]) — computed, not executed`,
     );
     return { triggered: true, truncated: false, drivingTokens, ratio: usageRatio };
   }
@@ -143,14 +154,14 @@ export async function runEndOfTurnCompaction(
       `${logPrefix} End-of-turn check${logOnly ? " (log-only, D3 gate)" : ""}: no compaction ` +
         `(chat=${chat.id}, driving=${drivingTokens}/${contextWindow} ` +
         `(${(usageRatio * 100).toFixed(1)}%, trigger=${triggerRatio * 100}%) ` +
-        `[usage=${lastUsage}, estimated=${estimatedTokens}]`,
+        `[usage=${lastUsage}, estimated=${estimatedTokens}${pathSuffix}]`,
     );
     return { triggered: false, truncated: false, drivingTokens, ratio: usageRatio };
   }
 
   console.log(
     `${logPrefix} End-of-turn compaction triggered: driving=${drivingTokens}/${contextWindow} ` +
-      `(${(usageRatio * 100).toFixed(0)}%) [usage=${lastUsage}, estimated=${estimatedTokens}]`,
+      `(${(usageRatio * 100).toFixed(0)}%) [usage=${lastUsage}, estimated=${estimatedTokens}${pathSuffix}]`,
   );
 
   let truncated = false;
