@@ -296,7 +296,7 @@ const LIST_AUTOMATIONS_TOOL: Tool = {
 
 const UPDATE_AUTOMATION_TOOL: Tool = {
   name: "update_automation",
-  description: "Modify an automation task. You can edit your own reminders freely. For built-in automations (synthesis, wake), you can edit prompt steps but not schedule or structural fields. User-created automations are read-only.",
+  description: "Modify an automation task. You can edit your own reminders freely and reschedule them with runAt or everyMinutes. For built-in automations (synthesis, wake), you can edit prompt steps but not schedule or structural fields. User-created automations are read-only.",
   parameters: Type.Object({
     automationId: Type.String({ description: "Task ID to modify" }),
     title: Type.Optional(Type.String({ description: "Updated title (agent reminders only)" })),
@@ -306,6 +306,8 @@ const UPDATE_AUTOMATION_TOOL: Tool = {
       prompt: Type.String({ description: "Step prompt content" }),
     }), { description: "Updated prompt steps" })),
     enabled: Type.Optional(Type.Boolean({ description: "Toggle on/off (agent reminders only)" })),
+    runAt: Type.Optional(Type.String({ description: "Reschedule an agent task as a one-time run at this ISO 8601 time (at least 2 minutes ahead)", format: "date-time" })),
+    everyMinutes: Type.Optional(Type.Number({ description: "Reschedule an agent task as a recurring interval, in minutes", minimum: 1, maximum: 527040 })),
   }),
 };
 
@@ -316,15 +318,17 @@ const SCHEDULE_CHAT_MESSAGE_TOOL: Tool = {
     "The post lands in the target thread as a user-role row wrapped in a provenance " +
     "envelope (`[quje from <origin title> — <time>]`), so it never impersonates the user. " +
     "Omit `when` to deliver immediately; pass an ISO 8601 timestamp at least 2 minutes " +
-    "ahead to schedule delivery. Write the text conditionally — \"if X is not done, do X; " +
-    "else verify and record why not\" — so a duplicate or repeated delivery is harmless. " +
-    "Use list_chats to discover targets.",
+    "ahead to schedule delivery. Set `wake: true` to have the target thread's own agent " +
+    "run a continue turn after the post lands (it wakes with that chat's context; it " +
+    "fires on the next scheduler tick plus the idle grace, not immediately). Write the " +
+    "text conditionally — \"if X is not done, do X; else verify and record why not\" — " +
+    "so a duplicate or repeated delivery is harmless. Use list_chats to discover targets.",
   parameters: Type.Object({
     targetChat: Type.String({ description: "Target chat id or a unique title fragment (agent/system chats only)" }),
     message: Type.String({ description: "The message body to deliver to the target thread" }),
     subject: Type.Optional(Type.String({ description: "Short subject line shown after the provenance envelope" })),
-    when: Type.Optional(Type.String({ description: "ISO 8601 delivery time at least 2 minutes in the future. Omit to deliver immediately.", format: "date-time" })),
-    wake: Type.Optional(Type.Boolean({ description: "Reserved: whether the post should wake the target thread. Not enabled yet." })),
+    when: Type.Optional(Type.String({ description: "ISO 8601 delivery time at least 2 minutes in the future. Omit to deliver immediately (or to wake as soon as the scheduler allows).", format: "date-time" })),
+    wake: Type.Optional(Type.Boolean({ description: "Wake the target thread: its agent runs a continue turn after the post lands. Not immediate — next scheduler tick plus idle grace." })),
   }),
 };
 
@@ -612,11 +616,38 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       if (isAgentTask) {
         if (args.title !== undefined) patch.title = args.title;
         if (args.enabled !== undefined) patch.enabled = args.enabled;
+        if (args.runAt !== undefined) {
+          const runMs = new Date(String(args.runAt)).getTime();
+          if (!Number.isFinite(runMs) || runMs <= Date.now() + 2 * 60 * 1000) {
+            return wrapResult({
+              content: "runAt must be a valid ISO timestamp at least 2 minutes in the future.",
+              isError: true,
+            }, "update_automation");
+          }
+          patch.schedule = { type: "once", runAt: new Date(runMs).toISOString() };
+          if (args.enabled === undefined) patch.enabled = true;
+        }
+        if (args.everyMinutes !== undefined) {
+          const minutes = Math.floor(Number(args.everyMinutes));
+          if (!Number.isFinite(minutes) || minutes < 1) {
+            return wrapResult({
+              content: "everyMinutes must be a positive number of minutes.",
+              isError: true,
+            }, "update_automation");
+          }
+          patch.schedule = { type: "interval", everyMinutes: minutes };
+          if (args.enabled === undefined) patch.enabled = true;
+        }
       } else if (isBuiltIn) {
         // Built-in: only promptSteps allowed
-        if (args.title !== undefined || args.enabled !== undefined) {
+        if (
+          args.title !== undefined ||
+          args.enabled !== undefined ||
+          args.runAt !== undefined ||
+          args.everyMinutes !== undefined
+        ) {
           return wrapResult({
-            content: `Cannot modify structural fields (title, enabled) on built-in automation "${existing.title}". Only prompt steps can be edited.`,
+            content: `Cannot modify structural fields (title, enabled, schedule) on built-in automation "${existing.title}". Only prompt steps can be edited.`,
             isError: true,
           }, "update_automation");
         }
@@ -646,14 +677,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       if (!body) {
         return wrapResult({ content: "message is required.", isError: true }, "schedule_chat_message");
       }
-      if (args.wake === true) {
-        return wrapResult({
-          content:
-            "wake: true is not enabled yet. Deliver the post now or schedule it; " +
-            "the target thread's next turn will see it.",
-          isError: true,
-        }, "schedule_chat_message");
-      }
+      const wake = args.wake === true;
 
       const resolved = await resolveCrossChatTarget(String(args.targetChat ?? ""));
       if (!resolved.ok) {
@@ -664,7 +688,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const subject = typeof args.subject === "string" ? args.subject.trim() : "";
       const whenRaw = typeof args.when === "string" ? args.when.trim() : "";
 
-      if (!whenRaw) {
+      if (!wake && !whenRaw) {
         try {
           const result = await deliverCrossChatPost({
             targetChatId: resolved.target.id,
@@ -685,12 +709,18 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         }
       }
 
-      const whenMs = new Date(whenRaw).getTime();
-      if (!Number.isFinite(whenMs) || whenMs <= Date.now() + 2 * 60 * 1000) {
-        return wrapResult({
-          content: "`when` must be a valid ISO timestamp at least 2 minutes in the future.",
-          isError: true,
-        }, "schedule_chat_message");
+      let runAtIso: string;
+      if (!whenRaw) {
+        runAtIso = new Date().toISOString();
+      } else {
+        const whenMs = new Date(whenRaw).getTime();
+        if (!Number.isFinite(whenMs) || whenMs <= Date.now() + 2 * 60 * 1000) {
+          return wrapResult({
+            content: "`when` must be a valid ISO timestamp at least 2 minutes in the future.",
+            isError: true,
+          }, "schedule_chat_message");
+        }
+        runAtIso = new Date(whenMs).toISOString();
       }
 
       try {
@@ -701,14 +731,21 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
           fromChatTitle,
           subject,
           body,
-          runAt: new Date(whenMs).toISOString(),
+          runAt: runAtIso,
+          wake,
         });
+        const headline = wake
+          ? whenRaw
+            ? `Scheduled wake for ${task.nextRunAt}.`
+            : `Scheduled wake for the next scheduler tick (~${task.nextRunAt}); there is no immediate kick.`
+          : `Scheduled delivery for ${task.nextRunAt}.`;
         return wrapResult({
           content:
-            `Scheduled for ${task.nextRunAt}.\n\n` +
+            `${headline}\n\n` +
             `- **ID**: ${task.id}\n` +
             `- **To**: ${resolved.target.title} (${resolved.target.id})\n` +
-            `- **Subject**: ${subject || "(none)"}`,
+            `- **Subject**: ${subject || "(none)"}` +
+            (wake ? "\n- The target thread's agent will run a continue turn after the post lands." : ""),
           isError: false,
         }, "schedule_chat_message");
       } catch (e: any) {

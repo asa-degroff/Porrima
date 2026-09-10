@@ -287,17 +287,27 @@ describe("schedule_chat_message tool", () => {
     }
   });
 
-  it("rejects wake, bad timing, and ambiguous targets", async () => {
+  it("schedules wakes, and rejects bad timing or ambiguous targets", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-crosschat-"));
     try {
-      const { chatStorage, byName } = await toolHarness(homeDir);
+      const { chatStorage, automationStorage, byName } = await toolHarness(homeDir);
       await chatStorage.createChat(makeChat("target", "Target Chat"));
       await chatStorage.createChat(makeChat("deploy-alpha", "Deploy Alpha"));
       await chatStorage.createChat(makeChat("deploy-beta", "Deploy Beta"));
 
       const tool = byName.get("schedule_chat_message")!;
-      await expect(tool.execute("c1", { targetChat: "target", message: "x", wake: true }))
-        .rejects.toThrow(/wake/);
+      const wakeResult = await tool.execute("c1", {
+        targetChat: "target",
+        message: "wake text",
+        subject: "Wake",
+        wake: true,
+      });
+      expect(JSON.stringify(wakeResult)).toMatch(/Scheduled wake/);
+      expect((await chatStorage.getChat("target"))?.messages ?? []).toHaveLength(0);
+      const wakeTask = automationStorage.listEnabledAutomationTasks().find((task) => task.kind === "crossChat");
+      expect(wakeTask?.crossChat?.wake).toBe(true);
+      expect(wakeTask?.crossChat?.body).toBe("wake text");
+
       await expect(tool.execute("c2", {
         targetChat: "target",
         message: "x",
@@ -305,6 +315,45 @@ describe("schedule_chat_message tool", () => {
       })).rejects.toThrow(/2 minutes/);
       await expect(tool.execute("c3", { targetChat: "deploy", message: "x" }))
         .rejects.toThrow(/matches 2 chats/);
+      chatStorage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reschedules an agent task via update_automation", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-crosschat-"));
+    try {
+      const { chatStorage, automationStorage, byName } = await toolHarness(homeDir);
+      await chatStorage.createChat(makeChat("target", "Target Chat"));
+      const task = await automationStorage.createCrossChatTask({
+        targetChatId: "target",
+        targetChatTitle: "Target Chat",
+        fromChatId: "origin",
+        fromChatTitle: "Origin Chat",
+        subject: "",
+        body: "Deferred post",
+        runAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      });
+
+      const tool = byName.get("update_automation")!;
+      const newRunAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await tool.execute("u1", { automationId: task.id, runAt: newRunAt });
+      const rescheduled = automationStorage.getAutomationTask(task.id);
+      expect(rescheduled?.schedule).toEqual({ type: "once", runAt: newRunAt });
+      expect(rescheduled?.nextRunAt).toBe(newRunAt);
+      expect(rescheduled?.enabled).toBe(true);
+
+      await expect(
+        tool.execute("u2", {
+          automationId: task.id,
+          runAt: new Date(Date.now() + 30_000).toISOString(),
+        }),
+      ).rejects.toThrow(/2 minutes/);
+
+      await tool.execute("u3", { automationId: task.id, everyMinutes: 120 });
+      const interval = automationStorage.getAutomationTask(task.id);
+      expect(interval?.schedule).toEqual({ type: "interval", everyMinutes: 120 });
       chatStorage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

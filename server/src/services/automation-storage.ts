@@ -786,14 +786,26 @@ export async function createCrossChatTask(input: {
   subject: string;
   body: string;
   runAt: string;
+  /** When true, the fire-time run wakes the target thread after appending. */
+  wake?: boolean;
   maxPending?: number;
 }): Promise<AutomationTask> {
   ensureSchema();
   const maxPending = input.maxPending ?? DEFAULT_MAX_PENDING_AGENT_REMINDERS;
   assertAgentTaskCap(maxPending);
 
+  const wake = input.wake === true;
   const runMs = new Date(input.runAt).getTime();
-  if (!Number.isFinite(runMs) || runMs <= Date.now() + 2 * 60 * 1000) {
+  if (!Number.isFinite(runMs)) {
+    throw new Error("runAt must be a valid ISO timestamp");
+  }
+  if (wake) {
+    // Wakes may be scheduled for "now" — they fire on the next scheduler tick
+    // (plus the idle grace), never immediately, because the tool can't kick.
+    if (runMs < Date.now() - 60_000) {
+      throw new Error("wake runAt must not be in the past");
+    }
+  } else if (runMs <= Date.now() + 2 * 60 * 1000) {
     throw new Error("runAt must be a valid future timestamp at least 2 minutes from now");
   }
   const body = input.body.trim();
@@ -831,7 +843,7 @@ export async function createCrossChatTask(input: {
       fromChatTitle: input.fromChatTitle,
       subject,
       body,
-      wake: false,
+      wake,
     },
     nextRunAt: schedule.runAt,
     createdAt: now,

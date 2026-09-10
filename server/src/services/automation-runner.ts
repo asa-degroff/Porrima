@@ -1,5 +1,5 @@
 import type { ToolSideEffects } from "./agent-tools.js";
-import type { AutomationRun, AutomationTask, Chat, ChatMessage } from "../types.js";
+import type { AutomationRun, AutomationTask, Chat, ChatMessage, CrossChatPostPayload } from "../types.js";
 import { acquireAutomationLock, releaseAutomationLock } from "./automation-lock.js";
 import {
   finishAutomationRun,
@@ -62,6 +62,34 @@ async function resolveAutomationModelId(storedModelId?: string): Promise<string 
   if (storedModelId) {
     const found = models.find((m) => m.id === storedModelId);
     if (found) return found.id;
+  }
+
+  return models[0].id;
+}
+
+/**
+ * Chat-first model resolution for wake turns: the target chat's own model wins,
+ * the global default is only a fallback, and the chat row is never rewritten.
+ */
+async function resolveChatFirstModelId(storedModelId?: string): Promise<string | null> {
+  const { discoverAllModels } = await import("./models.js");
+  const { getSettings } = await import("./chat-storage.js");
+  const models = await discoverAllModels();
+  if (models.length === 0) return null;
+
+  if (storedModelId) {
+    const found = models.find((m) => m.id === storedModelId);
+    if (found) return found.id;
+  }
+
+  try {
+    const settings = await getSettings();
+    if (settings.defaultModelId) {
+      const found = models.find((m) => m.id === settings.defaultModelId);
+      if (found) return found.id;
+    }
+  } catch {
+    // fall through to first available
   }
 
   return models[0].id;
@@ -153,7 +181,27 @@ async function sendAutomationPush(task: AutomationTask, result: AutomationExecut
   }
 }
 
-async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
+interface PromptAutomationOptions {
+  /** Chat semantics for prompt/tools/recall (defaults to "system"). */
+  chatType?: string;
+  /** Run from the persisted tail — no synthesized trigger row (wake). */
+  skipTriggerRow?: boolean;
+  /** Never rename the chat (wake). */
+  skipTitleRefresh?: boolean;
+  /** Refuse to create a missing chat (wake targets must already exist). */
+  requireExistingChat?: boolean;
+  /** Resolve the chat's own model first and never rewrite chat.modelId. */
+  preserveChatModel?: boolean;
+  /** Run memory retrieval for the initial prompt (wake: true). */
+  enableMemoryRetrieval?: boolean;
+}
+
+async function runPromptAutomation(
+  task: AutomationTask,
+  run: AutomationRun,
+  options: PromptAutomationOptions = {},
+): Promise<AutomationExecutionResult> {
+  const chatType = options.chatType ?? "system";
   const { getChat, saveChat } = await import("./chat-storage.js");
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
@@ -168,14 +216,21 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
   let promptTokenEstimate: number | undefined;
 
   try {
-    const chat = await ensureAutomationChat(task);
+    const chat = options.requireExistingChat
+      ? await getChat(task.chatId)
+      : await ensureAutomationChat(task);
     if (!chat) {
-      emitter.emitError("Automation chat not found after creation");
+      const message = options.requireExistingChat
+        ? "Automation chat not found"
+        : "Automation chat not found after creation";
+      emitter.emitError(message);
       emitter.end();
-      return makeErrorResult("Automation chat not found after creation");
+      return makeErrorResult(message);
     }
 
-    const modelId = await resolveAutomationModelId(chat.modelId);
+    const modelId = options.preserveChatModel
+      ? await resolveChatFirstModelId(chat.modelId)
+      : await resolveAutomationModelId(chat.modelId);
     if (!modelId) {
       emitter.emitError("No model available for automation");
       emitter.end();
@@ -193,24 +248,34 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     const runtimeModel = await createPiModelFromProvider(piModel);
     runtimeModel.contextWindow = contextWindow;
 
-    const steps = task.promptSteps.filter((step) => step.prompt.trim().length > 0);
-    if (steps.length === 0) {
+    const steps = options.skipTriggerRow
+      ? []
+      : task.promptSteps.filter((step) => step.prompt.trim().length > 0);
+    if (!options.skipTriggerRow && steps.length === 0) {
       emitter.emitError("Automation has no prompt steps");
       emitter.end();
       return makeErrorResult("Automation has no prompt steps");
     }
 
-    const firstTrigger = formatAutomationTrigger(task, steps[0]);
-    const firstTriggerRow = makeTriggerMessage(task, run, firstTrigger);
-    // Freeze this run's `[time:]` anchor on the trigger row so replays of the
-    // automation chat match the tokens this run's prompt contains.
-    const { buildTimeAnchor } = await import("./memory-context.js");
-    firstTriggerRow.timeAnchor = buildTimeAnchor(chat.messages);
-    chat.messages.push(firstTriggerRow);
-    triggerMessageIndex = chat.messages.length - 1;
-    if (chat.modelId !== modelId) chat.modelId = modelId;
-    await saveChat(chat);
-    triggerMessageInserted = true;
+    let modelChanged = false;
+    if (!options.preserveChatModel && chat.modelId !== modelId) {
+      chat.modelId = modelId;
+      modelChanged = true;
+    }
+    if (!options.skipTriggerRow) {
+      const firstTrigger = formatAutomationTrigger(task, steps[0]);
+      const firstTriggerRow = makeTriggerMessage(task, run, firstTrigger);
+      // Freeze this run's `[time:]` anchor on the trigger row so replays of the
+      // automation chat match the tokens this run's prompt contains.
+      const { buildTimeAnchor } = await import("./memory-context.js");
+      firstTriggerRow.timeAnchor = buildTimeAnchor(chat.messages);
+      chat.messages.push(firstTriggerRow);
+      triggerMessageIndex = chat.messages.length - 1;
+      triggerMessageInserted = true;
+    }
+    if (!options.skipTriggerRow || modelChanged) {
+      await saveChat(chat);
+    }
 
     resetMemoryContext(task.chatId);
     const splitPrompt = await buildSplitAugmentedPrompt(
@@ -218,9 +283,9 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       chat.messages,
       task.chatId,
       chat.projectId,
-      "system",
+      chatType,
       undefined,
-      { skipMemoryRetrieval: true },
+      options.enableMemoryRetrieval ? undefined : { skipMemoryRetrieval: true },
     );
     const systemPrompt = splitPrompt.systemPrompt;
 
@@ -235,7 +300,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     });
     const { getSettings } = await import("./chat-storage.js");
     const { timeMarkerIntervalMinutes } = await getSettings();
-    const tools = getAgentTools(task.chatId, effects, contextWindow, undefined, "system", createTimeMarkerState(timeMarkerIntervalMinutes))
+    const tools = getAgentTools(task.chatId, effects, contextWindow, undefined, chatType, createTimeMarkerState(timeMarkerIntervalMinutes))
       .filter((tool) => tool.name !== "ask_user");
 
     const compactionResult = await truncateBeforeSend(
@@ -273,16 +338,19 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       saveChat,
       passiveMemoryRecall: {
         enabled: true,
-        chatType: "system",
+        chatType,
         projectId: chat.projectId,
-        decorateMessage: (message) => ({
-          ...message,
-          _isAutomationMessage: true,
-          _automationTaskId: task.id,
-          _automationRunId: run.id,
+        ...(options.skipTriggerRow ? {} : {
+          decorateMessage: (message: ChatMessage) => ({
+            ...message,
+            _isAutomationMessage: true,
+            _automationTaskId: task.id,
+            _automationRunId: run.id,
+          }),
         }),
       },
       getFollowUp: async (state) => {
+        if (options.skipTriggerRow) return null;
         if (
           state.iterations === 1 &&
           state.textSummary.length === 0 &&
@@ -300,18 +368,22 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       },
       summarize: (state) =>
         state.textSummary || `*The automation ended without visible output (stopReason=${state.stopReason}).*`,
-      decorateAssistantMessage: (message) => ({
-        ...message,
-        timestamp: Date.now(),
-        _isAutomationMessage: true,
-        _automationTaskId: task.id,
-        _automationRunId: run.id,
+      ...(options.skipTriggerRow ? {} : {
+        decorateAssistantMessage: (message: ChatMessage) => ({
+          ...message,
+          timestamp: Date.now(),
+          _isAutomationMessage: true,
+          _automationTaskId: task.id,
+          _automationRunId: run.id,
+        }),
       }),
     });
 
-    await refreshAutomationChatTitle(task, chat, turn.assistantMessage.content, (title) => {
-      emitter.emitTitleUpdate(title);
-    });
+    if (!options.skipTitleRefresh) {
+      await refreshAutomationChatTitle(task, chat, turn.assistantMessage.content, (title) => {
+        emitter.emitTitleUpdate(title);
+      });
+    }
 
     try {
       invalidateAllStablePrefixCaches();
@@ -456,8 +528,11 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
 }
 
 /**
- * Delivery-only dispatch for kind "crossChat": append the post row to the
- * target (idempotent by task id) and finish. No model, no prompt, no turn.
+ * Delivery dispatch for kind "crossChat": append the post row to the target
+ * (idempotent by task id). With `wake: true`, the just-appended row is the
+ * target's last user row, and the target thread's own agent runs a continue
+ * turn over it with that chat's semantics. No trigger row, no title refresh,
+ * chat-first model resolution, no model rewrite.
  */
 async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
   const payload = task.crossChat;
@@ -466,8 +541,9 @@ async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promi
   }
 
   const { deliverCrossChatPost } = await import("./cross-chat.js");
+  let delivery: Awaited<ReturnType<typeof deliverCrossChatPost>>;
   try {
-    const result = await deliverCrossChatPost({
+    delivery = await deliverCrossChatPost({
       targetChatId: payload.targetChatId,
       fromChatId: payload.fromChatId,
       fromChatTitle: payload.fromChatTitle,
@@ -476,10 +552,17 @@ async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promi
       originTaskId: task.id,
       originRunId: run.id,
     });
+  } catch (e: any) {
+    return makeErrorResult(`Cross-chat delivery failed: ${e?.message || e}`);
+  }
+
+  await sendCrossChatPush(task, payload, delivery);
+
+  if (!payload.wake) {
     return {
-      summary: result.delivered
-        ? `Posted to "${result.chatTitle}".`
-        : `Already delivered to "${result.chatTitle}" for this task — no duplicate appended.`,
+      summary: delivery.delivered
+        ? `Posted to "${delivery.chatTitle}".`
+        : `Already delivered to "${delivery.chatTitle}" for this task — no duplicate appended.`,
       thinking: "",
       toolCalls: [],
       artifacts: [],
@@ -487,10 +570,46 @@ async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promi
       generatedImages: [],
       memoryUpdates: [],
       success: true,
-      chatId: result.chatId,
+      chatId: delivery.chatId,
     };
+  }
+
+  const wakeResult = await runPromptAutomation(task, run, {
+    chatType: delivery.chatType,
+    skipTriggerRow: true,
+    skipTitleRefresh: true,
+    requireExistingChat: true,
+    preserveChatModel: true,
+    enableMemoryRetrieval: true,
+  });
+  const prefix = delivery.delivered
+    ? `Posted to "${delivery.chatTitle}" and ran a wake turn.`
+    : `Already delivered to "${delivery.chatTitle}"; ran a wake turn.`;
+  return { ...wakeResult, summary: `${prefix}\n\n${wakeResult.summary}` };
+}
+
+async function sendCrossChatPush(
+  task: AutomationTask,
+  payload: CrossChatPostPayload,
+  delivery: { delivered: boolean; chatId: string; chatTitle: string },
+): Promise<void> {
+  if (!task.notifications.enabled || !delivery.delivered) return;
+  try {
+    const { sendPush, truncateForBody } = await import("./push-dispatch.js");
+    const bodyText = payload.subject.trim()
+      ? `${payload.subject.trim()} — ${payload.body}`
+      : payload.body;
+    await sendPush("owner", {
+      type: "cross_chat_post",
+      title: task.notifications.titleTemplate || task.title,
+      body: truncateForBody(bodyText),
+      url: `/?chat=${delivery.chatId}`,
+      chatId: delivery.chatId,
+      tag: `crosschat:${task.id}`,
+      data: { automationTaskId: task.id },
+    });
   } catch (e: any) {
-    return makeErrorResult(`Cross-chat delivery failed: ${e?.message || e}`);
+    console.warn(`[automation] cross-chat push failed for ${task.id}:`, e?.message || e);
   }
 }
 

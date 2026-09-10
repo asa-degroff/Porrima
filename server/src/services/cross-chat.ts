@@ -146,6 +146,7 @@ export interface CrossChatDeliveryResult {
   delivered: boolean;
   chatId: string;
   chatTitle: string;
+  chatType: Chat["type"];
   rowSequence: number;
 }
 
@@ -179,6 +180,7 @@ export async function deliverCrossChatPost(input: {
         delivered: false,
         chatId: target.id,
         chatTitle: target.title,
+        chatType: target.type,
         rowSequence: existing._rowSequence ?? -1,
       };
     }
@@ -199,6 +201,7 @@ export async function deliverCrossChatPost(input: {
     delivered: true,
     chatId: target.id,
     chatTitle: target.title,
+    chatType: target.type,
     rowSequence: stored._rowSequence ?? -1,
   };
 }

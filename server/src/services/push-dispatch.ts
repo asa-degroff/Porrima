@@ -11,6 +11,7 @@ import {
 export type PushPayloadType =
   | "message_complete"
   | "task_complete"
+  | "cross_chat_post"
   | "test";
 
 export interface PushPayload {
