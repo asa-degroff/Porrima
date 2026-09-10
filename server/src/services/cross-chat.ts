@@ -1,6 +1,22 @@
 import type { Chat, ChatMessage } from "../types.js";
-import { appendChatMessageRow, getChat, getChatTitle, getDb, listChats } from "./chat-storage.js";
+import { appendChatMessageRow, getChat, getChatTitle, getDb, getSettings, listChats } from "./chat-storage.js";
 import { buildTimeAnchor } from "./memory-context.js";
+
+/** Fallback when the user hasn't configured an agent name (matches the UI). */
+export const DEFAULT_AGENT_NAME = "Porrima";
+
+/**
+ * Agent display name for post attribution (`settings.agentName`), so the
+ * envelope never bakes in a local name. Falls back to the app name.
+ */
+export async function resolveAgentName(): Promise<string> {
+  try {
+    const settings = await getSettings();
+    return settings.agentName?.trim() || DEFAULT_AGENT_NAME;
+  } catch {
+    return DEFAULT_AGENT_NAME;
+  }
+}
 
 export interface ResolvedCrossChatTarget {
   id: string;
@@ -82,18 +98,20 @@ export function formatCrossChatStamp(atIso: string): string {
  * header stamp by test.
  */
 export function formatCrossChatEnvelope(
+  agentName: string,
   fromChatTitle: string,
   atIso: string,
   subject: string,
   body: string,
 ): string {
-  const header = `[quje from ${fromChatTitle} — ${formatCrossChatStamp(atIso)}]`;
+  const header = `[${agentName} from ${fromChatTitle} — ${formatCrossChatStamp(atIso)}]`;
   const subjectPart = subject.trim() ? ` ${subject.trim()}` : "";
   return `${header}${subjectPart}\n\n${body.trim()}`;
 }
 
 export function buildCrossChatPostRow(input: {
   targetChat: Chat;
+  agentName: string;
   fromChatId: string;
   fromChatTitle: string;
   subject: string;
@@ -105,7 +123,7 @@ export function buildCrossChatPostRow(input: {
   const at = input.at ?? new Date().toISOString();
   return {
     role: "user",
-    content: formatCrossChatEnvelope(input.fromChatTitle, at, input.subject, input.body),
+    content: formatCrossChatEnvelope(input.agentName, input.fromChatTitle, at, input.subject, input.body),
     timestamp: Date.now(),
     // Frozen against the target's tail at append time so later replays carry
     // the exact tokens this row's delivery used.
@@ -113,6 +131,7 @@ export function buildCrossChatPostRow(input: {
     _crossChatPost: {
       fromChatId: input.fromChatId,
       fromChatTitle: input.fromChatTitle,
+      agentName: input.agentName,
       subject: input.subject.trim(),
       at,
       ...(input.originTaskId ? { originTaskId: input.originTaskId } : {}),
@@ -186,8 +205,10 @@ export async function deliverCrossChatPost(input: {
     }
   }
 
+  const agentName = await resolveAgentName();
   const row = buildCrossChatPostRow({
     targetChat: target,
+    agentName,
     fromChatId: input.fromChatId,
     fromChatTitle: input.fromChatTitle,
     subject: input.subject,

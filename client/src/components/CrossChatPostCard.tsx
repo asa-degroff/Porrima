@@ -9,9 +9,11 @@ function formatStamp(atIso: string): string {
 
 /**
  * Envelope card for a cross-chat post. The row is persisted as a user-role
- * message with content `[quje from <title> — <stamp>] <subject>\n\n<body>`;
+ * message with content `[<agent name> from <title> — <stamp>] <subject>\n\n<body>`;
  * the card surfaces the attribution and shows the body without the envelope
- * header. Edit/retry are excluded upstream — these rows are not user speech.
+ * header. The sender name comes from the post metadata (the user-configured
+ * agent name at delivery time). Edit/retry are excluded upstream — these rows
+ * are not user speech.
  */
 export function CrossChatPostCard({
   post,
@@ -22,6 +24,7 @@ export function CrossChatPostCard({
 }) {
   const headerEnd = content.indexOf("\n\n");
   const body = (headerEnd >= 0 ? content.slice(headerEnd + 2) : content).trim();
+  const senderName = post.agentName?.trim() || "Porrima";
 
   return (
     <div
@@ -29,7 +32,7 @@ export function CrossChatPostCard({
       data-cross-chat-post={post.originTaskId ?? post.fromChatId}
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-purple-200/60">
-        <span className="font-semibold text-purple-200/80">quje</span>
+        <span className="font-semibold text-purple-200/80">{senderName}</span>
         <span>·</span>
         <a
           href={`/?chat=${encodeURIComponent(post.fromChatId)}`}

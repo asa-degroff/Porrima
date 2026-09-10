@@ -19,7 +19,7 @@ function row(content: string, rowId?: string, role: ChatMessage["role"] = "user"
 const ORIGIN_USER = row("u1", "a");
 const ORIGIN_ASSISTANT = row("a1", "b", "assistant");
 const CURRENT_USER = row("u2", "c");
-const PRESERVED_POST = row("[quje from other chat] post", "p");
+const PRESERVED_POST = row("[Agent from other chat] post", "p");
 const REPAIR_PROMPT = row("repair prompt", "r", "system");
 const MEMORY_DELTA_CONTENT = "[System context — updated memories]";
 
@@ -47,7 +47,7 @@ describe("current-message resolution (id-anchored, route-level)", () => {
       "a1",
       "[System context — updated memories]",
       "u2",
-      "[quje from other chat] post",
+      "[Agent from other chat] post",
     ]);
     const userIdx = messages.findIndex((m) => m._rowId === "c");
     expect(messages[userIdx - 1]?.role).toBe("system");
@@ -103,7 +103,7 @@ describe("current-message resolution (id-anchored, route-level)", () => {
       "a1",
       MEMORY_DELTA_CONTENT,
       "repair prompt",
-      "[quje from other chat] post",
+      "[Agent from other chat] post",
     ]);
   });
 });

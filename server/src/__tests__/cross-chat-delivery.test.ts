@@ -111,7 +111,8 @@ describe("cross-chat immediate delivery", () => {
 
       // Envelope ↔ metadata parity.
       const stamp = crossChat.formatCrossChatStamp(post._crossChatPost!.at);
-      expect(post.content.startsWith(`[quje from Origin Chat — ${stamp}] Status\n\n`)).toBe(true);
+      expect(post.content.startsWith(`[${crossChat.DEFAULT_AGENT_NAME} from Origin Chat — ${stamp}] Status\n\n`)).toBe(true);
+      expect(post._crossChatPost?.agentName).toBe(crossChat.DEFAULT_AGENT_NAME);
       expect(post.content.endsWith("Build is green.")).toBe(true);
       expect(typeof post.timeAnchor).toBe("string");
       expect(post.timeAnchor!.length).toBeGreaterThan(0);
@@ -127,6 +128,46 @@ describe("cross-chat immediate delivery", () => {
       const reloaded = await chatStorage.getChat("target");
       expect(reloaded?.messages[0].content).toBe(post.content);
       expect(reloaded?.messages[0].timeAnchor).toBe(post.timeAnchor);
+      chatStorage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the configured agent name, falling back to the app default", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-crosschat-"));
+    try {
+      const { chatStorage, crossChat } = await loadModules(homeDir);
+      await chatStorage.createChat(makeChat("origin", "Origin Chat"));
+      await chatStorage.createChat(makeChat("target", "Target Chat"));
+
+      await crossChat.deliverCrossChatPost({
+        targetChatId: "target",
+        fromChatId: "origin",
+        fromChatTitle: "Origin Chat",
+        subject: "",
+        body: "First note.",
+      });
+      const first = (await chatStorage.getChat("target"))!.messages[0];
+      expect(first._crossChatPost?.agentName).toBe(crossChat.DEFAULT_AGENT_NAME);
+      expect(first.content.startsWith(`[${crossChat.DEFAULT_AGENT_NAME} from Origin Chat — `)).toBe(true);
+
+      const settings = await chatStorage.getSettings();
+      await chatStorage.saveSettings({ ...settings, agentName: "Scout" });
+
+      await crossChat.deliverCrossChatPost({
+        targetChatId: "target",
+        fromChatId: "origin",
+        fromChatTitle: "Origin Chat",
+        subject: "",
+        body: "Second note.",
+      });
+      const target = await chatStorage.getChat("target");
+      const second = target!.messages[1];
+      expect(second._crossChatPost?.agentName).toBe("Scout");
+      expect(second.content.startsWith("[Scout from Origin Chat — ")).toBe(true);
+      // The earlier row keeps the name it was delivered under.
+      expect(first._crossChatPost?.agentName).toBe(crossChat.DEFAULT_AGENT_NAME);
       chatStorage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

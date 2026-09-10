@@ -316,7 +316,8 @@ const SCHEDULE_CHAT_MESSAGE_TOOL: Tool = {
   description:
     "Post a message into another chat as a visible, attributed note from you. " +
     "The post lands in the target thread as a user-role row wrapped in a provenance " +
-    "envelope (`[quje from <origin title> — <time>]`), so it never impersonates the user. " +
+    "envelope naming you and the origin chat (`[<your name> from <origin title> — <time>]`), " +
+    "so it never impersonates the user. " +
     "Omit `when` to deliver immediately; pass an ISO 8601 timestamp at least 2 minutes " +
     "ahead to schedule delivery. Set `wake: true` to have the target thread's own agent " +
     "run a continue turn after the post lands (it wakes with that chat's context; it " +

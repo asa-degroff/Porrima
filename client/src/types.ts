@@ -106,6 +106,8 @@ export interface MessageSegment {
 export interface CrossChatPostMetadata {
   fromChatId: string;
   fromChatTitle: string;
+  /** Agent display name at delivery time (`settings.agentName`, fallback Porrima). */
+  agentName?: string;
   subject: string;
   /** ISO timestamp the envelope shows. */
   at: string;

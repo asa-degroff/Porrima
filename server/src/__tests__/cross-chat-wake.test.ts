@@ -100,6 +100,7 @@ async function loadModules(homeDir: string) {
   return {
     chatStorage: await import("../services/chat-storage.js"),
     automationStorage: await import("../services/automation-storage.js"),
+    crossChat: await import("../services/cross-chat.js"),
     runner: await import("../services/automation-runner.js"),
   };
 }
@@ -149,7 +150,7 @@ describe("cross-chat wake turns", () => {
   it("runs the target's agent over the post with target semantics and no rewrite", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-wake-"));
     try {
-      const { chatStorage, automationStorage, runner } = await loadModules(homeDir);
+      const { chatStorage, automationStorage, crossChat, runner } = await loadModules(homeDir);
       await chatStorage.createChat(makeChat("origin", "Origin Chat", "origin-model"));
       await chatStorage.createChat(makeChat("target", "Target Chat", "target-model"));
 
@@ -171,7 +172,7 @@ describe("cross-chat wake turns", () => {
       const target = await chatStorage.getChat("target");
       expect(target?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
       expect(target?.messages[0]._crossChatPost?.originTaskId).toBe(task.id);
-      expect(target?.messages[0].content.startsWith("[quje from Origin Chat — ")).toBe(true);
+      expect(target?.messages[0].content.startsWith(`[${crossChat.DEFAULT_AGENT_NAME} from Origin Chat — `)).toBe(true);
       expect(target?.messages[1].content).toBe("wake reply");
 
       // The turn ran on the target chat, with the post as the last user row.
