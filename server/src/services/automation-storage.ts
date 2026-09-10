@@ -10,6 +10,7 @@ import type {
   AutomationRunStatus,
   AutomationSchedule,
   AutomationTask,
+  CrossChatPostPayload,
 } from "../types.js";
 import {
   DEFAULT_REMINDER_MAX_ITERATIONS,
@@ -52,6 +53,7 @@ interface AutomationTaskRow {
   promptStepsJson: string;
   promptDispatchMode: string | null;
   nextPromptStepId: string | null;
+  crossChatJson: string | null;
   notificationsJson: string;
   maxIterations: number;
   timeoutMs: number;
@@ -114,7 +116,8 @@ function ensureSchema(): void {
       lastStatus TEXT,
       consecutiveFailures INTEGER NOT NULL DEFAULT 0,
       createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL
+      updatedAt TEXT NOT NULL,
+      crossChatJson TEXT
     );
 
     CREATE TABLE IF NOT EXISTS automation_runs (
@@ -170,6 +173,10 @@ function ensureSchema(): void {
     db.exec("ALTER TABLE automation_tasks ADD COLUMN absentWindowJson TEXT");
     console.log("[automation] Added absentWindowJson column to automation_tasks");
   }
+  if (!taskCols.some((c) => c.name === "crossChatJson")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN crossChatJson TEXT");
+    console.log("[automation] Added crossChatJson column to automation_tasks");
+  }
 
   const runCols = db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{ name: string }>;
   if (!runCols.some((c) => c.name === "selectedPromptStepIdsJson")) {
@@ -217,6 +224,29 @@ function parseJson<T>(value: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseCrossChatPayload(value: string): CrossChatPostPayload | undefined {
+  try {
+    const parsed = JSON.parse(value) as Partial<CrossChatPostPayload>;
+    if (
+      typeof parsed?.targetChatId === "string" &&
+      typeof parsed?.fromChatId === "string" &&
+      typeof parsed?.body === "string"
+    ) {
+      return {
+        targetChatId: parsed.targetChatId,
+        fromChatId: parsed.fromChatId,
+        fromChatTitle: typeof parsed.fromChatTitle === "string" ? parsed.fromChatTitle : parsed.fromChatId,
+        subject: typeof parsed.subject === "string" ? parsed.subject : "",
+        body: parsed.body,
+        wake: parsed.wake === true,
+      };
+    }
+  } catch {
+    // fall through
+  }
+  return undefined;
 }
 
 function clampIntervalMinutes(value: unknown, fallback: number): number {
@@ -376,6 +406,7 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
     consecutiveFailures: row.consecutiveFailures ?? 0,
     ...(row.createdBy && (row.createdBy === "agent" || row.createdBy === "user") ? { createdBy: row.createdBy as "agent" | "user" } : {}),
     ...(row.archived !== null && row.archived === 1 ? { archived: true } : {}),
+    ...(row.crossChatJson ? { crossChat: parseCrossChatPayload(row.crossChatJson) } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -418,12 +449,12 @@ function insertTask(task: AutomationTask): void {
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
         activationPolicy, absentWindowJson, promptStepsJson, promptDispatchMode, nextPromptStepId,
         notificationsJson, maxIterations,
-        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, archived, createdAt, updatedAt
+        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdBy, archived, crossChatJson, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
         @activationPolicy, @absentWindowJson, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
         @notificationsJson, @maxIterations,
-        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @archived, @createdAt, @updatedAt
+        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdBy, @archived, @crossChatJson, @createdAt, @updatedAt
       )`,
     )
     .run({
@@ -449,6 +480,7 @@ function insertTask(task: AutomationTask): void {
       consecutiveFailures: task.consecutiveFailures ?? 0,
       createdBy: task.createdBy ?? "user",
       archived: task.archived ? 1 : 0,
+      crossChatJson: task.crossChat ? JSON.stringify(task.crossChat) : null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -663,6 +695,28 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
   return task;
 }
 
+/**
+ * Shared cap for agent-created tasks. Counts future-pending tasks plus any
+ * created in the last hour, so `when = now` chains (whose tasks are archived at
+ * start and never appear as future-pending) are still bounded.
+ */
+function assertAgentTaskCap(maxPending: number): void {
+  const pendingRow = getDb()
+    .prepare(`SELECT COUNT(*) as cnt FROM automation_tasks
+      WHERE createdBy = 'agent'
+        AND (
+          (enabled = 1 AND julianday(nextRunAt) > julianday('now'))
+          OR julianday(createdAt) > julianday('now', '-1 hour')
+        )`)
+    .get() as { cnt: number };
+  if (pendingRow.cnt >= maxPending) {
+    throw new Error(
+      `Agent task cap reached (${maxPending} pending or created in the last hour). ` +
+      `Complete or delete existing tasks first.`,
+    );
+  }
+}
+
 export async function createReminderTask(input: {
   message: string;
   title: string;
@@ -675,14 +729,7 @@ export async function createReminderTask(input: {
   const settings = await getSettings();
   const maxPending = input.maxPending ?? DEFAULT_MAX_PENDING_AGENT_REMINDERS;
 
-  // Check pending cap: count enabled agent-created tasks with future nextRunAt
-  const pendingRow = getDb()
-    .prepare(`SELECT COUNT(*) as cnt FROM automation_tasks
-      WHERE createdBy = 'agent' AND enabled = 1 AND julianday(nextRunAt) > julianday('now')`)
-    .get() as { cnt: number };
-  if (pendingRow.cnt >= maxPending) {
-    throw new Error(`Agent reminder cap reached (${maxPending} pending). Complete or delete existing reminders first.`);
-  }
+  assertAgentTaskCap(maxPending);
 
   // Validate scheduledAt is in the future (min 2 minutes ahead, respecting grace period)
   const runMs = new Date(input.scheduledAt).getTime();
@@ -718,6 +765,74 @@ export async function createReminderTask(input: {
     timeoutMs: settings.reminderTimeoutMs ?? DEFAULT_REMINDER_TIMEOUT_MS,
     consecutiveFailures: 0,
     createdBy: "agent",
+    nextRunAt: schedule.runAt,
+    createdAt: now,
+    updatedAt: now,
+  };
+  insertTask(task);
+  return task;
+}
+
+/**
+ * Create a scheduled cross-chat post (kind "crossChat"). Fire-time dispatch is
+ * delivery-only for now (wake is P2): the once-task appends the post row to the
+ * target and finishes, no LLM. Shares the agent-task cap with reminders.
+ */
+export async function createCrossChatTask(input: {
+  targetChatId: string;
+  targetChatTitle: string;
+  fromChatId: string;
+  fromChatTitle: string;
+  subject: string;
+  body: string;
+  runAt: string;
+  maxPending?: number;
+}): Promise<AutomationTask> {
+  ensureSchema();
+  const maxPending = input.maxPending ?? DEFAULT_MAX_PENDING_AGENT_REMINDERS;
+  assertAgentTaskCap(maxPending);
+
+  const runMs = new Date(input.runAt).getTime();
+  if (!Number.isFinite(runMs) || runMs <= Date.now() + 2 * 60 * 1000) {
+    throw new Error("runAt must be a valid future timestamp at least 2 minutes from now");
+  }
+  const body = input.body.trim();
+  if (!body) throw new Error("Post body is required");
+
+  const now = new Date().toISOString();
+  const orderRow = getDb()
+    .prepare("SELECT COALESCE(MAX(orderIndex), 0) as maxOrder FROM automation_tasks")
+    .get() as { maxOrder: number };
+  const schedule: AutomationSchedule = { type: "once", runAt: new Date(runMs).toISOString() };
+  const subject = input.subject.trim();
+  const title = (subject ? `Post to ${input.targetChatTitle}: ${subject}` : `Post to ${input.targetChatTitle}`)
+    .slice(0, 200);
+
+  const task: AutomationTask = {
+    id: `crosschat-${uuidv4()}`,
+    kind: "crossChat",
+    title,
+    enabled: true,
+    builtIn: false,
+    orderIndex: orderRow.maxOrder + 100,
+    chatId: input.targetChatId,
+    schedule,
+    activationPolicy: "idle",
+    promptSteps: [],
+    promptDispatchMode: "sequence",
+    notifications: { enabled: false },
+    maxIterations: 20,
+    timeoutMs: 30 * 60 * 1000,
+    consecutiveFailures: 0,
+    createdBy: "agent",
+    crossChat: {
+      targetChatId: input.targetChatId,
+      fromChatId: input.fromChatId,
+      fromChatTitle: input.fromChatTitle,
+      subject,
+      body,
+      wake: false,
+    },
     nextRunAt: schedule.runAt,
     createdAt: now,
     updatedAt: now,

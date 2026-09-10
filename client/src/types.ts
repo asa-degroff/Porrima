@@ -102,6 +102,17 @@ export interface MessageSegment {
   previewRaw?: string;
 }
 
+/** Attribution carried on a cross-chat post row. */
+export interface CrossChatPostMetadata {
+  fromChatId: string;
+  fromChatTitle: string;
+  subject: string;
+  /** ISO timestamp the envelope shows. */
+  at: string;
+  originTaskId?: string;
+  originRunId?: string;
+}
+
 export interface ImageAttachment {
   /** Base64-encoded image bytes. Present for new uploads and transient previews only. */
   data?: string;
@@ -157,6 +168,8 @@ export interface ChatMessage {
   _isAutomationMessage?: boolean;
   _automationTaskId?: string;
   _automationRunId?: string;
+  /** Provenance for a cross-chat post rendered as an envelope card. Inert on replay. */
+  _crossChatPost?: CrossChatPostMetadata;
   /** Empty assistant placeholder inserted when the user sends a steering message.
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
@@ -226,7 +239,7 @@ export interface Chat {
   lastDelayedExtractionMessageIndex?: number;
 }
 
-export type AutomationKind = "synthesis" | "wake" | "custom";
+export type AutomationKind = "synthesis" | "wake" | "custom" | "crossChat";
 export type AutomationScheduleType = "interval" | "daily" | "once";
 export type AutomationActivationPolicy = "idle" | "absent" | "manual_only";
 export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";

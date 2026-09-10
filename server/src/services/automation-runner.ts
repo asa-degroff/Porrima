@@ -399,6 +399,10 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
 }
 
 async function executeAutomation(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
+  if (task.kind === "crossChat") {
+    return runCrossChatPost(task, run);
+  }
+
   if (task.id === SYNTHESIS_AUTOMATION_ID || task.kind === "synthesis") {
     const result = await runSystemSynthesis({
       promptSteps: task.promptSteps,
@@ -449,6 +453,45 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
   }
 
   return runPromptAutomation(task, run);
+}
+
+/**
+ * Delivery-only dispatch for kind "crossChat": append the post row to the
+ * target (idempotent by task id) and finish. No model, no prompt, no turn.
+ */
+async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
+  const payload = task.crossChat;
+  if (!payload) {
+    return makeErrorResult("Cross-chat task is missing its payload");
+  }
+
+  const { deliverCrossChatPost } = await import("./cross-chat.js");
+  try {
+    const result = await deliverCrossChatPost({
+      targetChatId: payload.targetChatId,
+      fromChatId: payload.fromChatId,
+      fromChatTitle: payload.fromChatTitle,
+      subject: payload.subject,
+      body: payload.body,
+      originTaskId: task.id,
+      originRunId: run.id,
+    });
+    return {
+      summary: result.delivered
+        ? `Posted to "${result.chatTitle}".`
+        : `Already delivered to "${result.chatTitle}" for this task — no duplicate appended.`,
+      thinking: "",
+      toolCalls: [],
+      artifacts: [],
+      visuals: [],
+      generatedImages: [],
+      memoryUpdates: [],
+      success: true,
+      chatId: result.chatId,
+    };
+  } catch (e: any) {
+    return makeErrorResult(`Cross-chat delivery failed: ${e?.message || e}`);
+  }
 }
 
 export async function runAutomationTask(

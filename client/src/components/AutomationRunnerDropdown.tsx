@@ -68,6 +68,12 @@ function TaskIcon({ kind, traced = false }: { kind: AutomationKind; traced?: boo
       {kind === "custom" && (
         <polygon points="5 3 19 12 5 21 5 3" pathLength={traced ? 1 : undefined} />
       )}
+      {kind === "crossChat" && (
+        <>
+          <path d="m22 2-7 20-4-9-9-4Z" pathLength={traced ? 1 : undefined} />
+          <path d="M22 2 11 13" pathLength={traced ? 1 : undefined} />
+        </>
+      )}
     </svg>
   );
 }
@@ -188,7 +194,7 @@ export function AutomationRunnerDropdown({
     const isStreamingActive = isStreaming;
     if (task.kind === "synthesis" && isSynthesizing) return true;
     if (task.kind === "wake" && isWakeCycleRunning) return true;
-    if (task.kind === "custom" && isAutomationRunning) return true;
+    if ((task.kind === "custom" || task.kind === "crossChat") && isAutomationRunning) return true;
     if (runningId === task.id) return true;
     if (isStreamingActive) return true;
     return false;
@@ -198,7 +204,7 @@ export function AutomationRunnerDropdown({
     if (isStreaming) return "Chat active — will run after response completes";
     if (task.kind === "synthesis" && isSynthesizing) return "Already running";
     if (task.kind === "wake" && isWakeCycleRunning) return "Already running";
-    if (task.kind === "custom" && isAutomationRunning) return "Automation in progress";
+    if ((task.kind === "custom" || task.kind === "crossChat") && isAutomationRunning) return "Automation in progress";
     if (runningId === task.id) return "Starting...";
     return undefined;
   }, [isSynthesizing, isWakeCycleRunning, isAutomationRunning, runningId, isStreaming]);
@@ -313,7 +319,7 @@ export function AutomationRunnerDropdown({
                     runningId === task.id ||
                     (task.kind === "synthesis" && isSynthesizing) ||
                     (task.kind === "wake" && isWakeCycleRunning) ||
-                    (task.kind === "custom" && task.id === activeAutomationTaskId);
+                    ((task.kind === "custom" || task.kind === "crossChat") && task.id === activeAutomationTaskId);
 
                   return (
                     <button

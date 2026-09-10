@@ -309,6 +309,33 @@ const UPDATE_AUTOMATION_TOOL: Tool = {
   }),
 };
 
+const SCHEDULE_CHAT_MESSAGE_TOOL: Tool = {
+  name: "schedule_chat_message",
+  description:
+    "Post a message into another chat as a visible, attributed note from you. " +
+    "The post lands in the target thread as a user-role row wrapped in a provenance " +
+    "envelope (`[quje from <origin title> — <time>]`), so it never impersonates the user. " +
+    "Omit `when` to deliver immediately; pass an ISO 8601 timestamp at least 2 minutes " +
+    "ahead to schedule delivery. Write the text conditionally — \"if X is not done, do X; " +
+    "else verify and record why not\" — so a duplicate or repeated delivery is harmless. " +
+    "Use list_chats to discover targets.",
+  parameters: Type.Object({
+    targetChat: Type.String({ description: "Target chat id or a unique title fragment (agent/system chats only)" }),
+    message: Type.String({ description: "The message body to deliver to the target thread" }),
+    subject: Type.Optional(Type.String({ description: "Short subject line shown after the provenance envelope" })),
+    when: Type.Optional(Type.String({ description: "ISO 8601 delivery time at least 2 minutes in the future. Omit to deliver immediately.", format: "date-time" })),
+    wake: Type.Optional(Type.Boolean({ description: "Reserved: whether the post should wake the target thread. Not enabled yet." })),
+  }),
+};
+
+const LIST_CHATS_TOOL: Tool = {
+  name: "list_chats",
+  description: "List chats with ids, titles, types, last-modified times, and previews. Use to discover a target for schedule_chat_message.",
+  parameters: Type.Object({
+    limit: Type.Optional(Type.Number({ description: "Max chats to return (default 50, max 200)", minimum: 1, maximum: 200 })),
+  }),
+};
+
 const FILESYSTEM_TOOLS: Tool[] = [
   READ_FILE_TOOL,
   WRITE_FILE_TOOL,
@@ -322,7 +349,13 @@ const FILESYSTEM_TOOLS: Tool[] = [
   ASK_USER_TOOL,
 ];
 
-const AUTOMATION_TOOLS: Tool[] = [SCHEDULE_REMINDER_TOOL, LIST_AUTOMATIONS_TOOL, UPDATE_AUTOMATION_TOOL];
+const AUTOMATION_TOOLS: Tool[] = [
+  SCHEDULE_REMINDER_TOOL,
+  LIST_AUTOMATIONS_TOOL,
+  UPDATE_AUTOMATION_TOOL,
+  SCHEDULE_CHAT_MESSAGE_TOOL,
+  LIST_CHATS_TOOL,
+];
 // System/headless chats (synthesis, wake, automation runs) keep the automation
 // management tools — scheduling and reminder chaining are deliberate and are
 // bounded by the pending-reminder cap, the 2-minute minimum lead time, and
@@ -338,7 +371,7 @@ const SEQUENTIAL_TOOL_NAMES = new Set([
   "write_file", "edit_file", "bash", "run_python", "web_fetch",
   "browser_navigate", "browser_snapshot", "browser_click", "browser_hover", "browser_type", "browser_screenshot",
   "create_artifact", "update_artifact", "ask_user",
-  "schedule_reminder", "update_automation", "install_skill", "remove_skill",
+  "schedule_reminder", "schedule_chat_message", "update_automation", "install_skill", "remove_skill",
 ]);
 
 function toolIsAvailable(name: string, chatType?: string): boolean {
@@ -598,6 +631,114 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         content: `Updated "${updated.title}" (${updated.id}).`,
         isError: false,
       }, "update_automation");
+    },
+  });
+
+  tools.push({
+    ...SCHEDULE_CHAT_MESSAGE_TOOL,
+    label: "schedule_chat_message",
+    execute: async (_id, params) => {
+      const { resolveCrossChatTarget, deliverCrossChatPost, crossChatOriginTitle } = await import("./cross-chat.js");
+      const { createCrossChatTask } = await import("./automation-storage.js");
+      const args = params as Record<string, any>;
+
+      const body = typeof args.message === "string" ? args.message.trim() : "";
+      if (!body) {
+        return wrapResult({ content: "message is required.", isError: true }, "schedule_chat_message");
+      }
+      if (args.wake === true) {
+        return wrapResult({
+          content:
+            "wake: true is not enabled yet. Deliver the post now or schedule it; " +
+            "the target thread's next turn will see it.",
+          isError: true,
+        }, "schedule_chat_message");
+      }
+
+      const resolved = await resolveCrossChatTarget(String(args.targetChat ?? ""));
+      if (!resolved.ok) {
+        return wrapResult({ content: resolved.error, isError: true }, "schedule_chat_message");
+      }
+
+      const fromChatTitle = crossChatOriginTitle(chatId);
+      const subject = typeof args.subject === "string" ? args.subject.trim() : "";
+      const whenRaw = typeof args.when === "string" ? args.when.trim() : "";
+
+      if (!whenRaw) {
+        try {
+          const result = await deliverCrossChatPost({
+            targetChatId: resolved.target.id,
+            fromChatId: chatId,
+            fromChatTitle,
+            subject,
+            body,
+          });
+          return wrapResult({
+            content: `Delivered to **${result.chatTitle}** (${result.chatId}).`,
+            isError: false,
+          }, "schedule_chat_message");
+        } catch (e: any) {
+          return wrapResult(
+            { content: `Delivery failed: ${e?.message || e}`, isError: true },
+            "schedule_chat_message",
+          );
+        }
+      }
+
+      const whenMs = new Date(whenRaw).getTime();
+      if (!Number.isFinite(whenMs) || whenMs <= Date.now() + 2 * 60 * 1000) {
+        return wrapResult({
+          content: "`when` must be a valid ISO timestamp at least 2 minutes in the future.",
+          isError: true,
+        }, "schedule_chat_message");
+      }
+
+      try {
+        const task = await createCrossChatTask({
+          targetChatId: resolved.target.id,
+          targetChatTitle: resolved.target.title,
+          fromChatId: chatId,
+          fromChatTitle,
+          subject,
+          body,
+          runAt: new Date(whenMs).toISOString(),
+        });
+        return wrapResult({
+          content:
+            `Scheduled for ${task.nextRunAt}.\n\n` +
+            `- **ID**: ${task.id}\n` +
+            `- **To**: ${resolved.target.title} (${resolved.target.id})\n` +
+            `- **Subject**: ${subject || "(none)"}`,
+          isError: false,
+        }, "schedule_chat_message");
+      } catch (e: any) {
+        return wrapResult(
+          { content: `Scheduling failed: ${e?.message || e}`, isError: true },
+          "schedule_chat_message",
+        );
+      }
+    },
+  });
+
+  tools.push({
+    ...LIST_CHATS_TOOL,
+    label: "list_chats",
+    execute: async (_id, params) => {
+      const { listChats } = await import("./chat-storage.js");
+      const args = params as Record<string, any>;
+      const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || 50, 1), 200);
+      const chats = (await listChats()).slice(0, limit);
+      if (chats.length === 0) {
+        return wrapResult({ content: "No chats.", isError: false }, "list_chats");
+      }
+      const lines = chats.map((chat) => {
+        const preview = (chat.preview || "").replace(/\s+/g, " ").trim().slice(0, 90);
+        return `- **${chat.title}** (${chat.id}) [${chat.type}] · ${chat.lastModified}${preview ? `\n  ${preview}` : ""}`;
+      });
+      return wrapResult({
+        content: `Chats (${chats.length}):\n\n${lines.join("\n\n")}`,
+        isError: false,
+      }, "list_chats");
     },
   });
 

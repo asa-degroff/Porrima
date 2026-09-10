@@ -20,7 +20,13 @@ describe("agent tool registry", () => {
     expect(systemDefinitions).toContain("schedule_reminder");
     expect(systemDefinitions).toContain("list_automations");
     expect(systemDefinitions).toContain("update_automation");
+    // Cross-chat messaging is available to system/headless chats too (a
+    // verification turn can report its result to a target thread).
+    expect(systemDefinitions).toContain("schedule_chat_message");
+    expect(systemDefinitions).toContain("list_chats");
     expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_reminder");
+    expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_chat_message");
+    expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("list_chats");
   });
 
   it("serializes mutating tools while retaining parallel reads", () => {

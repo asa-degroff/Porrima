@@ -39,6 +39,17 @@ export interface MessageSegment {
   visual?: InlineVisual;
 }
 
+/** Attribution carried on a cross-chat post row. */
+export interface CrossChatPostMetadata {
+  fromChatId: string;
+  fromChatTitle: string;
+  subject: string;
+  /** ISO timestamp the envelope shows. */
+  at: string;
+  originTaskId?: string;
+  originRunId?: string;
+}
+
 export interface ChatMessage {
   /** Absolute chat_message_rows.sequence for UI edit/retry targeting. Never persisted. */
   _rowSequence?: number;
@@ -116,6 +127,8 @@ export interface ChatMessage {
   _isAutomationMessage?: boolean;
   _automationTaskId?: string;
   _automationRunId?: string;
+  /** Provenance for a cross-chat post rendered as an envelope card. Inert on replay. */
+  _crossChatPost?: CrossChatPostMetadata;
   /** Brief summary of what was done, generated for long assistant messages */
   recap?: string;
 }
@@ -230,7 +243,7 @@ export interface ChatListItem {
   queueCount?: number;
 }
 
-export type AutomationKind = "synthesis" | "wake" | "custom";
+export type AutomationKind = "synthesis" | "wake" | "custom" | "crossChat";
 export type AutomationScheduleType = "interval" | "daily" | "once";
 export type AutomationActivationPolicy = "idle" | "absent" | "manual_only";
 export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";
@@ -267,6 +280,16 @@ export interface AutomationNotificationSettings {
   titleTemplate?: string;
 }
 
+/** Payload carried by a `crossChat` automation task (one scheduled post). */
+export interface CrossChatPostPayload {
+  targetChatId: string;
+  fromChatId: string;
+  fromChatTitle: string;
+  subject: string;
+  body: string;
+  wake: boolean;
+}
+
 export interface AutomationTask {
   id: string;
   kind: AutomationKind;
@@ -292,6 +315,8 @@ export interface AutomationTask {
   /** Tracks who created this task: "agent" (via schedule_reminder tool) or "user" (via UI/API). */
   createdBy?: "agent" | "user";
   archived?: boolean;
+  /** Present on kind "crossChat": the post this task delivers at fire time. */
+  crossChat?: CrossChatPostPayload;
   createdAt: string;
   updatedAt: string;
 }
