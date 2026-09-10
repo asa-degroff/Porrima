@@ -2,8 +2,9 @@
  * Agent clock formatting.
  *
  * Every clock the model reads — the turn anchor (memory-context), the
- * intra-loop time markers (time-marker), and the synthesis/wake stamps
- * (system-chat) — renders in the user's local zone: the same frame the OS
+ * intra-loop time markers (time-marker), the synthesis/wake stamps
+ * (system-chat), and the calendar dates on memories/blocks/archives
+ * (formatAgentDate) — renders in the user's local zone: the same frame the OS
  * clock, tool output, and the user's own speech all speak in. An explicit
  * UTC offset is appended so the instant stays unambiguous: bare local wall
  * time is ambiguous across DST transitions (the fall-back hour happens
@@ -108,4 +109,25 @@ export function formatAgentClock(now: Date, timeZone?: string): string {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get(
     "minute",
   )}${name} (${offsetLabel(offsetPart)})`;
+}
+
+/**
+ * Render a stored UTC instant as a bare local calendar date: `2026-08-23`.
+ *
+ * Same zone resolution as formatAgentClock. Use this anywhere a memory/block/
+ * archive date is shown to the agent: rendering the instant in UTC (e.g.
+ * `createdAt.slice(0, 10)`) disagrees with the agent's local `[time:]` anchors
+ * and future-dates memories saved after the local day rolls into the next UTC
+ * day. Unparseable values fall back to the raw prefix rather than "NaN".
+ */
+export function formatAgentDate(value: string | number | Date, timeZone?: string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return typeof value === "string" ? value.slice(0, 10) : "";
+  }
+  const zone = timeZone && zoneValid(timeZone) ? timeZone : resolveSystemTimeZone();
+  const parts = zoneFormats(zone).wall.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }

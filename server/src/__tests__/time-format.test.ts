@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAgentClock, resolveSystemTimeZone } from "../services/time-format.js";
+import { formatAgentClock, formatAgentDate, resolveSystemTimeZone } from "../services/time-format.js";
 
 const DENVER = "America/Denver";
 
@@ -56,6 +56,42 @@ describe("formatAgentClock", () => {
     expect(formatAgentClock(new Date())).toMatch(
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: [A-Z]{2,5})? \(UTC[+-]\d{2}:\d{2}\)$/,
     );
+  });
+});
+
+describe("formatAgentDate", () => {
+  it("renders the local calendar date, matching the agent clock frame", () => {
+    // 2026-08-14T05:30Z is still Aug 13 late evening in Denver (23:30 MDT).
+    // A raw UTC slice would report "2026-08-14" — a date the agent's [time:]
+    // anchor has not reached yet (future-dated memory).
+    expect(formatAgentDate("2026-08-14T05:30:00.000Z", DENVER)).toBe("2026-08-13");
+    expect(formatAgentDate("2026-08-14T05:30:00.000Z", "UTC")).toBe("2026-08-14");
+  });
+
+  it("agrees with the date portion of formatAgentClock", () => {
+    for (const iso of ["2026-01-01T06:30:00.000Z", "2026-11-01T08:00:00.000Z"]) {
+      expect(formatAgentDate(iso, DENVER)).toBe(
+        formatAgentClock(new Date(iso), DENVER).slice(0, 10),
+      );
+    }
+  });
+
+  it("accepts Date and epoch-number inputs", () => {
+    const ms = Date.UTC(2026, 7, 14, 5, 30);
+    expect(formatAgentDate(new Date(ms), DENVER)).toBe("2026-08-13");
+    expect(formatAgentDate(ms, DENVER)).toBe("2026-08-13");
+  });
+
+  it("defaults to the system zone and tolerates invalid zones", () => {
+    const iso = "2026-08-14T05:30:00.000Z";
+    expect(formatAgentDate(iso)).toBe(formatAgentDate(iso, resolveSystemTimeZone()));
+    expect(formatAgentDate(iso, "Not/AZone")).toBe(formatAgentDate(iso));
+  });
+
+  it("falls back to the raw prefix for unparseable values", () => {
+    expect(formatAgentDate("not-a-date")).toBe("not-a-date");
+    expect(formatAgentDate("nope")).toBe("nope");
+    expect(formatAgentDate("")).toBe("");
   });
 });
 

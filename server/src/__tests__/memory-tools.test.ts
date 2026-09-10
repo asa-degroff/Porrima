@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatAgentDate } from "../services/time-format.js";
 
 async function loadMemoryTools(homeDir: string) {
   mkdirSync(join(homeDir, ".porrima"), { recursive: true });
@@ -811,7 +812,9 @@ describe("save_memory supersession", () => {
         },
         score: 0.91,
       } as any, undefined);
-      expect(line).toBe("- [mem-fmt-1] Asa prefers TypeScript [preference, importance: 7/10, saved: 2026-08-14]");
+      // Saved date renders in the agent's local zone (same frame as the
+      // [time:] anchors), not raw UTC — see time-format.ts.
+      expect(line).toBe(`- [mem-fmt-1] Asa prefers TypeScript [preference, importance: 7/10, saved: ${formatAgentDate("2026-08-14T12:00:00.000Z")}]`);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

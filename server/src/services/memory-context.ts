@@ -13,7 +13,7 @@ import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
 import { getProject, getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
-import { formatAgentClock } from "./time-format.js";
+import { formatAgentClock, formatAgentDate } from "./time-format.js";
 import { log } from "./logger.js";
 import { getRetrievalBudget } from "./retrieval-settings.js";
 import {
@@ -669,7 +669,7 @@ async function retrieveMemories(
 }
 
 export function formatRetrievedMemoryForContext(r: RetrievalResult, projectId?: string): string {
-  const created = r.memory.createdAt.slice(0, 10);
+  const created = formatAgentDate(r.memory.createdAt);
   const supersededNote = r.memory.supersededBy
     ? "SUPERSEDED — a newer version of this memory exists"
     : "";

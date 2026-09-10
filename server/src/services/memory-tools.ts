@@ -14,6 +14,7 @@ import {
   type MemoryBlock,
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
+import { formatAgentDate } from "./time-format.js";
 import { dedupAndSave } from "./memory-extraction.js";
 import type { ChatMessage, MemoryCategory } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
@@ -180,7 +181,7 @@ function suggestSimilarBlocks(query: string): string {
   if (!trimmed) return "";
   const blocks = listMemoryBlocks({ query: trimmed, includeInternal: true }).slice(0, 5);
   return blocks
-    .map((b) => `- [${b.id}] ${b.name} (${b.scope}${b.projectId ? `, project: ${b.projectId}` : ""}) — ${b.description} [updated ${b.updatedAt.slice(0, 10)}]`)
+    .map((b) => `- [${b.id}] ${b.name} (${b.scope}${b.projectId ? `, project: ${b.projectId}` : ""}) — ${b.description} [updated ${formatAgentDate(b.updatedAt)}]`)
     .join("\n");
 }
 
@@ -236,7 +237,7 @@ function renderBlockHistory(priorSnapshots: MemoryBlock[], budgetChars: number):
   let omitted = 0;
   for (let i = 0; i < snaps.length; i++) {
     const s = snaps[i];
-    const label = `--- v${snaps.length - i} updated ${s.updatedAt.slice(0, 10)} by ${s.updatedBy} (${s.content.length} chars) ---`;
+    const label = `--- v${snaps.length - i} updated ${formatAgentDate(s.updatedAt)} by ${s.updatedBy} (${s.content.length} chars) ---`;
     const remaining = budgetChars - used - label.length;
     if (remaining < 200) {
       omitted = snaps.length - i;
@@ -346,7 +347,7 @@ function formatArchiveWithinBudget(
   const header: string[] = [
     `Archive: ${archive.id} (${archive.messageCount} messages, ~${archive.estimatedTokens} tokens)`,
     `From chat: ${chatTitle || archive.chatId}`,
-    `Archived: ${archive.createdAt.slice(0, 10)}`,
+    `Archived: ${formatAgentDate(archive.createdAt)}`,
   ];
   if (window.length < total) {
     header.push(`Showing messages ${offset + 1}-${offset + window.length} of ${total} (use offset/limit to page)`);
@@ -511,7 +512,7 @@ export async function executeMemoryTool(
       const formatted = results
         .map(
           (r) => {
-            const created = r.memory.createdAt.slice(0, 10);
+            const created = formatAgentDate(r.memory.createdAt);
             const source = r.memory.sourceChatId ? `, source: ${r.memory.sourceChatId}` : "";
             const superseded = r.memory.supersededBy
               ? ` [SUPERSEDED by ${r.memory.supersededBy}]`
@@ -765,7 +766,7 @@ export async function executeMemoryTool(
       const lines = [
         `Memory Block: ${block.name} [${block.id}]`,
         `Scope: ${block.scope}${block.projectId ? ` (project: ${block.projectId})` : ""}`,
-        `Updated: ${block.updatedAt.slice(0, 10)} by ${block.updatedBy}`,
+        `Updated: ${formatAgentDate(block.updatedAt)} by ${block.updatedBy}`,
         `Length: ${block.content.length}/${maxChars} chars (${block.tokenEstimate} tokens)`,
         `---`,
         block.content,
@@ -807,7 +808,7 @@ export async function executeMemoryTool(
       }
       
       const lines = filteredBlocks.map((b) => 
-        `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.content.length}/${maxChars} chars, ${b.tokenEstimate} tok, updated ${b.updatedAt.slice(0,10)}]`
+        `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.content.length}/${maxChars} chars, ${b.tokenEstimate} tok, updated ${formatAgentDate(b.updatedAt)}]`
       );
       
       const shown = Math.min(effectiveLimit, filteredBlocks.length);

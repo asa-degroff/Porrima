@@ -3,7 +3,7 @@ import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import { createTimeMarkerState, type TimeMarkerState } from "./time-marker.js";
-import { formatAgentClock } from "./time-format.js";
+import { formatAgentClock, formatAgentDate } from "./time-format.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -674,7 +674,7 @@ async function buildMaintenancePhase2Trigger(
     inventoryLines.push("**Global:**\n");
     for (const b of globalBlocks) {
       inventoryLines.push(
-        `- [${b.id}] ${b.name} — ${b.description} (updated ${b.updatedAt.slice(0, 10)}, ~${b.tokenEstimate}t)`,
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t)`,
       );
     }
     inventoryLines.push("");
@@ -684,7 +684,7 @@ async function buildMaintenancePhase2Trigger(
     inventoryLines.push(`**${info.name}:**\n`);
     for (const b of info.blocks) {
       inventoryLines.push(
-        `- [${b.id}] ${b.name} — ${b.description} (updated ${b.updatedAt.slice(0, 10)}, ~${b.tokenEstimate}t)`,
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t)`,
       );
     }
     inventoryLines.push("");
