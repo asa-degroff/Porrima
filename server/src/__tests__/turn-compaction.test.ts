@@ -181,7 +181,12 @@ describe("runEndOfTurnCompaction — phase 2a move (doc §4.4, exit criteria §7
     expect(h.truncateCalls[0].forceCompact).toBe(false); // lastUsage !== 0
     expect(h.truncateCalls[0].knownUsage).toBe(70_000);
     expect(h.saveChatCalls).toHaveLength(1);
-    expect(h.saveChatCalls[0].opts).toEqual({ allowTruncation: true });
+    // The EOT compaction save must NOT pass allowTruncation: the flag disables
+    // the rebase, and EOT compaction runs in the background where a concurrent
+    // append (cross-chat post, queued send) can land. Compaction never removes
+    // rows (_outOfContext marks + summary splice), so the save rebases and
+    // preserves the append. (09-10 P0b review, Finding A.)
+    expect(h.saveChatCalls[0].opts).toBeUndefined();
     expect(onCompacted).toHaveBeenCalledTimes(1);
     expect(onCompacted).toHaveBeenCalledWith({ removedCount: 5, remainingCount: 7 });
   });

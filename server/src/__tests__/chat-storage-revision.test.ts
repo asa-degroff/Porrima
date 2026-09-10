@@ -472,6 +472,112 @@ describe("chat storage revision + row identity", () => {
     }
   });
 
+  it("refuses a stale truncating save on rejectOnRevisionConflict", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-refuse", [
+        { role: "user", content: "one", timestamp: 1 },
+        { role: "assistant", content: "two", timestamp: 2 },
+        { role: "user", content: "three", timestamp: 3 },
+      ]));
+
+      // The /edit route's view: loaded, then truncated and re-pushed.
+      const edit = await storage.getChat("edit-refuse");
+
+      // A concurrent writer appends after the edit's load (a cross-chat post
+      // or a queued send).
+      const concurrent = await storage.getChat("edit-refuse");
+      concurrent!.messages.push({ role: "user", content: "[post] from another chat", timestamp: 4 });
+      await storage.saveChat(concurrent!);
+
+      edit!.messages = edit!.messages.slice(0, 1);
+      edit!.messages.push({ role: "user", content: "one (edited)", timestamp: 5 });
+      await expect(
+        storage.saveChat(edit!, { allowTruncation: true, rejectOnRevisionConflict: true }),
+      ).rejects.toThrow("Revision conflict");
+
+      // The concurrent append is intact and the truncation was NOT applied.
+      const final = await storage.getChat("edit-refuse");
+      expect(final?.messages.map((m) => m.content)).toEqual([
+        "one",
+        "two",
+        "three",
+        "[post] from another chat",
+      ]);
+      const rev = storage
+        .getDb()
+        .prepare("SELECT revision FROM chats WHERE id = ?")
+        .get("edit-refuse") as { revision: number };
+      expect(rev.revision).toBe(1); // the refused save wrote nothing
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies a guarded truncation when the revision has not moved", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-apply", [
+        { role: "user", content: "one", timestamp: 1 },
+        { role: "assistant", content: "two", timestamp: 2 },
+        { role: "user", content: "three", timestamp: 3 },
+      ]));
+      const edit = await storage.getChat("edit-apply");
+      edit!.messages = edit!.messages.slice(0, 1);
+      edit!.messages.push({ role: "user", content: "one (edited)", timestamp: 4 });
+      await storage.saveChat(edit!, { allowTruncation: true, rejectOnRevisionConflict: true });
+
+      const final = await storage.getChat("edit-apply");
+      expect(final?.messages.map((m) => m.content)).toEqual(["one", "one (edited)"]);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a rebasing turn does not resurrect rows a truncating writer deleted", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-truncate", [
+        { role: "user", content: "one", timestamp: 1 },
+        { role: "assistant", content: "two", timestamp: 2 },
+        { role: "user", content: "three", timestamp: 3 },
+        { role: "assistant", content: "four", timestamp: 4 },
+      ]));
+
+      // A queued turn loads the full thread, then /edit truncates at index 2
+      // and saves its edited user row (array-authoritative, deletes 3-4).
+      const queued = await storage.getChat("edit-truncate");
+      const edit = await storage.getChat("edit-truncate");
+      edit!.messages = edit!.messages.slice(0, 2);
+      edit!.messages.push({ role: "user", content: "three (edited)", timestamp: 5 });
+      await storage.saveChat(edit!, { allowTruncation: true });
+
+      // The queued turn's save rebases. Its snapshot still contains "three"
+      // and "four", which the edit deleted from the DB — re-emitting them
+      // would silently undo the truncation.
+      queued!.messages.push({ role: "user", content: "queued message", timestamp: 6 });
+      await storage.saveChat(queued!);
+
+      const final = await storage.getChat("edit-truncate");
+      expect(final?.messages.map((m) => m.content)).toEqual([
+        "one",
+        "two",
+        "queued message",
+        "three (edited)",
+      ]);
+      const ids = final!.messages.map((m) => m._rowId);
+      expect(new Set(ids).size).toBe(ids.length);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to save a partial message window", async () => {
     const homeDir = makeTempHome();
     try {

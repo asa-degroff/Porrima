@@ -200,7 +200,7 @@ export async function runEndOfTurnCompaction(
         opts.signal,
       );
       if (compaction.truncated) {
-        await saveChat(chat, { allowTruncation: true });
+        await saveChat(chat);
         truncated = true;
         await opts.onCompacted?.({
           removedCount: compaction.removedCount,

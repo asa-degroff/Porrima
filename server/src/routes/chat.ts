@@ -5,7 +5,8 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError } from "../services/chat-storage.js";
+import { resolveCurrentMessageIndex, resolveTrailingRow } from "../services/current-message.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -3409,6 +3410,13 @@ async function handleChatStream(
     // Client-space context boundary for the mid-turn compaction event. Captured
     // before the compaction save renumbers `_rowSequence` so it matches the
     // sequences the live client last synced (see the event comment below).
+    //
+    // Captured on the FIRST compaction cycle only. On a multi-cycle turn (up to
+    // MAX_COMPACTION_CYCLES), later cycles mark more rows out-of-context without
+    // updating the boundary the client already received, so the client
+    // UNDER-dims: it keeps some out-of-context rows visible. That is the safe
+    // direction — it can never hide rows that are still in context — and a
+    // reload recomputes dimming from the persisted flags and corrects it.
     let midTurnFirstKeptSequence: number | undefined;
 
     while (state.needsMidTurnCompaction && !connectionClosed && !askUserRef.current && !waitingForInput && compactionCycle < MAX_COMPACTION_CYCLES) {
@@ -3499,7 +3507,7 @@ async function handleChatStream(
               midTurnFirstKeptSequence = boundarySeqs.length ? Math.min(...boundarySeqs) : undefined;
             }
 
-            await saveChat(chat, { allowTruncation: true });
+            await saveChat(chat);
 
             // The pre-compaction flush just extracted everything from the
             // removed messages, which includes all content streamed up to
@@ -4553,7 +4561,7 @@ router.post("/", async (req, res) => {
         _isSystemMessage: true,
       };
       chat.messages.push(confirmMsg);
-      await saveChat(chat, { allowTruncation: true });
+      await saveChat(chat);
 
       // If there's a follow-up message, process it; otherwise send confirmation
       if (compactResult.followUpMessage) {
@@ -4833,7 +4841,7 @@ router.post("/", async (req, res) => {
             turnRequestSignal(res),
           );
           if (compaction && compaction.truncated) {
-            await saveChat(chat, { allowTruncation: true });
+            await saveChat(chat);
             // The resumed turn prefills the rebuilt context — arm the indicator.
             postCompactionPrefillPending.add(chat.id);
             // Soft reset after compaction — frozen set retained, next build
@@ -5056,7 +5064,7 @@ router.post("/", async (req, res) => {
             turnRequestSignal(res),
           );
           if (compaction && compaction.truncated) {
-            await saveChat(chat, { allowTruncation: true });
+            await saveChat(chat);
             // The turn about to start prefills the rebuilt context — arm the indicator.
             postCompactionPrefillPending.add(chat.id);
             // Soft reset of memory context (doc §10.4) — frozen section retained
@@ -5131,13 +5139,7 @@ router.post("/", async (req, res) => {
     // a mid-transcript system role.
     // Resolve the current user row by identity, never by position: a rebase
     // against a concurrent append may have inserted rows after it.
-    const findCurrentUserIndex = (): number => {
-      if (currentUserRow?._rowId) {
-        const idx = chat.messages.findIndex((m) => m._rowId === currentUserRow!._rowId);
-        if (idx >= 0) return idx;
-      }
-      return chat.messages.length - 1;
-    };
+    const findCurrentUserIndex = (): number => resolveCurrentMessageIndex(chat.messages, currentUserRow);
 
     if (memoryDeltaContext) {
       const insertAt = Math.max(0, findCurrentUserIndex());
@@ -5218,9 +5220,7 @@ router.post("/", async (req, res) => {
     // Reuse the anchor frozen on the just-pushed row (never rebuild it) so the
     // wire prompt and the persisted history stay byte-identical. Resolve the row
     // by identity in case a rebase moved it.
-    const trailingRow = currentUserRow && chat.messages.includes(currentUserRow)
-      ? currentUserRow
-      : chat.messages[chat.messages.length - 1];
+    const trailingRow = resolveTrailingRow(chat.messages, currentUserRow);
     const sendTimeAnchor = trailingRow?.role === "user" ? trailingRow.timeAnchor : undefined;
     const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts, sendTimeAnchor);
 
@@ -5554,6 +5554,22 @@ function isEmptyAssistantPlaceholder(message: ChatMessage | undefined): boolean 
   );
 }
 
+// The /edit route is the only truncating writer, so it is a guarded
+// transaction: every save checks the revision under the write lock, and a
+// concurrent write since the load refuses the edit (409) instead of letting
+// the array-authoritative truncation delete the concurrent writer's rows —
+// and instead of a later rebase resurrecting the rows this truncation removed.
+function refuseStaleEdit(res: Response, err: RevisionConflictError): void {
+  console.warn(
+    `[chat] edit refused (revision conflict): base ${err.baseRevision} vs stored ${err.currentRevision} — ` +
+      "concurrent write preserved; user must reload and retry",
+  );
+  res.status(409).json({
+    error:
+      "The chat changed while this edit was in flight (a concurrent write landed first). Reload and try again.",
+  });
+}
+
 router.post("/edit", async (req, res) => {
   const { chatId, messageIndex, messageSequence, message, images } = req.body as {
     chatId: string;
@@ -5662,7 +5678,14 @@ router.post("/edit", async (req, res) => {
     chat.title = truncateTitle(message);
   }
 
-  await saveChat(chat, { allowTruncation: true });
+  // Truncating save: array-authoritative, so refuse on any revision movement
+  // since the load (a concurrent append this truncation would delete).
+  try {
+    await saveChat(chat, { allowTruncation: true, rejectOnRevisionConflict: true });
+  } catch (err) {
+    if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
+    throw err;
+  }
 
   // Build context with skills (using delta-aware prompt builder for memory-augmented chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
@@ -5735,7 +5758,15 @@ router.post("/edit", async (req, res) => {
           turnRequestSignal(res),
         );
         if (compaction && compaction.truncated) {
-          await saveChat(chat, { allowTruncation: true });
+          // Guarded: if a concurrent write landed after the truncation save
+          // above, refuse instead of deleting it (or rebasing around it and
+          // breaking the positional context resolution below).
+          try {
+            await saveChat(chat, { allowTruncation: true, rejectOnRevisionConflict: true });
+          } catch (err) {
+            if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
+            throw err;
+          }
           // The regenerated turn prefills the rebuilt context — arm the indicator.
           postCompactionPrefillPending.add(chat.id);
           // Soft reset after compaction — frozen set retained, next build
@@ -5806,7 +5837,15 @@ router.post("/edit", async (req, res) => {
       content: editMemoryDeltaContext,
       timestamp: Date.now(),
     });
-    await saveChat(chat);
+    // Guarded like the truncation save above: a concurrent write here would
+    // rebase the append in after the user row and break the positional
+    // current-message resolution below — refuse instead.
+    try {
+      await saveChat(chat, { rejectOnRevisionConflict: true });
+    } catch (err) {
+      if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
+      throw err;
+    }
   }
 
   // Context = all messages before the current edited user prompt. If this edit

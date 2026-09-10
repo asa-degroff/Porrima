@@ -990,7 +990,7 @@ export async function runHeadlessChatTurn(
           _compactionRemovedCount: compaction.removedCount,
           _compactionCycle: compactionCycle,
         });
-        await saveChat(chat, { allowTruncation: true });
+        await saveChat(chat);
 
         midTurnCompactionOccurred = true;
         activeContext = {

@@ -994,7 +994,7 @@ export async function runSystemSynthesis(options?: {
       console.log(
         `[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`,
       );
-      await saveChat(chat, { allowTruncation: true });
+      await saveChat(chat);
     }
 
     // -------------------------------------------------------------------
@@ -1336,7 +1336,7 @@ export async function runWakeCycle(options?: {
     );
     if (compactionResult?.truncated) {
       console.log(`[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`);
-      await saveChat(chat, { allowTruncation: true });
+      await saveChat(chat);
     }
 
     const maxIterations = Math.max(1, Math.floor(options?.maxIterations ?? 20));

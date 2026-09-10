@@ -318,7 +318,7 @@ async function runPromptAutomation(
       console.log(
         `[automation] Pre-compaction removed ${compactionResult.removedCount} messages for ${task.id}`,
       );
-      await saveChat(chat, { allowTruncation: true });
+      await saveChat(chat);
     }
     promptTokenEstimate = estimateContextTokens(chat.messages, systemPrompt, tools);
 

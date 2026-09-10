@@ -744,9 +744,28 @@ export async function getChatWithWindow(
   return chat;
 }
 
+/**
+ * A save with `rejectOnRevisionConflict` found that the chat's stored
+ * revision moved past the caller's snapshot. Nothing was written. The caller
+ * (the /edit route today) should refuse with a stale-state response and let
+ * the user reload — the concurrent writer's rows are intact.
+ */
+export class RevisionConflictError extends Error {
+  constructor(
+    public readonly chatId: string,
+    public readonly baseRevision: number,
+    public readonly currentRevision: number,
+  ) {
+    super(
+      `Revision conflict saving chat ${chatId}: caller base ${baseRevision}, stored ${currentRevision} — refusing to overwrite a concurrent writer`,
+    );
+    this.name = "RevisionConflictError";
+  }
+}
+
 export async function saveChat(
   chat: Chat,
-  opts?: { allowTruncation?: boolean; removedRowIds?: string[] },
+  opts?: { allowTruncation?: boolean; removedRowIds?: string[]; rejectOnRevisionConflict?: boolean },
 ): Promise<void> {
   await withChatWriteLock(chat.id, async () => {
     const db = getDb();
@@ -760,6 +779,19 @@ export async function saveChat(
     const nextRevision = currentRevision + 1;
     const baseRevision = chat._baseRevision;
     const removedRowIds = new Set(opts?.removedRowIds ?? []);
+
+    // Truncating writers opt into strict conflict detection: when the stored
+    // revision moved past the caller's snapshot, the array-authoritative sync
+    // would delete the concurrent writer's rows, so refuse instead. Checked
+    // under the write lock — there is no check-then-save window. Independent
+    // of the rebase kill switch (it is a guard, not a merge).
+    if (
+      opts?.rejectOnRevisionConflict &&
+      baseRevision !== undefined &&
+      baseRevision !== currentRevision
+    ) {
+      throw new RevisionConflictError(chat.id, baseRevision, currentRevision);
+    }
 
     // A paged window is a partial array; syncing it would rewrite the chat from
     // the window and delete everything outside it.
@@ -775,6 +807,15 @@ export async function saveChat(
     chat.lastModified = new Date().toISOString();
 
     const save = db.transaction(() => {
+      // `allowTruncation` marks a truncating writer: its array is authoritative
+      // and the sync deletes what the array omits — so it must NOT rebase (a
+      // rebase would preserve the very rows it is truncating). Only the /edit
+      // route passes it, and it pairs `rejectOnRevisionConflict` so a revision
+      // movement refuses the edit instead of deleting a concurrent append.
+      // Compaction never removes rows (it marks `_outOfContext` + splices a
+      // summary), so compaction-then-save sites must NOT pass it — they rebase
+      // and preserve concurrent appends (the flag only suppresses the
+      // shrinkage warning on the sync below).
       const needsRebase =
         isRebaseEnabled() &&
         !opts?.allowTruncation &&
@@ -793,7 +834,7 @@ export async function saveChat(
         console.log(
           `[chat-storage] rebase chat=${chat.id.slice(0, 8)} baseRev=${baseRevision} ` +
           `currentRev=${currentRevision} preserved=${result.preserved} removed=${result.removed} ` +
-          `ephemeral=${result.droppedEphemeral}`,
+          `ephemeral=${result.droppedEphemeral} truncatedDropped=${result.droppedTruncated}`,
         );
       }
 
@@ -1796,9 +1837,26 @@ function rebaseMessageArray(
   dbRows: ChatMessageRowIdentity[],
   messages: ChatMessage[],
   removedRowIds: Set<string>,
-): { merged: ChatMessage[]; preserved: number; removed: number; droppedEphemeral: number } {
+): {
+  merged: ChatMessage[];
+  preserved: number;
+  removed: number;
+  droppedEphemeral: number;
+  droppedTruncated: number;
+} {
+  // Capture which rows the writer actually loaded (had an id before the
+  // identity pass below). After the pass every row has an id, so this set is
+  // the only way to tell the writer's NEW rows (fresh id) from rows it loaded
+  // but the DB no longer has (a concurrent truncating writer deleted them).
+  // Known boundary: an id assigned by an earlier save of this process that
+  // rolled back (failed mid-transaction) is indistinguishable from a loaded
+  // id. Such a row is dropped instead of re-emitted as new — confined to
+  // ephemeral partial rows that were never persisted. `truncatedDropped` in
+  // the rebase log is the canary if this class ever bites in practice.
+  const loadedIds = new Set<string>();
   const byId = new Map<string, ChatMessage>();
   for (const message of messages) {
+    if (message._rowId) loadedIds.add(message._rowId);
     if (!message._rowId) message._rowId = randomUUID();
     byId.set(message._rowId, message);
   }
@@ -1808,6 +1866,7 @@ function rebaseMessageArray(
   let preserved = 0;
   let removed = 0;
   let droppedEphemeral = 0;
+  let droppedTruncated = 0;
 
   for (const row of dbRows) {
     if (row.row_id && removedRowIds.has(row.row_id)) {
@@ -1845,6 +1904,14 @@ function rebaseMessageArray(
       lastAnchor = anchorIndex;
       continue;
     }
+    if (message._rowId && loadedIds.has(message._rowId)) {
+      // The writer loaded this row but the DB no longer has it: a concurrent
+      // truncating writer (/edit) deleted it between load and save. Dropping
+      // it honors that writer's intent — resurrecting it would silently undo
+      // the truncation. (New rows have fresh ids and are not in loadedIds.)
+      droppedTruncated++;
+      continue;
+    }
     const bucket = buckets.get(lastAnchor);
     if (bucket) bucket.push(message);
     else buckets.set(lastAnchor, [message]);
@@ -1857,7 +1924,7 @@ function rebaseMessageArray(
     for (const message of buckets.get(i) ?? []) merged.push(message);
   }
 
-  return { merged, preserved, removed, droppedEphemeral };
+  return { merged, preserved, removed, droppedEphemeral, droppedTruncated };
 }
 
 /**
