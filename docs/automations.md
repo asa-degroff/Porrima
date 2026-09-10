@@ -59,6 +59,7 @@ Execution paths:
 - Built-in synthesis calls `runSystemSynthesis()` with automation metadata.
 - Built-in wake calls `runWakeCycle()` with automation metadata.
 - Custom prompt tasks call `runHeadlessChatTurn()` through `automation-runner.ts`.
+- Cross-chat posts (`schedule_chat_message` tool) create a once-task with kind `crossChat`; the payload rides in `crossChatJson` (the task row can't carry it as prompt steps) and `runCrossChatPost` dispatches it. Delivery is an `appendChatMessageRow` (envelope row with `_crossChatPost` metadata, idempotent by `originTaskId`, frozen time anchor) — `wake:false` at `when:now` appends at call time; everything else appends at fire time under a wake run on the target chat (post-row-as-prompt, no trigger row, target model preserved). Targets: agent + system chats only; existence checked at call and fire time (no chat resurrection). Cap: 10 pending cross-chat tasks shared across chats, queried over future-pending OR created-in-the-last-hour.
 
 Custom automations preserve the same KV-cache-sensitive prompt shape as system chat:
 
@@ -81,6 +82,8 @@ Failures are recorded in `automation_runs` and increment `consecutiveFailures` o
 - custom tasks: 30 minute base, capped at 24 hours
 
 Custom tasks are automatically disabled after 5 consecutive failures. A successful run clears the failure count and schedules the next normal run.
+
+**Once-task terminal state (mark-fired-at-start).** Single-shot tasks (reminders, cross-chat posts) are marked fired at START, not completion: the `startAutomationRun` transaction sets `enabled: false, archived: true` (the lever is the enabled flag — clearing `nextRunAt` alone is counterproductive, `taskIsDue` treats a missing next run as always-due). A process death mid-run therefore cannot re-arm the task, and no path may leave an enabled task with a null `nextRunAt`. Graceful failures of once-tasks re-arm through `computeFailureRetryAt` (backoff retry; auto-disable after 5 still wins), and a startup sweep marks runs interrupted by a restart `interrupted`.
 
 ## UI And API
 

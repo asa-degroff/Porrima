@@ -27,8 +27,8 @@ All data is stored in `~/.porrima/`:
 
 ## SQLite Schemas
 
-- `chats` — chat metadata with JSON `messages` column retained as a compatibility snapshot, delayed extraction tracking (`lastDelayedExtractionAt`, `lastDelayedExtractionMessageIndex`)
-- `chat_message_rows` — full-fidelity message row store keyed by `(chat_id, sequence)`, with `payload_json` plus metadata columns (`role`, `timestamp`, `out_of_context`, `is_compaction_summary`, `is_system_message`). Used for paged chat loading and as the authoritative source when populated.
+- `chats` — chat metadata with JSON `messages` column retained as a compatibility snapshot, delayed extraction tracking (`lastDelayedExtractionAt`, `lastDelayedExtractionMessageIndex`), and `revision` (optimistic-concurrency counter, bumped in-transaction on every row write — see [chat-message-architecture.md](chat-message-architecture.md))
+- `chat_message_rows` — full-fidelity message row store keyed by `(chat_id, sequence)`, with `payload_json` plus metadata columns (`role`, `timestamp`, `out_of_context`, `is_compaction_summary`, `is_system_message`, durable `row_id` — stable per-row identity that survives renumbering). Used for paged chat loading and as the authoritative source when populated.
 - `chat_messages` — denormalized message table for FTS5 (chat_id, message_index, role, content, timestamp). This is a search projection, not the full-fidelity message source.
 - `chat_messages_fts` — FTS5 virtual table with automatic triggers for full-text search
 - `projects` — project metadata

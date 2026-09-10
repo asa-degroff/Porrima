@@ -14,6 +14,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Browser tools**: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_hover`, `browser_type`, `browser_screenshot` — per-chat headless Chrome session (puppeteer-core). Snapshots assign `[eN]` refs to interactive elements; refs are invalidated by navigation and every action, so re-snapshot before further interaction. `browser_hover` moves the pointer over an element and leaves it there (hover-driven UI). Runs sequentially (never parallelized), auto-dismisses page dialogs, and is closed on chat deletion and server shutdown.
 - **Artifact tools**: `create_artifact`, `update_artifact`. HTML guidance (including p5 instance-mode checks) is emitted as result-side lint warnings instead of repeated in the tool schema.
 - **Automation tools**: `schedule_reminder`, `list_automations`, `update_automation` (interactive agent chats only).
+- **Cross-chat tools**: `schedule_chat_message` — deliver a message to any agent/system chat, optionally waking a turn there, optionally at a future time (delivery semantics in [automations.md](automations.md)); `list_chats` — chat enumeration (`search_conversation` already owns content search).
 - **Skill tools**: `list_skills`, `install_skill`, `remove_skill` (interactive agent chats only).
 - **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
 
