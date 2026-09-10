@@ -214,6 +214,32 @@ describe("compaction safety (fb9cdb6f regression)", () => {
     expect(active.some((m) => m.content === big)).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("raising target"));
   });
+
+  it("a stopped turn (signal already aborted) skips both compaction paths without mutating the chat", async () => {
+    const { truncateChatHistory, truncateBeforeSend } = await import("../services/compaction.js");
+    const big = "Context that would otherwise be compacted away. ".repeat(2000);
+    const chat = makeChat([
+      { role: "user", content: big, timestamp: 1 },
+      { role: "assistant", content: "First reply.", timestamp: 2 },
+      { role: "user", content: "Second question.", timestamp: 3 },
+      { role: "assistant", content: "Second reply.", timestamp: 4 },
+    ]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await truncateChatHistory(
+      chat, 8000, true, undefined, undefined, undefined, "You are helpful.", [], undefined, controller.signal,
+    );
+    expect(result.truncated).toBe(false);
+    expect(chat.messages).toHaveLength(4);
+    expect(chat.messages.every((m) => !m._outOfContext && !m._isCompactionSummary)).toBe(true);
+
+    const preSend = await truncateBeforeSend(
+      chat, 8000, "You are helpful.", undefined, undefined, [], undefined, undefined, controller.signal,
+    );
+    expect(preSend).toBeNull();
+    expect(chat.messages).toHaveLength(4);
+  });
 });
 
 // --- endOfTurnNeedsCompaction (fix 6: refined-estimator trigger at 0.80) ---

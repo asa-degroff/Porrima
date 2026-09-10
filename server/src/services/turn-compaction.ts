@@ -96,6 +96,14 @@ export interface EndOfTurnCompactionOptions {
    * question empirically before the flip removes the flag.
    */
   logOnly?: boolean;
+  /**
+   * Turn cancellation signal. When aborted before the decision is executed
+   * (user pressed stop), the check reports no trigger and the truncation +
+   * pre-archive memory flush are skipped. The signal is also threaded into
+   * truncateChatHistory so a stop landing mid-compaction bails at the next
+   * safe checkpoint.
+   */
+  signal?: AbortSignal;
 }
 
 export interface EndOfTurnCompactionResult {
@@ -117,6 +125,13 @@ export async function runEndOfTurnCompaction(
   // Rendered only when the caller identified the estimator path (the
   // estimateContextPressure callers); bare char-estimate callers omit it.
   const pathSuffix = opts.selectedPath ? `, path=${opts.selectedPath}` : "";
+
+  // A stopped turn must not compact: the user abandoned it, and the flush it
+  // runs would keep the extraction servers busy after the stop.
+  if (opts.signal?.aborted) {
+    console.log(`${logPrefix} End-of-turn compaction skipped (turn stopped): chat=${chat.id}`);
+    return { triggered: false, truncated: false, drivingTokens: 0, ratio: 0 };
+  }
 
   // Either signal can drive the trigger (conservative max, never min),
   // against the earlier end-of-turn threshold (0.80 vs pre-send's 0.85) —
@@ -169,7 +184,9 @@ export async function runEndOfTurnCompaction(
     const body = async () => {
       // Settle any in-flight mid-turn pulse before the flush so its
       // cursor is final and it isn't racing the extraction server.
+      if (opts.signal?.aborted) return;
       await opts.settleInFlight?.();
+      if (opts.signal?.aborted) return;
       const compaction = await truncateChatHistory(
         chat,
         contextWindow,
@@ -180,6 +197,7 @@ export async function runEndOfTurnCompaction(
         opts.systemPrompt,
         opts.tools,
         opts.preFlush,
+        opts.signal,
       );
       if (compaction.truncated) {
         await saveChat(chat, { allowTruncation: true });

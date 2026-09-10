@@ -986,6 +986,9 @@ export async function runSystemSynthesis(options?: {
       undefined,
       undefined,
       tools,
+      undefined,
+      undefined,
+      emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
       console.log(
@@ -1156,6 +1159,7 @@ export async function runSystemSynthesis(options?: {
       estimatedTokens: estimateContextTokens(chat.messages, synthesisPrompt, tools),
       systemPrompt: synthesisPrompt,
       tools,
+      signal: emitter.stream.abort.signal,
       logPrefix: "[system-chat]",
     });
 
@@ -1320,7 +1324,15 @@ export async function runWakeCycle(options?: {
 
     // Pre-send compaction
     const compactionResult = await truncateBeforeSend(
-      chat, contextWindow, wakePrompt, undefined, undefined, tools,
+      chat,
+      contextWindow,
+      wakePrompt,
+      undefined,
+      undefined,
+      tools,
+      undefined,
+      undefined,
+      emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
       console.log(`[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`);
@@ -1387,6 +1399,7 @@ export async function runWakeCycle(options?: {
       estimatedTokens: estimateContextTokens(chat.messages, wakePrompt, tools),
       systemPrompt: wakePrompt,
       tools,
+      signal: emitter.stream.abort.signal,
       logPrefix: "[system-chat]",
     });
 

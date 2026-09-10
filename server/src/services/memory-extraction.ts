@@ -2668,6 +2668,13 @@ interface ImmediateExtractionJob {
    * extractions instead of starting cold. `userMsg`/`assistantMsg` are unused.
    */
   preCompaction?: { removedMessages: ChatMessage[] };
+  /**
+   * Turn cancellation signal for pre-compaction flush jobs. A /stop while the
+   * job is queued or between its LLM and save phases resolves it without
+   * extracting or persisting facts — the removed messages stay in context
+   * (compaction bails on the same signal), so delayed extraction can cover them.
+   */
+  signal?: AbortSignal;
 }
 
 interface ImmediateExtractionSession {
@@ -3945,9 +3952,10 @@ export async function preCompactionFlush(
   modelId: string,
   chatId: string,
   removedMessages: ChatMessage[],
-  opts?: { projectId?: string }
+  opts?: { projectId?: string; signal?: AbortSignal }
 ): Promise<void> {
   const projectId = opts?.projectId;
+  const signal = opts?.signal;
 
   if (removedMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: no messages to process");
@@ -3995,6 +4003,7 @@ export async function preCompactionFlush(
     resolve,
     reject,
     preCompaction: { removedMessages: substantiveMessages },
+    signal,
   });
 
   void drainImmediateExtractionQueue(chatId);
@@ -4242,6 +4251,15 @@ async function processPreCompactionJob(
   const extractionSettings = opts.extractionSettings;
   const contextLabel = `preCompactionFlush chat=${job.chatId}`;
 
+  // A stop that landed while this job was queued skips it entirely. The
+  // removed messages remain in context because compaction bails on the same
+  // signal, so delayed extraction can still cover them.
+  if (job.signal?.aborted) {
+    console.log(`[memory] Pre-compaction flush for chat ${job.chatId} skipped — turn stopped`);
+    job.resolve();
+    return;
+  }
+
   // Same system prompt as immediate/mid-turn extraction — identical identity
   // key, so the flush continues the existing session and its cached prefix.
   const systemPrompt = await buildExtractionSystemPrompt(projectId);
@@ -4305,6 +4323,16 @@ async function processPreCompactionJob(
     });
     runHandle.attachOutput(result.rawOutput);
 
+    // Stop landed during the extraction call — drop the result rather than
+    // embedding/saving memories for an abandoned turn. Compaction will bail
+    // on the same signal before archiving, so nothing is lost from context.
+    if (job.signal?.aborted) {
+      console.log(`[memory] Pre-compaction flush for chat ${job.chatId} aborted before save — turn stopped`);
+      runHandle.complete({ facts: [], subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: { count: result.chunkCount, failures: result.chunkFailures, timingsMs: result.chunkTimingsMs }, jsonHealth: jsonHealthForResults(result.jsonHealth) });
+      job.resolve();
+      return;
+    }
+
     const chunksMeta = { count: result.chunkCount, failures: result.chunkFailures, timingsMs: result.chunkTimingsMs };
     const jsonHealthMeta = jsonHealthForResults(result.jsonHealth);
     const facts = result.facts;
@@ -4339,6 +4367,14 @@ async function processPreCompactionJob(
     if (!chatStillExists) {
       console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
       runHandle.complete({ facts, subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta, jsonHealth: jsonHealthMeta });
+      job.resolve();
+      return;
+    }
+
+    // Stop landing during the embedding batch also skips the save.
+    if (job.signal?.aborted) {
+      console.log(`[memory] Pre-compaction flush for chat ${job.chatId} aborted before save — turn stopped`);
+      runHandle.complete({ facts: [], subject: result.subjects[0], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0, chunks: chunksMeta, jsonHealth: jsonHealthMeta });
       job.resolve();
       return;
     }

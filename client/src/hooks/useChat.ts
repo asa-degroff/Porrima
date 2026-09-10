@@ -2172,16 +2172,19 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
 
   const abort = useCallback(async () => {
     if (chatId) {
+      // Always tell the server to stop. The local bgStreams entry can be
+      // missing while the server still has a pending turn (pre-stream setup:
+      // prompt construction, memory retrieval, compaction) or a live stream,
+      // and a plain local disconnect does not stop server-side generation.
+      try {
+        await apiStopChat(chatId);
+      } catch (err) {
+        console.error(`[chat] stop endpoint failed:`, err);
+      }
+
       const bg = bgStreams.get(chatId);
       if (bg) {
-        // First, call the server-side stop endpoint to immediately abort the agent loop
-        try {
-          await apiStopChat(chatId);
-        } catch (err) {
-          console.error(`[chat] stop endpoint failed:`, err);
-        }
-        
-        // Then abort the client-side SSE connection
+        // Abort the client-side SSE connection after the stop request lands.
         bg.abortController?.abort();
         bg.streaming = false;
         bgStreams.delete(chatId);

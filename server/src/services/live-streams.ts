@@ -73,6 +73,63 @@ export const activeStreams: Map<string, AbortController> =
   (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
 (globalThis as any)._activeChatStreams = activeStreams;
 
+/**
+ * Turn intents — registered synchronously at request entry (before the live
+ * stream exists) so /stop can abort a turn that is still doing pre-stream work:
+ * prompt construction, memory retrieval, pre-send compaction. Without this,
+ * stopping during that window found no controller, the client disconnected its
+ * SSE fetch (which by design does not stop a turn), and the model ran headless
+ * to completion.
+ *
+ * The controller is handed from the intent to installLiveStream, so the same
+ * signal covers the whole request. /stop aborts both the pending intent and the
+ * installed stream's controller.
+ */
+export interface PendingTurnIntent {
+  chatId: string;
+  abort: AbortController;
+  createdAt: number;
+}
+
+export const pendingTurnIntents: Map<string, PendingTurnIntent> =
+  (globalThis as any)._pendingChatTurnIntents || new Map<string, PendingTurnIntent>();
+(globalThis as any)._pendingChatTurnIntents = pendingTurnIntents;
+
+/**
+ * Register a turn intent for a chat. Call synchronously at the top of a route
+ * handler. When `res` is provided the intent is released when the response
+ * closes, so failed/early-return requests don't leave a stale entry behind.
+ */
+export function beginTurnIntent(chatId: string, res?: Response): PendingTurnIntent {
+  const intent: PendingTurnIntent = { chatId, abort: new AbortController(), createdAt: Date.now() };
+  // A newer request for the same chat supersedes an earlier still-pending one
+  // (mirrors installLiveStream replacing an existing stream). Without this the
+  // earlier request would keep working while /stop targeted only the newer
+  // intent.
+  const existing = pendingTurnIntents.get(chatId);
+  if (existing && !existing.abort.signal.aborted) {
+    existing.abort.abort();
+  }
+  pendingTurnIntents.set(chatId, intent);
+  if (res) {
+    (res as any)._turnIntent = intent;
+    res.on("close", () => {
+      if (pendingTurnIntents.get(chatId) === intent) {
+        pendingTurnIntents.delete(chatId);
+      }
+    });
+  }
+  return intent;
+}
+
+/** Abort the pending turn intent for a chat (used by /stop). */
+export function abortPendingTurnIntent(chatId: string): boolean {
+  const intent = pendingTurnIntents.get(chatId);
+  if (!intent) return false;
+  intent.abort.abort();
+  return true;
+}
+
 const LIVE_END_RETENTION_MS = 60_000;
 
 export function emitToStream(stream: LiveStream, chunk: string): void {
@@ -102,6 +159,12 @@ export function endLiveStream(chatId: string): void {
   const stream = liveStreams.get(chatId);
   if (!stream || stream.ended) return;
   stream.ended = true;
+  // Drop the abort alias immediately — retaining it through the reconnect
+  // retention window let /stop target a finished turn's controller (no-op) and
+  // report `stopped: true` while the next turn was still starting up.
+  if (activeStreams.get(chatId) === stream.abort) {
+    activeStreams.delete(chatId);
+  }
   for (const sub of stream.subscribers) {
     try { sub.res.end(); } catch {}
   }
@@ -148,7 +211,13 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
     endLiveStream(chatId);
   }
 
-  const abort = new AbortController();
+  // Prefer the turn intent registered at request entry (see beginTurnIntent)
+  // so an early /stop lands on the same controller this stream will expose.
+  const intent = (res as any)._turnIntent as PendingTurnIntent | undefined;
+  const abort = intent?.abort ?? new AbortController();
+  if (intent && pendingTurnIntents.get(chatId) === intent) {
+    pendingTurnIntents.delete(chatId);
+  }
   const primaryWrite = res.write.bind(res) as (chunk: string) => boolean;
 
   const stream: LiveStream = {

@@ -77,6 +77,8 @@ import {
   type LiveStreamSubscriber,
   liveStreams,
   activeStreams,
+  beginTurnIntent,
+  abortPendingTurnIntent,
   emitToStream,
   detachSubscriber,
   endLiveStream,
@@ -120,11 +122,11 @@ function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
 function preCompactionFlushHook(
   chat: Chat,
   errorLabel: string,
-): (removed: ChatMessage[]) => Promise<void> {
-  return async (removed: ChatMessage[]): Promise<void> => {
+): (removed: ChatMessage[], signal?: AbortSignal) => Promise<void> {
+  return async (removed: ChatMessage[], signal?: AbortSignal): Promise<void> => {
     if (!isMemoryAugmentedChatType(chat.type) || removed.length === 0) return;
     try {
-      await preCompactionFlush(chat.modelId, chat.id, removed, { projectId: chat.projectId });
+      await preCompactionFlush(chat.modelId, chat.id, removed, { projectId: chat.projectId, signal });
     } catch (err) {
       console.error(`[compaction] ${errorLabel}:`, err);
     }
@@ -417,6 +419,18 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.socket?.setNoDelay(true);
   installLiveStream(res, req, chatId);
   res.write(`: connected\n\n`);
+}
+
+/**
+ * Abort signal covering the whole HTTP turn request. Before the live stream
+ * exists this is the pending turn intent's controller (registered at request
+ * entry via beginTurnIntent); after installLiveStream claims the intent it is
+ * the same controller the live stream exposes. Undefined only for requests
+ * that never registered an intent (e.g. headless callers).
+ */
+function turnRequestSignal(res: Response): AbortSignal | undefined {
+  const intent = (res as any)._turnIntent as { abort?: AbortController } | undefined;
+  return intent?.abort?.signal;
 }
 
 function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string) {
@@ -1156,10 +1170,12 @@ async function handleChatStream(
   // turn's stream.
   liveStream.buildResync = () => buildResyncPayload();
   const connectionAbortController = liveStream.abort;
-  let connectionClosed = false;
-  connectionAbortController.signal.addEventListener("abort", () => {
-    connectionClosed = true;
-  });
+  let connectionClosed = connectionAbortController.signal.aborted;
+  if (!connectionClosed) {
+    connectionAbortController.signal.addEventListener("abort", () => {
+      connectionClosed = true;
+    }, { once: true });
+  }
 
   const MAX_ITERATIONS = 500;
 
@@ -1896,12 +1912,18 @@ async function handleChatStream(
       });
   }
 
-  // Create a turn-level abort controller to prevent signal bleeding across iterations
-  // Also abort the turn when the client disconnects (SSE close)
+  // Create a turn-level abort controller to prevent signal bleeding across iterations.
+  // A stop that landed before the stream existed (pending turn intent) leaves the
+  // connection signal already aborted — propagate that to the turn immediately
+  // instead of waiting for a future abort event that will never fire.
   const turnAbortController = new AbortController();
-  connectionAbortController.signal.addEventListener("abort", () => {
+  if (connectionAbortController.signal.aborted) {
     turnAbortController.abort();
-  });
+  } else {
+    connectionAbortController.signal.addEventListener("abort", () => {
+      turnAbortController.abort();
+    }, { once: true });
+  }
 
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
@@ -3067,11 +3089,18 @@ async function handleChatStream(
 
     // If the last turn ended with toolUse but no final text, continue the loop
     // This handles cases where the LLM signaled tool use but didn't produce the final text response
-    if (state.incompleteToolTurn && !askUserRef.current && iterations < MAX_ITERATIONS) {
+    if (state.incompleteToolTurn && !connectionClosed && !askUserRef.current && iterations < MAX_ITERATIONS) {
       console.log(`[chat] incomplete tool turn detected - continuing loop for final text`);
 
       // Continue the agent loop from current context (no new user message, just resume)
       const continueAbortController = new AbortController();
+      // A /stop must stop continuation too — unwired, the aborted main loop
+      // would gracefully exit and this loop would issue a fresh LLM call.
+      if (connectionAbortController.signal.aborted) {
+        continueAbortController.abort();
+      } else {
+        connectionAbortController.signal.addEventListener("abort", () => continueAbortController.abort(), { once: true });
+      }
 
       // Track if continuation produces any content
       let continuationProducedContent = false;
@@ -3186,11 +3215,18 @@ async function handleChatStream(
     // Stranded tool call recovery: if the model stopped with stopReason="stop" but
     // its thinking block contained drafted tool-call syntax that never materialized
     // as a structured call, continue the turn to let the model emit the real calls.
-    if (state.strandedToolCall && !askUserRef.current && iterations < MAX_ITERATIONS) {
+    if (state.strandedToolCall && !connectionClosed && !askUserRef.current && iterations < MAX_ITERATIONS) {
       console.log(`[chat] stranded tool call recovery: continuing turn to let model emit structured tool calls`);
       console.log(`[chat] stranded thinking preview: ${state.thinkingText.slice(0, 200).replace(/\n/g, ' ')}...`);
 
       const strandedAbortController = new AbortController();
+      // Same stop wiring as the incomplete-tool-turn continuation: recovery
+      // must not issue LLM calls or execute tools after /stop.
+      if (connectionAbortController.signal.aborted) {
+        strandedAbortController.abort();
+      } else {
+        connectionAbortController.signal.addEventListener("abort", () => strandedAbortController.abort(), { once: true });
+      }
       let strandedProducedSomething = false;
       // The main loop staged the stranded assistant row as a possible final
       // message. Once recovery begins that row is known-stale; the recovered
@@ -3367,7 +3403,7 @@ async function handleChatStream(
     const MAX_COMPACTION_CYCLES = 5;
     let compactionCycle = 0;
 
-    while (state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && compactionCycle < MAX_COMPACTION_CYCLES) {
+    while (state.needsMidTurnCompaction && !connectionClosed && !askUserRef.current && !waitingForInput && compactionCycle < MAX_COMPACTION_CYCLES) {
       compactionCycle++;
       state.needsMidTurnCompaction = false;
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: saving progress and compacting`);
@@ -3432,6 +3468,7 @@ async function handleChatStream(
             systemPrompt,
             agentTools,
             isAgent ? preCompactionFlushHook(chat, "mid-turn pre-flush failed") : undefined,
+            connectionAbortController.signal,
           );
           if (compaction?.truncated) {
             console.log(
@@ -3588,7 +3625,11 @@ async function handleChatStream(
       };
       liveWireContextRef.current = resumeContext.messages;
       const resumeAbortController = new AbortController();
-      connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort());
+      if (connectionAbortController.signal.aborted) {
+        resumeAbortController.abort();
+      } else {
+        connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort(), { once: true });
+      }
 
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: resuming agent loop with ${resumeMessages.length} messages`);
 
@@ -3787,7 +3828,10 @@ async function handleChatStream(
     // either run (flag cleared) or the turn is ending (recovery skipped on
     // MAX_ITERATIONS / pending input), and compacting a finished turn is
     // always safe.
-    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
+    //
+    // A stopped turn is the exception: /stop must not trigger compaction (and
+    // the pre-archive memory flush it runs) for a turn the user abandoned.
+    if (!connectionClosed && !state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
       // The agent loop is over — the next main-model call is at earliest the
       // follow-up re-acquire below. If end-of-turn compaction fires, its
       // flush/summary/index work and the prompt rebuild's memory retrieval
@@ -3859,6 +3903,7 @@ async function handleChatStream(
             hitContextLimit,
             estimatedTokens,
             selectedPath: pressure.selectedPath,
+            signal: connectionAbortController.signal,
             emitCompacting: () => {
               compactingActive = true;
               res.write(`event: compacting\ndata: {}\n\n`);
@@ -3954,6 +3999,7 @@ async function handleChatStream(
     // Cancelled waits (abort while queued) leave the message in the queue for
     // the replacing turn to drain; nothing is lost by bailing here.
     if (
+      !connectionClosed &&
       options.leaseRef && !options.leaseRef.current &&
       !askUserRef.current && !waitingForInput && messageQueue.peek(chat.id)
     ) {
@@ -3962,7 +4008,10 @@ async function handleChatStream(
       options.leaseRef.current = followUpLease;
     }
 
-    const queuedFollowUp = await messageQueue.drainOne(chat.id);
+    // After an explicit stop, leave queued messages queued — starting a fresh
+    // turn in a request the user just cancelled is exactly the "agent keeps
+    // going" behavior /stop is meant to prevent. They drain on the next send.
+    const queuedFollowUp = connectionClosed ? null : await messageQueue.drainOne(chat.id);
     if (queuedFollowUp && !askUserRef.current && !waitingForInput) {
       console.log(`[chat] post-loop: found queued follow-up message ${queuedFollowUp.id}, processing`);
       if (isChatDeleted(chat.id)) {
@@ -4107,8 +4156,9 @@ async function handleChatStream(
       await snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity, liveWireContextRef.current);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
-      // Generate a brief recap for long assistant messages (agent/project/system chats only)
-      if ((chat.type === "agent" || chat.type === "system") && logicalAssistantContent.length > RECAP_THRESHOLD && !assistantMsg.recap) {
+      // Generate a brief recap for long assistant messages (agent/project/system chats only).
+      // Skipped for a stopped turn — no point spending an LLM call on an abandoned response.
+      if (!connectionClosed && (chat.type === "agent" || chat.type === "system") && logicalAssistantContent.length > RECAP_THRESHOLD && !assistantMsg.recap) {
         try {
           const recap = await generateRecap(logicalAssistantContent);
           if (recap) {
@@ -4129,7 +4179,8 @@ async function handleChatStream(
       // target for those updates.
       // state.pendingFinalAssistantMessage is only set for non-toolUse stops,
       // so this naturally excludes tool-use iterations (already handled mid-turn).
-      if (state.pendingFinalAssistantMessage && !waitingForInput && !state.needsMidTurnCompaction) {
+      // Stopped turns are excluded too: the partial exchange was abandoned.
+      if (!connectionClosed && state.pendingFinalAssistantMessage && !waitingForInput && !state.needsMidTurnCompaction) {
         passiveRecall?.schedule({
           iteration: iterations,
           stopReason: "stop",
@@ -4144,9 +4195,10 @@ async function handleChatStream(
       // device that initiated this turn (if any deviceId was supplied) is
       // suppressed; presence-tracked devices are also skipped server-side.
       // System chats (synthesis, wake) are never user-facing — skip them.
+      // A stopped turn never notifies: there is no complete reply to announce.
       // Use the generated recap as the notification body when available,
       // falling back to truncated content.
-      if (chat.id !== "system" && !currentTurnIsHidden && !waitingForInput && logicalAssistantContent.trim()) {
+      if (!connectionClosed && chat.id !== "system" && !currentTurnIsHidden && !waitingForInput && logicalAssistantContent.trim()) {
         const initiatingDeviceId = (req.body as any)?.deviceId;
         const pushBody = assistantMsg.recap || truncateForBody(logicalAssistantContent);
         sendPush(
@@ -4230,8 +4282,10 @@ async function handleChatStream(
       // which left long tool loops invisible until completion and dropped
       // runs from ask_user/error turns.)
 
-      // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
-      if (!currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
+      // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference).
+      // Skipped for a stopped turn: the user abandoned this exchange, and extraction would keep
+      // running (and burn the CPU extraction servers) after the stop.
+      if (!connectionClosed && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
         // Wait for any in-flight mid-turn pulse so the shared immediate
         // extraction session history is settled before the turn-completion
         // extraction enqueues. This also lets a failed pulse roll back its
@@ -4241,9 +4295,11 @@ async function handleChatStream(
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
       // Run any deferred extractions from mid-loop follow-ups
-      for (const deferred of deferredExtractions) {
-        enqueueImmediateExtraction(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg, chat.projectId)
-          .catch((err) => console.error("[memory] deferred extraction failed:", err));
+      if (!connectionClosed) {
+        for (const deferred of deferredExtractions) {
+          enqueueImmediateExtraction(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg, chat.projectId)
+            .catch((err) => console.error("[memory] deferred extraction failed:", err));
+        }
       }
       deferredExtractions.length = 0;
     }
@@ -4357,6 +4413,10 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "chatId and message (or images) are required" });
   }
 
+  // Register the turn intent before any await so /stop can abort pre-stream
+  // work (prompt construction, memory retrieval, pre-send compaction) too.
+  beginTurnIntent(chatId, res);
+
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
@@ -4445,7 +4505,7 @@ router.post("/", async (req, res) => {
       // The flush runs as a pre-archive hook so removed messages are
       // extracted (continuing the cached extraction session) before archiving;
       // memories are available when the next buildSplitAugmentedPrompt runs.
-      const result = await triggerCompaction(chat, contextWindow, compactSystemPrompt, compactTools, preCompactionFlushHook(chat, "/compact flush failed"));
+      const result = await triggerCompaction(chat, contextWindow, compactSystemPrompt, compactTools, preCompactionFlushHook(chat, "/compact flush failed"), turnRequestSignal(res));
       if (result && result.truncated) {
         // Soft reset of memory context (doc §10.4) — the next buildSplitAugmentedPrompt
         // call runs Case 3: frozen section retained, new memories as delta rows.
@@ -4749,6 +4809,7 @@ router.post("/", async (req, res) => {
             toolsForEstimate(chat, effectiveContextWindow),
             { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed (resume)"),
+            turnRequestSignal(res),
           );
           if (compaction && compaction.truncated) {
             await saveChat(chat, { allowTruncation: true });
@@ -4966,6 +5027,7 @@ router.post("/", async (req, res) => {
             toolsForEstimate(chat, effectiveContextWindow),
             { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed"),
+            turnRequestSignal(res),
           );
           if (compaction && compaction.truncated) {
             await saveChat(chat, { allowTruncation: true });
@@ -5183,6 +5245,8 @@ router.post("/artifact-error", async (req, res) => {
     return res.status(400).json({ error: "Invalid artifactId" });
   }
 
+  beginTurnIntent(report.chatId, res);
+
   const chat = await getChat(report.chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
   if (!(chat.type === "agent" || chat.type === "system")) {
@@ -5390,11 +5454,17 @@ router.post("/stop", async (req, res) => {
     return res.status(400).json({ error: "chatId is required" });
   }
 
+  // Abort both registries: a turn doing pre-stream work (prompt construction,
+  // pre-send compaction) has only a pending intent, while an already-generated
+  // turn has a live stream. A stale, ended stream is never in activeStreams
+  // (endLiveStream drops it immediately) so a stop can no longer "succeed"
+  // against a finished turn while a new one is starting.
   const controller = activeStreams.get(chatId);
+  const pending = abortPendingTurnIntent(chatId);
 
-  if (controller) {
-    controller.abort();
-    console.log(`[chat] stop: aborted stream for chat ${chatId}`);
+  if (controller || pending) {
+    controller?.abort();
+    console.log(`[chat] stop: aborted ${controller ? "stream" : "pending turn"} for chat ${chatId}`);
     res.json({ stopped: true });
   } else {
     console.log(`[chat] stop: no active stream found for chat ${chatId}`);
@@ -5457,6 +5527,8 @@ router.post("/edit", async (req, res) => {
   if (!chatId || (messageIndex == null && messageSequence == null) || !message) {
     return res.status(400).json({ error: "chatId, messageIndex/messageSequence, and message are required" });
   }
+
+  beginTurnIntent(chatId, res);
 
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
@@ -5621,6 +5693,7 @@ router.post("/edit", async (req, res) => {
           undefined,
           { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
           preCompactionFlushHook(chat, "pre-send flush failed (edit)"),
+          turnRequestSignal(res),
         );
         if (compaction && compaction.truncated) {
           await saveChat(chat, { allowTruncation: true });

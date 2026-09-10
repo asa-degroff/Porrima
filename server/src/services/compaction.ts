@@ -857,10 +857,16 @@ export async function truncateBeforeSend(
   tools?: unknown,
   exactTokenOptions?: { baseUrl?: string; modelId?: string; timeoutMs?: number },
   /** See truncateChatHistory — runs before archive/index generation. */
-  onBeforeArchive?: (removedMessages: ChatMessage[]) => Promise<void>,
+  onBeforeArchive?: (removedMessages: ChatMessage[], signal?: AbortSignal) => Promise<void>,
+  /** See truncateChatHistory — checked before work, before the flush, and before archive/index. */
+  signal?: AbortSignal,
 ): Promise<CompactionResult | null> {
   const noOp = null;
   const messages = chat.messages;
+  if (signal?.aborted) {
+    console.log(`[compaction] Skipping pre-send compaction for chat ${chat.id} — turn stopped`);
+    return noOp;
+  }
   if (messages.length <= 2) return noOp;
 
   const exactEstimate = await estimateContextTokensWithExactToolResults(messages, systemPrompt, tools, {
@@ -869,6 +875,12 @@ export async function truncateBeforeSend(
     phase: "pre_send",
     contextWindow,
   });
+  // The exact-tool-result tokenization can take a while (per-result HTTP);
+  // re-check before planning/mutating anything.
+  if (signal?.aborted) {
+    console.log(`[compaction] Pre-send compaction aborted during estimation for chat ${chat.id} — turn stopped`);
+    return noOp;
+  }
   const estimatedTokens = exactEstimate.estimatedTokens;
   const displayTokens = exactEstimate.refinedTokens;
   const hardCapTokens = exactEstimate.hardCapTokens;
@@ -941,7 +953,7 @@ export async function truncateBeforeSend(
     // Too few in-context messages to compact conventionally; still run the
     // hard-cap pass so the breach is logged (and, if forcible, aggressively
     // truncated via truncateChatHistory).
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools, undefined, signal);
   }
 
   // Per-message token estimates for in-context messages.
@@ -1120,7 +1132,7 @@ export async function truncateBeforeSend(
     // Budget planning says keep everything AND no split occurred — nothing to
     // archive on this pass. Run the hard-cap pass so it can force aggressive
     // compaction if the actual payload still exceeds the cap.
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools, undefined, signal);
   }
 
   // Collect removed messages for archiving. Deep-copy each message so that
@@ -1172,8 +1184,14 @@ export async function truncateBeforeSend(
   // Pre-archive hook (memory extraction of the removed window). Deferred-mode
   // archiving doesn't hit the extraction server synchronously, but running
   // extraction first keeps ordering consistent with the other paths.
-  if (onBeforeArchive && removedMessages.length > 0) {
-    await onBeforeArchive(removedMessages);
+  if (onBeforeArchive && removedMessages.length > 0 && !signal?.aborted) {
+    await onBeforeArchive(removedMessages, signal);
+  }
+
+  // Stop landed during the flush — bail before the archive/index mutation.
+  if (signal?.aborted) {
+    console.log(`[compaction] Pre-send compaction aborted after pre-archive flush for chat ${chat.id} — turn stopped`);
+    return null;
   }
 
   // Archive in deferred mode — mechanical descriptions now, LLM enrichment
@@ -1290,7 +1308,7 @@ export async function truncateBeforeSend(
   // payload fits. Handles cases where the budget planning used a scale factor
   // that under-counted (e.g., tool schemas bloat the real payload beyond
   // what char estimation sees).
-  const additional = await hardCapSafetyPass(chat, contextWindow, systemPrompt, undefined, onKeepalive, tools, onBeforeArchive);
+  const additional = await hardCapSafetyPass(chat, contextWindow, systemPrompt, undefined, onKeepalive, tools, onBeforeArchive, signal);
   if (additional && additional.truncated) {
     return {
       truncated: true,
@@ -1326,8 +1344,10 @@ async function hardCapSafetyPass(
   onCompacting?: () => void,
   onKeepalive?: () => void,
   tools?: unknown,
-  onBeforeArchive?: (removedMessages: ChatMessage[]) => Promise<void>,
+  onBeforeArchive?: (removedMessages: ChatMessage[], signal?: AbortSignal) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<CompactionResult | null> {
+  if (signal?.aborted) return null;
   const breakdown = estimateContextBreakdown(chat.messages, systemPrompt, tools);
   const charEstimate = breakdown.pathBTokens;
   const hardCapEstimate = estimateHardCapTokens(
@@ -1360,7 +1380,7 @@ async function hardCapSafetyPass(
   // archives properly and generates index summaries.
   // truncateChatHistory fires onCompacting internally when it starts marking
   // messages, so don't double-fire from here.
-  const aggressive = await truncateChatHistory(chat, contextWindow, true, onCompacting, onKeepalive, undefined, systemPrompt, tools, onBeforeArchive);
+  const aggressive = await truncateChatHistory(chat, contextWindow, true, onCompacting, onKeepalive, undefined, systemPrompt, tools, onBeforeArchive, signal);
   if (!aggressive.truncated) {
     console.error(
       `[compaction] Aggressive compaction failed to reduce context further. ` +
@@ -1960,9 +1980,21 @@ export async function truncateChatHistory(
    * the removed window while the extraction server's cached prompt from
    * mid-turn pulses is still hot (index generation would evict it).
    */
-  onBeforeArchive?: (removedMessages: ChatMessage[]) => Promise<void>,
+  onBeforeArchive?: (removedMessages: ChatMessage[], signal?: AbortSignal) => Promise<void>,
+  /**
+   * Turn cancellation signal. Compaction is uninterruptible at the LLM-call
+   * level, so the signal is checked at the safe boundaries: before any work,
+   * before the pre-archive memory flush, and again before archive/index
+   * generation (after which the mutation must run to completion to stay
+   * consistent).
+   */
+  signal?: AbortSignal,
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
+  if (signal?.aborted) {
+    console.log(`[compaction] Skipping compaction for chat ${chat.id} — turn stopped`);
+    return noOp;
+  }
   const messages = chat.messages;
   if (messages.length <= 1) return noOp;  // Need at least 2 total messages
 
@@ -2240,8 +2272,16 @@ export async function truncateChatHistory(
   // archive/index generation so it can continue the extraction session's
   // cached prompt — index generation uses the same single slot and would
   // evict the cache.
-  if (onBeforeArchive && removedMessages.length > 0) {
-    await onBeforeArchive(removedMessages);
+  if (onBeforeArchive && removedMessages.length > 0 && !signal?.aborted) {
+    await onBeforeArchive(removedMessages, signal);
+  }
+
+  // A stop that landed during the flush (or right before it) bails here. The
+  // archive/index step below mutates chat.messages and must run to completion
+  // once started, or the removed window would be duplicated on the next pass.
+  if (signal?.aborted) {
+    console.log(`[compaction] Compaction aborted after pre-archive flush for chat ${chat.id} — turn stopped`);
+    return noOp;
   }
 
   // Archive removed messages and generate indexed summary (post-response
@@ -2368,12 +2408,17 @@ export async function triggerCompaction(
   contextWindow: number,
   systemPrompt?: string,
   tools?: unknown,
-  onBeforeArchive?: (removedMessages: ChatMessage[]) => Promise<void>,
+  onBeforeArchive?: (removedMessages: ChatMessage[], signal?: AbortSignal) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<CompactionResult | null> {
+  if (signal?.aborted) {
+    console.log(`[compaction] Manual compaction skipped for chat ${chat.id} — turn stopped`);
+    return null;
+  }
   console.log(`[compaction] Manual compaction triggered for chat ${chat.id}`);
 
   // Use truncateChatHistory with forceCompact=true
-  const result = await truncateChatHistory(chat, contextWindow, true, undefined, undefined, undefined, systemPrompt, tools, onBeforeArchive);
+  const result = await truncateChatHistory(chat, contextWindow, true, undefined, undefined, undefined, systemPrompt, tools, onBeforeArchive, signal);
   
   if (result.truncated) {
     console.log(`[compaction] Manual compaction complete: removed ${result.removedCount} messages (~${result.estimatedTokenCount} est. tokens)`);

@@ -245,6 +245,9 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       undefined,
       undefined,
       tools,
+      undefined,
+      undefined,
+      emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
       console.log(
@@ -335,6 +338,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       estimatedTokens: estimateContextTokens(chat.messages, systemPrompt, tools),
       systemPrompt,
       tools,
+      signal: emitter.stream.abort.signal,
       logOnly: true,
       logPrefix: `[automation:${task.id}]`,
     });

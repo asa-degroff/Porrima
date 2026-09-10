@@ -200,6 +200,34 @@ describe("mid-turn extraction behavior", () => {
     expect(mockState.fetch).toHaveBeenCalled();
   });
 
+  it("skips a pre-compaction flush whose turn was stopped before it ran", async () => {
+    const { preCompactionFlush } = await import("../services/memory-extraction.js");
+    const chatId = "chat-flush-aborted";
+    mockState.getChat.mockResolvedValue({ ...makeChat(), id: chatId });
+    mockState.fetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        throw new Error("completion should not be called for a stopped flush");
+      }
+      return jsonResponse({ default_generation_settings: { n_ctx: 16384 } });
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await preCompactionFlush(
+      "chat-model",
+      chatId,
+      [{ role: "assistant", content: "Abandoned task state before compaction.", timestamp: 3 }],
+      { projectId: "project-1", signal: controller.signal },
+    );
+
+    const completionCalls = mockState.fetch.mock.calls.filter(([input]) =>
+      String(input).endsWith("/v1/chat/completions"),
+    );
+    expect(completionCalls).toHaveLength(0);
+    expect(mockState.addMemory).not.toHaveBeenCalled();
+  });
+
   it("continues the immediate extraction session for pre-compaction flushes", async () => {
     const { preCompactionFlush } = await import("../services/memory-extraction.js");
     const captured: Array<{ system: string; user: string }> = [];

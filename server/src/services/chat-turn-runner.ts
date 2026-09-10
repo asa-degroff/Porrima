@@ -398,6 +398,14 @@ export async function runHeadlessChatTurn(
     tools,
   };
   const controller = new AbortController();
+  // /stop targets activeStreams, which for a headless run holds the emitter's
+  // stream controller. Link it here so synthesis/wake/automation turns actually
+  // cancel instead of generating to completion in the background.
+  if (emitter.stream.abort.signal.aborted) {
+    controller.abort();
+  } else {
+    emitter.stream.abort.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
   let timedOut = false;
   let timeoutReason: string | undefined;
   const timeout = setTimeout(() => {
@@ -950,6 +958,8 @@ export async function runHeadlessChatTurn(
           emitter.state.finalUsage?.totalTokens,
           systemPrompt,
           tools,
+          undefined,
+          controller.signal,
         );
         if (!compaction?.truncated) {
           console.warn(

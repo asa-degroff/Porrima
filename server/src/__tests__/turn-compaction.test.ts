@@ -144,6 +144,25 @@ describe("runEndOfTurnCompaction — phase 2a move (doc §4.4, exit criteria §7
     );
   });
 
+  it("stopped turn (signal already aborted): no check, no truncate, no save, no aftermath", async () => {
+    const chat = makeChat();
+    const controller = new AbortController();
+    controller.abort();
+    const onCompacted = vi.fn();
+    const r = await runEndOfTurnCompaction({
+      chat,
+      contextWindow: 100_000,
+      lastUsage: 99_000,
+      estimatedTokens: 99_000,
+      signal: controller.signal,
+      onCompacted,
+    });
+    expect(r).toEqual({ triggered: false, truncated: false, drivingTokens: 0, ratio: 0 });
+    expect(h.truncateCalls).toHaveLength(0);
+    expect(h.saveChatCalls).toHaveLength(0);
+    expect(onCompacted).not.toHaveBeenCalled();
+  });
+
   it("fires on the refined estimate alone (max() semantics); aftermath gets both counts", async () => {
     const chat = makeChat(); // 10 messages, 3 out-of-context → remaining 7
     h.truncateResult = { truncated: true, removedCount: 5 };
