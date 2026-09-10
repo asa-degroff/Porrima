@@ -230,7 +230,7 @@ export type AutomationKind = "synthesis" | "wake" | "custom";
 export type AutomationScheduleType = "interval" | "daily" | "once";
 export type AutomationActivationPolicy = "idle" | "absent" | "manual_only";
 export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";
-export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
+export type AutomationRunStatus = "running" | "success" | "failed" | "skipped" | "interrupted";
 
 export interface AutomationSchedule {
   type: AutomationScheduleType;

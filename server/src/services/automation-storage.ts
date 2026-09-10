@@ -814,6 +814,7 @@ export function updateAutomationPromptCursor(id: string, nextPromptStepId: strin
 
 export function startAutomationRun(taskId: string, origin: AutomationRun["origin"]): AutomationRun {
   ensureSchema();
+  const db = getDb();
   const run: AutomationRun = {
     id: uuidv4(),
     taskId,
@@ -821,12 +822,29 @@ export function startAutomationRun(taskId: string, origin: AutomationRun["origin
     origin,
     startedAt: new Date().toISOString(),
   };
-  getDb()
-    .prepare(
+
+  // Mark-fired-at-start: a once-scheduled task's terminal state is written in
+  // the same transaction that opens the run. A crash mid-run then cannot re-fire
+  // it; a graceful failure re-arms it in finishAutomationRun. The disarm lever
+  // is `enabled`, never `nextRunAt` — taskIsDue() treats a missing nextRunAt as
+  // always-due, so nulling it on an enabled task would arm it permanently.
+  const reserve = db.transaction(() => {
+    const task = getAutomationTask(taskId);
+    if (task && task.schedule.type === "once") {
+      insertTask({
+        ...task,
+        enabled: false,
+        archived: true,
+        nextRunAt: undefined,
+        updatedAt: run.startedAt,
+      });
+    }
+    db.prepare(
       `INSERT INTO automation_runs (id, taskId, status, origin, startedAt)
        VALUES (@id, @taskId, @status, @origin, @startedAt)`,
-    )
-    .run(run);
+    ).run(run);
+  });
+  reserve();
   return run;
 }
 
@@ -917,13 +935,16 @@ export function finishAutomationRun(
           : task.consecutiveFailures ?? 0;
       const shouldDisable =
         isFailure && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
-      // Once-schedule tasks self-disable and self-archive after success
+      // Once-scheduled tasks are disarmed at start (mark-fired-at-start).
+      // Success leaves them archived (terminal); a graceful failure re-arms
+      // them with backoff unless the failure ceiling wins.
       const isOnce = task.schedule.type === "once";
       const onceDisable = isOnce && isSuccess;
+      const onceReArm = isOnce && isFailure && !shouldDisable;
       insertTask({
         ...task,
-        enabled: (shouldDisable || onceDisable) ? false : task.enabled,
-        archived: onceDisable ? true : task.archived,
+        enabled: (shouldDisable || onceDisable) ? false : onceReArm ? true : task.enabled,
+        archived: onceDisable ? true : onceReArm ? false : task.archived,
         lastRunAt: isSuccess ? finishedAt : task.lastRunAt,
         nextRunAt: (shouldDisable || onceDisable)
           ? undefined
@@ -944,9 +965,55 @@ export function finishAutomationRun(
       if (onceDisable) {
         console.log(`[automation] One-time task ${task.id} completed, archived`);
       }
+      if (onceReArm) {
+        console.log(
+          `[automation] One-time task ${task.id} failed, re-armed for retry ` +
+          `(${consecutiveFailures} consecutive failure${consecutiveFailures === 1 ? "" : "s"})`,
+        );
+      }
     }
   }
   return run;
+}
+
+/**
+ * Startup hygiene for the pre-mark-fired-at-start orphan state: runs left in
+ * `running` (finishedAt = null) by a killed process, and once-tasks still armed
+ * despite such a run. Marks the rows `interrupted` and archives the tasks. No
+ * scheduler gate reads automation_runs, so this changes run history only.
+ */
+export function sweepOrphanedAutomationRuns(): number {
+  ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  const orphans = db.prepare(
+    "SELECT id, taskId FROM automation_runs WHERE status = 'running'",
+  ).all() as Array<{ id: string; taskId: string }>;
+  if (orphans.length === 0) return 0;
+
+  const sweep = db.transaction(() => {
+    const markInterrupted = db.prepare(
+      "UPDATE automation_runs SET status = 'interrupted', finishedAt = ? WHERE id = ? AND status = 'running'",
+    );
+    for (const orphan of orphans) {
+      markInterrupted.run(now, orphan.id);
+      const task = getAutomationTask(orphan.taskId);
+      if (task && task.schedule.type === "once" && task.enabled) {
+        insertTask({
+          ...task,
+          enabled: false,
+          archived: true,
+          nextRunAt: undefined,
+          lastStatus: "interrupted",
+          updatedAt: now,
+        });
+        console.log(`[automation] Archived orphaned once-task ${task.id} after an interrupted run`);
+      }
+    }
+  });
+  sweep();
+  console.log(`[automation] Marked ${orphans.length} orphaned run(s) interrupted`);
+  return orphans.length;
 }
 
 export function getAutomationRun(id: string): AutomationRun | null {

@@ -44,7 +44,7 @@ import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
 import { initializeExtractionPrompt } from "./services/extraction-prompt-store.js";
 import { createSystemChat } from "./services/system-chat.js";
-import { ensureAutomationDefaults } from "./services/automation-storage.js";
+import { ensureAutomationDefaults, sweepOrphanedAutomationRuns } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
 import { initSshMux, destroyAllMasters } from "./services/workspace.js";
 import { logStorageMigrationDiagnostics } from "./services/storage-diagnostics.js";
@@ -115,6 +115,9 @@ await initializeExtractionPrompt();
 // Create system chat for synthesis/reflection
 await createSystemChat();
 await ensureAutomationDefaults();
+// Mark runs orphaned by a killed process as interrupted (and archive any
+// still-armed once-task they belong to) before the scheduler starts.
+sweepOrphanedAutomationRuns();
 
 // One-shot migration: move agent notebook JSON files into memory_blocks.
 // Idempotent — does nothing once the JSON files are in the .backup/ folder.
