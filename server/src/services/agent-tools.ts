@@ -315,21 +315,16 @@ const SCHEDULE_CHAT_MESSAGE_TOOL: Tool = {
   name: "schedule_chat_message",
   description:
     "Post a message into another chat as a visible, attributed note from you. " +
-    "The post lands in the target thread as a user-role row wrapped in a provenance " +
-    "envelope naming you and the origin chat (`[<your name> from <origin title> — <time>]`), " +
-    "so it never impersonates the user. " +
     "Omit `when` to deliver immediately; pass an ISO 8601 timestamp at least 2 minutes " +
-    "ahead to schedule delivery. Set `wake: true` to have the target thread's own agent " +
+    "ahead to schedule delivery. Set `wake: true` to have the target thread " +
     "run a continue turn after the post lands (it wakes with that chat's context; it " +
-    "fires on the next scheduler tick plus the idle grace, not immediately). Write the " +
-    "text conditionally — \"if X is not done, do X; else verify and record why not\" — " +
-    "so a duplicate or repeated delivery is harmless. Use list_chats to discover targets.",
+    "fires on the next scheduler tick plus the idle grace, not immediately).",
   parameters: Type.Object({
     targetChat: Type.String({ description: "Target chat id or a unique title fragment (agent/system chats only)" }),
     message: Type.String({ description: "The message body to deliver to the target thread" }),
     subject: Type.Optional(Type.String({ description: "Short subject line shown after the provenance envelope" })),
     when: Type.Optional(Type.String({ description: "ISO 8601 delivery time at least 2 minutes in the future. Omit to deliver immediately (or to wake as soon as the scheduler allows).", format: "date-time" })),
-    wake: Type.Optional(Type.Boolean({ description: "Wake the target thread: its agent runs a continue turn after the post lands. Not immediate — next scheduler tick plus idle grace." })),
+    wake: Type.Optional(Type.Boolean({ description: "Wake the target thread: its agent runs a continue turn after the post lands." })),
   }),
 };
 
