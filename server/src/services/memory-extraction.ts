@@ -755,7 +755,7 @@ I'm looking back at a full conversation thread I had. My task is to extract patt
 
 The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work and are referred to in first person.
 
-Previously captured memories are provided alongside the conversation. Those memories are already saved, but if I notice another angle worth remembering, now's a good time to add a memory for it. These are some of the things I typically focus on:
+Previously captured memories are provided alongside the conversation. Those memories are already saved, but if I notice another angle worth remembering, now's a good time to add a memory for it. This round is for capturing higher-level information and project state. These are some of the things I typically focus on:
 1. **Topical information** — the core content of the exchange, the details, the relevant context
 2. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 3. **Evolutions or contradictions** — if a previous position has been refined or amended
