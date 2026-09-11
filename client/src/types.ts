@@ -174,7 +174,9 @@ export interface ChatMessage {
   _crossChatPost?: CrossChatPostMetadata;
   /** Empty assistant placeholder inserted when the user sends a steering message.
    *  While set, streaming deltas from the pre-steering generation are not applied here
-   *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
+   *  (they land on the previous assistant msg via message_complete). Consumed by
+   *  follow_up_start — either cleared in place or dropped when a tool-loop
+   *  continuation placeholder already occupies the tail slot. */
   _steeringPending?: boolean;
   /** Groups canonical split assistant rows that belong to one visible assistant turn. */
   _toolLoopId?: string;

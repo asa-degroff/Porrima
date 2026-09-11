@@ -9,6 +9,7 @@ import {
   getQueuedMessagesForChat,
   setCachedChat,
 } from "../lib/db";
+import { applyFollowUpStart, isEmptyAssistantPlaceholder } from "../lib/steeringPlaceholders";
 import type { Chat } from "../types";
 
 /** Server-reported position in the global turn queue (single GPU slot) */
@@ -301,14 +302,7 @@ function withLiveAssistantForReconnect(messages: ChatMessage[], bg: BackgroundSt
   const lastIsInFlightRow =
     last?.role === "assistant" &&
     !last._isCompactionSummary &&
-    (last._inProgress ||
-      (!last.content &&
-        !last.thinking &&
-        !last.toolCalls?.length &&
-        !last.segments?.length &&
-        !last.artifacts?.length &&
-        !last.generatedImages?.length &&
-        !last.visuals?.length));
+    (last._inProgress || isEmptyAssistantPlaceholder(last));
   if (last?.role === "assistant" && !last._isCompactionSummary && !lastIsInFlightRow) {
     const placeholder = makeAssistantPlaceholder(bg);
     placeholder._toolLoopId = last._toolLoopId;
@@ -1490,29 +1484,20 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         }
       },
       onFollowUpStart: (_data) => {
-        // The server has picked up a queued message. If the client already
-        // inserted a steering placeholder (via send() while streaming), just
-        // clear its pending flag so deltas start flowing into it. Otherwise
-        // this is a pure follow-up (e.g. queued while offline) — add a fresh
-        // placeholder.
+        // The server has picked up a queued message. The optimistic steering
+        // placeholder inserted by send() owns the empty bubble the drained
+        // response will stream into. A tool-loop `message_complete`
+        // (continues: true) may have appended a continuation placeholder
+        // after it when the enqueue raced the previous turn boundary; the
+        // transition below reuses that live tail slot and drops the stale
+        // steering row instead of stacking empty bubbles. With no
+        // placeholder at all (e.g. queued while offline) it adds one.
         onQueueCountDeltaRef.current?.(streamChatId, -1);
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
         bg.inferenceActivityPhase = "prefill";
 
-        const last = bg.messages[bg.messages.length - 1];
-        if (last?.role === "assistant" && last._steeringPending) {
-          const { _steeringPending, ...cleared } = last;
-          void _steeringPending;
-          bg.messages = [...bg.messages.slice(0, -1), cleared];
-        } else {
-          const placeholder: ChatMessage = {
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-          };
-          bg.messages = [...bg.messages, placeholder];
-        }
+        bg.messages = applyFollowUpStart(bg.messages);
 
         if (activeChatIdRef.current === streamChatId) {
           setInferenceActivityPhase("prefill");
