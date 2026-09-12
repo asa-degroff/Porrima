@@ -82,8 +82,7 @@ import {
   abortPendingTurnIntent,
   emitToStream,
   detachSubscriber,
-  endLiveStream,
-  closeLiveSSE,
+  closeLiveSSEIfCurrent,
   installLiveStream,
   stampStreamPresence,
   buildAttachFrames,
@@ -406,9 +405,11 @@ function queuedMessageToChatMessage(queued: QueuedUserMessage): ChatMessage {
 /**
  * Initialize an SSE response: write headers, disable Nagle, install the live
  * stream, and emit a keepalive. Idempotent — safe to call before pre-send
- * compaction and again inside handleChatStream.
+ * compaction and again inside handleChatStream. Returns the stream bound to
+ * this response (even if a newer turn has since replaced the registry entry),
+ * for ownership-guarded teardown.
  */
-function ensureSSEStream(res: Response, req: Request, chatId: string) {
+function ensureSSEStream(res: Response, req: Request, chatId: string): LiveStream {
   if (!res.headersSent) {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -418,8 +419,9 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
     });
   }
   res.socket?.setNoDelay(true);
-  installLiveStream(res, req, chatId);
+  const stream = installLiveStream(res, req, chatId);
   res.write(`: connected\n\n`);
+  return stream;
 }
 
 /**
@@ -1071,8 +1073,7 @@ async function acquireTurnGate(
   req: Request,
   res: Response,
 ): Promise<TurnLease | null> {
-  ensureSSEStream(res, req, chat.id);
-  const stream = liveStreams.get(chat.id)!;
+  const stream = ensureSSEStream(res, req, chat.id);
 
   // Resync while queued: a client attaching to this stream before the lease
   // is acquired sees the current queue position. The turn's builder replaces
@@ -1105,11 +1106,7 @@ async function acquireTurnGate(
     // Aborted while queued: /stop, or installLiveStream replaced this stream
     // when a newer turn for the same chat arrived.
     console.log(`[turn-gate] queued turn for chat ${chat.id} cancelled while waiting`);
-    if (liveStreams.get(chat.id) === stream) {
-      closeLiveSSE(chat.id, res);
-    } else if (!res.writableEnded) {
-      try { res.end(); } catch {}
-    }
+    closeLiveSSEIfCurrent(stream, res);
     return null;
   }
 }
@@ -1155,21 +1152,22 @@ async function handleChatStream(
   // Ensure SSE headers are set and the live-stream registry is wired up.
   // Idempotent: a caller that ran pre-send compaction already installed the
   // live stream; a second call here is a no-op for the registry and just
-  // re-flushes a keepalive.
-  ensureSSEStream(res, req, chat.id);
+  // re-flushes a keepalive. Capture the returned stream as this request's
+  // teardown handle — re-looking it up by chatId could later resolve to a
+  // newer turn's stream.
+  const liveStream = ensureSSEStream(res, req, chat.id);
 
-  // Reuse the live stream's abort controller so that the grace timer and
-  // /stop endpoint share a single cancellation signal. `connectionClosed` is
-  // only flipped when the stream is genuinely aborted (grace expired, /stop,
-  // or server-initiated), NOT on transient client disconnect — the live
-  // stream keeps generation running while a refreshing client reconnects.
-  const liveStream = liveStreams.get(chat.id)!;
   // Resync on attach: a client connecting mid-turn (refresh, silent
   // reconnect, another device) receives a snapshot of the uncommitted tail
   // built from this closure's accumulators. Installed here — the stream
   // exists from ensureSSEStream above. Replaced wholesale by the next
   // turn's stream.
   liveStream.buildResync = () => buildResyncPayload();
+  // Reuse the live stream's abort controller so that the grace timer and
+  // /stop endpoint share a single cancellation signal. `connectionClosed` is
+  // only flipped when the stream is genuinely aborted (grace expired, /stop,
+  // or server-initiated), NOT on transient client disconnect — the live
+  // stream keeps generation running while a refreshing client reconnects.
   const connectionAbortController = liveStream.abort;
   let connectionClosed = connectionAbortController.signal.aborted;
   if (!connectionClosed) {
@@ -4425,8 +4423,13 @@ async function handleChatStream(
       try { await titleGenerationPromise; } catch { /* logged upstream */ }
     }
 
-    endLiveStream(chat.id);
-    res.end();
+    // Ownership-guarded teardown: end this turn's stream only if it is still
+    // the registry's current stream. If a newer turn already replaced it
+    // (e.g. this turn stalled on a slow mid-turn pulse while the next turn
+    // started), closing the newer stream here would EOF its subscribers
+    // without a done event — the client shows "no response received from
+    // model" while the newer turn keeps generating headless.
+    closeLiveSSEIfCurrent(liveStream, res);
   }
 }
 
@@ -4486,7 +4489,7 @@ router.post("/", async (req, res) => {
     // flow while model discovery, memory retrieval, index generation, and the
     // (CPU) extraction model run. Without this, the client's fetch() could hang
     // without bytes long enough to trip its inactivity timeout.
-    ensureSSEStream(res, req, chat.id);
+    const compactStream = ensureSSEStream(res, req, chat.id);
     res.write(`event: compacting\ndata: {}\n\n`);
 
     let contextWindow = 0;
@@ -4603,7 +4606,7 @@ router.post("/", async (req, res) => {
         res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: confirmText })}\n\n`);
         await stampAssistantCompletion(chat);
         res.write(`event: done\ndata: ${JSON.stringify({ message: confirmMsg })}\n\n`);
-        closeLiveSSE(chat.id, res);
+        closeLiveSSEIfCurrent(compactStream, res);
         return;
       }
     } else {
@@ -4619,7 +4622,7 @@ router.post("/", async (req, res) => {
       res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: skipMsg.content })}\n\n`);
       await stampAssistantCompletion(chat);
       res.write(`event: done\ndata: ${JSON.stringify({ message: skipMsg })}\n\n`);
-      closeLiveSSE(chat.id, res);
+      closeLiveSSEIfCurrent(compactStream, res);
       return;
     }
   }

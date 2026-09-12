@@ -187,6 +187,37 @@ export function closeLiveSSE(chatId: string, res: Response): void {
 }
 
 /**
+ * End a live stream only if it is still the one registered for its chat.
+ *
+ * The registry is keyed by chatId, so a superseded turn's late teardown must
+ * not call endLiveStream(chatId) unconditionally: if a newer turn has taken
+ * over the chat, that would mark the newer turn's stream ended and close its
+ * subscribers without a done event — the client reports "Connection lost — no
+ * response received from model" while the newer turn keeps generating headless.
+ * Owners that hold a specific stream (a turn's finally, a synthesis emitter)
+ * should use this instead.
+ *
+ * Returns true when the stream was still current and got ended.
+ */
+export function endLiveStreamIfCurrent(stream: LiveStream): boolean {
+  if (liveStreams.get(stream.chatId) !== stream) return false;
+  endLiveStream(stream.chatId);
+  return true;
+}
+
+/**
+ * Close this request's SSE response: end the live stream only when it is
+ * still current, then end the response itself. A superseded request ends only
+ * its own response — the new turn's stream and subscribers are left alone.
+ */
+export function closeLiveSSEIfCurrent(stream: LiveStream, res: Response): void {
+  endLiveStreamIfCurrent(stream);
+  if (!res.writableEnded) {
+    try { res.end(); } catch {}
+  }
+}
+
+/**
  * Install the live-stream plumbing on a response. Patches res.write to route
  * through emitToStream (fan-out), registers a primary subscriber, and sets up
  * grace-on-disconnect. Replaces any existing live stream for this chat
@@ -198,7 +229,10 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
     // arrived after a reconnect or a second installLiveStream invocation.
     const dev = readDeviceId(_req);
     if (dev) markPresence(dev, "sse");
-    return liveStreams.get(chatId)!;
+    // Return the stream this response installed, not whatever is currently
+    // registered — a newer turn may already have replaced the registry entry,
+    // and callers use the return value for ownership-guarded teardown.
+    return ((res as any)._liveStream as LiveStream | undefined) ?? liveStreams.get(chatId)!;
   }
 
   // If a prior live stream exists for this chat (e.g., a dropped connection
@@ -248,6 +282,7 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
   });
 
   (res as any)._liveStreamInstalled = true;
+  (res as any)._liveStream = stream;
 
   // Stamp push-presence so message-complete dispatch knows this device is
   // currently watching the stream and should be suppressed.

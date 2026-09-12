@@ -11,7 +11,7 @@ import type {
 import {
   type LiveStream,
   emitToStream,
-  endLiveStream,
+  endLiveStreamIfCurrent,
   installHeadlessLiveStream,
 } from "./live-streams.js";
 
@@ -341,15 +341,16 @@ export class SynthesisEmitter {
 
   /**
    * Close the underlying live stream. Always call this — even on error — so
-   * subscribers see EOF and the registry cleans up. It's safe to call multiple
-   * times; endLiveStream is idempotent.
+   * subscribers see EOF and the registry cleans up. Ownership-guarded: if a
+   * user turn has since replaced this headless stream for the same chat,
+   * this teardown is a no-op for the newer turn's stream.
    */
   end(): void {
     if (this.keepaliveInterval) {
       clearInterval(this.keepaliveInterval);
       this.keepaliveInterval = null;
     }
-    endLiveStream(this.stream.chatId);
+    endLiveStreamIfCurrent(this.stream);
   }
 }
 
