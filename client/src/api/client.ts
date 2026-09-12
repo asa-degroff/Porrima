@@ -1233,12 +1233,14 @@ export interface MemoryPage {
 export async function fetchMemoriesPage(options: {
   sortBy?: string;
   category?: string;
+  durability?: string;
   limit?: number;
   offset?: number;
 } = {}): Promise<MemoryPage> {
   const params = new URLSearchParams();
   if (options.sortBy) params.set("sortBy", options.sortBy);
   if (options.category && options.category !== "all") params.set("category", options.category);
+  if (options.durability && options.durability !== "all") params.set("durability", options.durability);
   params.set("limit", String(options.limit ?? 100));
   params.set("offset", String(options.offset ?? 0));
 

@@ -1323,11 +1323,20 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   };
 }
 
-export async function getMemoryCount(options: { category?: string } = {}): Promise<number> {
+export async function getMemoryCount(options: { category?: string; durability?: string } = {}): Promise<number> {
   const db = getDb();
-  const row = options.category
-    ? db.prepare("SELECT COUNT(*) as cnt FROM memories WHERE category = ?").get(options.category) as { cnt: number }
-    : db.prepare("SELECT COUNT(*) as cnt FROM memories").get() as { cnt: number };
+  const whereParts: string[] = [];
+  const params: string[] = [];
+  if (options.category) {
+    whereParts.push("category = ?");
+    params.push(options.category);
+  }
+  if (options.durability) {
+    whereParts.push("durability = ?");
+    params.push(options.durability);
+  }
+  const whereClause = whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "";
+  const row = db.prepare(`SELECT COUNT(*) as cnt FROM memories${whereClause}`).get(...params) as { cnt: number };
   return row.cnt;
 }
 
@@ -1380,16 +1389,20 @@ const SORT_CLAUSES: Record<MemorySortBy, string> = {
 
 export async function getAllMemories(
   sortBy: MemorySortBy = "created_at_desc",
-  options: { limit?: number; offset?: number; category?: string } = {}
+  options: { limit?: number; offset?: number; category?: string; durability?: string } = {}
 ): Promise<Omit<Memory, "embedding">[]> {
   const db = getDb();
   const orderClause = SORT_CLAUSES[sortBy] || SORT_CLAUSES.created_at_desc;
   const limit = options.limit;
   const offset = options.offset ?? 0;
-  const whereClause = options.category ? " WHERE category = ?" : "";
+  const whereParts: string[] = [];
+  if (options.category) whereParts.push("category = ?");
+  if (options.durability) whereParts.push("durability = ?");
+  const whereClause = whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "";
   const pageClause = limit !== undefined ? " LIMIT ? OFFSET ?" : "";
   const params: (string | number)[] = [];
   if (options.category) params.push(options.category);
+  if (options.durability) params.push(options.durability);
   if (limit !== undefined) params.push(limit, offset);
   const rows = db
     .prepare(

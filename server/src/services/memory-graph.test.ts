@@ -16,6 +16,7 @@ function memory(
     accessCount: 0,
     sourceChatId: "",
     embedding,
+    durability: "durable",
     ...overrides,
   };
 }
@@ -55,6 +56,18 @@ describe("memory graph builder", () => {
       { source: "old", target: "new", similarity: 1, type: "lineage" },
     ]);
     expect(graph.clusters).toHaveLength(2);
+  });
+
+  it("carries durability from entries to nodes", () => {
+    const graph = buildMemoryGraph(
+      [
+        memory("durable-one", [1, 0]),
+        memory("session-one", [0, 1], { durability: "session" }),
+      ],
+      { minSimilarity: 0.95, neighbors: 2 }
+    );
+    expect(graph.nodes.find((node) => node.id === "durable-one")?.durability).toBe("durable");
+    expect(graph.nodes.find((node) => node.id === "session-one")?.durability).toBe("session");
   });
 
   it("keeps memories without embeddings as isolated nodes", () => {

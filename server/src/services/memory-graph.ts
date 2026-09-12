@@ -1,4 +1,4 @@
-import type { MemoryCategory, MemorySourceType } from "../types.js";
+import type { MemoryCategory, MemoryDurability, MemorySourceType } from "../types.js";
 import {
   ensureMemoryGraphEdgesForIds,
   getDb,
@@ -33,6 +33,7 @@ export interface MemoryGraphEntry {
   sourceId?: string;
   supersededBy?: string;
   supersedes?: string;
+  durability: MemoryDurability;
   embedding?: number[];
 }
 
@@ -92,6 +93,7 @@ interface MemoryGraphRow {
   source_id: string | null;
   superseded_by: string | null;
   supersedes: string | null;
+  durability: string;
   embedding: Buffer | null;
 }
 
@@ -107,7 +109,7 @@ const RRF_K = 60;
 const GRAPH_ROW_FIELDS = `
   m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed,
   m.access_count, m.source_chat_id, m.project_id, m.source_type,
-  m.source_id, m.superseded_by, m.supersedes, v.embedding
+  m.source_id, m.superseded_by, m.supersedes, m.durability, v.embedding
 `;
 
 export async function getMemoryGraph(options: MemoryGraphOptions = {}): Promise<MemoryGraphData> {
@@ -206,6 +208,7 @@ export function buildMemoryGraph(
     ...(entry.sourceId ? { sourceId: entry.sourceId } : {}),
     ...(entry.supersededBy ? { supersededBy: entry.supersededBy } : {}),
     ...(entry.supersedes ? { supersedes: entry.supersedes } : {}),
+    durability: entry.durability,
     hasEmbedding: Boolean(entry.embedding?.length),
     clusterId: "",
   }));
@@ -483,6 +486,7 @@ function rowToGraphEntry(row: MemoryGraphRow): MemoryGraphEntry {
     ...(row.source_id ? { sourceId: row.source_id } : {}),
     ...(row.superseded_by ? { supersededBy: row.superseded_by } : {}),
     ...(row.supersedes ? { supersedes: row.supersedes } : {}),
+    durability: (row.durability || "durable") as MemoryDurability,
     ...(embedding ? { embedding } : {}),
   };
 }

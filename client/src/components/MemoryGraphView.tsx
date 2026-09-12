@@ -960,6 +960,7 @@ function MemoryGraphDetails({
             {node.category}
           </span>
           <span className="text-[10px] text-white/30">importance {node.importance}/10</span>
+          {node.durability === "session" && <span className="text-[9px] text-sky-300/70">session-scoped</span>}
           {node.supersededBy && <span className="text-[9px] text-amber-300/70">superseded</span>}
         </div>
         <p className="text-xs text-white/75 leading-relaxed whitespace-pre-wrap">{node.text}</p>

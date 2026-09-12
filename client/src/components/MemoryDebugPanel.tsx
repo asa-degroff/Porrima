@@ -163,6 +163,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const [memoryPage, setMemoryPage] = useState({ offset: 0, total: 0, hasMore: false });
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null);
   const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<string>("all");
+  const [memoryDurabilityFilter, setMemoryDurabilityFilter] = useState<string>("all");
   const [memorySortBy, setMemorySortBy] = useState<string>("created_at_desc");
   const [expandedLineage, setExpandedLineage] = useState<string | null>(null);
   const [lineageData, setLineageData] = useState<Record<string, MemoryLineage>>({});
@@ -172,23 +173,26 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const loadMemoryPage = useCallback(async ({
     sortBy = memorySortBy,
     category = memoryCategoryFilter,
+    durability = memoryDurabilityFilter,
     offset = 0,
     append = false,
   }: {
     sortBy?: string;
     category?: string;
+    durability?: string;
     offset?: number;
     append?: boolean;
   } = {}) => {
     const page = await fetchMemoriesPage({
       sortBy,
       category,
+      durability,
       limit: MEMORY_PAGE_SIZE,
       offset,
     });
     setMemoryResults((prev) => append ? [...prev, ...page.items] : page.items);
     setMemoryPage({ offset: page.offset + page.items.length, total: page.total, hasMore: page.hasMore });
-  }, [memoryCategoryFilter, memorySortBy]);
+  }, [memoryCategoryFilter, memoryDurabilityFilter, memorySortBy]);
 
   // Blocks tab state
   const [blocks, setBlocks] = useState<MemoryBlock[]>([]);
@@ -316,6 +320,15 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
     if (memorySearchQuery.trim()) return;
     setMemoryLoading(true);
     loadMemoryPage({ category: cat, offset: 0 })
+      .catch(() => {})
+      .finally(() => setMemoryLoading(false));
+  }, [loadMemoryPage, memorySearchQuery]);
+
+  const handleMemoryDurabilityFilterChange = useCallback((d: string) => {
+    setMemoryDurabilityFilter(d);
+    if (memorySearchQuery.trim()) return;
+    setMemoryLoading(true);
+    loadMemoryPage({ durability: d, offset: 0 })
       .catch(() => {})
       .finally(() => setMemoryLoading(false));
   }, [loadMemoryPage, memorySearchQuery]);
@@ -496,6 +509,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
               hasMore={memoryPage.hasMore}
               loadingMore={memoryLoadingMore}
               categoryFilter={memoryCategoryFilter}
+              durabilityFilter={memoryDurabilityFilter}
               sortBy={memorySortBy}
               expandedLineage={expandedLineage}
               lineageData={lineageData}
@@ -505,6 +519,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
               onDeleteMemory={handleDeleteMemory}
               onToggleLineage={handleToggleLineage}
               onCategoryFilterChange={handleMemoryCategoryFilterChange}
+              onDurabilityFilterChange={handleMemoryDurabilityFilterChange}
               onLoadMore={handleLoadMoreMemories}
             />
           )}
@@ -796,6 +811,7 @@ function MemoriesTab({
   loadingMore,
   deleting,
   categoryFilter,
+  durabilityFilter,
   sortBy,
   expandedLineage,
   lineageData,
@@ -805,6 +821,7 @@ function MemoriesTab({
   onDeleteMemory,
   onToggleLineage,
   onCategoryFilterChange,
+  onDurabilityFilterChange,
   onLoadMore,
 }: {
   memoryStatus: { memoryCount: number; lastSynthesis: string | null; embeddingModelAvailable: boolean } | null;
@@ -817,6 +834,7 @@ function MemoriesTab({
   loadingMore: boolean;
   deleting: string | null;
   categoryFilter: string;
+  durabilityFilter: string;
   sortBy: string;
   expandedLineage: string | null;
   lineageData: Record<string, MemoryLineage>;
@@ -826,6 +844,7 @@ function MemoriesTab({
   onDeleteMemory: (id: string) => void;
   onToggleLineage: (id: string) => void;
   onCategoryFilterChange: (cat: string) => void;
+  onDurabilityFilterChange: (d: string) => void;
   onLoadMore: () => void;
 }) {
   const sortDd = useDropdown();
@@ -879,6 +898,21 @@ function MemoriesTab({
                   {cat === "all" ? "All" : cat}
                 </button>
               ))}
+              <span className="w-px h-3.5 bg-white/10 mx-0.5" aria-hidden="true" />
+              {(["all", "durable", "session"] as const).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => onDurabilityFilterChange(d)}
+                  title={d === "all" ? "All memories" : d === "session" ? "Only session-scoped memories" : "Only durable memories"}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all pressable ${
+                    durabilityFilter === d
+                      ? "bg-sky-500/30 text-sky-200 border border-sky-400/30"
+                      : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
             </div>
           );
         })()}
@@ -915,7 +949,8 @@ function MemoriesTab({
           <p className="text-white/30 text-xs text-center py-4">No memories found</p>
         ) : (
           results
-            .filter((m) => categoryFilter === "all" || m.category === categoryFilter)
+            .filter((m) => (categoryFilter === "all" || m.category === categoryFilter)
+              && (durabilityFilter === "all" || (m.durability ?? "durable") === durabilityFilter))
             .map((memory) => {
               const isSuperseded = !!memory.supersededBy;
               const hasLineage = !!(memory.supersededBy || memory.supersedes);
@@ -971,6 +1006,14 @@ function MemoriesTab({
                     }`}>
                       {memory.category}
                     </span>
+                    {memory.durability === "session" && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-sky-500/20 text-sky-300"
+                        title="Session-scoped: only useful while its origin thread is active"
+                      >
+                        session
+                      </span>
+                    )}
                     <span className="text-[9px] text-white/25">importance: {memory.importance}/10</span>
                     {memory.score !== undefined && (
                       <span className="text-[9px] text-white/25">relevance: {(memory.score * 100).toFixed(0)}%</span>

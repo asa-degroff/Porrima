@@ -463,6 +463,9 @@ router.get("/", async (req, res) => {
   const category = typeof req.query.category === "string" && req.query.category !== "all"
     ? req.query.category
     : undefined;
+  const durability = typeof req.query.durability === "string" && (VALID_MEMORY_DURABILITIES as readonly string[]).includes(req.query.durability)
+    ? req.query.durability
+    : undefined;
   const limitRaw = Number.parseInt(req.query.limit as string, 10);
   const offsetRaw = Number.parseInt(req.query.offset as string, 10);
   const hasPagination = Number.isFinite(limitRaw) || Number.isFinite(offsetRaw);
@@ -471,8 +474,8 @@ router.get("/", async (req, res) => {
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 100, 1), 500);
     const offset = Math.max(Number.isFinite(offsetRaw) ? offsetRaw : 0, 0);
     const [memories, total] = await Promise.all([
-      getAllMemories(sortBy as any, { limit, offset, category }),
-      getMemoryCount({ category }),
+      getAllMemories(sortBy as any, { limit, offset, category, durability }),
+      getMemoryCount({ category, durability }),
     ]);
     res.json({
       items: memories,
@@ -484,7 +487,7 @@ router.get("/", async (req, res) => {
     return;
   }
 
-  const memories = await getAllMemories(sortBy as any, { category });
+  const memories = await getAllMemories(sortBy as any, { category, durability });
   res.json(memories);
 });
 

@@ -451,6 +451,41 @@ describe("memory durability", () => {
     }
   });
 
+  it("filters by durability in getAllMemories and getMemoryCount", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      const now = new Date().toISOString();
+      const mk = (id: string, durability: "durable" | "session", category: "fact" | "note" = "fact") =>
+        storage.addMemory({
+          id,
+          text: `Memory ${id}`,
+          category,
+          importance: 5,
+          durability,
+          embedding: new Array(storage.DEFAULT_VEC_DIMENSION).fill(0),
+          createdAt: now,
+          lastAccessed: now,
+          accessCount: 0,
+          subject: "",
+        });
+      await mk("m-durable-a", "durable");
+      await mk("m-durable-b", "durable", "note");
+      await mk("m-session-a", "session");
+      await mk("m-session-b", "session", "note");
+
+      const sessions = await storage.getAllMemories("created_at_desc", { durability: "session" });
+      expect(sessions.map((m) => m.id).sort()).toEqual(["m-session-a", "m-session-b"]);
+      expect(await storage.getMemoryCount({ durability: "session" })).toBe(2);
+      expect(await storage.getMemoryCount({ durability: "durable" })).toBe(2);
+      expect(await storage.getMemoryCount({ category: "note", durability: "session" })).toBe(1);
+      const combined = await storage.getAllMemories("created_at_desc", { category: "note", durability: "session" });
+      expect(combined.map((m) => m.id)).toEqual(["m-session-b"]);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds the durability column to a legacy database with a durable default", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
     try {
