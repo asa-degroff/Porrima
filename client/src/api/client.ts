@@ -325,6 +325,15 @@ const SSE_INACTIVITY_ERROR_MESSAGE =
   "Live response stream stopped sending updates — checking server state";
 
 /**
+ * Clean EOF from a chat SSE body without a done/error event: the server or an
+ * intermediary closed the connection mid-stream. The turn usually keeps
+ * running server-side, so the chat hook treats this as reconnect-eligible
+ * (GET /chat/reconnect reattaches to the live stream). Exported because the
+ * hook matches on the exact message.
+ */
+export const SSE_NO_RESPONSE_ERROR_MESSAGE = "Connection lost — no response received from model";
+
+/**
  * Read an SSE response body: parse events and forward them to callbacks.
  * Shared by both the POST send path and the GET reconnect path. Handles
  * inactivity timeout (aborting via `controller`), trailing buffer, and the
@@ -408,7 +417,7 @@ async function readSSEBody(
   console.log("[SSE] Stream ended, receivedDoneOrError:", receivedDoneOrError);
 
   if (!receivedDoneOrError) {
-    callbacks.onError("Connection lost — no response received from model");
+    callbacks.onError(SSE_NO_RESPONSE_ERROR_MESSAGE);
   }
 }
 

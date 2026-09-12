@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
@@ -1556,6 +1556,10 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         const isOfflineError = err.startsWith("__OFFLINE__:");
         const isConnectionError = err.startsWith("Connection error:");
         const isInactivityError = err.startsWith("__SSE_INACTIVITY__:");
+        // Clean EOF mid-stream (server/proxy closed the body without a
+        // done/error event). The turn usually keeps running server-side, so
+        // treat it like the other transport failures and reattach.
+        const isConnectionLostError = err === SSE_NO_RESPONSE_ERROR_MESSAGE;
         const displayErr = isInactivityError ? err.replace("__SSE_INACTIVITY__:", "") : err;
         const bg = bgStreams.get(streamChatId);
 
@@ -1593,10 +1597,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         // to the server stream so the in-progress response continues. The
         // client's own SSE inactivity timeout is a missing-bytes watchdog, not
         // a model failure; attempt recovery even if navigator.onLine is stale.
+        // A clean EOF without done/error gets the same treatment: the turn
+        // usually keeps running server-side.
         const shouldAttemptReconnect =
           bg &&
           serverLikelyHasStream &&
-          (isOfflineError || isConnectionError || isInactivityError) &&
+          (isOfflineError || isConnectionError || isInactivityError || isConnectionLostError) &&
           (navigator.onLine || isInactivityError);
 
         if (shouldAttemptReconnect) {
