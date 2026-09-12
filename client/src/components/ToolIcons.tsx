@@ -9,9 +9,20 @@ export type ToolIconName =
   | "bash"
   | "run_python"
   | "create_artifact"
+  | "update_artifact"
   | "save_memory"
   | "search_memory"
+  | "list_memory_blocks"
+  | "read_memory_block"
+  | "create_memory_block"
+  | "update_memory_block"
+  | "read_archived_context"
+  | "create_notebook_entry"
   | "ask_user"
+  | "schedule_reminder"
+  | "list_automations"
+  | "update_automation"
+  | "schedule_chat_message"
   | "web_fetch"
   | "web_search"
   | "search_conversation"
@@ -82,6 +93,13 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
       <path d="M15 14h4" />
     </svg>
   ),
+  update_artifact: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 8h18" />
+      <path d="m10 15.5 3.5-3.5 2 2-3.5 3.5-2.75.5Z" />
+    </svg>
+  ),
   save_memory: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <ellipse cx="12" cy="5" rx="7" ry="3" />
@@ -100,11 +118,81 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
       <path d="m18 18 3 3" />
     </svg>
   ),
+  list_memory_blocks: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M10 6h7a2 2 0 0 1 2 2v7" />
+      <rect x="4" y="9" width="12" height="12" rx="2" />
+      <path d="M4 14h12" />
+    </svg>
+  ),
+  read_memory_block: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M4 9h16" />
+      <path d="M8 13h8" />
+      <path d="M8 16h5" />
+    </svg>
+  ),
+  create_memory_block: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M4 9h16" />
+      <path d="M12 12v5M9.5 14.5h5" />
+    </svg>
+  ),
+  update_memory_block: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M4 9h16" />
+      <path d="m10.5 16.5 4-4 2 2-4 4-2.75.5Z" />
+    </svg>
+  ),
+  read_archived_context: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="3" y="4" width="18" height="5" rx="1" />
+      <path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9" />
+      <path d="M12 16.5v-4" />
+      <path d="m9.5 14.5 2.5-2.5 2.5 2.5" />
+    </svg>
+  ),
+  create_notebook_entry: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 7v14" />
+      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+    </svg>
+  ),
   ask_user: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M5 22V19H8A3 3 0 0 1 4 16V8A2 2 0 0 1 6 6H20A2 2 0 0 1 22 8V16A3 3 0 0 1 20 19H8Z" />
       <path d="M10.75 9.5A1.75 1.75 0 1 1 14.25 11.1C13.4 11.6 13 12.1 13 12.8" />
       <line x1="13" y1="15.5" x2="13.01" y2="15.5" />
+    </svg>
+  ),
+  schedule_reminder: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+    </svg>
+  ),
+  list_automations: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  ),
+  update_automation: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="10.5" cy="10.5" r="7" />
+      <path d="M10.5 7v3.5l2.5 1.5" />
+      <path d="m15.5 17.5 3.5-3.5 2 2-3.5 3.5-2.75.5Z" />
+    </svg>
+  ),
+  schedule_chat_message: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M5 22V19H8A3 3 0 0 1 4 16V8A2 2 0 0 1 6 6H20A2 2 0 0 1 22 8V16A3 3 0 0 1 20 19H8Z" />
+      <circle cx="12" cy="12.5" r="3.5" />
+      <path d="M12 10.5v2l1.5 1" />
     </svg>
   ),
   web_fetch: (props) => (
