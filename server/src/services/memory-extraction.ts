@@ -642,10 +642,10 @@ export function invalidateExtractionPrefixCache(): void {
  * information that stays useful outside it. Transient state must still be
  * captured — the label lets retrieval keep it local instead of dropping it.
  */
-const DURABILITY_FIELD_GUIDE = `  - "durability": "durable" or "session".
-    "session" = only useful while this thread is active — current step, open branches, mid-experiment values, next actions, pending decisions.
-    "durable" = still useful outside this thread — settled decisions, architecture facts, preferences, instructions, lessons, project relationships.
-    Ask: would this matter in a conversation a month from now? If not, mark it "session". Transient task state is still worth capturing — mark it, don't drop it.`;
+const DURABILITY_FIELD_GUIDE = `  - "durability": "durable" or "session" Use these rough guidelines, and save memories of both types.
+    "session" = useful while this thread is active — current step, open branches, mid-experiment values, test results, next actions, pending decisions.
+    "durable" = still useful in the distant future — settled decisions, architectural directions, preferences, instructions, lessons, project relationships.
+    Ask: would this make sense in a conversation a month from now? If not, mark it "session". Transient task state is still worth capturing — mark it as session, don't drop it.`;
 
 const EXTRACTION_INSTRUCTIONS = `---
 
