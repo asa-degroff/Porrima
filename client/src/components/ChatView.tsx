@@ -673,9 +673,11 @@ export function ChatView({
         <div className="mb-4 px-3 py-2 rounded-lg bg-purple-500/8 border border-purple-400/15 text-purple-300/80 text-xs flex items-center gap-2">
           <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
           <span>
-            {turnQueueInfo.activeChatId === "system"
-              ? "Waiting for system activity to finish…"
-              : "Waiting for another chat to finish…"}
+            {turnQueueInfo.activeKind === "cache-warm"
+              ? "Queued — waiting for cache warm-up to finish…"
+              : turnQueueInfo.activeChatId === "system"
+                ? "Queued — waiting for system activity to finish…"
+                : "Queued — waiting for another chat to finish…"}
             {turnQueueInfo.position > 1 ? ` (position ${turnQueueInfo.position})` : ""}
           </span>
         </div>

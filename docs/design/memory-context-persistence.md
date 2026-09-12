@@ -305,10 +305,17 @@ build is row-read-only and the frozen section is invariant under Case 3, so the
 warm bakes `stablePrefix + frozen section` — a byte-prefix of the concurrent
 turn's Case 3 prompt (worst case a warm miss; best case the turn rides the
 warmed prefix) — and the dirty mark (line 309) preserves the "next turn
-retrieves for the new message" contract either way. Decision at PR time:
-accept (matches the dirty-leak lean), or add a yield-to-waiters deferral in
-`drainQueue` — check `turnGateStatus(job.chatId)`, defer with 30s backoff as
-for automations — ~5 lines, closes the window without priority inversion.
+retrieves for the new message" contract either way.
+
+**Resolved (09-12):** `drainQueue` now acquires the same turn lease real turns
+use for the whole prefill (kind `cache-warm`, background priority, 60s
+heartbeat) and a foreground turn preempts a running background warm via
+`preemptBackgroundWarms()`. The residual window above is closed — the warm is
+never dispatched concurrently with a turn, and a send arriving mid-warm queues
+at the gate and renders the explicit queued state instead of the warm's prefill
+progress. (The old options were "accept" or the ~5-line yield-to-waiters
+deferral; the gate lease plus preemption keeps user priority without the
+priority inversion.)
 
 **Sub-case analysis (v1.1).** The change is dropping the `resetMemoryContext`
 call only; the trailing `invalidateMemoriesCache` stays, which preserves the

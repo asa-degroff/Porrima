@@ -681,8 +681,15 @@ export function extractSlotProgress(
 
   if (!candidates.length) return null;
 
+  // A request that owns a slot (enforced binding) must never be attributed
+  // another slot's progress. Before this fix a preferred slot that was not
+  // processing yet fell back to candidates[0] — with a cache warm racing the
+  // turn (or any other concurrent request), the turn's indicator then showed
+  // the other request's token counts. Until our slot picks the request up,
+  // the monitor stays at its initial "loading" emit; progress appears as
+  // soon as the slot is processing.
   const selected = preferredSlotId !== undefined
-    ? candidates.find((candidate) => candidate.slotId === preferredSlotId) ?? candidates[0]
+    ? candidates.find((candidate) => candidate.slotId === preferredSlotId) ?? null
     : candidates
         .filter((candidate) => candidate.processing)
         .sort((a, b) => (b.processedTokens ?? -1) - (a.processedTokens ?? -1))[0] ?? candidates[0];

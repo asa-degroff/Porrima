@@ -47,7 +47,8 @@ export type ReadAloudHandler = (text: string, options?: ReadAloudOptions) => voi
 export type ModelProgressPhase = "loading" | "prefill" | "generating";
 export type ModelProgressCacheState = "hot" | "partial" | "cold" | "unknown";
 export type ModelProgressConfidence = "matched-slot" | "inferred-active-slot" | "unknown";
-export type InferenceActivityPhase = "prefill" | "decode";
+/** queued = waiting for the GPU slot behind another turn or cache warm. */
+export type InferenceActivityPhase = "prefill" | "decode" | "queued";
 
 export interface ModelProgress {
   phase: ModelProgressPhase;
@@ -216,8 +217,15 @@ export interface TurnResyncPayload {
   compacting?: boolean;
   /** True when the turn is mid-thinking at snapshot time. */
   thinkingActive?: boolean;
-  /** Turn-gate queue position — present while this chat's turn is queued. */
-  queue?: { activeChatId: string | null; position: number; queuedCount: number };
+  /** Turn-gate queue position — present while this chat's turn is queued.
+   *  `activeKind` distinguishes a user chat from a background cache warm
+   *  (absent = chat). */
+  queue?: {
+    activeChatId: string | null;
+    activeKind?: "chat" | "system" | "cache-warm";
+    position: number;
+    queuedCount: number;
+  };
 }
 
 export interface Chat {

@@ -615,6 +615,17 @@ describe("extractSlotProgress", () => {
     expect(snapshot!.slotId).toBe(0);
   });
 
+  it("returns null when the preferred slot is not processing even if another slot is", () => {
+    // A concurrent request (e.g. a cache warm racing the turn) must never be
+    // reported as this request's prefill progress. Until the request's own
+    // slot starts, the monitor stays at its "loading" emit.
+    const payload = [
+      { id: 0, is_processing: true, n_prompt_tokens_processed: 3000, n_prompt_tokens: 10000 },
+      { id: 1, is_processing: false, n_prompt_tokens: 0 },
+    ];
+    expect(extractSlotProgress(payload, 1, 10000)).toBeNull();
+  });
+
   it("returns null when no slots are processing", () => {
     const payload = [
       { id: 0, is_processing: false, n_prompt_tokens: 0 },

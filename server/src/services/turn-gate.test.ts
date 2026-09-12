@@ -78,7 +78,7 @@ describe("turn-gate", () => {
   it("ignores stale or foreign lease releases", async () => {
     const first = await acquireTurn("chat-a");
     const second = acquireTurn("chat-b");
-    releaseTurn({ leaseId: "bogus", chatId: "chat-b", acquiredAt: Date.now(), lastHeartbeatAt: Date.now() });
+    releaseTurn({ leaseId: "bogus", chatId: "chat-b", kind: "chat", acquiredAt: Date.now(), lastHeartbeatAt: Date.now() });
     expect(getActiveTurn()?.chatId).toBe("chat-a");
     expect(getQueuedTurns()).toHaveLength(1);
 
@@ -110,6 +110,30 @@ describe("turn-gate", () => {
 
     releaseTurn(first);
     expect((await watcher).chatId).toBe("chat-c");
+    releaseTurn(getActiveTurn()!);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("serves foreground waiters before background waiters", async () => {
+    const first = await acquireTurn("chat-a");
+    const background = acquireTurn("__cache_warm__", {
+      kind: "cache-warm",
+      priority: "background",
+    });
+    const foreground = acquireTurn("chat-b");
+
+    // The foreground turn jumped the background warm's place in line.
+    expect(getQueuedTurns().map((t) => t.chatId)).toEqual(["chat-b", "__cache_warm__"]);
+
+    releaseTurn(first);
+    expect((await foreground).chatId).toBe("chat-b");
+    expect(getActiveTurn()?.kind).toBe("chat");
+
+    releaseTurn(getActiveTurn()!);
+    expect((await background).chatId).toBe("__cache_warm__");
+    // A background lease reports its kind so the client can label the wait.
+    expect(turnGateStatus("__cache_warm__")?.activeKind).toBe("cache-warm");
+
     releaseTurn(getActiveTurn()!);
     expect(isTurnGateBusy()).toBe(false);
   });

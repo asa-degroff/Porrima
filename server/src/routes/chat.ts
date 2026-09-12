@@ -38,7 +38,8 @@ import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor,
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
-import { acquireTurn, releaseTurn, heartbeatTurnLease, isTurnGateBusy, turnGateStatus, type TurnLease } from "../services/turn-gate.js";
+import { acquireTurn, releaseTurn, heartbeatTurnLease, isTurnGateBusy, turnGateStatus, type TurnLease, type TurnQueueInfo } from "../services/turn-gate.js";
+import { preemptBackgroundWarms } from "../services/cache-warm-queue.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
@@ -1077,14 +1078,16 @@ async function acquireTurnGate(
 
   // Resync while queued: a client attaching to this stream before the lease
   // is acquired sees the current queue position. The turn's builder replaces
-  // this one once handleChatStream starts.
-  let lastWaitingInfo: { activeChatId: string | null; position: number; queuedCount: number } | null = null;
+  // this one once handleChatStream starts. After the grant, lastWaitingInfo
+  // is cleared so an attach during pre-stream work (prompt rebuild, memory
+  // retrieval, compaction) does not resurrect the queued state.
+  let lastWaitingInfo: TurnQueueInfo | null = null;
   stream.buildResync = () => ({
     message: null,
-    queue: lastWaitingInfo ?? turnGateStatus(chat.id) ?? undefined,
+    queue: lastWaitingInfo ?? undefined,
   });
 
-  const emitWaiting = (info: { activeChatId: string | null; position: number; queuedCount: number }) => {
+  const emitWaiting = (info: TurnQueueInfo) => {
     lastWaitingInfo = info;
     try {
       res.write(`event: waiting\ndata: ${JSON.stringify(info)}\n\n`);
@@ -1094,7 +1097,12 @@ async function acquireTurnGate(
   };
 
   try {
-    return await withSSEKeepalive(res, async () => {
+    // A background cache warm holds the same gate. Abort it so this
+    // foreground turn takes the GPU as soon as the warm's connection unwinds
+    // instead of waiting out a full-context prefill. User-requested warms
+    // are never preempted and the turn queues behind them normally.
+    preemptBackgroundWarms(`turn for chat ${chat.id}`);
+    const lease = await withSSEKeepalive(res, async () => {
       const status = turnGateStatus(chat.id);
       if (status) emitWaiting(status);
       return await acquireTurn(chat.id, {
@@ -1102,6 +1110,16 @@ async function acquireTurnGate(
         onQueueUpdate: emitWaiting,
       });
     });
+    // Drop the queued indicator immediately on grant: pre-stream work can run
+    // for a while before the first model event, and the client should show
+    // the turn as active rather than still waiting.
+    lastWaitingInfo = null;
+    try {
+      res.write(`event: turn_start\ndata: ${JSON.stringify({ chatId: chat.id })}\n\n`);
+    } catch {
+      // Connection gone — the abort path cleans up.
+    }
+    return lease;
   } catch {
     // Aborted while queued: /stop, or installLiveStream replaced this stream
     // when a newer turn for the same chat arrived.

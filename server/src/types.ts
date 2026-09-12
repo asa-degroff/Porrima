@@ -166,8 +166,14 @@ export interface TurnResyncPayload {
    *  restarts its thinking timer instead of freezing the duration. */
   thinkingActive?: boolean;
   /** Turn-gate queue position — present while this chat's turn is queued
-   *  behind another (single GPU slot). */
-  queue?: { activeChatId: string | null; position: number; queuedCount: number };
+   *  behind another (single GPU slot). `activeKind` distinguishes a user chat
+   *  from a background cache warm (absent = chat). */
+  queue?: {
+    activeChatId: string | null;
+    activeKind?: "chat" | "system" | "cache-warm";
+    position: number;
+    queuedCount: number;
+  };
 }
 
 export interface Chat {

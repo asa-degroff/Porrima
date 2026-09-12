@@ -300,7 +300,10 @@ onCompaction?: (info: {
   onMessageComplete?: (message: any, meta?: { continues?: boolean; queuedMessageId?: string }) => void;
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
-  onWaiting?: (info: { activeChatId: string | null; position: number; queuedCount: number }) => void;
+  onWaiting?: (info: { activeChatId: string | null; activeKind?: "chat" | "system" | "cache-warm"; position: number; queuedCount: number }) => void;
+  /** The turn gate granted this chat the GPU slot: the queued state is over
+   *  even if pre-stream work delays the first model event. */
+  onTurnStart?: (data: { chatId: string }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
   /** State snapshot delivered when attaching to an in-flight stream — the
    *  turn's uncommitted tail, built from the server's live accumulators.
@@ -724,6 +727,9 @@ function processSSEEvent(
       break;
     case "waiting":
       callbacks.onWaiting?.(data);
+      break;
+    case "turn_start":
+      callbacks.onTurnStart?.(data);
       break;
     case "model_progress":
       callbacks.onModelProgress?.(data);

@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CACHE_WARM_TURN_ID,
   enqueueWarm,
   isCacheWarmOrLlamaRuntimeBusy,
+  preemptBackgroundWarms,
   schedulePostSynthesisWarms,
   slotHasActiveTask,
 } from "./cache-warm-queue.js";
+import { warmChatCache } from "./cache-warm.js";
 import { getSettings } from "./chat-storage.js";
 import { listActiveQueueChats } from "./message-queue.js";
-import { acquireTurn, getActiveTurn, releaseTurn } from "./turn-gate.js";
+import { acquireTurn, getActiveTurn, releaseTurn, turnGateStatus } from "./turn-gate.js";
 
 const warmMockState = vi.hoisted(() => ({
   calls: [] as string[],
@@ -319,5 +322,69 @@ describe("warm queue deferral (turn gate + queued messages)", () => {
       { timeout: 2000 },
     );
     await psPromise;
+  });
+});
+
+describe("warm preemption (foreground turns vs background warms)", () => {
+  it("holds the turn gate while warming, and a running background warm is preempted", async () => {
+    let warmStarted!: () => void;
+    const started = new Promise<void>((resolve) => { warmStarted = resolve; });
+    vi.mocked(warmChatCache).mockImplementationOnce(async (_chatId, options) => {
+      warmStarted();
+      await new Promise<void>((_, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new Error("preempted")), { once: true });
+      });
+      throw new Error("unreachable");
+    });
+
+    const warmPromise = enqueueWarm("chat-warm", "post-synthesis").catch((err) => err as Error);
+    await started;
+
+    // The warm holds the same lease real turns use, under its own identity.
+    const status = turnGateStatus();
+    expect(status?.activeChatId).toBe(CACHE_WARM_TURN_ID);
+    expect(status?.activeKind).toBe("cache-warm");
+
+    // A foreground turn queues behind it instead of dispatching concurrently.
+    const turnLease = acquireTurn("chat-user");
+    let granted = false;
+    void turnLease.then(() => { granted = true; });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(granted).toBe(false);
+
+    // Foreground arrival preempts the background warm; the queue's finally
+    // releases the lease and the turn is served.
+    expect(preemptBackgroundWarms()).toBe(1);
+    await expect(warmPromise).resolves.toBeInstanceOf(Error);
+    const lease = await turnLease;
+    expect(lease.chatId).toBe("chat-user");
+    releaseTurn(lease);
+    expect(getActiveTurn()).toBeNull();
+  });
+
+  it("does not preempt an explicit user-requested warm", async () => {
+    let warmStarted!: () => void;
+    let finishWarm!: () => void;
+    const started = new Promise<void>((resolve) => { warmStarted = resolve; });
+    const finished = new Promise<void>((resolve) => { finishWarm = resolve; });
+    vi.mocked(warmChatCache).mockImplementationOnce(async (chatId, options) => {
+      warmStarted();
+      await finished;
+      return {
+        warmed: true,
+        chatId,
+        targetKind: "chat",
+        modelId: "demo-model",
+        reason: options?.reason ?? "user-requested",
+        warmedAt: Date.now(),
+      };
+    });
+
+    const warmPromise = enqueueWarm("chat-user-warm", "user-requested");
+    await started;
+    expect(preemptBackgroundWarms()).toBe(0);
+
+    finishWarm();
+    await expect(warmPromise).resolves.toMatchObject({ warmed: true, chatId: "chat-user-warm" });
   });
 });

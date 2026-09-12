@@ -7,18 +7,30 @@ import { randomUUID } from "crypto";
 // concurrent turns collide on the single slot and fail with provider errors.
 // Every GPU-bound turn (user chats via POST /api/chat, /edit, artifact
 // repair, and automation/system-chat turns) acquires a lease here before
-// starting inference and releases it when the turn completes. Turns that
-// arrive while another turn holds the lease queue in FIFO order instead of
-// failing — the HTTP route keeps the client's SSE connection open and emits
-// `waiting` events until the lease is granted.
+// starting inference and releases it when the turn completes. Cache-warm
+// prefills acquire the same lease (kind "cache-warm", background priority)
+// so a warm and a turn never dispatch concurrently; a foreground turn
+// preempts a running background warm. Turns that arrive while another turn
+// holds the lease queue in FIFO order instead of failing — the HTTP route
+// keeps the client's SSE connection open and emits `waiting` events until
+// the lease is granted (then a `turn_start`).
 //
 // State lives on globalThis so tsx watch reloads don't drop an active lease
 // (same pattern as live-streams.ts).
 // ---------------------------------------------------------------------------
 
+/** What the lease belongs to. "cache-warm" is a background prefill that has
+ *  no chat of its own; the client labels the wait from it. */
+export type TurnLeaseKind = "chat" | "system" | "cache-warm";
+
+/** Foreground waiters (user turns) are served before background waiters
+ *  (cache warms) when both are queued at the gate. */
+export type TurnWaitPriority = "foreground" | "background";
+
 export interface TurnLease {
   leaseId: string;
   chatId: string;
+  kind: TurnLeaseKind;
   acquiredAt: number;
   /** Last activity touch. A lease whose heartbeat goes stale is treated as
    *  dead: its holder hung (e.g. a stalled stream read with bodyTimeout: 0)
@@ -30,6 +42,9 @@ export interface TurnLease {
 export interface TurnQueueInfo {
   /** Chat currently holding the lease, if any. */
   activeChatId: string | null;
+  /** Lease kind of the active holder — lets the client distinguish a user
+   *  chat from a background cache warm. */
+  activeKind?: TurnLeaseKind;
   /** 1-based queue position (the caller's own slot when already queued). */
   position: number;
   /** Total waiters currently queued. */
@@ -41,10 +56,17 @@ export interface AcquireTurnOptions {
   signal?: AbortSignal;
   /** Called on enqueue and whenever a waiter ahead is removed. */
   onQueueUpdate?: (info: TurnQueueInfo) => void;
+  /** Lease owner kind (default "chat"). */
+  kind?: TurnLeaseKind;
+  /** Foreground waiters are served before background waiters
+   *  (default "foreground"). */
+  priority?: TurnWaitPriority;
 }
 
 interface Waiter {
   chatId: string;
+  kind: TurnLeaseKind;
+  priority: TurnWaitPriority;
   enqueuedAt: number;
   resolve: (lease: TurnLease) => void;
   reject: (err: Error) => void;
@@ -84,19 +106,43 @@ function shortId(id: string): string {
   return id.length > 8 ? `${id.slice(0, 8)}...` : id;
 }
 
-function makeLease(chatId: string): TurnLease {
+function makeLease(chatId: string, kind: TurnLeaseKind): TurnLease {
   const now = Date.now();
-  return { leaseId: randomUUID(), chatId, acquiredAt: now, lastHeartbeatAt: now };
+  return { leaseId: randomUUID(), chatId, kind, acquiredAt: now, lastHeartbeatAt: now };
+}
+
+/** Omit the default "chat" kind from wire payloads/tests; the client treats
+ *  an absent kind as a user chat. */
+function reportedActiveKind(lease: TurnLease | null | undefined): TurnLeaseKind | undefined {
+  return lease && lease.kind !== "chat" ? lease.kind : undefined;
 }
 
 function notifyWaiters(): void {
   state.waiters.forEach((waiter, index) => {
     waiter.onQueueUpdate?.({
       activeChatId: state.active?.chatId ?? null,
+      activeKind: reportedActiveKind(state.active),
       position: index + 1,
       queuedCount: state.waiters.length,
     });
   });
+}
+
+/**
+ * Insert a waiter in front of any background waiters. User turns never queue
+ * behind cache warms that happened to reach the gate first.
+ */
+function enqueueWaiter(waiter: Waiter): void {
+  if (waiter.priority === "background") {
+    state.waiters.push(waiter);
+    return;
+  }
+  const firstBackground = state.waiters.findIndex((w) => w.priority === "background");
+  if (firstBackground === -1) {
+    state.waiters.push(waiter);
+  } else {
+    state.waiters.splice(firstBackground, 0, waiter);
+  }
 }
 
 /**
@@ -108,6 +154,8 @@ function notifyWaiters(): void {
  * queue drains instead of deadlocking behind a turn that will never finish.
  */
 export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promise<TurnLease> {
+  const kind = options?.kind ?? "chat";
+  const priority = options?.priority ?? "foreground";
   if (state.active && isStaleLease(state.active)) {
     const stale = state.active;
     console.warn(
@@ -117,7 +165,7 @@ export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promi
     releaseTurn(stale);
   }
   if (!state.active) {
-    state.active = makeLease(chatId);
+    state.active = makeLease(chatId, kind);
     console.log(`[turn-gate] granted turn to chat=${shortId(chatId)} (idle)`);
     return Promise.resolve(state.active);
   }
@@ -131,6 +179,8 @@ export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promi
 
     const waiter: Waiter = {
       chatId,
+      kind,
+      priority,
       enqueuedAt: Date.now(),
       resolve,
       reject,
@@ -150,9 +200,9 @@ export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promi
       signal.addEventListener("abort", waiter.onAbort, { once: true });
     }
 
-    state.waiters.push(waiter);
+    enqueueWaiter(waiter);
     console.log(
-      `[turn-gate] queued turn for chat=${shortId(chatId)} (position ${state.waiters.length}, active=${shortId(state.active!.chatId)})`,
+      `[turn-gate] queued turn for chat=${shortId(chatId)} (position ${state.waiters.indexOf(waiter) + 1}, active=${shortId(state.active!.chatId)})`,
     );
     notifyWaiters();
   });
@@ -184,7 +234,7 @@ export function releaseTurn(lease: TurnLease | null | undefined): void {
       waiter.signal.removeEventListener("abort", waiter.onAbort);
     }
     if (waiter.signal?.aborted) continue;
-    state.active = makeLease(waiter.chatId);
+    state.active = makeLease(waiter.chatId, waiter.kind);
     console.log(
       `[turn-gate] granted turn to chat=${shortId(waiter.chatId)} (${state.waiters.length} still queued)`,
     );
@@ -236,6 +286,7 @@ export function turnGateStatus(forChatId?: string): TurnQueueInfo | null {
   const ownIndex = forChatId ? state.waiters.findIndex((w) => w.chatId === forChatId) : -1;
   return {
     activeChatId: liveActive?.chatId ?? null,
+    activeKind: reportedActiveKind(liveActive),
     position: ownIndex >= 0 ? ownIndex + 1 : state.waiters.length + 1,
     queuedCount: state.waiters.length,
   };

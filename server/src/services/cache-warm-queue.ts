@@ -13,7 +13,7 @@
 import { isActive, waitForIdle } from "./llm-activity.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 import { isAutomationActive } from "./automation-lock.js";
-import { isTurnGateBusy } from "./turn-gate.js";
+import { acquireTurn, heartbeatTurnLease, isTurnGateBusy, releaseTurn, type TurnLease } from "./turn-gate.js";
 import { listActiveQueueChats } from "./message-queue.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
@@ -30,6 +30,16 @@ import { getDefaultServiceConfig, mergeServiceConfig } from "./llama-service-con
 
 export type CacheWarmReason = "user-requested" | "sleep-prewarm" | "post-synthesis";
 
+/** Synthetic gate identity for warm prefills. Warm jobs hold the same turn
+ *  lease real turns use, so a prefill is never dispatched concurrently with a
+ *  chat turn; the client recognizes the kind to label the wait. */
+export const CACHE_WARM_TURN_ID = "__cache_warm__";
+
+/** The gate treats a lease without a heartbeat as hung after 15 minutes; a
+ *  cold full-context prefill can legitimately run longer, so warm leases are
+ *  touched on this cadence while they hold the slot. */
+const WARM_LEASE_HEARTBEAT_MS = 60_000;
+
 export type CacheWarmJob =
   | {
       kind: "chat";
@@ -37,8 +47,13 @@ export type CacheWarmJob =
       chatId: string;
       /** Why this warm was enqueued */
       reason: CacheWarmReason;
-      /** Abort signal for timeout */
+      /** Caller's abort signal (optional). */
       signal?: AbortSignal;
+      /** Queue-owned controller so a foreground turn can preempt the job. */
+      abort: AbortController;
+      /** Caller signal combined with the queue controller — what the warm
+       *  itself and the gate wait actually listen to. */
+      effectiveSignal: AbortSignal;
       /** Resolve/reject the caller's promise when the job completes */
       resolve: (result: CacheWarmResult) => void;
       reject: (err: Error) => void;
@@ -47,6 +62,8 @@ export type CacheWarmJob =
       kind: "new-agent-chat-baseline";
       reason: CacheWarmReason;
       signal?: AbortSignal;
+      abort: AbortController;
+      effectiveSignal: AbortSignal;
       resolve: (result: CacheWarmResult) => void;
       reject: (err: Error) => void;
     };
@@ -116,6 +133,10 @@ interface PostSynthesisWarmPlan {
 // Public API
 // ---------------------------------------------------------------------------
 
+function composeAbortSignal(signal: AbortSignal | undefined, abort: AbortController): AbortSignal {
+  return signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+}
+
 /**
  * Enqueue a cache warm request. If the LLM is idle and no other warm is
  * in progress, the job runs immediately. Otherwise it queues behind any
@@ -129,7 +150,17 @@ export function enqueueWarm(
   signal?: AbortSignal,
 ): Promise<CacheWarmResult> {
   return new Promise((resolve, reject) => {
-    queue.push({ kind: "chat", chatId, reason, signal, resolve, reject });
+    const abort = new AbortController();
+    queue.push({
+      kind: "chat",
+      chatId,
+      reason,
+      signal,
+      abort,
+      effectiveSignal: composeAbortSignal(signal, abort),
+      resolve,
+      reject,
+    });
     drainQueue();
   });
 }
@@ -139,9 +170,36 @@ export function enqueueNewAgentChatBaselineWarm(
   signal?: AbortSignal,
 ): Promise<CacheWarmResult> {
   return new Promise((resolve, reject) => {
-    queue.push({ kind: "new-agent-chat-baseline", reason, signal, resolve, reject });
+    const abort = new AbortController();
+    queue.push({
+      kind: "new-agent-chat-baseline",
+      reason,
+      abort,
+      signal,
+      effectiveSignal: composeAbortSignal(signal, abort),
+      resolve,
+      reject,
+    });
     drainQueue();
   });
+}
+
+/**
+ * Abort the running background warm so a foreground turn can take the GPU
+ * without waiting out a full-context prefill. User-requested warms are never
+ * preempted (the user explicitly asked for them). Queued background jobs are
+ * left in place: they defer at the turn gate and run after the user's turn.
+ *
+ * Returns the number of running jobs aborted.
+ */
+export function preemptBackgroundWarms(reason = "foreground turn"): number {
+  if (mutex === "idle") return 0;
+  if (mutex.reason === "user-requested") return 0;
+  console.log(
+    `[cache-warm-queue] preempting ${mutex.reason} warm for ${jobTargetLabel(mutex)} (${reason})`,
+  );
+  mutex.abort.abort(new Error(`Preempted by ${reason}`));
+  return 1;
 }
 
 /**
@@ -459,13 +517,15 @@ async function drainQueue(): Promise<void> {
   // Acquire mutex
   mutex = job;
   let shouldDrainNext = true;
+  let lease: TurnLease | null = null;
+  let leaseHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   try {
     // If LLM is actively generating, wait for it to finish
     if (isActive()) {
       console.log(`[cache-warm-queue] waiting for LLM idle before warming ${jobTargetLabel(job)}`);
       try {
-        await waitForIdle(job.signal);
+        await waitForIdle(job.effectiveSignal);
       } catch (err) {
         // Aborted while waiting — reject the job
         job.reject(err instanceof Error ? err : new Error("Aborted waiting for idle"));
@@ -524,12 +584,27 @@ async function drainQueue(): Promise<void> {
     }
 
     // Check if the job was aborted while we were waiting
-    if (job.signal?.aborted) {
-      job.reject(job.signal.reason instanceof Error ? job.signal.reason : new Error("Aborted"));
+    if (job.effectiveSignal.aborted) {
+      job.reject(job.effectiveSignal.reason instanceof Error ? job.effectiveSignal.reason : new Error("Aborted"));
       mutex = "idle";
       drainQueue();
       return;
     }
+
+    // Hold the same lease user turns use for the whole prefill. Without this
+    // a turn arriving mid-warm acquires the free gate and dispatches its own
+    // request; llama.cpp then queues it behind the warm invisibly, and the
+    // turn's prefill monitor latches onto the warm's slot (showing the wrong
+    // progress). With the lease held, the turn queues at the gate and its
+    // client shows the real queued state. Background jobs also yield to
+    // foreground waiters via the lease priority, and a foreground arrival
+    // preempts this job through preemptBackgroundWarms().
+    lease = await acquireTurn(CACHE_WARM_TURN_ID, {
+      kind: "cache-warm",
+      priority: "background",
+      signal: job.effectiveSignal,
+    });
+    leaseHeartbeat = setInterval(() => heartbeatTurnLease(lease), WARM_LEASE_HEARTBEAT_MS);
 
     // Execute the warm — import lazily to avoid circular deps
     console.log(`[cache-warm-queue] warming ${jobTargetLabel(job)} (reason: ${job.reason})`);
@@ -537,11 +612,11 @@ async function drainQueue(): Promise<void> {
     const result = job.kind === "new-agent-chat-baseline"
       ? await warmNewAgentChatBaselineCache({
         reason: job.reason,
-        signal: job.signal,
+        signal: job.effectiveSignal,
       })
       : await warmChatCache(job.chatId, {
         reason: job.reason,
-        signal: job.signal,
+        signal: job.effectiveSignal,
       });
 
     // If the result was a queued warm but the actual warm function detected
@@ -564,6 +639,8 @@ async function drainQueue(): Promise<void> {
   } catch (err) {
     job.reject(err instanceof Error ? err : new Error(String(err)));
   } finally {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    releaseTurn(lease);
     // Release mutex and try next item
     mutex = "idle";
     if (shouldDrainNext) {

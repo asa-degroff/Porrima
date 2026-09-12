@@ -15,6 +15,8 @@ import type { Chat } from "../types";
 /** Server-reported position in the global turn queue (single GPU slot) */
 export interface TurnQueueInfo {
   activeChatId: string | null;
+  /** What the active lease belongs to (absent = user chat). */
+  activeKind?: "chat" | "system" | "cache-warm";
   position: number;
   queuedCount: number;
 }
@@ -1034,6 +1036,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onModelProgress: (progress) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Any model_progress means the lease was granted and the request is
+        // live; heal a queued state whose turn_start event was lost.
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
+        }
         const next = { ...progress, receivedAt: Date.now() };
         bg.modelProgress = progress.phase === "generating" ? null : next;
         bg.inferenceActivityPhase = progress.phase === "generating" ? "decode" : "prefill";
@@ -1084,6 +1092,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         if (msg) {
           bg.modelProgress = null;
           bg.inferenceActivityPhase = "decode";
+        } else if (payload?.queue) {
+          // Still waiting for the GPU slot: queued, not prefilling. Showing
+          // the prefill animation here would misrepresent the wait (and the
+          // prefill belongs to whoever holds the slot).
+          bg.modelProgress = null;
+          bg.inferenceActivityPhase = "queued";
         } else if (payload?.modelProgress) {
           const p = payload.modelProgress;
           bg.modelProgress = p.phase === "generating" ? null : { ...p, receivedAt: Date.now() };
@@ -1514,8 +1528,33 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       },
       onWaiting: (info) => {
         const bg = bgStreams.get(streamChatId);
-        if (bg) bg.queueInfo = info;
-        if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(info);
+        if (!bg) return;
+        bg.queueInfo = info;
+        // A queued turn is not prefilling: drop any optimistic/stale progress
+        // (the running prefill belongs to whoever holds the slot) and render
+        // the frozen queued state until the lease is granted. Never regress a
+        // running decode — a late waiting event can race a grant.
+        bg.modelProgress = null;
+        if (bg.inferenceActivityPhase !== "decode") {
+          bg.inferenceActivityPhase = "queued";
+        }
+        if (activeChatIdRef.current === streamChatId) {
+          setTurnQueueInfo(info);
+          setModelProgress(null);
+          setInferenceActivityPhase(bg.inferenceActivityPhase);
+        }
+      },
+      onTurnStart: () => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        if (bg.queueInfo) {
+          bg.queueInfo = null;
+          if (activeChatIdRef.current === streamChatId) setTurnQueueInfo(null);
+        }
+        if (bg.inferenceActivityPhase === "queued") {
+          bg.inferenceActivityPhase = "prefill";
+          if (activeChatIdRef.current === streamChatId) setInferenceActivityPhase("prefill");
+        }
       },
       onAudioChunk: (chunk) => {
         // Live agent TTS streaming: forward audio data to TTS hook
