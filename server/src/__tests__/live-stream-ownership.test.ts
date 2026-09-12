@@ -13,8 +13,8 @@ import {
  * Pins the ownership-guarded teardown added after a stale-turn race:
  *
  * A turn can finish its agent loop, send `done`, and then stall for minutes in
- * its completion path (e.g. `await awaitMidTurnPulse` while a slow extraction
- * pulse retries). If the user starts the next turn in that window,
+ * its completion path (historically while awaiting a slow, retrying mid-turn
+ * extraction pulse). If the user starts the next turn in that window,
  * installLiveStream replaces the by-then-finished turn's stream with the new
  * turn's stream. When the old turn's finally block eventually runs, an
  * unconditional endLiveStream(chatId) would grab the *newer* turn's stream by

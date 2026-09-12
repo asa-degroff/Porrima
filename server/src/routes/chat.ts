@@ -1134,8 +1134,11 @@ async function handleChatStream(
   }
 
   // Mark chat as active so the scheduler skips extraction for it —
-  // compaction cycles already use the extraction server heavily.
-  markChatActive(chat.id);
+  // compaction cycles already use the extraction server heavily. The owner
+  // token ties the entry to this turn: a superseded turn's late finally must
+  // not clear a newer turn's active entry (see the finally below).
+  const activeChatOwner = {};
+  markChatActive(chat.id, activeChatOwner);
 
   // Safety check: log if context is unexpectedly empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -4313,13 +4316,24 @@ async function handleChatStream(
       // Skipped for a stopped turn: the user abandoned this exchange, and extraction would keep
       // running (and burn the CPU extraction servers) after the stop.
       if (!connectionClosed && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
-        // Wait for any in-flight mid-turn pulse so the shared immediate
-        // extraction session history is settled before the turn-completion
-        // extraction enqueues. This also lets a failed pulse roll back its
-        // cursor so the turn-completion extraction covers that window.
-        await awaitMidTurnPulse(state);
-        enqueueImmediateExtraction(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
-          .catch((err) => console.error("[memory] extraction failed:", err));
+        // Never block turn teardown on an in-flight mid-turn pulse: it can run
+        // up to midTurnExtractionTimeoutMs (up to 15 min), and holding this
+        // finally open is what let a stale turn's later cleanup stomp the next
+        // turn's live stream. Chain the turn-completion extraction after the
+        // pulse instead — ordering with the shared immediate-extraction
+        // session is preserved, and a failed pulse's cursor rollback still
+        // lands before the enqueue covers that window. (Trade-off: if the
+        // process exits before the pulse settles, this enqueue is lost — the
+        // next turn's extraction/flush paths still cover the window.)
+        const inFlightPulse = state.midTurnInFlightPulse;
+        const enqueueTurnExtraction = () =>
+          void enqueueImmediateExtraction(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
+            .catch((err) => console.error("[memory] extraction failed:", err));
+        if (inFlightPulse) {
+          void inFlightPulse.catch(() => {}).then(enqueueTurnExtraction);
+        } else {
+          enqueueTurnExtraction();
+        }
       }
       // Run any deferred extractions from mid-loop follow-ups
       if (!connectionClosed) {
@@ -4405,8 +4419,14 @@ async function handleChatStream(
     } catch (err) {
       console.warn("[llama-slot] release failed:", err instanceof Error ? err.message : err);
     }
-    markLlamaCacheResidencyFinished(chat.id);
-    markChatInactive(chat.id);
+    // Chat-keyed bookkeeping is ownership-scoped: a superseded turn's late
+    // finally must not mark the newer turn's cache residency finished, so the
+    // stream check gates it. The active-chat entry is token-scoped instead —
+    // markChatInactive is a no-op when a newer turn owns the entry.
+    if (liveStreams.get(chat.id) === liveStream) {
+      markLlamaCacheResidencyFinished(chat.id);
+    }
+    markChatInactive(chat.id, activeChatOwner);
     stopSSEKeepalive();
     ttsTextQueue.close();
     if (audioStreamTask) {

@@ -85,9 +85,21 @@ export function withExtractionMutex<T>(fn: () => Promise<T>): Promise<T> {
 // delayed extraction forever. Stale entries (no touch) are treated as
 // inactive. The route touches the entry alongside the turn-gate lease
 // heartbeat, so healthy turns stay active.
+//
+// Entries also carry an owner token (the turn that marked the chat active).
+// A superseded turn can finish long after a newer turn took over (e.g. it
+// stalled awaiting a slow mid-turn pulse); its late finally must not clear
+// the newer turn's entry, so releases are owner-scoped when a token is
+// supplied. Callers without a token (e.g. chat deletion) keep the
+// unconditional release semantics.
 // ---------------------------------------------------------------------------
 
-const _activeChats = new Map<string, number>();
+interface ActiveChatEntry {
+  lastActivity: number;
+  owner?: object;
+}
+
+const _activeChats = new Map<string, ActiveChatEntry>();
 
 const DEFAULT_ACTIVE_CHAT_STALE_MS = 15 * 60_000;
 const ACTIVE_CHAT_STALE_MS = (() => {
@@ -95,31 +107,38 @@ const ACTIVE_CHAT_STALE_MS = (() => {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_ACTIVE_CHAT_STALE_MS;
 })();
 
-export function markChatActive(chatId: string): void {
-  _activeChats.set(chatId, Date.now());
+export function markChatActive(chatId: string, owner?: object): void {
+  _activeChats.set(chatId, { lastActivity: Date.now(), owner });
 }
 
 /** Refresh the activity timestamp for an in-flight turn. */
 export function touchChatActivity(chatId: string): void {
-  if (_activeChats.has(chatId)) {
-    _activeChats.set(chatId, Date.now());
-  }
+  const entry = _activeChats.get(chatId);
+  if (entry) entry.lastActivity = Date.now();
 }
 
-export function markChatInactive(chatId: string): void {
+/**
+ * Clear the active marker for a chat. When `owner` is supplied, the release
+ * only applies if the entry is still owned by that turn — a stale turn whose
+ * finally runs after a newer turn started must not clear the newer entry.
+ */
+export function markChatInactive(chatId: string, owner?: object): void {
+  const entry = _activeChats.get(chatId);
+  if (!entry) return;
+  if (owner !== undefined && entry.owner !== owner) return;
   _activeChats.delete(chatId);
 }
 
 export function isChatActive(chatId: string): boolean {
-  const lastActivity = _activeChats.get(chatId);
-  if (lastActivity === undefined) return false;
-  return Date.now() - lastActivity <= ACTIVE_CHAT_STALE_MS;
+  const entry = _activeChats.get(chatId);
+  if (!entry) return false;
+  return Date.now() - entry.lastActivity <= ACTIVE_CHAT_STALE_MS;
 }
 
 export function hasActiveChats(): boolean {
   const now = Date.now();
-  for (const lastActivity of _activeChats.values()) {
-    if (now - lastActivity <= ACTIVE_CHAT_STALE_MS) return true;
+  for (const entry of _activeChats.values()) {
+    if (now - entry.lastActivity <= ACTIVE_CHAT_STALE_MS) return true;
   }
   return false;
 }
