@@ -151,6 +151,7 @@ describe("memory block storage", () => {
         lastAccessed: now,
         accessCount: 0,
         subject: "KV cache slot persistence debugging",
+        durability: "durable",
       });
 
       const db = storage.getDb();
@@ -228,6 +229,7 @@ describe("memory block storage", () => {
         lastAccessed: now,
         accessCount: 0,
         subject: "Router failover drill",
+        durability: "durable",
       });
       const viaSubject = db
         .prepare("SELECT id FROM fts_memories WHERE fts_memories MATCH ?")
@@ -253,6 +255,7 @@ describe("memory block storage", () => {
         lastAccessed: now,
         accessCount: 0,
         subject: "",
+        durability: "durable",
       });
       await storage.setLastSynthesis(now);
       storage.closeMemoryDb();
@@ -412,6 +415,72 @@ describe("zeitgeist resolution (09-08 dead-address audit)", () => {
 
       expect(next.blockType).toBe("zeitgeist");
       expect(storage.getActiveZeitgeistBlock()?.id).toBe("blk-next-zeitgeist");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("memory durability", () => {
+  it("round-trips session durability and supports in-place promotion", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      const now = new Date().toISOString();
+
+      await storage.addMemory({
+        id: "mem-session",
+        text: "Currently migrating the extraction pipeline",
+        category: "context",
+        importance: 7,
+        durability: "session",
+        embedding: new Array(storage.DEFAULT_VEC_DIMENSION).fill(0),
+        createdAt: now,
+        lastAccessed: now,
+        accessCount: 0,
+        subject: "Extraction migration",
+      });
+
+      expect((await storage.getMemoryById("mem-session"))?.durability).toBe("session");
+      expect((await storage.getAllMemories())[0]?.durability).toBe("session");
+
+      await storage.updateMemory("mem-session", { durability: "durable" });
+      expect((await storage.getMemoryById("mem-session"))?.durability).toBe("durable");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds the durability column to a legacy database with a durable default", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      const now = new Date().toISOString();
+      await storage.addMemory({
+        id: "mem-legacy",
+        text: "Memory written before the durability column existed",
+        category: "fact",
+        importance: 5,
+        durability: "durable",
+        embedding: new Array(storage.DEFAULT_VEC_DIMENSION).fill(0),
+        createdAt: now,
+        lastAccessed: now,
+        accessCount: 0,
+        subject: "",
+      });
+      const dbPath = storage.getMemoryDbPath();
+      storage.closeMemoryDb();
+
+      // Drop the column to simulate a pre-migration database, then reload.
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(dbPath);
+      raw.exec("ALTER TABLE memories DROP COLUMN durability");
+      const colsAfterDrop = raw.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+      expect(colsAfterDrop.some((c) => c.name === "durability")).toBe(false);
+      raw.close();
+
+      const reloadedStorage = await loadMemoryStorage(homeDir);
+      expect((await reloadedStorage.getMemoryById("mem-legacy"))?.durability).toBe("durable");
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

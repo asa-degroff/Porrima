@@ -615,7 +615,17 @@ export const VALID_MEMORY_CATEGORIES: readonly MemoryCategory[] = [
 /** Fallback category assigned when the extraction model produces an invalid category. */
 export const FALLBACK_MEMORY_CATEGORY: MemoryCategory = "note";
 
-export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'explicit' | 'synthesis';
+export type MemoryDurability = "durable" | "session";
+
+/** Canonical list of valid durability values. "session" means the memory is only
+ *  useful while its origin thread is active; "durable" means it stays useful outside
+ *  it. Kept in sync with the extraction parser and runtime tools. */
+export const VALID_MEMORY_DURABILITIES: readonly MemoryDurability[] = ["durable", "session"];
+
+/** Fallback durability when the extraction model omits or misspells the field. */
+export const FALLBACK_MEMORY_DURABILITY: MemoryDurability = "durable";
+
+export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'explicit' | 'synthesis' | 'consolidation';
 
 export interface Memory {
   id: string;
@@ -639,6 +649,7 @@ export interface Memory {
   supersededBy?: string;  // ID of newer memory that supersedes this one
   supersedes?: string;  // ID of older memory that this one supersedes
   subject: string;  // Topic framing from extraction context; '' for legacy/user-authored
+  durability: MemoryDurability;  // "session" = thread-local; "durable" = useful outside the origin thread
 }
 
 export interface MemoryStore {

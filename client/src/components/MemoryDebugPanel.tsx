@@ -19,6 +19,7 @@ interface ExtractionParsedFact {
   text: string;
   category?: string;
   importance?: number;
+  durability?: string;
   sourceExchangeId?: string;
 }
 
@@ -660,6 +661,7 @@ function RunDetail({ run }: { run: ExtractionRun }) {
               <li key={i} className="text-[11px] flex gap-2">
                 {f.category && <span className="text-white/40 shrink-0 w-20 truncate">[{f.category}]</span>}
                 {f.importance !== undefined && <span className="text-white/40 shrink-0 w-8">i{f.importance}</span>}
+                {f.durability === "session" && <span className="text-sky-300/60 shrink-0 w-12">session</span>}
                 {f.sourceExchangeId && <span className="text-purple-300/50 shrink-0 w-8">{f.sourceExchangeId}</span>}
                 <span className="text-white/80 flex-1">{f.text}</span>
               </li>

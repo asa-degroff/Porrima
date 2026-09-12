@@ -22,6 +22,7 @@ export interface ExtractionParsedFact {
   text: string;
   category?: string;
   importance?: number;
+  durability?: string;
   sourceExchangeId?: string;
 }
 

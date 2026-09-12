@@ -20,6 +20,7 @@ function memory(overrides: Partial<Memory>): Memory {
     lastAccessed: overrides.lastAccessed || new Date(0).toISOString(),
     accessCount: overrides.accessCount ?? 0,
     subject: overrides.subject || "",
+    durability: overrides.durability || "durable",
     ...overrides,
   };
 }

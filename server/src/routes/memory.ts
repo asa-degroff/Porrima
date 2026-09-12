@@ -36,8 +36,15 @@ import {
   NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
 } from "../services/llama-cache-residency.js";
 import { stampUserInteractionActivity } from "../services/user-activity.js";
-import type { Memory, MemoryCategory, MemorySummary } from "../types.js";
-import { VALID_MEMORY_CATEGORIES } from "../types.js";
+import type { Memory, MemoryCategory, MemoryDurability, MemorySummary } from "../types.js";
+import { VALID_MEMORY_CATEGORIES, VALID_MEMORY_DURABILITIES } from "../types.js";
+
+/** Validate a user-supplied durability value; unknown values fall back to durable. */
+function normalizeMemoryDurability(value: unknown): MemoryDurability {
+  return typeof value === "string" && (VALID_MEMORY_DURABILITIES as readonly string[]).includes(value)
+    ? (value as MemoryDurability)
+    : "durable";
+}
 
 const router = Router();
 
@@ -483,7 +490,7 @@ router.get("/", async (req, res) => {
 
 // Create memory (auto-embeds)
 router.post("/", async (req, res) => {
-  const { text, category, importance, sourceChatId, sourceType, sourceId } = req.body;
+  const { text, category, importance, durability, sourceChatId, sourceType, sourceId } = req.body;
   if (!text) return res.status(400).json({ error: "text is required" });
 
   let embedding: number[];
@@ -499,6 +506,7 @@ router.post("/", async (req, res) => {
     text,
     category: category || "fact",
     importance: Math.min(10, Math.max(1, importance || 5)),
+    durability: normalizeMemoryDurability(durability),
     embedding,
     createdAt: now,
     lastAccessed: now,
@@ -608,7 +616,7 @@ router.get("/:id", async (req, res) => {
 
 // Update memory (re-embeds if text changes)
 router.patch("/:id", async (req, res) => {
-  const { text, category, importance } = req.body;
+  const { text, category, importance, durability } = req.body;
 
   const existing = await getMemoryById(req.params.id);
   if (!existing) return res.status(404).json({ error: "Memory not found" });
@@ -630,6 +638,7 @@ router.patch("/:id", async (req, res) => {
       importance: importance !== undefined
         ? Math.min(10, Math.max(1, importance))
         : existing.importance,
+      durability: durability !== undefined ? normalizeMemoryDurability(durability) : existing.durability,
       embedding,
       createdAt: now,
       lastAccessed: now,
@@ -647,11 +656,12 @@ router.patch("/:id", async (req, res) => {
     return res.json(stripEmbedding(newMemory));
   }
 
-  // Non-text updates (category, importance) — edit in place
+  // Non-text updates (category, importance, durability) — edit in place
   const updates: Partial<Memory> = {};
   if (category !== undefined) updates.category = category;
   if (importance !== undefined)
     updates.importance = Math.min(10, Math.max(1, importance));
+  if (durability !== undefined) updates.durability = normalizeMemoryDurability(durability);
 
   if (Object.keys(updates).length > 0) {
     await updateMemory(req.params.id, updates);

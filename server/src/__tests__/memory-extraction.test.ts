@@ -21,6 +21,7 @@ describe("parseExtractionResponse", () => {
       text: "User's name is Alex",
       category: "fact",
       importance: 8,
+      durability: "durable",
       sourceExchangeId: undefined,
       subject: "",
     });
@@ -73,6 +74,26 @@ describe("parseExtractionResponse", () => {
     expect(result.facts[0].category).toBe("fact");
     expect(result.facts[1].text).toBe("Invalid");
     expect(result.facts[1].category).toBe("note");
+  });
+
+  it("parses explicit session durability and defaults missing durability to durable", () => {
+    const input = `[
+      {"text": "Currently migrating the extraction pipeline", "category": "context", "importance": 7, "durability": "session"},
+      {"text": "User prefers TypeScript", "category": "preference", "importance": 5, "durability": "durable"},
+      {"text": "Legacy memory without the field", "category": "note", "importance": 4}
+    ]`;
+    const result = parseExtractionResponse(input);
+    expect(result.facts).toHaveLength(3);
+    expect(result.facts[0].durability).toBe("session");
+    expect(result.facts[1].durability).toBe("durable");
+    expect(result.facts[2].durability).toBe("durable");
+  });
+
+  it("falls back to durable for unknown durability values", () => {
+    const input = `[{"text": "Bad label", "category": "fact", "importance": 5, "durability": "forever"}]`;
+    const result = parseExtractionResponse(input);
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0].durability).toBe("durable");
   });
 
   it("filters out facts with missing text", () => {

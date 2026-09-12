@@ -32,6 +32,17 @@ Memories track `sourceType` ('chat_immediate', 'chat_delayed', 'synthesis', 'sup
   - Tracks `lastDelayedExtractionAt` and `lastDelayedExtractionMessageIndex` per chat. Uses `updateChatExtractionState()` to avoid touching `lastModified` (preserves chat ordering).
 - **Pre-compaction flush**: when conversation context is compacted, memories are extracted from the removed messages before archival. Compaction summary messages (`_isCompactionSummary`), out-of-context rows, system rows, and synthesis rows (`_isSynthesisMessage`) are filtered out to prevent extracting operational metadata or the synthesis cycle's own review of already-extracted memory content.
 
+### Durability scoping (session vs durable)
+
+Every extracted memory carries a `durability` label, orthogonal to category and importance:
+
+- `session` — only useful while its origin thread is active: current step, open branches, mid-experiment values, next actions, pending decisions.
+- `durable` — still useful outside the thread: settled decisions, architecture facts, preferences, instructions, lessons, project relationships.
+
+All extraction prompts (immediate, mid-turn pulse, pre-compaction, delayed) classify each fact; missing or invalid labels fall back to `durable`. When a re-saved duplicate is labeled durable, the stored session memory is promoted — durability only ever moves session → durable. Legacy rows default to durable.
+
+The label is currently informational (extraction, storage, tools, debug panel). Retrieval policy — dampening cross-chat session memories during ranking — is planned as a follow-up; see [design/memory-durability.md](design/memory-durability.md).
+
 ## Retrieval Pipeline
 
 Memory retrieval uses a multi-stage pipeline for high-relevance results:
@@ -129,7 +140,7 @@ In headless automation turns (`chat-turn-runner.ts`), the search context include
 ## Agent Tools
 
 The agent can explicitly save, search, forget memories, and read archived context:
-- `save_memory` — store a new memory
+- `save_memory` — store a new memory (optional `durability`: `durable` or `session`, default `durable`)
 - `search_memory` — vector + FTS5 search across all memories
 - `forget_memory` — delete a memory by ID
 - `search_conversation` — FTS5 search across current messages AND archived context blocks (cross-chat)

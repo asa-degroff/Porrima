@@ -94,6 +94,7 @@ async function addFixtureMemory(
     sourceType: "explicit",
     sourceId: "",
     subject: "",
+    durability: "durable",
   });
 }
 
@@ -793,6 +794,34 @@ describe("save_memory supersession", () => {
       expect(await memoryStorage.getMemoryCount()).toBe(3);
       const tomb = await memoryStorage.getMemoryById("mem-tomb-1");
       expect(tomb?.importance).toBe(5);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores session durability and promotes it when a durable duplicate is re-saved", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-supersede-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryToolsWithEmbedMock(homeDir);
+      testVectors[OLD_TEXT] = V_OLD;
+      testVectors[DUP_TEXT] = V_OLD;
+
+      const first = await memoryTools.executeMemoryTool({
+        name: "save_memory",
+        arguments: saveMemoryArgs(OLD_TEXT, { durability: "session" }),
+      } as any, "");
+      expect(first.isError).toBe(false);
+      const id = first.content.match(/Saved memory \[([^\]]+)\]/)![1];
+      expect((await memoryStorage.getMemoryById(id))?.durability).toBe("session");
+
+      // A near-duplicate labeled durable promotes the stored label.
+      const second = await memoryTools.executeMemoryTool({
+        name: "save_memory",
+        arguments: saveMemoryArgs(DUP_TEXT, { durability: "durable" }),
+      } as any, "");
+      expect(second.isError).toBe(false);
+      expect(second.content).toContain("near-duplicate");
+      expect((await memoryStorage.getMemoryById(id))?.durability).toBe("durable");
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

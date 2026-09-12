@@ -38,6 +38,14 @@ export const MEMORY_TOOLS: Tool[] = [
         minimum: 1,
         maximum: 10,
       }),
+      durability: Type.Optional(
+        StringEnum(["durable", "session"] as const, {
+          description:
+            "How long this memory stays useful. 'session' = only while this thread is active " +
+            "(current step, open branches, mid-experiment values, pending decisions). " +
+            "'durable' = stays useful in other conversations too. Default: durable.",
+        })
+      ),
       supersedeMemoryId: Type.Optional(
         Type.String({
           description:
@@ -421,7 +429,7 @@ export async function executeMemoryTool(
 ): Promise<ToolResult> {
   switch (toolCall.name) {
     case "save_memory": {
-      const { text, category, importance, supersedeMemoryId } = toolCall.arguments;
+      const { text, category, importance, durability, supersedeMemoryId } = toolCall.arguments;
       if (!text) return { content: "Missing text", isError: true };
 
       // Validate the supersession target before spending an embedding call.
@@ -454,6 +462,7 @@ export async function executeMemoryTool(
         text,
         category: (category as MemoryCategory) || "fact",
         importance: Math.min(10, Math.max(1, importance || 5)),
+        durability: durability === "session" ? "session" as const : "durable" as const,
         subject: '',
       };
 
@@ -523,7 +532,8 @@ export async function executeMemoryTool(
             const subjectLine = r.memory.subject
               ? `(subject: ${r.memory.subject})\n`
               : "";
-            return `${subjectLine}- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, created: ${created}, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
+            const durabilityNote = r.memory.durability === "session" ? ", session-scoped" : "";
+            return `${subjectLine}- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, created: ${created}, score: ${r.score.toFixed(3)}${source}${supersedes}${durabilityNote})${superseded}`;
           }
         )
         .join("\n");

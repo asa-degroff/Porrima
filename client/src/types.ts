@@ -636,7 +636,9 @@ export interface LlamaBinaryInfo {
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
-export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit" | "synthesis";
+export type MemoryDurability = "durable" | "session";
+
+export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit" | "synthesis" | "consolidation";
 
 export interface MemorySummary {
   id: string;
@@ -653,6 +655,7 @@ export interface MemorySummary {
   supersededBy?: string;
   supersedes?: string;
   subject: string;
+  durability: MemoryDurability;
 }
 
 export interface MemoryLineageEntry {

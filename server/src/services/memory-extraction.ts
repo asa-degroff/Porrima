@@ -25,8 +25,8 @@ import {
 } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
-import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
-import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY } from "../types.js";
+import type { ChatMessage, Memory, MemoryCategory, MemoryDurability, MemorySourceType, Chat, Settings } from "../types.js";
+import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY, VALID_MEMORY_DURABILITIES, FALLBACK_MEMORY_DURABILITY } from "../types.js";
 import { appDataPath } from "./paths.js";
 import {
   DEFAULT_EXTRACTION_MAX_TOKENS,
@@ -635,6 +635,18 @@ export function invalidateExtractionPrefixCache(): void {
   _extractionPrefixCache = null;
 }
 
+/**
+ * Durability rubric — shared output-schema field across every extraction prompt
+ * (immediate, mid-turn pulse, pre-compaction, delayed). "session" marks task
+ * state that matters only while its origin thread is active; "durable" marks
+ * information that stays useful outside it. Transient state must still be
+ * captured — the label lets retrieval keep it local instead of dropping it.
+ */
+const DURABILITY_FIELD_GUIDE = `  - "durability": "durable" or "session".
+    "session" = only useful while this thread is active — current step, open branches, mid-experiment values, next actions, pending decisions.
+    "durable" = still useful outside this thread — settled decisions, architecture facts, preferences, instructions, lessons, project relationships.
+    Ask: would this matter in a conversation a month from now? If not, mark it "session". Transient task state is still worth capturing — mark it, don't drop it.`;
+
 const EXTRACTION_INSTRUCTIONS = `---
 
 ## Memory Extraction Task
@@ -657,6 +669,7 @@ Output a JSON object with two fields:
   - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
+${DURABILITY_FIELD_GUIDE}
 
 Categories:
 - "preference" — likes, dislikes, stylistic choices
@@ -779,7 +792,7 @@ Previously captured memories are provided alongside the conversation. Those memo
 2. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 3. **Evolutions or contradictions** — if a previous position has been refined or amended
 4. **Thematic context** — higher-level insights that connect multiple exchanges
-5. **Unresolved threads** — ongoing work, open questions, or pending decisions
+5. **Unresolved threads** — ongoing work, open questions, or pending decisions. These are usually "session" unless they encode a durable open question for the project.
 
 Each extracted memory should be self-contained and meaningful (2-5 sentences).
 
@@ -789,6 +802,7 @@ Output a JSON object with two fields:
   - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
+${DURABILITY_FIELD_GUIDE}
 
 If nothing is genuinely novel or significant, output: {"subject": "", "memories": []}
 
@@ -814,6 +828,7 @@ interface ExtractedFact {
   text: string;
   category: MemoryCategory;
   importance: number;
+  durability: MemoryDurability;
   sourceExchangeId?: string;
   subject: string;
 }
@@ -841,6 +856,22 @@ function normalizeExtractionImportance(value: unknown): number {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isFinite(n)) return DEFAULT_EXTRACTION_IMPORTANCE;
   return Math.min(10, Math.max(1, Math.round(n)));
+}
+
+const DEFAULT_EXTRACTION_DURABILITY: MemoryDurability = FALLBACK_MEMORY_DURABILITY;
+
+function normalizeExtractionDurability(value: unknown): MemoryDurability {
+  return typeof value === "string" && (VALID_MEMORY_DURABILITIES as readonly string[]).includes(value)
+    ? (value as MemoryDurability)
+    : DEFAULT_EXTRACTION_DURABILITY;
+}
+
+/**
+ * Session loses to durable when a duplicate is re-saved — labels only improve.
+ * A durable re-statement of a session-scoped memory means it outlived its thread.
+ */
+function mergeDurability(existing: MemoryDurability, incoming: MemoryDurability): MemoryDurability {
+  return existing === "durable" || incoming === "durable" ? "durable" : "session";
 }
 
 function cleanJsonArrayOutput(text: string): string {
@@ -919,6 +950,7 @@ export function parseExtractionResponse(text: string): ParsedExtraction {
         text: f.text,
         category,
         importance: normalizeExtractionImportance(f.importance),
+        durability: normalizeExtractionDurability(f.durability),
         sourceExchangeId,
         subject,
       });
@@ -2557,6 +2589,7 @@ async function saveExtractedMemory(
     text: fact.text,
     category: fact.category,
     importance: Math.min(10, Math.max(1, fact.importance)),
+    durability: fact.durability,
     embedding,
     createdAt: now,
     lastAccessed: now,
@@ -2637,8 +2670,10 @@ export async function dedupAndSave(
       console.log(
         `[memory] Near-identical match (sim=${duplicate.similarity.toFixed(3)}), bumping metadata: "${duplicate.memory.text}"`
       );
+      const mergedDurability = mergeDurability(duplicate.memory.durability, fact.durability);
       await updateMemory(duplicate.memory.id, {
         importance: Math.max(duplicate.memory.importance, fact.importance),
+        ...(mergedDurability !== duplicate.memory.durability ? { durability: mergedDurability } : {}),
         lastAccessed: new Date().toISOString(),
       });
       skippedDuplicates++;
@@ -2847,6 +2882,7 @@ Output a JSON object with two fields:
   - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
+${DURABILITY_FIELD_GUIDE}
   - "sourceExchangeId": Use exactly one of these exchange ids: ${ids}. If a memory depends on multiple exchanges, use the exchange that best supports it.
 
 If nothing is significant, output: {"subject": "", "memories": []}`;
@@ -3181,7 +3217,7 @@ async function runImmediateBatch(input: {
     extractionMetrics.totalFactsExtracted += facts.length;
     extractionMetrics.lastExtractionAt = new Date().toISOString();
     runHandle.complete({
-      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, sourceExchangeId: f.sourceExchangeId })),
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, durability: f.durability, sourceExchangeId: f.sourceExchangeId })),
       subject: chunkResult.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
@@ -3467,6 +3503,7 @@ Output a JSON object with two fields:
   - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
+${DURABILITY_FIELD_GUIDE}
   - "sourceExchangeId": Use "midturn-${pulseIndex}" for all memories in this pulse.
 
 If nothing significant has emerged yet, output: {"subject": "", "memories": []}`;
@@ -3924,6 +3961,7 @@ Output a JSON object with two fields:
   - "text": A standalone statement with sufficient context (2-5 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10
+${DURABILITY_FIELD_GUIDE}
 
 If nothing is significant, output: {"subject": "", "memories": []}`;
 
@@ -4414,7 +4452,7 @@ async function processPreCompactionJob(
 
     console.log("[memory] Pre-compaction flush complete");
     runHandle.complete({
-      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, durability: f.durability })),
       subject: result.subjects[0],
       saved: outcome.added,
       superseded: outcome.superseded,
@@ -4749,8 +4787,10 @@ export async function extractDelayedMemories(
         console.log(
           `[memory-delayed] Near-identical match (sim=${duplicate.similarity.toFixed(3)}), bumping metadata: "${duplicate.memory.text}"`
         );
+        const mergedDurability = mergeDurability(duplicate.memory.durability, fact.durability);
         await updateMemory(duplicate.memory.id, {
           importance: Math.max(duplicate.memory.importance, fact.importance),
+          ...(mergedDurability !== duplicate.memory.durability ? { durability: mergedDurability } : {}),
           lastAccessed: new Date().toISOString(),
         });
         runSkipped++;
@@ -4840,7 +4880,7 @@ export async function extractDelayedMemories(
 
     console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
     runHandle.complete({
-      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, durability: f.durability })),
       subject: chunkResult.subjects[0],
       saved: runSaved,
       superseded: comparisonSuperseded,
