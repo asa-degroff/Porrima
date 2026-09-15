@@ -67,6 +67,20 @@ interface ModelStatsDetail {
 
 // --- Reranker Stats Types (aligned with server reranker-stats.ts) ---
 
+interface RerankerSelectedResult {
+  text: string;
+  score: number;
+  id?: string;
+  subject?: string;
+  category?: string;
+  importance?: number;
+  createdAt?: string;
+  projectId?: string;
+  durability?: string;
+  supersededBy?: string;
+  docIndex?: number;
+}
+
 interface RerankerStatsRun {
   id: string;
   timestamp: number;
@@ -82,7 +96,7 @@ interface RerankerStatsRun {
   source: string;
   query?: string;
   documents?: string[];
-  selectedResults?: Array<{ text: string; score: number }>;
+  selectedResults?: RerankerSelectedResult[];
 }
 
 interface RerankerStatsSummary {
@@ -522,12 +536,53 @@ function formatRerankerSource(source: string | undefined): string {
   return source || "memory";
 }
 
-function CollapsibleDocSection({ title, count, children, defaultOpen }: { title: string; count: number; children: React.ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+function memoryCategoryChipClass(category: string | undefined): string {
+  switch (category) {
+    case "fact": return "bg-blue-500/20 text-blue-300";
+    case "preference": return "bg-purple-500/20 text-purple-300";
+    case "behavior": return "bg-amber-500/20 text-amber-300";
+    case "context": return "bg-cyan-500/20 text-cyan-300";
+    case "decision": return "bg-rose-500/20 text-rose-300";
+    case "note": return "bg-slate-500/20 text-slate-300";
+    case "reflection": return "bg-indigo-500/20 text-indigo-300";
+    default: return "bg-emerald-500/20 text-emerald-300";
+  }
+}
+
+function formatShortDate(value: string | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+}
+
+function CollapsibleDocSection({
+  title,
+  count,
+  children,
+  defaultOpen,
+  open: controlledOpen,
+  onToggle,
+  sectionRef,
+}: {
+  title: string;
+  count: number;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  /** Controlled open state — omit for self-managed toggling. */
+  open?: boolean;
+  onToggle?: () => void;
+  sectionRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [internalOpen, setInternalOpen] = useState(!!defaultOpen);
+  const open = controlledOpen ?? internalOpen;
+  const toggle = () => {
+    if (onToggle) onToggle();
+    else setInternalOpen((v) => !v);
+  };
   return (
-    <div>
+    <div ref={sectionRef}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-white/30 hover:text-white/50 transition-colors mb-1 w-full"
       >
         <span>{open ? "▼" : "▶"}</span>
@@ -540,10 +595,28 @@ function CollapsibleDocSection({ title, count, children, defaultOpen }: { title:
 
 function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const docsRef = useRef<HTMLDivElement | null>(null);
   const hasQuery = !!run.query;
   const hasDocs = !!run.documents && run.documents.length > 0;
   const hasSelected = !!run.selectedResults && run.selectedResults.length > 0;
   const hasPeek = hasQuery || hasDocs || hasSelected;
+
+  // Document indices that produced an injected memory — highlighted in the
+  // documents list and linked from each selected row.
+  const selectedDocIndices = new Set(
+    (run.selectedResults ?? [])
+      .map((result) => result.docIndex)
+      .filter((index): index is number => index !== undefined),
+  );
+
+  const revealDoc = (index: number) => {
+    if (!docsOpen) setDocsOpen(true);
+    requestAnimationFrame(() => {
+      const doc = docsRef.current?.querySelector(`[data-doc-index="${index}"]`);
+      (doc ?? docsRef.current)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
 
   return (
     <div className="border-b border-white/5 last:border-b-0">
@@ -587,25 +660,99 @@ function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: 
             </div>
           )}
           {run.documents && run.documents.length > 0 && (
-            <CollapsibleDocSection title="Documents" count={run.documents.length}>
-              {run.documents.map((doc, i) => (
-                <div key={i} className="bg-black/20 rounded p-2 text-[10px] text-white/50 font-mono leading-relaxed break-words">
-                  <span className="text-purple-300/50 select-none">[{i + 1}] </span>
-                  {doc.slice(0, 800)}
-                  {doc.length > 800 ? "…" : ""}
-                </div>
-              ))}
+            <CollapsibleDocSection
+              title="Documents"
+              count={run.documents.length}
+              open={docsOpen}
+              onToggle={() => setDocsOpen((v) => !v)}
+              sectionRef={docsRef}
+            >
+              {run.documents.map((doc, i) => {
+                const wasSelected = selectedDocIndices.has(i);
+                return (
+                  <div
+                    key={i}
+                    data-doc-index={i}
+                    className={`rounded p-2 text-[10px] font-mono leading-relaxed break-words ${
+                      wasSelected
+                        ? "bg-emerald-900/15 border border-emerald-500/20 text-white/55"
+                        : "bg-black/20 text-white/50"
+                    }`}
+                  >
+                    <span className="text-purple-300/50 select-none">[{i + 1}] </span>
+                    {wasSelected && <span className="text-emerald-400/60">selected · </span>}
+                    {doc.slice(0, 800)}
+                    {doc.length > 800 ? "…" : ""}
+                  </div>
+                );
+              })}
             </CollapsibleDocSection>
           )}
           {run.selectedResults && run.selectedResults.length > 0 && (
             <CollapsibleDocSection title="Selected for injection" count={run.selectedResults.length} defaultOpen>
-              {run.selectedResults.map((result, i) => (
-                <div key={i} className="bg-emerald-900/10 border border-emerald-500/10 rounded p-2 text-[10px] text-emerald-200/60 font-mono leading-relaxed break-words">
-                  <span className="text-emerald-400/50 select-none">[{result.score.toFixed(3)}] </span>
-                  {result.text.slice(0, 600)}
-                  {result.text.length > 600 ? "…" : ""}
-                </div>
-              ))}
+              {run.selectedResults.map((result, i) => {
+                const created = formatShortDate(result.createdAt);
+                const docIndex = result.docIndex;
+                return (
+                  <div
+                    key={result.id ?? i}
+                    className="bg-emerald-900/10 border border-emerald-500/10 rounded p-2 text-[10px] text-emerald-200/60 font-mono leading-relaxed break-words"
+                  >
+                    {result.subject && (
+                      <div className="text-sky-300/50 mb-0.5">subject: {result.subject}</div>
+                    )}
+                    <div>
+                      <span className="text-emerald-400/50 select-none">[{result.score.toFixed(3)}] </span>
+                      {result.text.slice(0, 600)}
+                      {result.text.length > 600 ? "…" : ""}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 font-sans">
+                      {result.category && (
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${memoryCategoryChipClass(result.category)}`}>
+                          {result.category}
+                        </span>
+                      )}
+                      {result.importance !== undefined && (
+                        <span className="text-[9px] text-white/25">importance: {result.importance}/10</span>
+                      )}
+                      {result.durability === "session" && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-sky-500/20 text-sky-300"
+                          title="Session-scoped: only useful while its origin thread is active"
+                        >
+                          session
+                        </span>
+                      )}
+                      {result.supersededBy && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/20 text-amber-300"
+                          title={`Superseded by ${result.supersededBy}`}
+                        >
+                          superseded
+                        </span>
+                      )}
+                      {result.projectId && (
+                        <span className="text-[9px] text-white/25">project: {result.projectId}</span>
+                      )}
+                      {docIndex !== undefined && (
+                        <button
+                          onClick={() => revealDoc(docIndex)}
+                          className="text-[9px] text-purple-300/50 hover:text-purple-300 transition-colors"
+                          title="Show this memory in the documents list"
+                        >
+                          doc #{docIndex + 1}
+                        </button>
+                      )}
+                      {created && <span className="text-[9px] text-white/25 ml-auto">{created}</span>}
+                    </div>
+                    {result.id && (
+                      <div className="text-[9px] text-white/20 mt-0.5 select-all" title={result.id}>
+                        {result.id}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </CollapsibleDocSection>
           )}
         </div>

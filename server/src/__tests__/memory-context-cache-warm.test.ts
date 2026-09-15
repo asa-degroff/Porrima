@@ -77,6 +77,11 @@ describe("memory context after cache warming", () => {
     }));
     vi.doMock("../services/reranker-stats.js", () => ({
       recordRerankerStats: vi.fn(),
+      buildSelectedResult: (memory: { id: string; text: string }, score: number) => ({
+        id: memory.id,
+        text: memory.text,
+        score,
+      }),
     }));
     vi.doMock("../services/persona-store.js", () => ({
       loadPersona: vi.fn(async () => ({ content: "Persona." })),

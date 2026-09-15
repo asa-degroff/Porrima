@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { appDataPath } from "./paths.js";
+import type { Memory, MemoryCategory, MemoryDurability } from "../types.js";
 
 const DB_PATH = appDataPath("porrima.db");
 const MAX_RUNS = 100;
@@ -9,9 +10,44 @@ const EMA_ALPHA = 0.3;
 
 // --- Types ---
 
+/**
+ * A memory that was injected into the prompt after reranking.
+ * Metadata beyond text/score is optional so rows recorded before the
+ * enrichment (and rows parsed from older DBs) still render cleanly.
+ */
 export interface SelectedResult {
   text: string;
   score: number;
+  id?: string;
+  subject?: string;
+  category?: MemoryCategory;
+  importance?: number;
+  createdAt?: string;
+  projectId?: string;
+  durability?: MemoryDurability;
+  supersededBy?: string;
+  /** Index into the run's `documents` array — correlates selected rows with the reranker input. */
+  docIndex?: number;
+}
+
+/**
+ * Project the fields the stats UI needs out of a memory at injection time.
+ * Empty subjects are dropped so JSON payloads stay lean.
+ */
+export function buildSelectedResult(memory: Memory, score: number, docIndex?: number): SelectedResult {
+  return {
+    text: memory.text,
+    score,
+    id: memory.id,
+    subject: memory.subject?.trim() || undefined,
+    category: memory.category,
+    importance: memory.importance,
+    createdAt: memory.createdAt,
+    projectId: memory.projectId,
+    durability: memory.durability,
+    supersededBy: memory.supersededBy,
+    docIndex,
+  };
 }
 
 export interface RerankerStatsEntry {

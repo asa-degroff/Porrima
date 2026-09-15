@@ -3,7 +3,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { embed } from "./embeddings.js";
 import { searchMemories, mmrRerank, updateMemory, buildMemoryIndexText, type ScoredMemory } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
-import { recordRerankerStats } from "./reranker-stats.js";
+import { recordRerankerStats, buildSelectedResult, type SelectedResult } from "./reranker-stats.js";
 import {
   formatRetrievedMemoryForContext,
   filterMemoriesAlreadyInCurrentContext,
@@ -336,7 +336,7 @@ function recordStats(
   chatType: string | undefined,
   formattedQuery: string,
   documents: string[],
-  selectedResults?: Array<{ text: string; score: number }>,
+  selectedResults?: SelectedResult[],
 ): void {
   try {
     recordRerankerStats({
@@ -592,7 +592,13 @@ export class PassiveMemoryRecallController {
     // Dampen memories from other projects so they don't dominate passive recall.
     // Applied after mapping reranker results but before MIN_RERANK_SCORE filtering,
     // so dampened scores are compared against the threshold consistently.
-    let candidates = output.results.map(({ index, score }) => ({ ...rerankCandidates[index], score }));
+    // `docIndex` maps this candidate back to its position in rerankDocuments
+    // so the stats UI can correlate injected memories with the documents list.
+    let candidates = output.results.map(({ index, score }) => ({
+      ...rerankCandidates[index],
+      score,
+      docIndex: index,
+    }));
 
     if (options.projectId) {
       const crossProjectCount = applyCrossProjectScoreMultiplier(candidates, options.projectId, crossProjectMultiplier);
@@ -613,7 +619,7 @@ export class PassiveMemoryRecallController {
 
     // Record stats after selection so we know which memories were actually injected.
     recordStats(output, options.chatType, formattedQuery, rerankDocuments,
-      selected.map((c) => ({ text: c.memory.text, score: c.score })),
+      selected.map((c) => buildSelectedResult(c.memory, c.score, c.docIndex)),
     );
 
     this.candidates.clear();

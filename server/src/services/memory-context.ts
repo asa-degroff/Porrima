@@ -7,7 +7,7 @@ import {
   setMemoryContextDirty, setAllMemoryContextDirty, type MemoryBlock,
 } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
-import { recordRerankerStats } from "./reranker-stats.js";
+import { recordRerankerStats, buildSelectedResult } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
@@ -548,6 +548,16 @@ async function retrieveMemories(
     score,
   }));
 
+  // Map injected memories back to their reranker document index (position in
+  // `rerankDocuments`) so the stats UI can correlate selected rows with the
+  // documents list. Keyed by memory id to avoid threading the index through
+  // the MMR/score-adjustment pipeline.
+  const rerankDocIndexById = new Map<string, number>();
+  for (const { index } of rerankOutput.results) {
+    const candidate = rerankCandidates[index];
+    if (candidate) rerankDocIndexById.set(candidate.memory.id, index);
+  }
+
   // --- Topic-aware memory culling ---
   // After compaction cycles, the memory store accumulates memories from every
   // topic the conversation has touched. Compaction summaries capture what the
@@ -643,10 +653,9 @@ async function retrieveMemories(
       source: "memory-context",
       query: `Instruct: ${instruction}\nQuery: ${rerankQuery}`,
       documents: rerankDocuments,
-      selectedResults: finalMemories.map((r) => ({
-        text: r.memory.text,
-        score: r.score,
-      })),
+      selectedResults: finalMemories.map((r) =>
+        buildSelectedResult(r.memory, r.score, rerankDocIndexById.get(r.memory.id)),
+      ),
       timestamp: Date.now(),
     });
   } catch (e) {
