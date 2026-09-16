@@ -42,7 +42,7 @@ Two complementary memory systems: **atomic memories** (8 categories: preference,
 
 Hybrid retrieval: vector search + FTS5 with RRF fusion, then cross-encoder reranking via Qwen3-Reranker-0.6B with chat-type-specific instructions. Memory blocks loaded by scope (global/project) with progressive disclosure — descriptions always in context, full content via `read_memory_block` tool. Extraction pipeline sees loaded blocks to prevent redundant extraction.
 
-Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. KV cache optimization uses delta-based memory injection — frozen memories in system prompt, new memories appended as delta messages to preserve longest-common-prefix caching. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `memory-tools.ts`, `reranker.ts`, `system-chat.ts`, `automation-storage.ts`, `automation-scheduler.ts`, `automation-runner.ts`, `chat-turn-runner.ts`, `agent-loop-runner.ts`, `llm-stream.ts`.
+Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. KV cache optimization uses delta-based memory injection — frozen memories in system prompt, new memories appended as delta messages to preserve longest-common-prefix caching. Key files: `memory-storage.ts`, `memory-block-scope.ts`, `memory-extraction.ts`, `memory-context.ts`, `memory-tools.ts`, `reranker.ts`, `system-chat.ts`, `automation-storage.ts`, `automation-scheduler.ts`, `automation-runner.ts`, `chat-turn-runner.ts`, `agent-loop-runner.ts`, `llm-stream.ts`.
 
 ## Automations
 
@@ -122,6 +122,7 @@ porrima/
 │       ├── automation-lock.ts       # Global automation run lock
 │       ├── embeddings.ts            # Embedding API wrapper (llama.cpp /v1/embeddings)
 │       ├── memory-storage.ts        # Memory + block SQLite + sqlite-vec persistence + KNN search
+│       ├── memory-block-scope.ts    # Scope/project resolution invariants for memory blocks
 │       ├── memory-extraction.ts     # Immediate + delayed extraction + supersession tracking
 │       ├── memory-context.ts        # System prompt augmentation with memories + blocks + stable prefix caching
 │       ├── memory-tools.ts          # Agent tool definitions: memories, blocks, archives, conversation search

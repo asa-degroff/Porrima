@@ -42,18 +42,26 @@ interface MemoryBlock {
 
 **Global blocks** (always loaded):
 - Applied to every chat regardless of project
+- Never carry a project association — moving one to `global` clears it
 - Examples: user preferences, agent personality notes, communication style
 
 **Project blocks** (loaded when `projectId` matches):
 - Scoped to a specific project
 - Examples: architecture decisions, tech stack, coding conventions
 - Still searchable cross-project via FTS and `search_memory`
+- Agent tools auto-bind to the current chat's project when `scope='project'` is used without `project_id`; agents can also target another project by ID, name, or path (ambiguous names are rejected)
 
 **Archived blocks** (never loaded):
 - Retired knowledge moved out of active context via `scope='archived'`
 - Excluded from context injection and default listings
+- Keep their project association so restoring (`scope='project'`) returns them to the right project
 - Still searchable via FTS/`search_memory`, readable via `read_memory_block`, and listable via `list_memory_blocks(scope='archived')`
 - Reversible: set the scope back to `global`/`project` to restore
+
+**Invariants** (enforced by `memory-block-scope.ts` and normalized in storage):
+- `global` → `projectId` is always empty
+- `project` → `projectId` must resolve to a real project; unresolvable requests are rejected rather than writing an orphan that no chat would load
+- `archived` → `projectId` is preserved unless explicitly cleared
 
 ## Context Injection
 
@@ -68,7 +76,7 @@ In `buildStablePrefix` / `buildMemoryAugmentedPrompt`, blocks and project contex
    - [blk:id] Name — description
    Use read_memory_block(id) to load full content when relevant.
 6. ## Continuity Context (Zeitgeist)
-7. ## Project Context (project chats only: working directory + AGENTS.md)
+7. ## Project Context (project chats only: project name + ID, working directory, AGENTS.md)
 8. ## Project Memory Blocks (project blocks, using the remaining project-chat block budget)
 9. ## Available Project Memory Blocks (remaining current-project blocks — one-line descriptions)
 10. ## Relevant Memories (atomic memories from reranker pipeline)
@@ -84,11 +92,11 @@ In `buildStablePrefix` / `buildMemoryAugmentedPrompt`, blocks and project contex
 
 | Tool | Description |
 |------|-------------|
-| `create_memory_block` | Create a new named block with content, scope, optional projectId. With `supersedes_block_id`, replaces an existing block while preserving lineage (scope/project inherited unless overridden) |
-| `update_memory_block` | Edit a block's content, description, or name; change scope (e.g. `'archived'` to retire it, `'global'`/`'project'` to restore). Rejects over-limit content with the exact overage |
+| `create_memory_block` | Create a new named block with content, scope, optional projectId. `scope='project'` without `project_id` binds to the current chat's project; `project_id` accepts an ID, name, path, or `'current'`. With `supersedes_block_id`, replaces an existing block while preserving lineage (scope/project inherited unless overridden; `scope='global'` clears the project) |
+| `update_memory_block` | Edit a block's content, description, or name; move it between scopes: `'project'` (current project unless `project_id` given), `'global'` (clears project), `'archived'` (retires it, keeps project association). Rejects over-limit content with the exact overage |
 | `read_memory_block` | Load full content of a block by ID. `include_history=true` adds prior content snapshots (newest first) |
-| `list_memory_blocks` | Browse blocks by scope, project, substring `query`, recency, limit. Excludes archived unless `scope='archived'` |
-| `search_memory` | Extended to also return block excerpts alongside atomic memory results |
+| `list_memory_blocks` | Browse blocks by scope, project (ID/name/path), substring `query`, recency, limit. Project IDs are included in the output. Excludes archived unless `scope='archived'` |
+| `search_memory` | Extended to also return block excerpts (with scope/project) alongside atomic memory results |
 
 ## Supersession
 
@@ -138,7 +146,7 @@ This directly prevents redundant extraction of facts already in blocks.
 | `GET` | `/api/memory/blocks` | List blocks (optional `?scope=` and `?projectId=` filters) |
 | `POST` | `/api/memory/blocks` | Create block |
 | `GET` | `/api/memory/blocks/:id` | Get single block |
-| `PATCH` | `/api/memory/blocks/:id` | Update block (sets `updatedBy: "user"`) |
+| `PATCH` | `/api/memory/blocks/:id` | Update block — content/description/name and scope/project reassignment (sets `updatedBy: "user"`) |
 | `DELETE` | `/api/memory/blocks/:id` | Delete block |
 | `GET` | `/api/memory/blocks/:id/history` | Supersession chain |
 
@@ -157,6 +165,7 @@ This directly prevents redundant extraction of facts already in blocks.
 | File | Role |
 |------|------|
 | `server/src/services/memory-storage.ts` | Block table schema, CRUD functions, FTS search, supersession |
+| `server/src/services/memory-block-scope.ts` | Scope/project resolution invariants shared by agent tools and REST routes |
 | `server/src/services/memory-tools.ts` | Agent tool definitions and executors |
 | `server/src/services/memory-context.ts` | Context injection, scope loading, stable prefix caching |
 | `server/src/services/memory-extraction.ts` | Extraction prompt augmentation with block content |

@@ -94,19 +94,19 @@ export function getCachedPromptBreakdown(chatId: string): PromptSectionBreakdown
   return promptBreakdownCache.get(chatId);
 }
 
-async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ label: string; agentsMd: string | null } | null> {
+async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ id: string; name?: string; label: string; agentsMd: string | null } | null> {
   if (!projectId) return null;
   const project = await getProject(projectId);
   if (project) {
     const workspace = await getWorkspaceForProject(project);
     const agentsMd = await workspace.readAgentsMd();
-    return { label: workspace.label, agentsMd };
+    return { id: project.id, name: project.name, label: workspace.label, agentsMd };
   }
   if (projectPath) {
     const agentsMd = await readAgentsMd(projectPath);
-    return { label: projectPath, agentsMd };
+    return { id: projectId, label: projectPath, agentsMd };
   }
-  return null;
+  return { id: projectId, label: "", agentsMd: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -863,10 +863,18 @@ export async function buildStablePrefix(
     try {
       const projectContext = await loadProjectContext(projectId, projectPath);
       if (projectContext) {
+        // Surface the project name + ID so the agent can reference the project
+        // in memory-block tools (scope='project', project_id=...).
+        const projectLine = projectContext.name
+          ? `Current project: ${projectContext.name} (${projectContext.id})`
+          : `Current project: ${projectContext.id}`;
+        const cwdLine = projectContext.label
+          ? `\nCurrent working directory: ${projectContext.label}`
+          : "";
         const agentsSection = projectContext.agentsMd
           ? `\n\nProject instructions from AGENTS.md:\n${projectContext.agentsMd}`
           : "";
-        projectSection = `\n\n## Project Context\nCurrent working directory: ${projectContext.label}${agentsSection}`;
+        projectSection = `\n\n## Project Context\n${projectLine}${cwdLine}${agentsSection}`;
       }
     } catch (e) {
       console.error("[memory] Failed to load AGENTS.md:", e);

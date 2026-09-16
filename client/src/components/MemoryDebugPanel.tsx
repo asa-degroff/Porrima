@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { searchMemories, fetchMemoriesPage, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
-import type { MemorySummary, MemoryLineage, MemoryBlock } from "../types";
+import { searchMemories, fetchMemoriesPage, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, fetchProjects } from "../api/client";
+import type { MemorySummary, MemoryLineage, MemoryBlock, Project } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
 import MemoryGraphView from "./MemoryGraphView";
@@ -199,8 +199,12 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockContent, setEditBlockContent] = useState("");
+  const [editBlockScope, setEditBlockScope] = useState<MemoryBlock["scope"]>("global");
+  const [editBlockProjectId, setEditBlockProjectId] = useState("");
+  const [blockEditError, setBlockEditError] = useState<string | null>(null);
   const [confirmingBlockDelete, setConfirmingBlockDelete] = useState<string | null>(null);
   const [blockScopeFilter, setBlockScopeFilter] = useState<"all" | "global" | "project" | "archived">("all");
+  const [projects, setProjects] = useState<Project[]>([]);
 
   // ── Extraction SSE ────────────────────────────────────────────────────
   useEffect(() => {
@@ -264,12 +268,20 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
     if (activeTab !== "blocks" || !isOpen) return;
     if (blocks.length === 0) {
       setBlocksLoading(true);
-      fetchMemoryBlocks()
-        .then(setBlocks)
+      // Active blocks + archived (the default listing excludes archived, but
+      // the panel offers an Archived filter).
+      Promise.all([fetchMemoryBlocks(), fetchMemoryBlocks("archived")])
+        .then(([active, archived]) => setBlocks([...active, ...archived]))
         .catch(() => {})
         .finally(() => setBlocksLoading(false));
     }
   }, [activeTab, isOpen]);
+
+  // ── Load projects for block scope editing ─────────────────────────────
+  useEffect(() => {
+    if (activeTab !== "blocks" || !isOpen || projects.length > 0) return;
+    fetchProjects().then(setProjects).catch(() => {});
+  }, [activeTab, isOpen, projects.length]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleRunSynthesis = useCallback(async () => {
@@ -360,6 +372,23 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
     }
     setConfirmingBlockDelete(null);
   }, []);
+
+  const handleSaveBlock = useCallback(async (id: string, content: string) => {
+    setBlockEditError(null);
+    try {
+      const updated = await updateMemoryBlockApi(id, {
+        content,
+        scope: editBlockScope,
+        // Only project scope needs a project reference: global clears it
+        // server-side, and archived keeps the block's existing association.
+        projectId: editBlockScope === "project" ? editBlockProjectId : undefined,
+      });
+      setBlocks((prev) => prev.map((b) => (b.id === id ? updated : b)));
+      setEditingBlockId(null);
+    } catch (err) {
+      setBlockEditError(err instanceof Error ? err.message : "Failed to update block");
+    }
+  }, [editBlockScope, editBlockProjectId]);
 
   const handleToggleLineage = useCallback(async (id: string) => {
     if (expandedLineage === id) {
@@ -527,23 +556,30 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
             <BlocksTab
               blocks={blocks}
               loading={blocksLoading}
+              projects={projects}
               editingBlockId={editingBlockId}
               editBlockContent={editBlockContent}
+              editBlockScope={editBlockScope}
+              editBlockProjectId={editBlockProjectId}
+              editBlockError={blockEditError}
               confirmingBlockDelete={confirmingBlockDelete}
               scopeFilter={blockScopeFilter}
               onContentChange={setEditBlockContent}
+              onEditScopeChange={setEditBlockScope}
+              onEditProjectChange={setEditBlockProjectId}
               onScopeFilterChange={setBlockScopeFilter}
-              onStartEdit={(id: string, content: string) => {
-                setEditingBlockId(id);
-                setEditBlockContent(content);
+              onStartEdit={(block: MemoryBlock) => {
+                setEditingBlockId(block.id);
+                setEditBlockContent(block.content);
+                setEditBlockScope(block.scope);
+                setEditBlockProjectId(block.projectId || "");
+                setBlockEditError(null);
               }}
-              onCancelEdit={() => setEditingBlockId(null)}
-              onSaveBlock={(id: string, content: string) => {
-                updateMemoryBlockApi(id, { content }).then((updated) => {
-                  setBlocks((prev) => prev.map((b) => b.id === id ? updated : b));
-                  setEditingBlockId(null);
-                });
+              onCancelEdit={() => {
+                setEditingBlockId(null);
+                setBlockEditError(null);
               }}
+              onSaveBlock={handleSaveBlock}
               onDeleteBlock={handleDeleteBlock}
               onCancelDelete={() => setConfirmingBlockDelete(null)}
             />
@@ -1092,11 +1128,17 @@ function MemoriesTab({
 function BlocksTab({
   blocks,
   loading,
+  projects,
   editingBlockId,
   editBlockContent,
+  editBlockScope,
+  editBlockProjectId,
+  editBlockError,
   confirmingBlockDelete,
   scopeFilter,
   onContentChange,
+  onEditScopeChange,
+  onEditProjectChange,
   onScopeFilterChange,
   onStartEdit,
   onCancelEdit,
@@ -1106,18 +1148,26 @@ function BlocksTab({
 }: {
   blocks: MemoryBlock[];
   loading: boolean;
+  projects: Project[];
   editingBlockId: string | null;
   editBlockContent: string;
+  editBlockScope: MemoryBlock["scope"];
+  editBlockProjectId: string;
+  editBlockError: string | null;
   confirmingBlockDelete: string | null;
   scopeFilter: "all" | "global" | "project" | "archived";
   onContentChange: (content: string) => void;
+  onEditScopeChange: (scope: MemoryBlock["scope"]) => void;
+  onEditProjectChange: (projectId: string) => void;
   onScopeFilterChange: (scope: "all" | "global" | "project" | "archived") => void;
-  onStartEdit: (id: string, content: string) => void;
+  onStartEdit: (block: MemoryBlock) => void;
   onCancelEdit: () => void;
   onSaveBlock: (id: string, content: string) => void;
   onDeleteBlock: (id: string) => void;
   onCancelDelete: () => void;
 }) {
+  const projectDd = useDropdown();
+  const editedProject = projects.find((p) => p.id === editBlockProjectId);
   return (
     <div className="p-4 space-y-3">
       <p className="text-white/30 text-xs">
@@ -1149,7 +1199,7 @@ function BlocksTab({
       ) : (
         <div className="space-y-2 max-h-[400px] overflow-y-auto">
           {blocks
-            .filter((b) => scopeFilter === "all" || b.scope === scopeFilter)
+            .filter((b) => scopeFilter === "all" ? b.scope !== "archived" : b.scope === scopeFilter)
             .map((block) => (
               <div
                 key={block.id}
@@ -1170,13 +1220,18 @@ function BlocksTab({
                       }`}>
                         {block.scope}
                       </span>
+                      {block.projectId && (
+                        <span className="text-[10px] text-white/25 truncate max-w-[140px]" title={block.projectId}>
+                          {projects.find((p) => p.id === block.projectId)?.name || block.projectId}
+                        </span>
+                      )}
                       <span className="text-[10px] text-white/25">{block.tokenEstimate}t</span>
                     </div>
                     <p className="text-xs text-white/40 mt-0.5">{block.description}</p>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
-                      onClick={() => editingBlockId === block.id ? onCancelEdit() : onStartEdit(block.id, block.content)}
+                      onClick={() => editingBlockId === block.id ? onCancelEdit() : onStartEdit(block)}
                       className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60 pressable"
                       title="Edit"
                     >
@@ -1211,12 +1266,62 @@ function BlocksTab({
 
                 {editingBlockId === block.id ? (
                   <div className="mt-2 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex gap-1">
+                        {(["global", "project", "archived"] as const).map((scope) => (
+                          <button
+                            key={scope}
+                            onClick={() => onEditScopeChange(scope)}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all pressable border ${
+                              editBlockScope === scope
+                                ? scope === "global" ? "bg-blue-500/25 text-blue-200 border-blue-400/30"
+                                  : scope === "project" ? "bg-emerald-500/25 text-emerald-200 border-emerald-400/30"
+                                  : "bg-amber-500/25 text-amber-200 border-amber-400/30"
+                                : "bg-white/5 text-white/40 border-white/10 hover:bg-white/10"
+                            }`}
+                            title={
+                              scope === "global" ? "Loaded in every chat"
+                                : scope === "project" ? "Loaded in one project's chats"
+                                : "Out of active context, still searchable"
+                            }
+                          >
+                            {scope}
+                          </button>
+                        ))}
+                      </div>
+                      {editBlockScope === "project" && (
+                        <div className="w-44">
+                          <Dropdown
+                            state={projectDd}
+                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                            trigger={<span className="truncate flex-1 text-left">
+                              {editedProject?.name || editBlockProjectId || "Select a project…"}
+                            </span>}
+                          >
+                            {projects.length === 0 ? (
+                              <p className="px-3 py-2 text-[10px] text-white/40">No projects</p>
+                            ) : projects.map((p) => (
+                              <button
+                                key={p.id}
+                                onClick={() => { projectDd.close(); onEditProjectChange(p.id); }}
+                                className={`w-full text-left px-3 py-2 text-[10px] transition-all ${p.id === editBlockProjectId ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+                              >
+                                {p.name}
+                              </button>
+                            ))}
+                          </Dropdown>
+                        </div>
+                      )}
+                    </div>
                     <textarea
                       className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 resize-y outline-none focus:ring-1 focus:ring-blue-400/30"
                       value={editBlockContent}
                       onChange={(e) => onContentChange(e.target.value)}
                       rows={6}
                     />
+                    {editBlockError && (
+                      <p className="text-[10px] text-red-300/80">{editBlockError}</p>
+                    )}
                     <div className="flex gap-2 justify-end">
                       <button
                         onClick={onCancelEdit}

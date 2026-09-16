@@ -474,6 +474,326 @@ describe("memory block lifecycle tools", () => {
   });
 });
 
+describe("memory block scope resolution", () => {
+  async function seedChat(
+    chatStorage: Awaited<ReturnType<typeof loadMemoryTools>>["chatStorage"],
+    id: string,
+    projectId?: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    await chatStorage.createChat({
+      id,
+      title: `Chat ${id}`,
+      type: "agent",
+      modelId: "test-model",
+      systemPrompt: "",
+      messages: [],
+      createdAt: now,
+      lastModified: now,
+      ...(projectId ? { projectId } : {}),
+    });
+  }
+
+  // Created results embed one id; supersede results embed old then new, so the
+  // newest block is always the last id in the message.
+  function blockIdFrom(result: { content: string }): string {
+    const matches = [...result.content.matchAll(/\[(blk-[^\]]+)\]/g)];
+    expect(matches.length, `no block id in: ${result.content}`).toBeGreaterThan(0);
+    return matches[matches.length - 1][1];
+  }
+
+  it("binds scope=project to the current chat's project", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "Project knowledge", content: "content", scope: "project" },
+      } as any, "chat-project");
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("project: proj-alpha");
+      const block = memoryStorage.getMemoryBlock(blockIdFrom(result));
+      expect(block?.scope).toBe("project");
+      expect(block?.projectId).toBe("proj-alpha");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects project scope when no project can be resolved instead of writing an orphan", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-no-project");
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Orphan", description: "d", content: "c", scope: "project" },
+      } as any, "chat-no-project");
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("project-scoped");
+      expect(memoryStorage.listMemoryBlocks({ includeInternal: true })).toHaveLength(0);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("moves a global block into the current project via update_memory_block", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      const created = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Global Block", description: "d", content: "c" },
+      } as any, "chat-project");
+      const id = blockIdFrom(created);
+
+      const moved = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: id, scope: "project" },
+      } as any, "chat-project");
+
+      expect(moved.isError).toBe(false);
+      expect(moved.content).toContain("scope: global → project");
+      expect(moved.content).toContain("project: (none) → proj-alpha");
+      const block = memoryStorage.getMemoryBlock(id);
+      expect(block?.scope).toBe("project");
+      expect(block?.projectId).toBe("proj-alpha");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the project association when scope changes to global", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      const created = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "d", content: "c", scope: "project" },
+      } as any, "chat-project");
+      const id = blockIdFrom(created);
+
+      const moved = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: id, scope: "global" },
+      } as any, "chat-1");
+
+      expect(moved.isError).toBe(false);
+      expect(moved.content).toContain("project: proj-alpha → (none)");
+      const block = memoryStorage.getMemoryBlock(id);
+      expect(block?.scope).toBe("global");
+      expect(block?.projectId).toBe("");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the project association when archiving and restores it from another chat", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+      await seedChat(chatStorage, "chat-no-project");
+
+      const created = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "d", content: "c", scope: "project" },
+      } as any, "chat-project");
+      const id = blockIdFrom(created);
+
+      const archived = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: id, scope: "archived" },
+      } as any, "chat-no-project");
+      expect(archived.isError).toBe(false);
+      expect(memoryStorage.getMemoryBlock(id)?.projectId).toBe("proj-alpha");
+
+      const restored = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: id, scope: "project" },
+      } as any, "chat-no-project");
+      expect(restored.isError).toBe(false);
+      expect(restored.content).toContain("scope: archived → project");
+      const block = memoryStorage.getMemoryBlock(id);
+      expect(block?.scope).toBe("project");
+      expect(block?.projectId).toBe("proj-alpha");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an explicit project clear while scope stays project", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      const created = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "d", content: "c", scope: "project" },
+      } as any, "chat-project");
+      const id = blockIdFrom(created);
+
+      const cleared = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: { block_id: id, project_id: "" },
+      } as any, "chat-project");
+
+      expect(cleared.isError).toBe(true);
+      expect(cleared.content).toContain("scope=\"global\"");
+      expect(memoryStorage.getMemoryBlock(id)?.projectId).toBe("proj-alpha");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("superseding with scope=global clears the inherited project", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      const created = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "d", content: "c", scope: "project" },
+      } as any, "chat-project");
+      const oldId = blockIdFrom(created);
+
+      const superseded = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Global Replacement",
+          description: "d",
+          content: "c2",
+          scope: "global",
+          supersedes_block_id: oldId,
+        },
+      } as any, "chat-project");
+
+      expect(superseded.isError).toBe(false);
+      const newId = blockIdFrom(superseded);
+      const newBlock = memoryStorage.getMemoryBlock(newId);
+      expect(newBlock?.scope).toBe("global");
+      expect(newBlock?.projectId).toBe("");
+      expect(newBlock?.supersedes).toBe(oldId);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves project_id by project name and rejects unknown projects", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-no-project");
+      const now = new Date().toISOString();
+      await chatStorage.createProject({
+        id: "proj-alpha",
+        name: "Alpha Project",
+        path: "/work/alpha",
+        color: "blue",
+        pinned: false,
+        createdAt: now,
+        lastModified: now,
+      });
+
+      const byName = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Named Project Block",
+          description: "d",
+          content: "c",
+          scope: "project",
+          project_id: "Alpha Project",
+        },
+      } as any, "chat-no-project");
+
+      expect(byName.isError).toBe(false);
+      const block = memoryStorage.getMemoryBlock(blockIdFrom(byName));
+      expect(block?.projectId).toBe("proj-alpha");
+
+      const unknown = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Unknown Project Block",
+          description: "d",
+          content: "c",
+          scope: "project",
+          project_id: "No Such Project",
+        },
+      } as any, "chat-no-project");
+
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content).toContain("Unknown project");
+      expect(unknown.content).toContain("Alpha Project (proj-alpha)");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists blocks with their project IDs and filters by project", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, chatStorage } = await loadMemoryTools(homeDir);
+      await seedChat(chatStorage, "chat-project", "proj-alpha");
+
+      await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Project Block", description: "d", content: "c", scope: "project" },
+      } as any, "chat-project");
+      await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: { name: "Global Block", description: "d", content: "c" },
+      } as any, "chat-project");
+
+      const listed = await memoryTools.executeMemoryTool({
+        name: "list_memory_blocks",
+        arguments: { project_id: "proj-alpha" },
+      } as any, "chat-project");
+
+      expect(listed.content).toContain("[blk-");
+      expect(listed.content).toContain("project: proj-alpha");
+      expect(listed.content).toContain("Project Block");
+      expect(listed.content).not.toContain("Global Block");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects project_id combined with scope=global", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-block-scope-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "create_memory_block",
+        arguments: {
+          name: "Contradiction",
+          description: "d",
+          content: "c",
+          scope: "global",
+          project_id: "proj-alpha",
+        },
+      } as any, "chat-1");
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("can't carry a project");
+      expect(memoryStorage.listMemoryBlocks({ includeInternal: true })).toHaveLength(0);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
 function makeArchiveFixture(overrides: {
   id?: string;
   chatId?: string;

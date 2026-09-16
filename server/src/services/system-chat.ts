@@ -139,7 +139,8 @@ Your synthesis is complete. Now review and maintain your memory blocks, includin
 ### Block Maintenance
 - **Archive** stale blocks (not updated in 2+ weeks, superseded by newer content): \`update_memory_block(id, scope="archived", description="Archived: ...")\`
 - **Update** blocks with new insights from your synthesis: \`update_memory_block(id, content=new, description=new)\`
-- **Create** new blocks for topics not covered yet: \`create_memory_block(name, description, content, scope=...)\`
+- **Create** new blocks for topics not covered yet: \`create_memory_block(name, description, content, scope=...)\` — use scope="project" with a project ID from the inventory for project-specific knowledge, and scope="global" for knowledge that applies everywhere
+- **Move** a block whose knowledge turned out to be project-specific into that project: \`update_memory_block(id, scope="project", project_id="<project ID from the inventory>")\`
 - **Consolidate** overlapping blocks — merge redundant content into one
 - **Read** full block content before acting: \`read_memory_block(id)\`
 
@@ -630,7 +631,7 @@ async function buildMaintenancePhase2Trigger(
   chatId: string,
   phase2Instructions = SYNTHESIS_PHASE2_INSTRUCTIONS,
 ): Promise<string> {
-  const { getDb } = await import("./chat-storage.js");
+  const { getDb, getProject } = await import("./chat-storage.js");
   const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars, isSystemManagedMemoryBlock } = await import("./memory-storage.js");
 
   // 1. All non-system global blocks
@@ -661,9 +662,16 @@ async function buildMaintenancePhase2Trigger(
   for (const projectId of projectIdSet) {
     const blocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b));
     if (blocks.length > 0) {
-      // Get project name from AGENTS.md or fall back to ID
-      const projectName = projectId.slice(0, 8);
-      projectBlocks.set(projectId, { name: projectName, blocks });
+      // Label with the real project name plus the full ID so the agent can
+      // target the project with create/update_memory_block(project_id=...).
+      let projectLabel = projectId;
+      try {
+        const project = await getProject(projectId);
+        if (project?.name) projectLabel = `${project.name} (${projectId})`;
+      } catch {
+        // Fall back to the raw ID.
+      }
+      projectBlocks.set(projectId, { name: projectLabel, blocks });
     }
   }
 

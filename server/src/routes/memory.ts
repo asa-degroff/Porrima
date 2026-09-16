@@ -22,6 +22,7 @@ import {
   getMaxBlockChars,
   buildMemoryIndexText,
 } from "../services/memory-storage.js";
+import { isBlockScope, resolveBlockScopeTarget } from "../services/memory-block-scope.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
@@ -545,9 +546,21 @@ router.post("/blocks", async (req, res) => {
   if (!name || !description || !content) {
     return res.status(400).json({ error: "name, description, and content are required" });
   }
+  if (scope !== undefined && !isBlockScope(scope)) {
+    return res.status(400).json({ error: `Invalid scope: ${scope}. Use 'global', 'project', or 'archived'.` });
+  }
   const maxChars = await getMaxBlockChars();
   if (content.length > maxChars) {
     return res.status(400).json({ error: `Content exceeds ${maxChars} character limit` });
+  }
+  const resolution = await resolveBlockScopeTarget({
+    requestedScope: scope,
+    requestedProjectId: projectId === undefined
+      ? undefined
+      : (String(projectId).trim() === "" ? null : String(projectId)),
+  });
+  if (!resolution.ok) {
+    return res.status(400).json({ error: resolution.error });
   }
   const id = `blk-${uuid()}`;
   const now = new Date().toISOString();
@@ -556,8 +569,8 @@ router.post("/blocks", async (req, res) => {
     name,
     description,
     content,
-    scope: scope || "global",
-    projectId: projectId || "",
+    scope: resolution.target.scope,
+    projectId: resolution.target.projectId,
     createdAt: now,
     updatedAt: now,
     updatedBy: "user",
@@ -578,11 +591,28 @@ router.get("/blocks/:id", async (req, res) => {
 
 // Update block
 router.patch("/blocks/:id", async (req, res) => {
-  const { content, description, name } = req.body;
+  const { content, description, name, scope, projectId } = req.body;
+  if (scope !== undefined && !isBlockScope(scope)) {
+    return res.status(400).json({ error: `Invalid scope: ${scope}. Use 'global', 'project', or 'archived'.` });
+  }
+  const existing = getMemoryBlock(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Block not found" });
+  const resolution = await resolveBlockScopeTarget({
+    requestedScope: scope,
+    requestedProjectId: projectId === undefined
+      ? undefined
+      : (String(projectId).trim() === "" ? null : String(projectId)),
+    existing,
+  });
+  if (!resolution.ok) {
+    return res.status(400).json({ error: resolution.error });
+  }
   const success = updateMemoryBlock(req.params.id, {
     content,
     description,
     name,
+    scope: resolution.target.scope,
+    projectId: resolution.target.projectId,
     updatedBy: "user",
   });
   if (!success) return res.status(404).json({ error: "Block not found" });

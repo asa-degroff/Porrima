@@ -2097,6 +2097,10 @@ export function createMemoryBlock(
   const db = getDb();
   const full: MemoryBlock = {
     ...block,
+    // Global blocks never carry a project association — callers should have
+    // resolved this already (see memory-block-scope.ts), but normalize here so
+    // no code path can persist a global block with a stale projectId.
+    projectId: block.scope === "global" ? "" : (block.projectId || ""),
     blockType: block.blockType ?? "note",
     attachments: block.attachments,
     tokenEstimate: estimateBlockTokens(block.content),
@@ -2142,10 +2146,13 @@ export function updateMemoryBlock(id: string, updates: {
         ? JSON.stringify(existing.attachments)
         : null;
   // `projectId: null` explicitly clears to the schema's blank global value;
-  // `undefined` keeps the existing value.
-  const newProjectId = updates.projectId !== undefined
-    ? (updates.projectId ?? "")
-    : (existing.projectId || "");
+  // `undefined` keeps the existing value. Global scope always clears it so a
+  // block moved out of a project can't keep a stale association.
+  const newProjectId = newScope === "global"
+    ? ""
+    : updates.projectId !== undefined
+      ? (updates.projectId ?? "")
+      : (existing.projectId || "");
 
   db.prepare(`
     UPDATE memory_blocks SET

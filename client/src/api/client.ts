@@ -1306,13 +1306,16 @@ export async function createMemoryBlockApi(block: { name: string; description: s
   return res.json();
 }
 
-export async function updateMemoryBlockApi(id: string, updates: { content?: string; description?: string; name?: string }): Promise<import("../types").MemoryBlock> {
+export async function updateMemoryBlockApi(id: string, updates: { content?: string; description?: string; name?: string; scope?: string; projectId?: string }): Promise<import("../types").MemoryBlock> {
   const res = await apiFetch(`${BASE}/memory/blocks/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error("Failed to update memory block");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Failed to update memory block");
+  }
   return res.json();
 }
 
