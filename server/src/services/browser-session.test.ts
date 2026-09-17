@@ -57,6 +57,9 @@ describe("browser session: hover-driven UI", () => {
   let session: BrowserSession;
 
   beforeAll(async () => {
+    // This suite asserts private-browser behavior; never attach to a Chrome the
+    // developer happens to have running with remote debugging enabled.
+    process.env.PORRIMA_BROWSER_ATTACH = "0";
     const dir = mkdtempSync(join(tmpdir(), "browser-hover-"));
     writeFileSync(join(dir, "index.html"), PAGE);
     server = spawn("python3", ["-m", "http.server", String(PORT), "--directory", dir], { stdio: "ignore" });
@@ -95,6 +98,7 @@ describe("browser session: hover-driven UI", () => {
 
   afterAll(async () => {
     await closeBrowserSession(CHAT_ID).catch(() => {});
+    delete process.env.PORRIMA_BROWSER_ATTACH;
     server.kill();
   });
 });

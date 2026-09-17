@@ -9,7 +9,6 @@ import {
   screenshotPage,
   drainDialogNotes,
   formatElementLine,
-  DEFAULT_VIEWPORT,
 } from "./browser-session.js";
 
 const BROWSER_NAVIGATE_TOOL: Tool = {
@@ -182,7 +181,7 @@ async function executeType(args: Record<string, any>, chatId: string): Promise<T
 async function executeScreenshot(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
   const session = await getBrowserSession(chatId);
   const shot = await screenshotPage(session, args.fullPage === true);
-  const label = `Screenshot of ${shot.url} — "${shot.title}" (${shot.width}x${shot.height}, ${args.fullPage ? "full page" : `viewport ${DEFAULT_VIEWPORT.width}x${DEFAULT_VIEWPORT.height}`})`;
+  const label = `Screenshot of ${shot.url} — "${shot.title}" (${shot.width}x${shot.height}, ${args.fullPage ? "full page" : "viewport"})`;
   const content: any[] = [
     { type: "text", text: `${label}${drainDialogNotes(session)}` },
     { type: "image", data: shot.data, mimeType: shot.mimeType, name: "browser-screenshot" },

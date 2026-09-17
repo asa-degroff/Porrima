@@ -1,6 +1,6 @@
 import puppeteer, { type Browser, type Page, type ElementHandle } from "puppeteer-core";
 import sharp from "sharp";
-import { findChromePath } from "./chrome.js";
+import { discoverDevToolsTarget, findChromePath } from "./chrome.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
@@ -22,17 +22,23 @@ export interface SnapshotElement {
   xpath: string;
 }
 
+export type BrowserMode = "launched" | "attached";
+
 export interface BrowserSession {
   chatId: string;
   browser: Browser;
   page: Page;
+  /** "launched" = private browser owned by this session; "attached" = the user's already-running Chrome. */
+  mode: BrowserMode;
+  /** Pages opened by one of the session's own tabs (window.open / target=_blank), adopted by syncActivePage. */
+  popups: Page[];
   refs: Map<number, SnapshotElement>;
   lastUsed: number;
   dialogs: string[];
 }
 
 const sessions = new Map<string, BrowserSession>();
-const launching = new Map<string, Promise<BrowserSession>>();
+const opening = new Map<string, Promise<BrowserSession>>();
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 function touch(session: BrowserSession): void {
@@ -52,11 +58,24 @@ function startSweeper(): void {
   sweepTimer.unref();
 }
 
+async function teardownBrowser(session: BrowserSession): Promise<void> {
+  if (session.mode === "attached") {
+    // The browser belongs to the user: close only this session's tab, then
+    // disconnect. Never call browser.close() on a browser we did not launch.
+    if (!session.page.isClosed()) {
+      await session.page.close().catch(() => {});
+    }
+    await session.browser.disconnect().catch(() => {});
+    return;
+  }
+  await session.browser.close().catch(() => {});
+}
+
 export async function closeBrowserSession(chatId: string): Promise<void> {
   const session = sessions.get(chatId);
   sessions.delete(chatId);
   if (session) {
-    await session.browser.close().catch(() => {});
+    await teardownBrowser(session);
   }
 }
 
@@ -77,6 +96,36 @@ function attachDialogHandler(session: BrowserSession, page: Page): void {
   });
 }
 
+/** Record pages opened by one of the session's own tabs so they can be adopted. */
+function watchForPopups(session: BrowserSession, page: Page): void {
+  page.on("popup", (popup) => {
+    if (!popup) return;
+    session.popups.push(popup);
+    if (session.popups.length > 5) session.popups.shift();
+  });
+}
+
+async function attachSession(chatId: string, endpoint: string): Promise<BrowserSession> {
+  const browser = await puppeteer.connect({
+    ...(/^wss?:\/\//i.test(endpoint) ? { browserWSEndpoint: endpoint } : { browserURL: endpoint }),
+    // Never apply an emulated viewport to a browser we do not own — it would
+    // resize the user's windows.
+    defaultViewport: null,
+  });
+  try {
+    const page = await browser.newPage();
+    const session: BrowserSession = { chatId, browser, page, mode: "attached", popups: [], refs: new Map(), lastUsed: Date.now(), dialogs: [] };
+    attachDialogHandler(session, page);
+    watchForPopups(session, page);
+    sessions.set(chatId, session);
+    startSweeper();
+    return session;
+  } catch (err) {
+    await browser.disconnect().catch(() => {});
+    throw err;
+  }
+}
+
 async function launchSession(chatId: string): Promise<BrowserSession> {
   const chromePath = findChromePath();
   if (!chromePath) {
@@ -93,11 +142,42 @@ async function launchSession(chatId: string): Promise<BrowserSession> {
   });
   const page = await browser.newPage();
   await page.setViewport(DEFAULT_VIEWPORT);
-  const session: BrowserSession = { chatId, browser, page, refs: new Map(), lastUsed: Date.now(), dialogs: [] };
+  const session: BrowserSession = { chatId, browser, page, mode: "launched", popups: [], refs: new Map(), lastUsed: Date.now(), dialogs: [] };
   attachDialogHandler(session, page);
+  watchForPopups(session, page);
   sessions.set(chatId, session);
   startSweeper();
   return session;
+}
+
+/**
+ * Prefer the user's running Chrome when remote debugging is enabled (Chrome
+ * 144+ exposes the consent toggle at chrome://inspect/#remote-debugging, which
+ * writes DevToolsActivePort into the profile dir). Otherwise launch a private
+ * browser. PORRIMA_BROWSER_CDP_URL pins an explicit endpoint and fails loudly
+ * when unreachable; PORRIMA_BROWSER_ATTACH=0 disables attaching entirely.
+ */
+async function openBrowserSession(chatId: string): Promise<BrowserSession> {
+  const explicitEndpoint = process.env.PORRIMA_BROWSER_CDP_URL?.trim();
+  if (explicitEndpoint) {
+    try {
+      return await attachSession(chatId, explicitEndpoint);
+    } catch (err) {
+      throw new Error(`Could not connect to PORRIMA_BROWSER_CDP_URL (${explicitEndpoint}): ${(err as Error).message}`);
+    }
+  }
+  if (process.env.PORRIMA_BROWSER_ATTACH !== "0") {
+    const target = await discoverDevToolsTarget().catch(() => null);
+    if (target) {
+      const endpoint = `ws://127.0.0.1:${target.port}${target.webSocketPath}`;
+      try {
+        return await attachSession(chatId, endpoint);
+      } catch (err) {
+        console.warn(`[browser] Could not attach to Chrome at ${endpoint}: ${(err as Error).message} — falling back to a private browser. Approve the connection via chrome://inspect/#remote-debugging to use your Chrome.`);
+      }
+    }
+  }
+  return launchSession(chatId);
 }
 
 export async function getBrowserSession(chatId: string): Promise<BrowserSession> {
@@ -108,23 +188,40 @@ export async function getBrowserSession(chatId: string): Promise<BrowserSession>
       return existing;
     }
     sessions.delete(chatId);
-    await existing.browser.close().catch(() => {});
+    await teardownBrowser(existing);
   }
-  const pending = launching.get(chatId);
+  const pending = opening.get(chatId);
   if (pending) return pending;
-  const promise = launchSession(chatId).finally(() => launching.delete(chatId));
-  launching.set(chatId, promise);
+  const promise = openBrowserSession(chatId).finally(() => opening.delete(chatId));
+  opening.set(chatId, promise);
   return promise;
 }
 
-/** After navigation/clicks, adopt the most recently opened page (e.g. target=_blank popups). */
+/** After navigation/clicks, adopt a page opened by the session's own tab (e.g. target=_blank popups). */
 async function syncActivePage(session: BrowserSession): Promise<boolean> {
-  const pages = await session.browser.pages();
-  const newest = pages[pages.length - 1];
-  if (!newest || newest === session.page) return false;
-  session.page = newest;
-  attachDialogHandler(session, newest);
-  await newest.setViewport(DEFAULT_VIEWPORT).catch(() => {});
+  let next: Page | undefined;
+  while (session.popups.length > 0) {
+    const candidate = session.popups.pop()!;
+    if (!candidate.isClosed() && candidate !== session.page) {
+      next = candidate;
+      break;
+    }
+  }
+  // A launched browser is private to the session, so the newest page is ours
+  // even without a popup event. An attached browser may only adopt popups —
+  // anything else could be a tab the user just opened.
+  if (!next && session.mode === "launched") {
+    const pages = await session.browser.pages();
+    const newest = pages[pages.length - 1];
+    if (newest && newest !== session.page) next = newest;
+  }
+  if (!next) return false;
+  session.page = next;
+  attachDialogHandler(session, next);
+  watchForPopups(session, next);
+  if (session.mode !== "attached") {
+    await next.setViewport(DEFAULT_VIEWPORT).catch(() => {});
+  }
   return true;
 }
 
@@ -286,7 +383,9 @@ export async function snapshotPage(session: BrowserSession, query?: string, limi
   const scrollPct = raw.scrollHeight > raw.innerHeight
     ? Math.round((raw.scrollY / (raw.scrollHeight - raw.innerHeight)) * 100)
     : 0;
-  const header = `${raw.url} — "${raw.title}"\nViewport ${DEFAULT_VIEWPORT.width}x${DEFAULT_VIEWPORT.height} · scroll ${scrollPct}% · ${matched.length} element${matched.length === 1 ? "" : "s"}`;
+  const viewport = session.page.viewport();
+  const viewportLabel = viewport ? `${viewport.width}x${viewport.height}` : "native";
+  const header = `${raw.url} — "${raw.title}"\nViewport ${viewportLabel} · scroll ${scrollPct}% · ${matched.length} element${matched.length === 1 ? "" : "s"}`;
   const lines = shown.map(formatElementLine);
   if (matched.length > shown.length) {
     lines.push(`… ${matched.length - shown.length} more element(s) omitted — filter with query or raise limit (max ${MAX_SNAPSHOT_LIMIT}).`);
