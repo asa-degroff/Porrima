@@ -87,6 +87,9 @@ html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
     inset: -1px;
     padding: 1px;
     border-radius: inherit;
+    /* Pseudo-elements excluded from the global squircle rule (hosts with a
+       corner-* class) still need to follow their host's corner shape. */
+    corner-shape: inherit;
     pointer-events: none;
     /* Fixed-size edge ramps fade through the corners into quiet side edges. */
     background:
@@ -102,23 +105,17 @@ html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
   /* Press into shadow rather than reversing the light source. The same
      mode-scoped overlay adds a faint face tint and a darker bottom/right rim,
-     without replacing the host's theme background or keyboard focus shadow. */
-  .depth-raised.pressable:active:not(:disabled):not([aria-disabled="true"])::after {
-    background: rgb(0 0 0 / 0.06);
+     without replacing the host's theme background or keyboard focus shadow.
+     Restricted to hosts that ARE the control: :active matches every ancestor
+     of the pressed element, so cards, modal shells and menus (div hosts)
+     must not darken when a child inside them is clicked. */
+  :is(button, a, [role="button"]).depth-raised:active:not(:disabled):not([aria-disabled="true"])::after {
+    background: rgb(0 0 0 / 0.07);
     -webkit-mask: none;
     mask: none;
     box-shadow:
-      inset 0 0 0 1px rgb(0 0 0 / 0.22),
+      inset 0 0 0 1px rgb(0 0 0 / 0.24),
       inset -1px -1px 2px rgb(0 0 0 / 0.16);
-  }
-
-  /* Dropdown triggers use depth chrome but not the pressable scale; they
-     still get pressed feedback, darkening only (no scale, no light flip). */
-  .depth-raised:active:not(.pressable):not(:disabled):not([aria-disabled="true"])::after {
-    background: rgb(0 0 0 / 0.08);
-    -webkit-mask: none;
-    mask: none;
-    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25);
   }
 }
 
