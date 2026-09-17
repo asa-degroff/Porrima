@@ -483,6 +483,7 @@ export interface Settings {
   chromaticAberration?: boolean;
   mouseWarp?: boolean;
   cornerRadius?: CornerRadius;
+  surfaceDepth?: "flat" | "beveled";
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;

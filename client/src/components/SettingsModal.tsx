@@ -30,6 +30,7 @@ import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from ".
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { BackgroundEffectPreview } from "./BackgroundEffectPreview";
+import { SurfaceDepthPreview } from "./SurfaceDepthPreview";
 import { ThemePicker } from "./ThemePicker";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
@@ -813,6 +814,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [chromaticAberration, setChromaticAberration] = useState(settings.chromaticAberration ?? true);
   const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
+  const [surfaceDepth, setSurfaceDepth] = useState<"flat" | "beveled">(settings.surfaceDepth || "flat");
   const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [activityHue, setActivityHue] = useState<number>(settings.activityHue ?? 38);
   const [activitySaturation, setActivitySaturation] = useState<number>(settings.activitySaturation ?? 85);
@@ -2185,6 +2187,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       chromaticAberration,
       mouseWarp,
       cornerRadius,
+      surfaceDepth,
       activityShape,
       activityHue,
       activitySaturation,
@@ -2984,7 +2987,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       <Dropdown
         state={state}
         triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+        panelClassName="left-0 right-0 top-full mt-1"
+        panelContentClassName="max-h-[240px] overflow-y-auto"
         trigger={<span className="truncate flex-1 text-left">{getBinaryLabel(selected)}</span>}
       >
         <button
@@ -3133,7 +3137,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl mx-4 app-modal-surface border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="depth-raised relative w-full max-w-3xl mx-4 app-modal-surface border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
@@ -3414,7 +3418,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   state={defaultBinaryDd}
                   disabled={llamaPathUpdating || llamaBinaries.length === 0}
                   triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono disabled:opacity-40"
-                  panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                  panelClassName="left-0 right-0 top-full mt-1"
+                  panelContentClassName="max-h-[240px] overflow-y-auto"
                   trigger={
                     <span className="truncate flex-1 text-left">
                       {llamaPathInfo?.valid ? getBinaryLabel(llamaPathInfo.currentPath) : "Select discovered binary"}
@@ -3789,7 +3794,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <Dropdown
 	                                      state={extractionModelDd}
 	                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-	                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                      panelClassName="left-0 right-0 top-full mt-1"
+	                                      panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                      trigger={<span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>}
 	                                    >
 		                                      {extractionServerModels.map((m) => (
@@ -3826,7 +3832,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                     <Dropdown
                                       state={extractionBinaryDd}
                                       triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      panelClassName="left-0 right-0 top-full mt-1"
+                                      panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
                                     >
                                       <button onClick={() => {
@@ -3865,7 +3872,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                      <Dropdown
 	                                        state={rerankerModelDd}
 	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                        panelClassName="left-0 right-0 top-full mt-1"
+	                                        panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>}
 	                                      >
 		                                        {rerankerModels.map((m) => (
@@ -3908,7 +3916,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                     <Dropdown
                                       state={rerankerBinaryDd}
                                       triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      panelClassName="left-0 right-0 top-full mt-1"
+                                      panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
                                     >
                                       <button onClick={() => {
@@ -3950,7 +3959,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  <Dropdown
 	                                    state={embeddingModelDd}
 	                                    triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-	                                    panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                    panelClassName="left-0 right-0 top-full mt-1"
+	                                    panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                    trigger={<span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>}
 	                                  >
 		                                    {embeddingModels.map((m) => (
@@ -4003,7 +4013,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 							        <Dropdown
 							          state={embeddingBinaryDd}
 							          triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-							          panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+							          panelClassName="left-0 right-0 top-full mt-1"
+							          panelContentClassName="max-h-[240px] overflow-y-auto"
 							          trigger={<span className="truncate flex-1 text-left">{label}</span>}
 							        >
 							          <button onClick={() => {
@@ -4042,7 +4053,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                      <Dropdown
 	                                        state={titleGenerationModelDd}
 	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                        panelClassName="left-0 right-0 top-full mt-1"
+	                                        panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>}
 	                                      >
 		                                        {titleGenerationModels.map((m) => (
@@ -4080,7 +4092,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                     <Dropdown
                                       state={titleGenBinaryDd}
                                       triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      panelClassName="left-0 right-0 top-full mt-1"
+                                      panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
                                     >
                                       <button onClick={() => {
@@ -4538,6 +4551,32 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <p className="text-white/30 text-xs">
               Scales the radius of rounded corners (superellipse on supported browsers, circular as a fallback).
             </p>
+          </div>
+
+          {/* Surface Depth — limited rollout while the lighting is evaluated. */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-white/60">Surface Depth <span className="text-xs text-white/35">· Prototype</span></label>
+              <p className="text-white/30 text-xs mt-0.5">
+                Preview below, then Apply or Save to use on send buttons, the model picker, active chat cards, and the message input.
+              </p>
+            </div>
+            <div className="flex gap-2" role="group" aria-label="Surface depth">
+              {(["flat", "beveled"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={surfaceDepth === value}
+                  onClick={() => setSurfaceDepth(value)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable ${
+                    surfaceDepth === value ? "border-white/30 bg-white/5" : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  {value === "flat" ? "Flat (current)" : "Beveled"}
+                </button>
+              ))}
+            </div>
+            <SurfaceDepthPreview depth={surfaceDepth} />
           </div>
 
           {/* Activity Shape */}
@@ -5421,7 +5460,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               <label className="block text-sm text-white/50">Default Web Search Provider</label>
               <Dropdown
                 state={webSearchProviderDd}
-                panelClassName="left-0 right-0 top-full mt-1 overflow-hidden"
+                panelClassName="left-0 right-0 top-full mt-1"
+                panelContentClassName="overflow-hidden"
                 trigger={
                   <span className="truncate flex-1 text-left">
                     {WEB_SEARCH_PROVIDER_OPTIONS.find((p) => p.id === defaultWebSearchProvider)?.label || "Brave Search"}
@@ -6846,7 +6886,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              </span>
 	                            }
 	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
-	                            panelClassName="left-0 right-0 top-full mt-1 max-h-[120px] overflow-y-auto"
+	                            panelClassName="left-0 right-0 top-full mt-1"
+	                            panelContentClassName="max-h-[120px] overflow-y-auto"
 	                          >
 	                            <button
 	                              onClick={() => {
@@ -6929,7 +6970,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              </span>
 	                            }
 	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
-	                            panelClassName="left-0 right-0 top-full mt-1 max-h-[150px] overflow-y-auto"
+	                            panelClassName="left-0 right-0 top-full mt-1"
+	                            panelContentClassName="max-h-[150px] overflow-y-auto"
 	                          >
 	                            <button
 	                              onClick={() => {

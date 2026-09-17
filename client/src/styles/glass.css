@@ -44,6 +44,94 @@ html[data-radius="default"] { --radius-scale: 1.6; }
 /* Tailwind's base `.rounded` utility hardcodes 0.25rem, so scale it here too. */
 html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
+/*
+ * Beveled depth prototype. Explicit opt-in surfaces only; the real border,
+ * background, state rings and shadows remain intact. A masked 1px overlay
+ * lights that border without painting over translucent interiors.
+ *
+ * Hosts must already be positioned and have a 1px border. Keep scrolling on
+ * a child (not the host), so the edge doesn't scroll away with its content.
+ * ::after is reserved for this effect. Radius utilities below keep the fade
+ * tied to corner size rather than panel height, including squircle corners.
+ * Local data-depth scopes let Settings preview an unsaved choice safely.
+ */
+[data-depth="flat"] { --depth-edge-display: none; }
+[data-depth="beveled"] { --depth-edge-display: block; }
+
+.depth-raised,
+.depth-inset {
+  --depth-radius: var(--radius-lg);
+  --depth-top: rgb(255 255 255 / 0.3);
+  --depth-bottom: rgb(0 0 0 / 0.5);
+}
+
+:is(.depth-raised, .depth-inset).rounded-xl { --depth-radius: var(--radius-xl); }
+:is(.depth-raised, .depth-inset).rounded-2xl { --depth-radius: var(--radius-2xl); }
+
+/* Circle surfaces (avatars, dots) keep the full-ring highlight instead of
+   directional ramps; a directional gradient on a circle reads as a rim light. */
+:is(.depth-raised, .depth-inset).rounded-full {
+  --depth-radius: 9999px;
+}
+
+.depth-inset {
+  --depth-top: rgb(0 0 0 / 0.5);
+  --depth-bottom: rgb(255 255 255 / 0.2);
+}
+
+@supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
+  :is(.depth-raised, .depth-inset)::after {
+    content: "";
+    display: var(--depth-edge-display, none);
+    position: absolute;
+    inset: -1px;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    /* Fixed-size edge ramps fade through the corners into quiet side edges. */
+    background:
+      linear-gradient(to bottom, var(--depth-top), transparent)
+        top / 100% min(50%, var(--depth-radius)) no-repeat,
+      linear-gradient(to top, var(--depth-bottom), transparent)
+        bottom / 100% min(50%, var(--depth-radius)) no-repeat;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+
+  /* Press into shadow rather than reversing the light source. The same
+     mode-scoped overlay adds a faint face tint and a darker bottom/right rim,
+     without replacing the host's theme background or keyboard focus shadow. */
+  .depth-raised.pressable:active:not(:disabled):not([aria-disabled="true"])::after {
+    background: rgb(0 0 0 / 0.06);
+    -webkit-mask: none;
+    mask: none;
+    box-shadow:
+      inset 0 0 0 1px rgb(0 0 0 / 0.22),
+      inset -1px -1px 2px rgb(0 0 0 / 0.16);
+  }
+
+  /* Dropdown triggers use depth chrome but not the pressable scale; they
+     still get pressed feedback, darkening only (no scale, no light flip). */
+  .depth-raised:active:not(.pressable):not(:disabled):not([aria-disabled="true"])::after {
+    background: rgb(0 0 0 / 0.08);
+    -webkit-mask: none;
+    mask: none;
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25);
+  }
+}
+
+/* Lighting is decorative: fall back to real borders in high contrast mode. */
+@media (forced-colors: active) {
+  :is(.depth-raised, .depth-inset)::after { display: none; }
+  :is(.depth-raised, .depth-inset):focus-visible,
+  .depth-inset:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 /* Opt-in pressed affordance for command buttons. Uses individual scale so
    existing translate/rotate transform utilities continue to compose. */
 .pressable {

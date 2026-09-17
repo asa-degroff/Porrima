@@ -100,7 +100,8 @@ export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent
               borderColor: `rgba(var(--theme-primary-border))`,
               color: `rgba(var(--theme-primary-text))`,
             } : undefined}
-            panelClassName="right-0 top-full mt-1 min-w-[180px] overflow-hidden"
+            panelClassName="right-0 top-full mt-1 min-w-[180px]"
+            panelContentClassName="overflow-hidden"
             trigger={matchingPreset ? (matchingPreset.name || "Untitled") : isNoneSelected ? "Add preset" : "Custom"}
           >
             {isAgent && (

@@ -240,7 +240,8 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
     : '';
 
   return (
-    <div className={isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl border border-white/10 overflow-hidden bg-black/20" : "mt-3 rounded-xl border border-white/10 overflow-hidden bg-black/20"}>
+    <div className={`relative depth-raised ${isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl border border-white/10 bg-black/20" : "mt-3 rounded-xl border border-white/10 bg-black/20"}`}>
+      <div className={`flex flex-col flex-1 min-h-0 overflow-hidden ${isPinnedView ? "rounded-xl" : "rounded-[calc(var(--radius-xl)-1px)]"}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.03] shrink-0">
         <div className="flex items-center gap-2">
@@ -397,6 +398,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
           )}
         </>
       )}
+      </div>
     </div>
   );
 }

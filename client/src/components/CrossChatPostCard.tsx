@@ -28,7 +28,7 @@ export function CrossChatPostCard({
 
   return (
     <div
-      className="mx-1 md:mx-2 my-2 rounded-xl border border-purple-400/25 bg-purple-500/10 px-4 py-3"
+      className="relative depth-raised mx-1 md:mx-2 my-2 rounded-xl border border-purple-400/25 bg-purple-500/10 px-4 py-3"
       data-cross-chat-post={post.originTaskId ?? post.fromChatId}
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-purple-200/60">

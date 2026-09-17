@@ -200,12 +200,18 @@ html, body { background: transparent !important; max-height: 100% !important; }
 
   return (
     <div
-      className={isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden" : "mt-3 rounded-xl overflow-hidden"}
+      className={`relative depth-raised ${isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl" : "mt-3 rounded-xl"}`}
       style={{
-        border: "1px solid rgba(var(--theme-secondary), 0.2)",
-        background: "rgba(var(--theme-secondary), 0.03)",
+        position: "relative",
       }}
     >
+      <div
+        className="overflow-hidden rounded-[calc(var(--radius-xl)-1px)]"
+        style={{
+          border: "1px solid rgba(var(--theme-secondary), 0.2)",
+          background: "rgba(var(--theme-secondary), 0.03)",
+        }}
+      >
       {/* Compact header */}
       <div
         className="flex items-center justify-between px-3 py-1.5 shrink-0"
@@ -284,6 +290,7 @@ html, body { background: transparent !important; max-height: 100% !important; }
             <div className="text-sm text-white/40">Loading...</div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

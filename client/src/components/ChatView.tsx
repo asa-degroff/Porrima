@@ -1164,7 +1164,7 @@ export function ChatView({
           onClick={() => { setPromptModal(null); setPromptLoading(false); }}
         >
           <div
-            className="prompt-viewer-surface theme-primary-bg border theme-primary-border rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
+            className="depth-raised relative prompt-viewer-surface theme-primary-bg border theme-primary-border rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-3 border-b theme-primary-border">

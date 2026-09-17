@@ -428,7 +428,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`app-input-surface border rounded-2xl p-2 md:p-2.5 theme-accent-focus transition-colors relative ${
+        className={`depth-inset app-input-surface border rounded-2xl p-2 md:p-2.5 theme-accent-focus transition-colors relative ${
           dragging
             ? "theme-accent-drag ring-0"
             : waitingForInput
@@ -519,7 +519,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 data-haptic="manual"
-                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
+                className="depth-raised relative px-4 py-1.5 rounded-lg text-sm theme-accent-btn focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable"
               >
                 Send
               </button>
@@ -552,7 +552,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                 onClick={handleSubmit}
                 disabled={!canSend}
                 data-haptic="manual"
-                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
+                className="depth-raised relative px-4 py-1.5 rounded-lg text-sm theme-accent-btn focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable"
               >
                 Send
               </button>

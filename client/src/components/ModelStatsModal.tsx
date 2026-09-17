@@ -981,7 +981,7 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
+        className="depth-raised relative bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header — no tabs */}

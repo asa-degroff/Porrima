@@ -286,7 +286,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         <label className="block text-xs font-medium text-white/50">Model</label>
         <Dropdown
           state={modelDd}
-          panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+          panelClassName="left-0 right-0 top-full mt-1"
+          panelContentClassName="max-h-[320px] overflow-y-auto"
           trigger={<span className="truncate flex-1 text-left">{model || "No models found"}</span>}
         >
           {models.map((m) => (
@@ -475,7 +476,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <Dropdown
             state={samplerDd}
             triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
-            panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            panelClassName="left-0 right-0 top-full mt-1"
+            panelContentClassName="max-h-[240px] overflow-y-auto"
             trigger={<span className="truncate flex-1 text-left">{sampler}</span>}
           >
             {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
@@ -502,7 +504,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <Dropdown
             state={schedulerDd}
             triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
-            panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            panelClassName="left-0 right-0 top-full mt-1"
+            panelContentClassName="max-h-[240px] overflow-y-auto"
             trigger={<span className="truncate flex-1 text-left">{scheduler}</span>}
           >
             {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (

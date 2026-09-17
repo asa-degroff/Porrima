@@ -119,7 +119,8 @@ export function VisionControls({
           <Dropdown
             state={presetDd}
             disabled={analyzing}
-            panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+            panelClassName="left-0 right-0 top-full mt-1"
+            panelContentClassName="max-h-[320px] overflow-y-auto"
             trigger={<span className="truncate flex-1 text-left">{selectedPresetObj?.name || selectedPreset}</span>}
           >
             {presets.map((p) => (

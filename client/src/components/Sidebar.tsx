@@ -291,7 +291,7 @@ function ChangeProjectDirectoryModal({
     >
       <div
         ref={modalRef}
-        className="w-full max-w-lg mx-4 bg-[#111318] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
+        className="depth-raised relative w-full max-w-lg mx-4 bg-[#111318] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <div className="min-w-0">
@@ -352,7 +352,8 @@ function ChangeProjectDirectoryModal({
               <Dropdown
                 state={sshConnectionDd}
                 disabled={loadingSshConnections || sshConnections.length === 0}
-                panelClassName="left-0 right-0 top-full mt-1 max-h-[260px] overflow-y-auto"
+                panelClassName="left-0 right-0 top-full mt-1"
+                panelContentClassName="max-h-[260px] overflow-y-auto"
                 trigger={
                   <span className="truncate flex-1 text-left">
                     {loadingSshConnections

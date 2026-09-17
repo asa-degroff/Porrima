@@ -28,6 +28,7 @@
 
 - Tailwind v4 with glassmorphism (`backdrop-blur-xl bg-white/[0.08]`)
 - Agent-related UI uses purple accent colors; quick chats use blue; projects use emerald
+- **Surface depth prototype**: Appearance → Surface Depth offers Flat (default) / Beveled with a locally scoped preview. `surfaceDepth` is saved with settings and cached as `porrima-surface-depth` for startup. `data-depth` controls explicit `.depth-raised` / `.depth-inset` opt-ins in `styles/glass.css`: send buttons, model picker trigger/panel, active sidebar chat cards, and the composer. The masked `::after` lights the existing 1px border without changing fills, state colors, or shadows. Hosts must be positioned, reserve `::after`, and keep scrolling on a child. Unsupported masking and forced colors retain ordinary borders. No new blur or animation is added.
 - No external state management — React hooks + API calls
 - Lazy loading for heavy components (ImageSandbox, MarkdownRenderer, RippleGridBackground)
 

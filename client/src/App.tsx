@@ -51,6 +51,7 @@ import {
   isCustomThemeBackgroundDark,
 } from "./utils/custom-theme";
 
+const SURFACE_DEPTH_KEY = "porrima-surface-depth";
 const CORNER_RADIUS_KEY = "porrima-corner-radius";
 const LEGACY_CORNER_RADIUS_KEY = "quje-corner-radius";
 const HIGH_EFFICIENCY_MODE_KEY = "porrima-high-efficiency-mode";
@@ -125,6 +126,14 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
+function readCachedSurfaceDepth(): "flat" | "beveled" {
+  try {
+    return readStoredValue(SURFACE_DEPTH_KEY) === "beveled" ? "beveled" : "flat";
+  } catch {
+    return "flat";
+  }
+}
+
 function readCachedCornerRadius(): CornerRadius {
   try {
     const v = readStoredValue(CORNER_RADIUS_KEY, LEGACY_CORNER_RADIUS_KEY);
@@ -159,6 +168,7 @@ function applyHighEfficiencyMode(enabled: boolean): void {
 if (typeof document !== "undefined") {
   document.documentElement.setAttribute("data-corner", "squircle");
   document.documentElement.setAttribute("data-radius", readCachedCornerRadius());
+  document.documentElement.setAttribute("data-depth", readCachedSurfaceDepth());
   applyHighEfficiencyMode(readCachedHighEfficiencyMode());
 }
 
@@ -645,6 +655,14 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     document.documentElement.setAttribute('data-radius', radius);
     try { writeStoredValue(CORNER_RADIUS_KEY, radius, LEGACY_CORNER_RADIUS_KEY); } catch {}
   }, [settings.cornerRadius]);
+
+  // Mirror the saved depth mode for startup; the settings preview is local.
+  useEffect(() => {
+    if (settingsLoading) return;
+    const depth = settings.surfaceDepth === 'beveled' ? 'beveled' : 'flat';
+    document.documentElement.setAttribute('data-depth', depth);
+    try { writeStoredValue(SURFACE_DEPTH_KEY, depth); } catch {}
+  }, [settings.surfaceDepth, settingsLoading]);
 
   // Apply background effect
   useEffect(() => {

@@ -19,8 +19,9 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
     <Dropdown
       state={dd}
       disabled={disabled}
-      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 md:px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer max-w-[120px] md:max-w-none"
-      panelClassName="right-0 top-full mt-1 min-w-[200px] max-h-[320px] overflow-y-auto"
+      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 md:px-3 py-1.5 text-sm text-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer max-w-[120px] md:max-w-none"
+      panelClassName="right-0 top-full mt-1 min-w-[200px]"
+      panelContentClassName="max-h-[320px] overflow-y-auto"
       trigger={
         <>
           <span className="truncate">{selected?.name || selectedId}</span>

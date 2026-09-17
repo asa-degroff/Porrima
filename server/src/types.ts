@@ -437,6 +437,7 @@ export interface Settings {
   themePresets?: ThemePreset[];
   /** Id of the last theme preset loaded into the custom editor, if any. */
   activeThemePresetId?: string;
+  surfaceDepth?: "flat" | "beveled";
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;

@@ -119,7 +119,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       onContextMenu={handleContextMenu}
       {...longPressProps}
       className={`w-full min-h-8 text-left px-2 py-1.5 rounded-lg transition-all group relative border select-none ${
-        active ? "bg-white/10" : "hover:bg-white/6"
+        active ? "depth-raised bg-white/10" : "hover:bg-white/6"
       } ${
         active
           ? "border-white/20" + (cacheResidency && lastActive

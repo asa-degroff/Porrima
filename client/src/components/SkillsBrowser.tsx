@@ -296,7 +296,7 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
             return (
               <div
                 key={skill.name}
-                className={`group p-2.5 rounded-lg border transition-all ${
+                className={`relative depth-raised group p-2.5 rounded-lg border transition-all ${
                   isExpanded
                     ? "bg-white/[0.06] border-white/[0.1]"
                     : "bg-white/[0.04] border-white/[0.06] hover:bg-white/[0.07]"

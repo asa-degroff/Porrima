@@ -105,11 +105,12 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
 
   return (
     <div
-      className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
+      className={`relative depth-raised rounded-xl border border-white/10 ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
       onContextMenu={handleContextMenu}
       {...longPressProps}
       style={{ position: 'relative', zIndex: 1 }}
     >
+      <div className="overflow-hidden rounded-[calc(var(--radius-xl)-1px)]">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.02]">
         <div className="flex items-center gap-2">
@@ -413,6 +414,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
         </div>,
         document.body
       )}
+      </div>
     </div>
   );
 });
