@@ -88,12 +88,11 @@ describe("chromeUserDataDirs", () => {
 });
 
 describe("discoverDevToolsTarget", () => {
-  it("finds a live endpoint advertised by DevToolsActivePort", async () => {
+  it("returns the target advertised by DevToolsActivePort — liveness belongs to the connect, not discovery", async () => {
     const dir = makeUserDataDir();
-    const port = await listen((_req, res) => {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ Browser: "Chrome/152" }));
-    });
+    // A port with nothing listening is fine at discovery time: the attach
+    // attempt fails fast (connection refused) and falls back to launch.
+    const port = 49_999;
     writeFileSync(join(dir, "DevToolsActivePort"), `${port}\n/devtools/browser/live\n`);
     process.env[ENV_KEY] = dir;
 
@@ -104,17 +103,28 @@ describe("discoverDevToolsTarget", () => {
     });
   });
 
-  it("skips a stale DevToolsActivePort when nothing is listening", async () => {
+  it("finds a WebSocket-only consent-mode endpoint (404 on /json/version)", async () => {
     const dir = makeUserDataDir();
-    const dead = createServer();
-    await new Promise<void>((resolve) => dead.listen(0, "127.0.0.1", () => resolve()));
-    const address = dead.address();
-    if (!address || typeof address === "string") throw new Error("server did not expose a port");
-    const deadPort = address.port;
-    await new Promise<void>((resolve) => dead.close(() => resolve()));
-    writeFileSync(join(dir, "DevToolsActivePort"), `${deadPort}\n/devtools/browser/stale\n`);
+    // Chrome 152 consent mode: the legacy HTTP surface answers 404, only the
+    // WS path works, and the handshake waits for the user's approval.
+    // Discovery must NOT classify that endpoint as dead — this is the
+    // production case the old /json/version probe misclassified (09-18).
+    const port = await listen((_req, res) => {
+      res.statusCode = 404;
+      res.end();
+    });
+    writeFileSync(join(dir, "DevToolsActivePort"), `${port}\n/devtools/browser/consent\n`);
     process.env[ENV_KEY] = dir;
 
+    expect(await discoverDevToolsTarget()).toEqual({
+      userDataDir: dir,
+      port,
+      webSocketPath: "/devtools/browser/consent",
+    });
+  });
+
+  it("returns null when no user-data dir has a parseable DevToolsActivePort", async () => {
+    process.env[ENV_KEY] = makeUserDataDir();
     expect(await discoverDevToolsTarget()).toBeNull();
   });
 });

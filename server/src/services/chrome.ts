@@ -78,25 +78,32 @@ export function readDevToolsActivePort(userDataDir: string): DevToolsActiveTarge
   }
 }
 
-async function isDevToolsEndpointLive(port: number): Promise<boolean> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * First running Chrome with an active remote debugging endpoint, if any.
- * A DevToolsActivePort file alone is not enough — stale files survive crashes,
- * so the endpoint must answer before we try to attach.
+ * First Chrome user-data dir with a parseable DevToolsActivePort file, if any.
+ *
+ * Deliberately no network liveness probe here. The previous probe — HTTP GET
+ * /json/version — is exactly the surface Chrome 152's consent-mode remote
+ * debugging does NOT serve: a browser enabled via the
+ * chrome://inspect/#remote-debugging toggle exposes a WebSocket-only
+ * endpoint, the legacy /json/* HTTP routes answer 404, and the WS handshake
+ * itself stays PENDING until the user approves the "allow remote debugging"
+ * prompt in the UI. A pre-flight probe therefore cannot distinguish
+ * "waiting for consent" from "dead", and a fast timeout probe is worse:
+ * the consent prompt never gets a chance to appear, so the attach path can
+ * never be reached (observed 09-18: live consent-mode Chrome at 127.0.0.1:9222
+ * answered 404 on /json/version, the probe classified it dead, and the
+ * session silently fell back to a private headless browser).
+ *
+ * Liveness is established by the attach attempt itself (openBrowserSession
+ * in browser-session.ts): a dead endpoint fails fast with connection
+ * refused, a live one connects immediately (consent already granted) or
+ * waits for the user to approve. Stale files that survive a crash are
+ * handled by that same fast failure.
  */
 export async function discoverDevToolsTarget(): Promise<DevToolsActiveTarget | null> {
   for (const dir of chromeUserDataDirs()) {
     const target = readDevToolsActivePort(dir);
-    if (!target) continue;
-    if (await isDevToolsEndpointLive(target.port)) return target;
+    if (target) return target;
   }
   return null;
 }

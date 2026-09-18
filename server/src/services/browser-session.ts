@@ -1,8 +1,10 @@
-import puppeteer, { type Browser, type Page, type ElementHandle } from "puppeteer-core";
+import puppeteer, { type Browser, type ConnectionTransport, type Page, type ElementHandle } from "puppeteer-core";
 import sharp from "sharp";
+import WebSocket from "ws";
 import { discoverDevToolsTarget, findChromePath } from "./chrome.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_CONSENT_TIMEOUT_MS = 60_000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
 export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const MAX_SCREENSHOT_WIDTH = 1280;
@@ -105,13 +107,75 @@ function watchForPopups(session: BrowserSession, page: Page): void {
   });
 }
 
-async function attachSession(chatId: string, endpoint: string): Promise<BrowserSession> {
-  const browser = await puppeteer.connect({
-    ...(/^wss?:\/\//i.test(endpoint) ? { browserWSEndpoint: endpoint } : { browserURL: endpoint }),
-    // Never apply an emulated viewport to a browser we do not own — it would
-    // resize the user's windows.
-    defaultViewport: null,
+/**
+ * A CDP transport whose WebSocket handshake honours a real deadline.
+ *
+ * puppeteer.connect()'s `timeout` option cannot do this: in puppeteer-core
+ * 25.x ConnectOptions has no timeout field, and the built-in
+ * NodeWebSocketTransport builds its `ws` client without a handshakeTimeout.
+ * A Chrome enabled via chrome://inspect/#remote-debugging keeps the upgrade
+ * pending until the user answers the "allow remote debugging" dialog, so an
+ * unanswered prompt left the attach (and the whole agent turn) hanging
+ * forever. Owning the transport makes the ws handshake timeout enforce the
+ * consent window — on timeout the connect rejects and the caller falls back.
+ */
+class WsTransport implements ConnectionTransport {
+  onmessage?: (message: string) => void;
+  onclose?: () => void;
+
+  constructor(private readonly ws: WebSocket) {
+    ws.on("message", (data) => this.onmessage?.(data.toString()));
+    ws.on("close", () => this.onclose?.());
+    // Keep an error listener attached so EventEmitter does not throw on an
+    // unhandled 'error'; post-open failures surface through 'close'.
+    ws.on("error", () => {});
+  }
+
+  send(message: string): void {
+    this.ws.send(message);
+  }
+
+  close(): void {
+    this.ws.close();
+  }
+}
+
+function openConsentTransport(endpoint: string, handshakeTimeoutMs: number): Promise<ConnectionTransport> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(endpoint, {
+      handshakeTimeout: handshakeTimeoutMs,
+      perMessageDeflate: false,
+      maxPayload: 256 * 1024 * 1024,
+      followRedirects: true,
+    });
+    ws.once("open", () => resolve(new WsTransport(ws)));
+    ws.once("error", reject);
   });
+}
+
+async function attachSession(chatId: string, endpoint: string, consentTimeoutMs?: number): Promise<BrowserSession> {
+  // Only ws/wss endpoints can hit the consent handshake; an explicit HTTP
+  // endpoint (PORRIMA_BROWSER_CDP_URL) goes through puppeteer's own browserURL
+  // discovery.
+  const transport = /^wss?:\/\//i.test(endpoint)
+    ? await openConsentTransport(endpoint, consentTimeoutMs ?? DEFAULT_CONSENT_TIMEOUT_MS)
+    : undefined;
+  let browser: Browser;
+  try {
+    browser = await puppeteer.connect(
+      transport
+        ? {
+            transport,
+            // Never apply an emulated viewport to a browser we do not own —
+            // it would resize the user's windows.
+            defaultViewport: null,
+          }
+        : { browserURL: endpoint, defaultViewport: null },
+    );
+  } catch (err) {
+    transport?.close();
+    throw err;
+  }
   try {
     const page = await browser.newPage();
     const session: BrowserSession = { chatId, browser, page, mode: "attached", popups: [], refs: new Map(), lastUsed: Date.now(), dialogs: [] };
@@ -170,13 +234,18 @@ async function openBrowserSession(chatId: string): Promise<BrowserSession> {
     const target = await discoverDevToolsTarget().catch(() => null);
     if (target) {
       const endpoint = `ws://127.0.0.1:${target.port}${target.webSocketPath}`;
+      const consentTimeoutMs = Number(process.env.PORRIMA_BROWSER_CONSENT_TIMEOUT_MS) || DEFAULT_CONSENT_TIMEOUT_MS;
+      console.log(`[browser] attaching to user Chrome at ${endpoint} (up to ${consentTimeoutMs}ms for remote-debugging consent)`);
       try {
-        return await attachSession(chatId, endpoint);
+        const session = await attachSession(chatId, endpoint, consentTimeoutMs);
+        console.log(`[browser] attached to user Chrome (port ${target.port}) — chat ${chatId}`);
+        return session;
       } catch (err) {
-        console.warn(`[browser] Could not attach to Chrome at ${endpoint}: ${(err as Error).message} — falling back to a private browser. Approve the connection via chrome://inspect/#remote-debugging to use your Chrome.`);
+        console.warn(`[browser] attach to Chrome at ${endpoint} failed: ${(err as Error).message} — falling back to a private browser. To use your Chrome: enable the toggle at chrome://inspect/#remote-debugging and approve the "allow remote debugging" prompt when it appears.`);
       }
     }
   }
+  console.log(`[browser] no attach — launching private browser for chat ${chatId}`);
   return launchSession(chatId);
 }
 
@@ -385,7 +454,8 @@ export async function snapshotPage(session: BrowserSession, query?: string, limi
     : 0;
   const viewport = session.page.viewport();
   const viewportLabel = viewport ? `${viewport.width}x${viewport.height}` : "native";
-  const header = `${raw.url} — "${raw.title}"\nViewport ${viewportLabel} · scroll ${scrollPct}% · ${matched.length} element${matched.length === 1 ? "" : "s"}`;
+  const modeLabel = session.mode === "attached" ? "attached to user Chrome" : "private launched browser";
+  const header = `${raw.url} — "${raw.title}"\nViewport ${viewportLabel} · scroll ${scrollPct}% · ${matched.length} element${matched.length === 1 ? "" : "s"} · session: ${modeLabel}`;
   const lines = shown.map(formatElementLine);
   if (matched.length > shown.length) {
     lines.push(`… ${matched.length - shown.length} more element(s) omitted — filter with query or raise limit (max ${MAX_SNAPSHOT_LIMIT}).`);
