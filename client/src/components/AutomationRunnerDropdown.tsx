@@ -235,12 +235,14 @@ export function AutomationRunnerDropdown({
         {dropdown.open && (
           <div
             ref={panelRef}
-            className="absolute z-30 top-full mt-1 animate-dropdown-enter app-solid-popover border rounded-xl shadow-2xl py-1 overflow-hidden min-w-[180px] max-w-[280px]"
+            className="absolute z-30 top-full mt-1 animate-dropdown-enter app-solid-popover border rounded-xl shadow-2xl py-1 min-w-[180px] max-w-[280px]"
             style={{
               backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
               borderColor: `rgba(var(--theme-primary-border))`,
             }}
           >
+            {/* Corner clipper child — the host stays overflow-visible for the depth ring */}
+            <div className="overflow-hidden rounded-xl">
             {error && (
               <div className="px-3 py-2 text-xs text-red-400/80 border-b border-white/5">
                 {error}
@@ -348,6 +350,7 @@ export function AutomationRunnerDropdown({
                 })}
               </div>
             )}
+            </div>
           </div>
         )}
       </div>

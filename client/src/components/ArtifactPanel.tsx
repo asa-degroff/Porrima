@@ -263,8 +263,9 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
                 </svg>
               </button>
               {showVersionMenu && (
-                <div className="absolute top-full left-0 mt-1 w-64 max-h-64 overflow-y-auto rounded-lg border border-white/10 app-solid-popover shadow-xl z-50">
-                  <div className="p-2">
+                <div className="absolute top-full left-0 mt-1 w-64 max-h-64 rounded-lg border border-white/10 app-solid-popover shadow-xl z-50">
+                  {/* Scroll child — the host stays overflow-visible for the depth ring */}
+                  <div className="max-h-64 overflow-y-auto rounded-lg p-2">
                     <div className="text-[10px] text-white/40 uppercase tracking-wider mb-2 px-2">Version History</div>
                     {versions.slice().reverse().map((v) => (
                       <button

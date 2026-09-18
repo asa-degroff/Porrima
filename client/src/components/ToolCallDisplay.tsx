@@ -8,10 +8,19 @@ import { ImageLightbox } from "./ImageLightbox";
 import { ToolIcon, type ToolIconName } from "./ToolIcons";
 import { Beats } from "./Beats";
 
-const statusColors = {
-  running: "border-yellow-400/20 bg-yellow-500/5",
-  done: "border-emerald-400/20 bg-emerald-500/5",
-  error: "border-red-400/20 bg-red-500/5",
+// Split so the depth host carries the border (the beveled edge) while the
+// inner clipper carries the fill — the host must stay overflow-visible or
+// the depth ring is clipped away (see the CLIP RULE in glass.css).
+const statusBorders = {
+  running: "border-yellow-400/20",
+  done: "border-emerald-400/20",
+  error: "border-red-400/20",
+};
+
+const statusBgs = {
+  running: "bg-yellow-500/5",
+  done: "bg-emerald-500/5",
+  error: "bg-red-500/5",
 };
 
 const statusIcons = {
@@ -98,7 +107,8 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
   const iconInfo = getToolIcon(name);
 
   return (
-    <div className={`my-2 rounded-lg border ${statusColors[status]} overflow-hidden max-w-full`}>
+    <div className={`my-2 relative depth-raised rounded-lg border ${statusBorders[status]} max-w-full`}>
+      <div className={`overflow-hidden rounded-lg ${statusBgs[status]}`}>
       {/* Header - clickable to expand */}
       <button
         onClick={() => setExpanded(!expanded)}
@@ -256,6 +266,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
           </div>
         </div>
       )}
+      </div>
       {/* Image lightbox for tool-returned images */}
       {lightboxImage && createPortal(
         <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />,

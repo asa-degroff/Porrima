@@ -4557,9 +4557,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div className="space-y-3">
             <div>
               <label className="block text-sm font-medium text-white/60">Surface Depth <span className="text-xs text-white/35">· Prototype</span></label>
-              <p className="text-white/30 text-xs mt-0.5">
-                Preview below, then Apply or Save to use on send buttons, the model picker, active chat cards, and the message input.
-              </p>
             </div>
             <div className="flex gap-2" role="group" aria-label="Surface depth">
               {(["flat", "beveled"] as const).map((value) => (
@@ -4572,7 +4569,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     surfaceDepth === value ? "border-white/30 bg-white/5" : "border-white/10 hover:border-white/20"
                   }`}
                 >
-                  {value === "flat" ? "Flat (current)" : "Beveled"}
+                  {value === "flat" ? "Flat" : "Beveled"}
                 </button>
               ))}
             </div>

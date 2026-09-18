@@ -1051,9 +1051,9 @@ function ScrollableToolContainer({
   }, []);
   
   return (
-    <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden relative">
+    <div className="my-2 relative depth-raised rounded-lg border border-white/10 bg-white/[0.02]">
       {header}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto max-h-[300px] custom-scrollbar">
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto rounded-b-lg max-h-[300px] custom-scrollbar">
         {children}
       </div>
       {/* Scroll to bottom button - appears when user scrolls away during streaming */}
@@ -1101,7 +1101,7 @@ function ToolCallsList({
   
   if (useScrollContainer) {
     return (
-      <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+      <div className="my-2 relative depth-raised rounded-lg border border-white/10 bg-white/[0.02]">
         <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="4 7 4 4 20 4 20 7" />
@@ -1112,7 +1112,7 @@ function ToolCallsList({
           <span className="text-white/20">•</span>
           <span className="text-[11px]">Scroll to view all</span>
         </div>
-        <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+        <div className="max-h-[300px] overflow-y-auto rounded-b-lg custom-scrollbar">
           {renderToolCalls()}
         </div>
       </div>
@@ -1124,7 +1124,7 @@ function ToolCallsList({
 
 function PinnedPlaceholder({ title, onUnpin }: { title: string; onUnpin: () => void }) {
   return (
-    <div className="mt-3 rounded-xl border border-blue-400/20 bg-blue-500/[0.06] px-3 py-2 flex items-center justify-between gap-2">
+    <div className="mt-3 relative depth-raised rounded-xl border border-blue-400/20 bg-blue-500/[0.06] px-3 py-2 flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 min-w-0">
         <svg
           xmlns="http://www.w3.org/2000/svg"

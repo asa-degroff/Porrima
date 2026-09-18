@@ -529,7 +529,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                   onAbort?.();
                 }}
                 data-haptic="manual"
-                className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors pressable"
+                className="relative depth-raised px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors pressable"
               >
                 Stop
               </button>
@@ -538,7 +538,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                 onClick={handleSubmit}
                 disabled={!canSend}
                 data-haptic="manual"
-                className="px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
+                className="relative depth-raised px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
                 title="Message will be sent when back online"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -670,7 +670,7 @@ export function ChatView({
   const statusNotices = (
     <>
       {turnQueueInfo && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-purple-500/8 border border-purple-400/15 text-purple-300/80 text-xs flex items-center gap-2">
+        <div className="mb-4 px-3 py-2 relative depth-raised rounded-lg bg-purple-500/8 border border-purple-400/15 text-purple-300/80 text-xs flex items-center gap-2">
           <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
           <span>
             {turnQueueInfo.activeKind === "cache-warm"
@@ -683,18 +683,18 @@ export function ChatView({
         </div>
       )}
       {warning && (
-        <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
+        <div className="mb-4 px-4 py-3 relative depth-raised rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
           {warning.message}
         </div>
       )}
       {reconnecting && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-400/15 text-blue-300/80 text-xs flex items-center gap-2">
+        <div className="mb-4 px-3 py-2 relative depth-raised rounded-lg bg-blue-500/8 border border-blue-400/15 text-blue-300/80 text-xs flex items-center gap-2">
           <div className="w-3 h-3 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
           <span>Reconnecting…</span>
         </div>
       )}
       {displayError && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-red-500/8 border border-red-400/15 text-red-300/80 text-xs flex items-center justify-between gap-3">
+        <div className="mb-4 px-3 py-2 relative depth-raised rounded-lg bg-red-500/8 border border-red-400/15 text-red-300/80 text-xs flex items-center justify-between gap-3">
           <span>{displayError}</span>
           <button
             onClick={() => setDismissedError(error!)}
@@ -1042,7 +1042,7 @@ export function ChatView({
         {scrollPaused && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm pressable"
+            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full depth-raised bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm pressable"
             title="Scroll to bottom"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

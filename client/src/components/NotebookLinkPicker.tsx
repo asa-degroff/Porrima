@@ -28,9 +28,11 @@ export function NotebookLinkPicker({ userNotebooks, agentNotebooks, filterText, 
 
   return (
     <div
-      className="link-picker-popup fixed z-50 w-80 max-h-96 overflow-auto rounded-lg border border-white/10 app-solid-popover shadow-xl"
+      className="link-picker-popup fixed z-50 w-80 max-h-96 rounded-lg border border-white/10 app-solid-popover shadow-xl"
       style={position}
     >
+      {/* Scroll child — the host stays overflow-visible for the depth ring */}
+      <div className="max-h-96 overflow-auto rounded-lg">
       <div className="px-3 py-2 border-b border-white/10">
         <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider">Link to Notebook Entry</h4>
       </div>
@@ -55,6 +57,7 @@ export function NotebookLinkPicker({ userNotebooks, agentNotebooks, filterText, 
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -184,7 +184,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   return (
     <div
       ref={containerRef}
-      className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden"
+      className="relative depth-raised rounded-xl border border-white/10 bg-white/[0.03]"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -206,7 +206,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
       />
       {/* Drag overlay */}
       {dragging && (
-        <div className="absolute inset-0 bg-purple-500/10 border-2 border-dashed border-purple-400/40 flex items-center justify-center pointer-events-none z-10">
+        <div className="absolute inset-0 rounded-xl bg-purple-500/10 border-2 border-dashed border-purple-400/40 flex items-center justify-center pointer-events-none z-10">
           <div className="text-center">
             <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-purple-400 mb-2">
               <path d="M12 5v14M5 12h14" />

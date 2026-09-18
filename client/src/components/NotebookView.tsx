@@ -451,14 +451,14 @@ export function NotebookView({
         {/* Right: search + actions */}
         <div className="flex items-center gap-2 shrink-0">
           {/* Inline search bar (desktop only) */}
-          <div className="hidden md:block relative w-[300px]">
+          <div className="hidden md:block relative w-[300px] rounded-lg bg-white/5 border border-white/10 depth-inset focus-within:border-purple-400/40 focus-within:bg-white/10 transition-all">
             <input
               ref={searchInputRef}
               type="text"
               value={searchInput}
               onChange={(e) => handleSearchInput(e.target.value)}
               placeholder="Search notebooks..."
-              className="w-full pl-8 pr-8 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm focus:outline-none focus:border-purple-400/40 focus:bg-white/10 transition-all placeholder:text-white/30"
+              className="w-full pl-8 pr-8 py-1.5 rounded-lg bg-transparent border-0 text-white/90 text-sm outline-none placeholder:text-white/30"
             />
             {/* Search icon */}
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none">
@@ -534,14 +534,17 @@ export function NotebookView({
       {showSearch && (
         <div className="md:hidden px-3 py-2 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center gap-2">
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchInput}
-              onChange={(e) => handleSearchInput(e.target.value)}
-              placeholder="Search notebooks..."
-              className="flex-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm focus:outline-none focus:border-purple-400/40 focus:bg-white/10 transition-all placeholder:text-white/30"
-            />
+            {/* Inset field: the wrapper carries the border (inputs can't host the depth ::after) */}
+            <div className="relative flex-1 min-w-0 rounded-lg bg-white/5 border border-white/10 depth-inset focus-within:border-purple-400/40 focus-within:bg-white/10 transition-all">
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchInput}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                placeholder="Search notebooks..."
+                className="w-full px-3 py-1.5 rounded-lg bg-transparent border-0 text-white/90 text-sm outline-none placeholder:text-white/30"
+              />
+            </div>
             {searchInput && (
               <button
                 onClick={() => { setSearchInput(''); onClearSearch?.(); }}

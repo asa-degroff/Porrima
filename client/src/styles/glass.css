@@ -45,32 +45,44 @@ html[data-radius="default"] { --radius-scale: 1.6; }
 html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
 /*
- * Beveled depth prototype. Explicit opt-in surfaces only; the real border,
+ * Beveled depth. Explicit opt-in surfaces only; the real border,
  * background, state rings and shadows remain intact. A masked 1px overlay
  * lights that border without painting over translucent interiors.
  *
- * Hosts must already be positioned and have a 1px border. Keep scrolling on
- * a child (not the host), so the edge doesn't scroll away with its content.
- * ::after is reserved for this effect. Radius utilities below keep the fade
- * tied to corner size rather than panel height, including squircle corners.
+ * Hosts must already be positioned and have a 1px border. ::after is
+ * reserved for this effect. Radius utilities below keep the fade tied to
+ * corner size rather than panel height, including squircle corners.
  * Local data-depth scopes let Settings preview an unsaved choice safely.
+ *
+ * CLIP RULE — keep scrolling on a child (not the host). The ring occupies
+ * exactly the host's border region, which sits OUTSIDE the padding box;
+ * any overflow other than visible on the host (hidden, auto, scroll)
+ * clips at the padding box and silently removes the ring entirely
+ * (verified in-browser: a solid ring renders on a plain host and vanishes
+ * on an otherwise-identical overflow-hidden host). A host that clips also
+ * drags the ring away with its content while scrolling. So: the host
+ * carries border + radius + positioning, a child carries overflow + a
+ * matching radius.
  */
 [data-depth="flat"] { --depth-edge-display: none; }
 [data-depth="beveled"] { --depth-edge-display: block; }
 
+/* .app-solid-popover is the shared floating-panel idiom (token for the
+   solid backdrop) — every popover bevels as raised chrome by default. */
 .depth-raised,
-.depth-inset {
+.depth-inset,
+.app-solid-popover {
   --depth-radius: var(--radius-lg);
   --depth-top: rgb(255 255 255 / 0.3);
   --depth-bottom: rgb(0 0 0 / 0.5);
 }
 
-:is(.depth-raised, .depth-inset).rounded-xl { --depth-radius: var(--radius-xl); }
-:is(.depth-raised, .depth-inset).rounded-2xl { --depth-radius: var(--radius-2xl); }
+:is(.depth-raised, .depth-inset, .app-solid-popover).rounded-xl { --depth-radius: var(--radius-xl); }
+:is(.depth-raised, .depth-inset, .app-solid-popover).rounded-2xl { --depth-radius: var(--radius-2xl); }
 
 /* Circle surfaces (avatars, dots) keep the full-ring highlight instead of
    directional ramps; a directional gradient on a circle reads as a rim light. */
-:is(.depth-raised, .depth-inset).rounded-full {
+:is(.depth-raised, .depth-inset, .app-solid-popover).rounded-full {
   --depth-radius: 9999px;
 }
 
@@ -80,7 +92,7 @@ html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 }
 
 @supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
-  :is(.depth-raised, .depth-inset)::after {
+  :is(.depth-raised, .depth-inset, .app-solid-popover)::after {
     content: "";
     display: var(--depth-edge-display, none);
     position: absolute;
@@ -121,7 +133,7 @@ html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
 /* Lighting is decorative: fall back to real borders in high contrast mode. */
 @media (forced-colors: active) {
-  :is(.depth-raised, .depth-inset)::after { display: none; }
+  :is(.depth-raised, .depth-inset, .app-solid-popover)::after { display: none; }
   :is(.depth-raised, .depth-inset):focus-visible,
   .depth-inset:focus-within {
     outline: 2px solid Highlight;

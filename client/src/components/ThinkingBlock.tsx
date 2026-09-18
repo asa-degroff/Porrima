@@ -116,7 +116,7 @@ export function ThinkingBlock({
   }
 
   return (
-    <div className="mb-2 rounded-xl border overflow-hidden"
+    <div className="relative depth-raised mb-2 rounded-xl border"
       style={{
         backgroundColor: `rgba(var(--theme-primary), 0.1)`,
         borderColor: `rgba(var(--theme-primary-border))`,

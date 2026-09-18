@@ -329,13 +329,13 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           <div className="flex gap-2">
             <button
               onClick={handleConfirmDelete}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all pressable"
+              className="relative depth-raised px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all pressable"
             >
               Delete
             </button>
             <button
               onClick={handleCancelDelete}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all pressable"
+              className="relative depth-raised px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all pressable"
             >
               Cancel
             </button>

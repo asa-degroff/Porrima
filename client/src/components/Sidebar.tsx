@@ -1233,7 +1233,7 @@ export function Sidebar({
         <div className="flex items-center gap-1">
           {searchActive ? (
             <div
-              className="flex-1 min-w-0 rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"
+              className="relative depth-inset flex-1 min-w-0 rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"
               onClick={(e) => e.stopPropagation()}
             >
               <SidebarSearch
@@ -1246,7 +1246,7 @@ export function Sidebar({
             </div>
           ) : (
             <div
-              className="flex-1 min-w-0 flex items-center justify-start rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] cursor-text"
+              className="relative depth-inset flex-1 min-w-0 flex items-center justify-start rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] cursor-text"
               onClick={handleActivateSearch}
             >
               <div className="relative flex items-center">
@@ -1718,7 +1718,7 @@ export function Sidebar({
             {!agentShowAll && agentChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
               <button
                 onClick={() => setAgentShowAll(true)}
-                className="w-full rounded-lg border border-purple-400/20 bg-purple-500/10 px-2 py-1.5 text-xs font-medium text-purple-300 transition-colors hover:bg-purple-500/20 pressable"
+                className="relative depth-raised w-full rounded-lg border border-purple-400/20 bg-purple-500/10 px-2 py-1.5 text-xs font-medium text-purple-300 transition-colors hover:bg-purple-500/20 pressable"
               >
                 Show {agentChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
               </button>
@@ -1800,7 +1800,7 @@ export function Sidebar({
                 {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
                   <button
                     onClick={() => setQuickShowAll(true)}
-                    className="w-full rounded-lg border border-blue-400/20 bg-blue-500/10 px-2 py-1.5 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-500/20 pressable"
+                    className="relative depth-raised w-full rounded-lg border border-blue-400/20 bg-blue-500/10 px-2 py-1.5 text-xs font-medium text-blue-300 transition-colors hover:bg-blue-500/20 pressable"
                   >
                     Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
                   </button>
@@ -1821,7 +1821,7 @@ export function Sidebar({
         <div className="flex gap-2">
           <button
             onClick={() => { onSwitchView('notebooks'); onClose(); }}
-            className="relative flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable"
+            className="relative depth-raised flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable"
             style={{
               backgroundColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.15 : 0.05})`,
               borderColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.4 : 0.25})`,
@@ -1842,7 +1842,7 @@ export function Sidebar({
           {imageSandboxEnabled && (
             <button
               onClick={() => { onOpenImageSandbox(); onClose(); }}
-              className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable ${
+              className={`relative depth-raised flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable ${
                 activeView === 'notebooks' ? 'opacity-50' : ''
               }`}
               style={{

@@ -59,14 +59,17 @@ export function ConversationSearch({ isOpen, onClose, onSelectResult }: Props) {
     <div className="absolute inset-x-0 top-0 z-40 bg-[#0a0a0f]/0.98 backdrop-blur-xl border-b border-white/10 shadow-2xl">
       <div className="p-3">
         <div className="flex items-center gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search conversations..."
-            className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm focus:outline-none focus:border-white/20 focus:bg-white/10 transition-all placeholder:text-white/30"
-          />
+          {/* Inset field: the wrapper carries the border (inputs can't host the depth ::after) */}
+          <div className="relative flex-1 min-w-0 rounded-lg bg-white/5 border border-white/10 depth-inset focus-within:border-white/20 focus-within:bg-white/10 transition-all">
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search conversations..."
+              className="w-full px-3 py-2 rounded-lg bg-transparent border-0 text-white/90 text-sm outline-none placeholder:text-white/30"
+            />
+          </div>
           <button
             onClick={onClose}
             className="p-2 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
