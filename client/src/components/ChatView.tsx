@@ -5,6 +5,7 @@ import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MidTurnCompactionIndicator } from "./CompactionIndicator";
 import { CrossChatPostCard } from "./CrossChatPostCard";
+import { ReminderCard } from "./ReminderCard";
 import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
@@ -945,6 +946,7 @@ export function ChatView({
                     const isSystemMessage = !!msg._isSystemMessage;
                     const isMidTurnCompaction = !!msg._isMidTurnCompaction;
                     const isCrossChatPost = !!msg._crossChatPost;
+                    const isReminder = !!msg._reminder;
                     const singleMessageKey =
                       msg._rowSequence != null
                         ? `seq-${msg._rowSequence}`
@@ -995,13 +997,15 @@ export function ChatView({
                             />
                           ) : isCrossChatPost && msg._crossChatPost ? (
                             <CrossChatPostCard post={msg._crossChatPost} content={msg.content} />
+                          ) : isReminder && msg._reminder ? (
+                            <ReminderCard reminder={msg._reminder} content={msg.content} />
                           ) : isSystemMessage ? (
                             <div className="flex items-center gap-3 mx-2 mt-4 mb-1">
                               <div className="h-px flex-1 bg-amber-400/15"></div>
                               <span className="text-[10px] text-amber-200/35 font-medium uppercase tracking-wider">system</span>
                             </div>
                           ) : undefined}
-                          {!isMidTurnCompaction && !isCrossChatPost && (
+                          {!isMidTurnCompaction && !isCrossChatPost && !isReminder && (
                             <MessageBubble
                               message={msg}
                               isStreaming={streaming}
@@ -1013,9 +1017,9 @@ export function ChatView({
                               activeTools={isLast ? activeTools : undefined}
                               artifacts={isLast && streaming ? artifacts : undefined}
                               generatedImages={isLast && streaming ? generatedImages : undefined}
-                              editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext && !isCrossChatPost}
-                              onEditMessage={msg.role === "user" && !isCrossChatPost ? onEditMessage : undefined}
-                              onRetryMessage={msg.role === "user" && !isCrossChatPost ? onRetryMessage : undefined}
+                              editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext && !isCrossChatPost && !isReminder}
+                              onEditMessage={msg.role === "user" && !isCrossChatPost && !isReminder ? onEditMessage : undefined}
+                              onRetryMessage={msg.role === "user" && !isCrossChatPost && !isReminder ? onRetryMessage : undefined}
                               messageIndex={i}
                               messageSequence={msg._rowSequence}
                               availableSkills={availableSkillNames}

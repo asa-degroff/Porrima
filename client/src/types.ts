@@ -116,6 +116,16 @@ export interface CrossChatPostMetadata {
   originRunId?: string;
 }
 
+/** Attribution carried on an in-chat reminder trigger row. */
+export interface ReminderMetadata {
+  taskId: string;
+  runId: string;
+  /** Reminder title — the card's subject line. */
+  title: string;
+  /** ISO timestamp the reminder actually fired. */
+  firedAt: string;
+}
+
 export interface ImageAttachment {
   /** Base64-encoded image bytes. Present for new uploads and transient previews only. */
   data?: string;
@@ -173,6 +183,8 @@ export interface ChatMessage {
   _automationRunId?: string;
   /** Provenance for a cross-chat post rendered as an envelope card. Inert on replay. */
   _crossChatPost?: CrossChatPostMetadata;
+  /** Provenance for an in-chat reminder trigger row rendered as a reminder card. Inert on replay. */
+  _reminder?: ReminderMetadata;
   /** Empty assistant placeholder inserted when the user sends a steering message.
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Consumed by

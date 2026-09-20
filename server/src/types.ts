@@ -52,6 +52,16 @@ export interface CrossChatPostMetadata {
   originRunId?: string;
 }
 
+/** Attribution carried on an in-chat reminder trigger row. */
+export interface ReminderMetadata {
+  taskId: string;
+  runId: string;
+  /** Reminder title — the card's subject line. */
+  title: string;
+  /** ISO timestamp the reminder actually fired. */
+  firedAt: string;
+}
+
 export interface ChatMessage {
   /** Absolute chat_message_rows.sequence for UI edit/retry targeting. Never persisted. */
   _rowSequence?: number;
@@ -131,6 +141,8 @@ export interface ChatMessage {
   _automationRunId?: string;
   /** Provenance for a cross-chat post rendered as an envelope card. Inert on replay. */
   _crossChatPost?: CrossChatPostMetadata;
+  /** Provenance for an in-chat reminder trigger row rendered as a reminder card. Inert on replay. */
+  _reminder?: ReminderMetadata;
   /** Brief summary of what was done, generated for long assistant messages */
   recap?: string;
 }

@@ -276,12 +276,19 @@ function makeToolCall(id: string, name: string, args: Record<string, any>): Tool
 
 const SCHEDULE_REMINDER_TOOL: Tool = {
   name: "schedule_reminder",
-  description: "Schedule a one-time reminder for yourself. Creates a message in the system chat that fires at the specified time, respecting inactivity gates. Use this to follow up on open threads, check on tasks, or revisit ideas later. Reminders run as full automation turns with tool access — including this one, so you can schedule the next follow-up from within a fired reminder run.",
+  description:
+    "Schedule a one-time reminder for yourself. Fires as a full agent turn in the target chat — " +
+    "by default the current chat — at the specified time, respecting inactivity gates. The reminder " +
+    "lands as a visible reminder card in that thread and runs with the thread's full context and " +
+    "full tool access — including this one, so you can schedule the next follow-up from within a " +
+    "fired reminder run. Pass targetChat to fire elsewhere (agent or system chats; the system chat " +
+    "remains the home for housekeeping watches that belong to no single thread).",
   parameters: Type.Object({
     message: Type.String({ description: "The prompt content to deliver to your future self — what you want to be reminded to do or think about" }),
     title: Type.String({ description: "Short label for the reminder (e.g. 'Check PR #22616 status')" }),
     scheduledAt: Type.String({ description: "ISO 8601 timestamp for when to fire (must be at least 2 minutes in the future)", format: "date-time" }),
     activationPolicy: Type.Optional(Type.Enum(["idle", "absent", "manual_only"] as const, { description: "When to fire: 'idle' (default, fires when system is idle), 'absent' (waits for user absence threshold), 'manual_only' (never auto-fires)" })),
+    targetChat: Type.Optional(Type.String({ description: "Where the reminder fires: a chat id or unique title fragment (agent or system chats). Defaults to the current chat." })),
   }),
 };
 
@@ -518,15 +525,43 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "schedule_reminder",
     execute: async (_id, params) => {
       const { createReminderTask } = await import("./automation-storage.js");
+      const { getChat } = await import("./chat-storage.js");
+      const { resolveCrossChatTarget } = await import("./cross-chat.js");
       const args = params as Record<string, any>;
+
+      // Default destination is the calling chat (the closure's chatId) — the
+      // reminder fires where the context lives. Quick chats are
+      // standalone-by-design and take the legacy system chat instead.
+      let destinationChatId: string;
+      let destinationLabel: string;
+      const explicit = typeof args.targetChat === "string" ? args.targetChat.trim() : "";
+      if (explicit) {
+        const resolved = await resolveCrossChatTarget(explicit);
+        if (!resolved.ok) {
+          return wrapResult({ content: resolved.error, isError: true }, "schedule_reminder");
+        }
+        destinationChatId = resolved.target.id;
+        destinationLabel = `${resolved.target.title} (${resolved.target.id})`;
+      } else {
+        const calling = await getChat(chatId);
+        if (calling && calling.type !== "quick") {
+          destinationChatId = calling.id;
+          destinationLabel = `${calling.title} (${calling.id})`;
+        } else {
+          destinationChatId = "system";
+          destinationLabel = "system (the current chat is not a reminder target)";
+        }
+      }
+
       const task = await createReminderTask({
         message: args.message,
         title: args.title,
         scheduledAt: args.scheduledAt,
         activationPolicy: args.activationPolicy,
+        chatId: destinationChatId,
       });
       return wrapResult({
-        content: `Reminder scheduled.\n\n- **ID**: ${task.id}\n- **Title**: ${task.title}\n- **Scheduled**: ${task.nextRunAt}\n- **Policy**: ${task.activationPolicy}\n- **Chat**: system`,
+        content: `Reminder scheduled.\n\n- **ID**: ${task.id}\n- **Title**: ${task.title}\n- **Scheduled**: ${task.nextRunAt}\n- **Policy**: ${task.activationPolicy}\n- **Fires in**: ${destinationLabel}`,
         isError: false,
       }, "schedule_reminder");
     },

@@ -1,5 +1,5 @@
 import type { ToolSideEffects } from "./agent-tools.js";
-import type { AutomationRun, AutomationTask, Chat, ChatMessage, CrossChatPostPayload } from "../types.js";
+import type { AutomationRun, AutomationTask, Chat, ChatMessage, CrossChatPostPayload, ReminderMetadata } from "../types.js";
 import { acquireAutomationLock, releaseAutomationLock } from "./automation-lock.js";
 import {
   finishAutomationRun,
@@ -151,6 +151,7 @@ function makeTriggerMessage(
   task: AutomationTask,
   run: AutomationRun,
   content: string,
+  reminder?: ReminderMetadata,
 ): ChatMessage {
   return {
     role: "user",
@@ -160,6 +161,7 @@ function makeTriggerMessage(
     _isAutomationMessage: true,
     _automationTaskId: task.id,
     _automationRunId: run.id,
+    ...(reminder ? { _reminder: reminder } : {}),
   };
 }
 
@@ -194,6 +196,11 @@ interface PromptAutomationOptions {
   preserveChatModel?: boolean;
   /** Run memory retrieval for the initial prompt (wake: true). */
   enableMemoryRetrieval?: boolean;
+  /** Trigger row style. "reminder": bare prompt content + _reminder card
+   *  metadata — the row is the thread's visible message and the thread
+   *  already has the context the heading exists to supply elsewhere.
+   *  Default "automation": the formatted "# title / ## step" heading. */
+  triggerStyle?: "automation" | "reminder";
 }
 
 async function runPromptAutomation(
@@ -263,8 +270,13 @@ async function runPromptAutomation(
       modelChanged = true;
     }
     if (!options.skipTriggerRow) {
-      const firstTrigger = formatAutomationTrigger(task, steps[0]);
-      const firstTriggerRow = makeTriggerMessage(task, run, firstTrigger);
+      const reminderMeta = options.triggerStyle === "reminder"
+        ? { taskId: task.id, runId: run.id, title: task.title, firedAt: run.startedAt }
+        : undefined;
+      const firstTrigger = reminderMeta
+        ? steps[0].prompt
+        : formatAutomationTrigger(task, steps[0]);
+      const firstTriggerRow = makeTriggerMessage(task, run, firstTrigger, reminderMeta);
       // Freeze this run's `[time:]` anchor on the trigger row so replays of the
       // automation chat match the tokens this run's prompt contains.
       const { buildTimeAnchor } = await import("./memory-context.js");
@@ -470,6 +482,39 @@ async function runPromptAutomation(
   }
 }
 
+/**
+ * Fire-time dispatch for an in-chat reminder: an agent-created custom task
+ * whose target is a real chat runs in that chat's own semantics — the
+ * wake-shaped options, with the reminder's trigger row as the thread's
+ * visible message. A target that no longer exists (or is a quick chat)
+ * reroutes to the system chat via a CLONE — the task row keeps its original
+ * target, and the run row records where the turn actually landed. No
+ * resurrection: the system chat is the only chat ensureAutomationChat may
+ * create, and it is permanent.
+ *
+ * Exported for tests — the decision, not the LLM, is what this pins.
+ */
+export function resolveInChatReminderDispatch(
+  task: AutomationTask,
+  liveChat: Chat | null,
+): { task: AutomationTask; options: PromptAutomationOptions } {
+  if (liveChat && (liveChat.type === "agent" || liveChat.type === "system")) {
+    return {
+      task,
+      options: {
+        chatType: liveChat.type,
+        skipTriggerRow: false,
+        skipTitleRefresh: true,
+        requireExistingChat: true,
+        preserveChatModel: true,
+        enableMemoryRetrieval: true,
+        triggerStyle: "reminder",
+      },
+    };
+  }
+  return { task: { ...task, chatId: "system" }, options: {} };
+}
+
 async function executeAutomation(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
   if (task.kind === "crossChat") {
     return runCrossChatPost(task, run);
@@ -522,6 +567,20 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
       automationRunId: run.id,
     });
     return { ...result, chatId: "system" };
+  }
+
+  // In-chat reminder: an agent-created custom task whose target is a real
+  // chat fires in that thread, with its context. System-chat tasks (the
+  // legacy default) keep the path below, byte-for-byte.
+  if (task.kind === "custom" && task.createdBy === "agent" && task.chatId !== "system") {
+    const { getChat } = await import("./chat-storage.js");
+    const dispatch = resolveInChatReminderDispatch(task, await getChat(task.chatId));
+    if (dispatch.task.chatId !== task.chatId) {
+      console.log(
+        `[automation] ${task.id} reminder target "${task.chatId}" is unavailable — rerouting to system chat`,
+      );
+    }
+    return runPromptAutomation(dispatch.task, run, dispatch.options);
   }
 
   return runPromptAutomation(task, run);

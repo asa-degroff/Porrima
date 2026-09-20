@@ -34,6 +34,19 @@ Prompt dispatch modes:
 
 Synthesis automations always use `sequence` because their prompt steps are phases. Wake and custom automations can use any dispatch mode.
 
+## Reminders (In-Chat Routing)
+
+The `schedule_reminder` tool creates a once-task (kind `custom`, `createdBy: "agent"`) that fires as a full agent turn **in the destination chat**, not always in the system chat:
+
+- **Default destination is the calling chat** — the tool captures the current chat id from its execution context and stores it in `automation_tasks.chatId`. The fired turn runs with that chat's full history, memory augmentation, project context, and agent toolset (so a fired reminder can schedule the next follow-up — watch loops stay anchored to the thread they were born in).
+- **Explicit destination** via `targetChat` (chat id or unique title fragment), resolved with the same rules as cross-chat posts: agent and system chats only. The system chat remains available as an explicit target for housekeeping watches that belong to no single thread.
+- **Quick chats are not targets.** An explicit quick-chat target is rejected; a reminder scheduled from inside a quick chat falls back to the system chat and says so in the tool result.
+- **Fire-time dispatch** (`resolveInChatReminderDispatch` in `automation-runner.ts`): a live agent/system target runs `runPromptAutomation` with the wake-shaped options — the target's `chatType`, `preserveChatModel` (the chat's own model wins, the row is never rewritten), `skipTitleRefresh`, `requireExistingChat`, `enableMemoryRetrieval`. A target that no longer exists (or is a quick chat) reroutes to the system chat through a **cloned** task — the task row keeps its declared target, the run row records where the turn actually landed, and nothing is resurrected (the system chat is the only chat `ensureAutomationChat` may create).
+- **The trigger row is the visible message.** In-chat reminders persist their trigger row with the bare reminder prompt as content plus `_reminder` metadata (`taskId`, `runId`, `title`, `firedAt`). The UI renders it as a `ReminderCard` (amber envelope, title + fire stamp + prompt); like cross-chat posts, the row is excluded from edit/retry (editing would truncate the thread after the row) and from TTS auto-read. The row keeps the standard automation flags (`_isSystemMessage`, `_isAutomationMessage`) so extraction filtering and replay behave as they do for system-chat reminders, and it carries a frozen `timeAnchor`.
+- **Firing semantics are unchanged by the destination.** The scheduler's global gates (active chats, busy turn gate, 2-minute idle grace) and the single global turn slot apply exactly as before — an in-chat reminder never interleaves a live turn. The headless stream is keyed to the destination chat, so an open pane watches the fired turn live.
+- **Side effects on the destination chat:** the pre-send `truncateBeforeSend()` and end-of-turn compaction check run there, the same as for a user turn. New rows are picked up by delayed memory extraction like any other chat activity.
+- **Backward compatible by construction:** existing reminders (and any caller omitting `chatId`) have `chatId: "system"` and take the legacy path byte-for-byte. Rescheduling via `update_automation` never changes the destination.
+
 ## Scheduler
 
 `startScheduler()` starts `startAutomationScheduler()` from `automation-scheduler.ts`. The automation scheduler:

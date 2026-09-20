@@ -722,6 +722,10 @@ export async function createReminderTask(input: {
   title: string;
   scheduledAt: string;  // ISO 8601
   activationPolicy?: AutomationActivationPolicy;
+  /** Chat the reminder fires in — its turn runs with that chat's full
+   *  context. Default "system" (the legacy destination). The
+   *  schedule_reminder tool resolves the calling chat and passes it. */
+  chatId?: string;
   maxPending?: number;
 }): Promise<AutomationTask> {
   ensureSchema();
@@ -755,7 +759,7 @@ export async function createReminderTask(input: {
     enabled: true,
     builtIn: false,
     orderIndex: orderRow.maxOrder + 100,  // high order so reminders sort after everything else
-    chatId: "system",
+    chatId: input.chatId ?? "system",
     schedule,
     activationPolicy,
     promptSteps,
