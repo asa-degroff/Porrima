@@ -6679,7 +6679,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	              <div className="flex items-center justify-between">
 	                <div>
 	                  <label className="block text-sm font-medium text-white/60">Maintenance review threshold (blocks)</label>
-	                  <p className="text-xs text-white/30 mt-0.5">Synthesis gets a maintenance nudge when the active block count exceeds 70% of this (dormant-project blocks count too). Not a cap — blocks may exceed it freely. What rides in each chat's context is governed by separate token budgets, not this number.</p>
+	                  <p className="text-xs text-white/30 mt-0.5">Synthesis gets a maintenance reminder when the active block count exceeds 70% of this number</p>
 	                </div>
 	                <span className="text-xs text-white/40">{maxBlockCount} blocks</span>
 	              </div>
@@ -6704,7 +6704,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	              <div className="flex items-center justify-between">
 	                <div>
 	                  <label className="block text-sm font-medium text-white/60">Global block token budget</label>
-	                  <p className="text-xs text-white/30 mt-0.5">Tokens of global block content that ride full in every chat's context (newest first; the rest ride as index lines, readable on demand). Higher = richer attached recall, slower prefill. Changing this rebuilds each chat's context prefix.</p>
+	                  <p className="text-xs text-white/30 mt-0.5">Tokens of global block content active in every chat's context</p>
 	                </div>
 	                <span className="text-xs text-white/40">{globalBlockTokenBudget}t</span>
 	              </div>
@@ -6728,7 +6728,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	              <div className="flex items-center justify-between">
 	                <div>
 	                  <label className="block text-sm font-medium text-white/60">Project block token budget</label>
-	                  <p className="text-xs text-white/30 mt-0.5">Tokens of project block content that ride full in this project's chats (newest first; the rest ride as index lines). Fills the remainder after the global budget in project chats.</p>
+	                  <p className="text-xs text-white/30 mt-0.5">Tokens of project block content active in a project's chats</p>
 	                </div>
 	                <span className="text-xs text-white/40">{projectBlockTokenBudget}t</span>
 	              </div>
