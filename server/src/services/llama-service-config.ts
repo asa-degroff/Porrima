@@ -108,9 +108,16 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
     port: LLAMA_SERVER_PORTS.reranker,
     gpuLayers: 0,
     ctxSize: 4096,
-    batchSize: 4096,
-    ubatchSize: 4096,
-    extraArgs: [],
+    // parallel is deliberately left unset: llama.cpp auto-resolves to 4 slots,
+    // and /v1/rerank fans a document array across them. Retrieval latency is
+    // user-visible, so keep the concurrency even though it costs context KV.
+    batchSize: 1024,
+    ubatchSize: 1024,
+    // The query is a genuine shared prefix across a rerank fan-out, so keep a
+    // prompt cache — but a small one. llama.cpp defaults --cache-ram to
+    // 8192 MiB, which held 111 dead entries and ~8 GiB resident for ~800
+    // requests/day of stateless scoring.
+    extraArgs: ["--cache-ram", "1024"],
     embedding: true,
     reranking: true,
     pooling: "rank",
@@ -122,9 +129,18 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
     port: LLAMA_SERVER_PORTS.embedding,
     gpuLayers: 0,
     ctxSize: 8192,
-    batchSize: 8192,
-    ubatchSize: 8192,
-    extraArgs: [],
+    // Embedding traffic is overwhelmingly single-slot (121 of 169 launch
+    // bursts in a 24h sample), so one slot is enough and cuts context KV 4x.
+    parallel: 1,
+    // The largest embedding request in a 24h sample was 2019 tokens, so 2048
+    // still fills a micro-batch in a single pass. 8192 only inflated the
+    // compute buffer, which continuous batching sizes for the worst case.
+    batchSize: 2048,
+    ubatchSize: 2048,
+    // Every input is a distinct short text with no reusable prefix, so prompt
+    // caching buys nothing. llama.cpp defaults --cache-ram to 8192 MiB; at 0
+    // it is disabled outright.
+    extraArgs: ["--cache-ram", "0"],
     embedding: true,
     pooling: "mean",
   },
