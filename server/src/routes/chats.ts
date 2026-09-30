@@ -9,20 +9,9 @@ import { computeContextBreakdown } from "../services/context-breakdown.js";
 import { discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { Chat } from "../types.js";
 import type { ChatMetadataUpdate } from "../services/chat-storage.js";
+import { parseMessageLimit, parsePositiveInt } from "../utils/message-window.js";
 
 const router = Router();
-const MAX_MESSAGE_WINDOW_LIMIT = 1000;
-
-function parsePositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "string") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function parseMessageLimit(value: unknown): number | undefined {
-  const parsed = parsePositiveInt(value);
-  return parsed ? Math.min(parsed, MAX_MESSAGE_WINDOW_LIMIT) : undefined;
-}
 
 // List all chats
 router.get("/", async (_req, res) => {

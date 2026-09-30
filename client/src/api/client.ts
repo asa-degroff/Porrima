@@ -518,16 +518,26 @@ export function streamArtifactErrorRepair(
  * page reload to decide whether to reconnect to a live stream.
  */
 export async function getChatStatus(
-  chatId: string
-): Promise<{ active: boolean; subscribers: number; reachable: boolean }> {
+  chatId: string,
+  opts: { includeWindow?: boolean; messageLimit?: number } = {}
+): Promise<{ active: boolean; subscribers: number; reachable: boolean; window?: Chat }> {
   try {
-    const res = await apiFetch(`${BASE}/chat/status/${encodeURIComponent(chatId)}`);
+    const qs = new URLSearchParams();
+    if (opts.includeWindow) qs.set("includeWindow", "1");
+    if (opts.messageLimit) qs.set("messageLimit", String(opts.messageLimit));
+    const query = qs.toString();
+    const res = await apiFetch(
+      `${BASE}/chat/status/${encodeURIComponent(chatId)}${query ? `?${query}` : ""}`
+    );
     if (!res.ok) return { active: false, subscribers: 0, reachable: true };
     const data = await res.json();
     return {
       active: Boolean(data.active),
       subscribers: Number(data.subscribers ?? 0),
       reachable: true,
+      // Present only when the server found a live stream and includeWindow
+      // was set; the server skips the DB read otherwise.
+      window: (data.window as Chat | undefined) ?? undefined,
     };
   } catch {
     return { active: false, subscribers: 0, reachable: false };

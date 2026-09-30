@@ -1845,7 +1845,16 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     if (bgStreams.has(chatIdToConnect)) return;
 
     let cancelled = false;
-    const status = await getChatStatus(chatIdToConnect);
+    // Ask for the message window in the same round trip as the liveness
+    // probe. A live turn needs the persisted window regardless — the resync
+    // snapshot only carries the uncommitted tail — so fetching it separately
+    // cost a second sequential RTT. The server only does the DB read when a
+    // stream is actually active, so a probe that finds nothing stays as
+    // cheap as before.
+    const status = await getChatStatus(chatIdToConnect, {
+      includeWindow: true,
+      messageLimit: MESSAGE_PAGE_SIZE,
+    });
     if (cancelled) return;
     if (!status.active) return;
     // Chat may have switched away during the async check.
@@ -1853,13 +1862,16 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     if (bgStreams.has(chatIdToConnect)) return;
 
     console.log(`[chat] reconnecting to in-flight stream for ${chatIdToConnect} (resync snapshot)`);
-    let serverChat: Chat | null = null;
-    try {
-      // Windowed like the normal chat load — a full-history fetch here would
-      // render the entire chat and reconcile it on every streaming frame.
-      serverChat = await apiFetchChat(chatIdToConnect, { messageLimit: MESSAGE_PAGE_SIZE });
-    } catch {
-      serverChat = activeChatRef.current?.id === chatIdToConnect ? activeChatRef.current : null;
+    let serverChat: Chat | null = status.window ?? null;
+    if (!serverChat) {
+      // Fallback for a server that ignored includeWindow.
+      try {
+        // Windowed like the normal chat load — a full-history fetch here would
+        // render the entire chat and reconcile it on every streaming frame.
+        serverChat = await apiFetchChat(chatIdToConnect, { messageLimit: MESSAGE_PAGE_SIZE });
+      } catch {
+        serverChat = activeChatRef.current?.id === chatIdToConnect ? activeChatRef.current : null;
+      }
     }
     if (cancelled) return;
     if (chatIdToConnect !== activeChatIdRef.current) return;
@@ -1995,12 +2007,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       if (!isRecentlyStreaming(activeChatId)) return;
 
       (async () => {
-        const status = await getChatStatus(activeChatId);
         if (document.visibilityState !== "visible") return;
-        if (!status.active) return;
-        if (activeChatId !== activeChatIdRef.current) return;
-        if (bgStreams.has(activeChatId)) return;
 
+        // tryReconnect already probes status (and now fetches the message
+        // window in that same round trip) plus re-checks the chatId and
+        // bgStreams guards, so probing here first only added a redundant
+        // round trip before the one that does the work.
         console.log(`[chat] reconnecting on visibility change for ${activeChatId} (resync snapshot)`);
         const cleanup = await tryReconnect(activeChatId);
         if (cleanup) cleanup();

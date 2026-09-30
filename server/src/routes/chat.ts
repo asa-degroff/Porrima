@@ -5,7 +5,8 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
+import { resolveMessageLimit } from "../utils/message-window.js";
 import { resolveCurrentMessageIndex, resolveTrailingRow } from "../services/current-message.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
@@ -5557,13 +5558,33 @@ router.post("/stop", async (req, res) => {
 
 // Check whether a chat has a live in-flight stream (used by clients to decide
 // whether to reconnect on mount or page refresh).
+//
+// `?includeWindow=1&messageLimit=N` additionally returns the persisted message
+// window, but ONLY when a stream is actually active. Clients reconnecting to a
+// live turn need that window anyway — the resync snapshot carries just the
+// uncommitted tail, so the committed history has to be fetched separately (see
+// buildResyncMessage and the reattach comment above). Folding it in here
+// collapses probe + window from two sequential round trips into one.
+//
+// Folding it unconditionally instead would waste a full window download on
+// every probe that finds no live stream, and the client's "recently
+// streaming" marker outlives the turn by RECENTLY_STREAMING_TTL_MS, so that
+// is the common case, not the rare one.
 router.get("/status/:chatId", async (req, res) => {
   const { chatId } = req.params;
   const stream = liveStreams.get(chatId);
   const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
+
+  const includeWindow = req.query.includeWindow !== undefined && req.query.includeWindow !== "0";
+  let window: Awaited<ReturnType<typeof getChatWithWindow>> = null;
+  if (active && includeWindow) {
+    window = await getChatWithWindow(chatId, { limit: resolveMessageLimit(req.query.messageLimit) });
+  }
+
   res.json({
     active,
     subscribers: stream?.subscribers.size ?? 0,
+    ...(window ? { window } : {}),
   });
 });
 
