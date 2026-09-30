@@ -4,6 +4,7 @@ import session from "express-session";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { Request, Response, NextFunction } from "express";
+import { responseCompression } from "./middleware/compression.js";
 import modelsRouter from "./routes/models.js";
 import chatsRouter from "./routes/chats.js";
 import chatRouter from "./routes/chat.js";
@@ -161,6 +162,11 @@ if (isProd) {
 }
 
 app.use(express.json({ limit: "50mb" }));
+
+// Compress API responses. Must be mounted before every router so it wraps
+// their res.write/res.end, and must keep its content-type filter so the
+// SSE routes stay unbuffered (see middleware/compression.ts).
+app.use(responseCompression());
 
 // Auth routes (unprotected)
 app.use("/api/auth", authRouter);

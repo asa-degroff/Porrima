@@ -16,6 +16,7 @@
     "@simplewebauthn/server": "^14.0.1",
     "better-sqlite3": "^13.0.2",
     "busboy": "^1.6.0",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.2",
