@@ -661,12 +661,12 @@ I think beyond surface-level facts, considering:
 - **Lessons**: what worked, what didn't, patterns that emerged
 - **Experiences**: how I approached the situation, what I observed, how I felt about it
 
-Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 2-5 sentences per memory is ideal.
+Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 4-6 sentences per memory is ideal.
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context that produced these memories. Use a noun phrase, not a full sentence. Be specific — name the concrete topic or system discussed, not the activity. Don't use generic labels like "this conversation", "coding session", "debugging", or "project update".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "text": A standalone statement with sufficient context (4-6 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
 ${DURABILITY_FIELD_GUIDE}
@@ -794,12 +794,12 @@ Previously captured memories are provided alongside the conversation. Those memo
 4. **Thematic context** — higher-level insights that connect multiple exchanges
 5. **Unresolved threads** — ongoing work, open questions, or pending decisions. These are usually "session" unless they encode a durable open question for the project.
 
-Each extracted memory should be self-contained and meaningful (2-5 sentences).
+Each extracted memory should be self-contained and meaningful (4-6 sentences).
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context. Use a noun phrase. Be specific about what topic or system was discussed. Don't use generic labels like "this conversation" or "coding session".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "text": A standalone statement with sufficient context (4-6 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
 ${DURABILITY_FIELD_GUIDE}
@@ -2879,7 +2879,7 @@ function buildImmediateBatchHeader(exchanges: ImmediateExchange[], isTurnComplet
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing the conversational context. Be specific. Don't use generic labels like "this conversation" or "coding session".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "text": A standalone statement with sufficient context (4-6 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
 ${DURABILITY_FIELD_GUIDE}
@@ -3500,7 +3500,7 @@ function buildMidTurnBatchHeader(pulseIndex: number): string {
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing what you are working on right now. Be specific. Don't use generic labels like "coding session" or "debugging".
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "text": A standalone statement with sufficient context (4-6 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10 (10 = critical, 1 = trivial)
 ${DURABILITY_FIELD_GUIDE}
@@ -3953,12 +3953,12 @@ Focus on:
 3. User context — preferences, instructions, corrections, expertise revealed
 4. Decisions & rationale — why approaches were chosen, tradeoffs considered, alternatives rejected
 
-Each memory should be self-contained and meaningful (2-5 sentences).
+Each memory should be self-contained and meaningful (4-6 sentences).
 
 Output a JSON object with two fields:
 - "subject": A brief topic line (5-15 words) describing what this conversation segment was about. Be specific.
 - "memories": A JSON array. Each item:
-  - "text": A standalone statement with sufficient context (2-5 sentences)
+  - "text": A standalone statement with sufficient context (4-6 sentences)
   - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
   - "importance": 1-10
 ${DURABILITY_FIELD_GUIDE}
