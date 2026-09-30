@@ -4,7 +4,8 @@ import {
   searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope,
   isSystemManagedMemoryBlock, buildMemoryIndexText,
   getMemoryContextState, upsertMemoryContextState, deleteMemoryContextState,
-  setMemoryContextDirty, setAllMemoryContextDirty, type MemoryBlock,
+  setMemoryContextDirty, setAllMemoryContextDirty, getBlockTokenBudgets,
+  type MemoryBlock, type BlockTokenBudgets,
 } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats, buildSelectedResult } from "./reranker-stats.js";
@@ -63,6 +64,10 @@ const stablePrefixCache = new Map<string, {
   blocksSection: string;
   hasIndexedBlocks: boolean;
   sectionTokens: StablePrefixSectionTokens;
+  /** Budgets the cached block sections were built with — a change to either
+      (any path: UI, API, hand-edit) makes the entry stale at read time. */
+  globalBlockTokenBudget: number;
+  projectBlockTokenBudget: number;
 }>();
 
 /**
@@ -726,13 +731,14 @@ function buildMemoriesDelta(memories: RetrievalResult[], projectId?: string, hin
 
 // ---- Stable prefix builder ----
 
-const GLOBAL_MEMORY_BLOCK_TOKEN_BUDGET = 3000;
-const PROJECT_CHAT_MEMORY_BLOCK_TOKEN_BUDGET = 5000;
-
-interface SplitMemoryBlockParts {
+export interface SplitMemoryBlockParts {
   loadedParts: string[];
   indexParts: string[];
   loadedTokens: number;
+  /** IDs of blocks that made the budget (full content in the prefix). */
+  loadedIds: string[];
+  /** IDs of blocks that fell to the index line only. */
+  indexIds: string[];
 }
 
 interface StableMemoryBlockSections {
@@ -746,27 +752,31 @@ function formatMemoryBlockIndexLine(block: MemoryBlock, options?: { project?: bo
   return `- [${block.id}] ${block.name}${options?.project ? " (project)" : ""} — ${block.description}`;
 }
 
-function splitMemoryBlocksForPrefix(
+export function splitMemoryBlocksForPrefix(
   blocks: MemoryBlock[],
   tokenBudget: number,
   options?: { project?: boolean },
 ): SplitMemoryBlockParts {
   const loadedParts: string[] = [];
   const indexParts: string[] = [];
+  const loadedIds: string[] = [];
+  const indexIds: string[] = [];
   let loadedTokens = 0;
   let budgetExhausted = tokenBudget <= 0;
 
   for (const block of blocks) {
     if (!budgetExhausted && loadedTokens + block.tokenEstimate <= tokenBudget) {
       loadedParts.push(`### ${block.name}\n${block.content}`);
+      loadedIds.push(block.id);
       loadedTokens += block.tokenEstimate;
       continue;
     }
     budgetExhausted = true;
     indexParts.push(formatMemoryBlockIndexLine(block, options));
+    indexIds.push(block.id);
   }
 
-  return { loadedParts, indexParts, loadedTokens };
+  return { loadedParts, indexParts, loadedTokens, loadedIds, indexIds };
 }
 
 function buildMemoryBlockSection(
@@ -785,12 +795,15 @@ function buildMemoryBlockSection(
   return parts.length > 0 ? `\n\n${parts.join("\n\n")}` : "";
 }
 
-function buildStableMemoryBlockSections(projectId?: string): StableMemoryBlockSections {
+function buildStableMemoryBlockSections(
+  projectId: string | undefined,
+  budgets: BlockTokenBudgets,
+): StableMemoryBlockSections {
   const globalBlocks = getMemoryBlocksByScope("global")
     .filter((b) => !isSystemManagedMemoryBlock(b));
   const globalParts = splitMemoryBlocksForPrefix(
     globalBlocks,
-    GLOBAL_MEMORY_BLOCK_TOKEN_BUDGET,
+    budgets.global,
   );
   const globalSection = buildMemoryBlockSection(
     "## Memory Blocks",
@@ -804,7 +817,7 @@ function buildStableMemoryBlockSections(projectId?: string): StableMemoryBlockSe
   if (projectId) {
     const projectBlocks = getMemoryBlocksByScope("project", projectId)
       .filter((b) => !isSystemManagedMemoryBlock(b));
-    const projectBudget = Math.max(0, PROJECT_CHAT_MEMORY_BLOCK_TOKEN_BUDGET - globalParts.loadedTokens);
+    const projectBudget = Math.max(0, budgets.project - globalParts.loadedTokens);
     const projectParts = splitMemoryBlocksForPrefix(
       projectBlocks,
       projectBudget,
@@ -834,9 +847,17 @@ export async function buildStablePrefix(
   projectPath?: string,
 ): Promise<{ stablePrefix: string; blocksSection: string }> {
   const cacheKey = chatId;
+  // Read before the cache check: a budget change (any path) must invalidate
+  // the cached block sections, so the current budgets are part of validity.
+  const budgets = await getBlockTokenBudgets();
   const cached = stablePrefixCache.get(cacheKey);
 
-  if (cached && cached.basePrompt === baseSystemPrompt) {
+  if (
+    cached &&
+    cached.basePrompt === baseSystemPrompt &&
+    cached.globalBlockTokenBudget === budgets.global &&
+    cached.projectBlockTokenBudget === budgets.project
+  ) {
     return { stablePrefix: cached.prefix, blocksSection: cached.blocksSection };
   }
 
@@ -886,7 +907,7 @@ export async function buildStablePrefix(
   let combinedBlocksSection = "";
   let hasIndexedBlocks = false;
   try {
-    const sections = buildStableMemoryBlockSections(projectId);
+    const sections = buildStableMemoryBlockSections(projectId, budgets);
     globalBlocksSection = sections.globalSection;
     projectBlocksSection = sections.projectSection;
     combinedBlocksSection = sections.combinedBlocksSection;
@@ -913,6 +934,8 @@ export async function buildStablePrefix(
     prefix: stablePrefix,
     blocksSection: combinedBlocksSection,
     hasIndexedBlocks,
+    globalBlockTokenBudget: budgets.global,
+    projectBlockTokenBudget: budgets.project,
     sectionTokens: {
       basePrompt: estimateTextTokens(baseSystemPrompt),
       persona: estimateTextTokens(personaSection),

@@ -896,6 +896,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
   const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 6000);
+  const [maxBlockCount, setMaxBlockCount] = useState(settings.maxBlockCount ?? 15);
+  const [globalBlockTokenBudget, setGlobalBlockTokenBudget] = useState(settings.globalBlockTokenBudget ?? 3000);
+  const [projectBlockTokenBudget, setProjectBlockTokenBudget] = useState(settings.projectBlockTokenBudget ?? 5000);
   const [crossProjectScoreMultiplier, setCrossProjectScoreMultiplier] = useState(settings.crossProjectScoreMultiplier ?? 0.3);
   const [globalProjectScoreMultiplier, setGlobalProjectScoreMultiplier] = useState(settings.globalProjectScoreMultiplier ?? 1.0);
   const [retrievalDepthProfile, setRetrievalDepthProfile] = useState<RetrievalDepthProfile>(coerceRetrievalDepthProfile(settings.retrievalDepthProfile));
@@ -2213,6 +2216,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       readFileDefaultLines,
       readFileMaxBytes,
       maxBlockChars,
+      maxBlockCount,
+      globalBlockTokenBudget,
+      projectBlockTokenBudget,
       crossProjectScoreMultiplier,
       globalProjectScoreMultiplier,
       llamaBinaryScanDir: llamaBinaryScanDir.trim() || undefined,
@@ -6670,6 +6676,75 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                onChange={(e) => setMaxBlockChars(Number(e.target.value))}
 	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
 	              />
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Maintenance review threshold (blocks)</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Synthesis gets a maintenance nudge when the active block count exceeds 70% of this (dormant-project blocks count too). Not a cap — blocks may exceed it freely. What rides in each chat's context is governed by separate token budgets, not this number.</p>
+	                </div>
+	                <span className="text-xs text-white/40">{maxBlockCount} blocks</span>
+	              </div>
+	              <input
+	                type="range"
+	                min={5}
+	                max={100}
+	                step={1}
+	                value={maxBlockCount}
+	                onChange={(e) => setMaxBlockCount(Number(e.target.value))}
+	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	              />
+	              <div className="flex items-center justify-between text-[10px] text-white/25">
+	                <span>5</span>
+	                <span>100</span>
+	              </div>
+	            </div>
+
+	            {/* Global block token budget — attachment, not a warning: governs
+	                how many tokens of global block content ride FULL in every chat */}
+	            <div className="space-y-1.5">
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Global block token budget</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Tokens of global block content that ride full in every chat's context (newest first; the rest ride as index lines, readable on demand). Higher = richer attached recall, slower prefill. Changing this rebuilds each chat's context prefix.</p>
+	                </div>
+	                <span className="text-xs text-white/40">{globalBlockTokenBudget}t</span>
+	              </div>
+	              <input
+	                type="range"
+	                min={0}
+	                max={10000}
+	                step={250}
+	                value={globalBlockTokenBudget}
+	                onChange={(e) => setGlobalBlockTokenBudget(Number(e.target.value))}
+	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	              />
+	              <div className="flex items-center justify-between text-[10px] text-white/25">
+	                <span>0</span>
+	                <span>10,000</span>
+	              </div>
+	            </div>
+
+	            {/* Project block token budget — same mechanic for project chats */}
+	            <div className="space-y-1.5">
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Project block token budget</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Tokens of project block content that ride full in this project's chats (newest first; the rest ride as index lines). Fills the remainder after the global budget in project chats.</p>
+	                </div>
+	                <span className="text-xs text-white/40">{projectBlockTokenBudget}t</span>
+	              </div>
+	              <input
+	                type="range"
+	                min={0}
+	                max={10000}
+                step={250}
+	                value={projectBlockTokenBudget}
+	                onChange={(e) => setProjectBlockTokenBudget(Number(e.target.value))}
+	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	              />
+	              <div className="flex items-center justify-between text-[10px] text-white/25">
+	                <span>0</span>
+	                <span>10,000</span>
+	              </div>
 	            </div>
 	          </div>
 

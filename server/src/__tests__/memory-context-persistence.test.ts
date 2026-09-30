@@ -189,6 +189,7 @@ function mockStorageModule(rows: Map<string, EmulatedRow>) {
     }),
     mmrRerank: vi.fn((items: unknown[], _e: unknown, limit: number) => items.slice(0, limit)),
     updateMemory: vi.fn(async () => true),
+    getBlockTokenBudgets: vi.fn(async () => ({ global: 3000, project: 5000 })),
     getMemoryBlocksByScope: vi.fn(() => []),
     getAllMemoryBlocks: vi.fn(() => []),
     isSystemManagedMemoryBlock: vi.fn(() => false),

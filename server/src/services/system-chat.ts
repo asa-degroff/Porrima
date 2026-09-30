@@ -620,19 +620,24 @@ async function buildSynthesisTriggerContent(
 // ---------------------------------------------------------------------------
 // Phase 2: Block maintenance + zeitgeist trigger (merged)
 //
-// Builds a compact block inventory from all global blocks and project-scoped
-// blocks from projects that had agent chat activity since last synthesis.
-// The inventory is metadata only — the agent reads full content selectively
-// via read_memory_block when it decides a block needs attention.
-// Also checks zeitgeist size and appends an archive directive if over threshold.
+// Builds a compact block inventory: all global blocks, plus project-scoped
+// blocks from every project that has active blocks. Projects with recent
+// agent chat activity get full per-block lines; dormant projects get a
+// compact summary (count + oldest update + names) so their blocks can be
+// reviewed exactly when they stop being active — the window where staleness
+// review is still relevant. The inventory is metadata only — the agent reads
+// full content selectively via read_memory_block when it decides a block
+// needs attention. Also checks zeitgeist size and appends an archive
+// directive if over threshold.
 // ---------------------------------------------------------------------------
 
-async function buildMaintenancePhase2Trigger(
+export async function buildMaintenancePhase2Trigger(
   chatId: string,
   phase2Instructions = SYNTHESIS_PHASE2_INSTRUCTIONS,
 ): Promise<string> {
   const { getDb, getProject } = await import("./chat-storage.js");
-  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars, isSystemManagedMemoryBlock } = await import("./memory-storage.js");
+  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars, getMaxBlockCount, isSystemManagedMemoryBlock, getBlockTokenBudgets } = await import("./memory-storage.js");
+  const { splitMemoryBlocksForPrefix } = await import("./memory-context.js");
 
   // 1. All non-system global blocks
   const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
@@ -657,32 +662,86 @@ async function buildMaintenancePhase2Trigger(
 
   const projectIdSet = new Set(activeProjects.map((p) => p.projectId));
 
-  // 3. Project-scoped blocks from active projects only
-  const projectBlocks: Map<string, { name: string; blocks: typeof globalBlocks[number][] }> = new Map();
-  for (const projectId of projectIdSet) {
+  // 3. Project-scoped blocks from EVERY project that has active blocks.
+  // Active projects (recent agent chat) get full per-block lines; dormant
+  // projects get a compact summary in section 4. The project list comes from
+  // the memory store — the blocks live in memory-storage's database, not the
+  // chat database `db` above.
+  const allProjectIds = [
+    ...new Set(
+      getAllMemoryBlocks()
+        .filter((b) => b.scope === "project" && b.projectId !== "")
+        .map((b) => b.projectId),
+    ),
+  ];
+
+  const blocksByProject = new Map<
+    string,
+    { label: string; blocks: typeof globalBlocks[number][] }
+  >();
+  for (const projectId of allProjectIds) {
     const blocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b));
-    if (blocks.length > 0) {
-      // Label with the real project name plus the full ID so the agent can
-      // target the project with create/update_memory_block(project_id=...).
-      let projectLabel = projectId;
-      try {
-        const project = await getProject(projectId);
-        if (project?.name) projectLabel = `${project.name} (${projectId})`;
-      } catch {
-        // Fall back to the raw ID.
-      }
-      projectBlocks.set(projectId, { name: projectLabel, blocks });
+    if (blocks.length === 0) continue;
+    // Label with the real project name plus the full ID so the agent can
+    // target the project with create/update_memory_block(project_id=...).
+    let projectLabel = projectId;
+    try {
+      const project = await getProject(projectId);
+      if (project?.name) projectLabel = `${project.name} (${projectId})`;
+    } catch {
+      // Fall back to the raw ID.
     }
+    blocksByProject.set(projectId, { label: projectLabel, blocks });
   }
 
-  // 4. Build compact inventory string
+  // Active projects keep their prior render order (most-recently-active
+  // first); the rest become dormant review lines, oldest staleness first.
+  const projectBlocks: Map<string, { name: string; blocks: typeof globalBlocks[number][] }> = new Map();
+  const dormantProjects: Array<{ label: string; blocks: typeof globalBlocks[number][] }> = [];
+  for (const { projectId } of activeProjects) {
+    const entry = blocksByProject.get(projectId);
+    if (entry) projectBlocks.set(projectId, { name: entry.label, blocks: entry.blocks });
+  }
+  for (const [projectId, entry] of blocksByProject) {
+    if (!projectIdSet.has(projectId)) {
+      dormantProjects.push({ label: entry.label, blocks: entry.blocks });
+    }
+  }
+  dormantProjects.sort(
+    (a, b) =>
+      Date.parse(a.blocks[a.blocks.length - 1].updatedAt) -
+      Date.parse(b.blocks[b.blocks.length - 1].updatedAt),
+  );
+
+  // 4. Build compact inventory string. Attached-status markers use the SAME
+  // split the prefix builder applies (same function, same settings-derived
+  // budgets), so the inventory's claim about what each chat receives can't
+  // drift from it — including after a budget change.
+  const { global: globalBudget, project: projectBudget } = await getBlockTokenBudgets();
+  const globalSplit = splitMemoryBlocksForPrefix(globalBlocks, globalBudget);
+  const globalMode = (id: string) =>
+    globalSplit.loadedIds.includes(id)
+      ? "(rides full in all chats)"
+      : "(index-only in all chats)";
+  const projectSplitFor = (
+    blocks: typeof globalBlocks[number][],
+  ) =>
+    splitMemoryBlocksForPrefix(
+      blocks,
+      Math.max(0, projectBudget - globalSplit.loadedTokens),
+    );
+  const projectMode = (split: ReturnType<typeof projectSplitFor>, id: string) =>
+    split.loadedIds.includes(id)
+      ? "(rides full in project chats)"
+      : "(index-only in project chats)";
+
   const inventoryLines: string[] = [];
 
   if (globalBlocks.length > 0) {
     inventoryLines.push("**Global:**\n");
     for (const b of globalBlocks) {
       inventoryLines.push(
-        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t)`,
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t) ${globalMode(b.id)}`,
       );
     }
     inventoryLines.push("");
@@ -690,22 +749,53 @@ async function buildMaintenancePhase2Trigger(
 
   for (const [projectId, info] of projectBlocks) {
     inventoryLines.push(`**${info.name}:**\n`);
+    const split = projectSplitFor(info.blocks);
     for (const b of info.blocks) {
       inventoryLines.push(
-        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t)`,
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${formatAgentDate(b.updatedAt)}, ~${b.tokenEstimate}t) ${projectMode(split, b.id)}`,
       );
     }
     inventoryLines.push("");
   }
 
-  // 5. Compute budget
+  if (dormantProjects.length > 0) {
+    inventoryLines.push(
+      "**Dormant projects** (no recent agent chat — staleness review candidates):\n",
+    );
+    for (const p of dormantProjects) {
+      // blocks arrive updatedAt DESC — oldest (the review candidates) first
+      const oldestFirst = [...p.blocks].reverse();
+      const oldest = oldestFirst[0];
+      const DORMANT_NAME_LIMIT = 10;
+      const names = oldestFirst
+        .slice(0, DORMANT_NAME_LIMIT)
+        .map((b) => b.name)
+        .join(" · ");
+      const extra =
+        p.blocks.length > DORMANT_NAME_LIMIT
+          ? ` +${p.blocks.length - DORMANT_NAME_LIMIT} more`
+          : "";
+      const split = projectSplitFor(p.blocks);
+      const shortName = p.label.split(" (")[0];
+      const attached = `(attached in ${shortName} chats: ${split.loadedIds.length} full, ${p.blocks.length - split.loadedIds.length} index)`;
+      inventoryLines.push(
+        `- ${p.label}: ${p.blocks.length} blocks, oldest updated ${formatAgentDate(oldest.updatedAt)} — ${names}${extra} ${attached}`,
+      );
+    }
+    inventoryLines.push("");
+  }
+
+  // 5. Compute budget — all active-scope blocks, dormant projects included:
+  // a block that stopped being attached is still active knowledge, and the
+  // budget line is what tells maintenance how much review is owed.
   const allActiveBlocks = [
     ...globalBlocks,
     ...[...projectBlocks.values()].flatMap((p) => p.blocks),
+    ...dormantProjects.flatMap((p) => p.blocks),
   ];
   const totalBlocks = allActiveBlocks.length;
   const totalChars = allActiveBlocks.reduce((sum, b) => sum + b.content.length, 0);
-  const BLOCK_LIMIT = 15;
+  const BLOCK_LIMIT = await getMaxBlockCount();
   const maxBlockChars = await getMaxBlockChars();
   const CHAR_LIMIT = BLOCK_LIMIT * maxBlockChars;
   const BLOCK_WARN = BLOCK_LIMIT * 0.7;

@@ -590,6 +590,16 @@ export interface Settings {
   timeMarkerIntervalMinutes?: number;
   // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
   maxBlockChars?: number;
+  // Max number of active-scope memory blocks (drives the synthesis maintenance
+  // budget warning; total char budget = this × maxBlockChars). Default 15.
+  maxBlockCount?: number;
+  // Token budget for full-content GLOBAL memory blocks in every chat's stable
+  // prefix (greedy newest-first fill; overflow rides as index lines).
+  // Higher = richer attached context, slower prefill. Default 3000.
+  globalBlockTokenBudget?: number;
+  // Token budget for full-content PROJECT memory blocks in project chats.
+  // Default 5000.
+  projectBlockTokenBudget?: number;
   // Cross-project score multiplier — dampens memories from other projects during retrieval.
   // 0.3 means cross-project memories get 30% of their original score, preventing them from
   // dominating results while still allowing highly relevant content to surface. Default 0.3.

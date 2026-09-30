@@ -1994,6 +1994,30 @@ export async function getMaxBlockChars(): Promise<number> {
   return clampMaxBlockChars(settings.maxBlockChars);
 }
 
+const DEFAULT_MAX_BLOCK_COUNT = 15;
+const MIN_MAX_BLOCK_COUNT = 5;
+const MAX_MAX_BLOCK_COUNT = 100;
+
+function clampMaxBlockCount(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_MAX_BLOCK_COUNT;
+  return Math.min(MAX_MAX_BLOCK_COUNT, Math.max(MIN_MAX_BLOCK_COUNT, Math.round(numeric)));
+}
+
+/**
+ * Active-scope memory-block count ceiling. Drives the synthesis maintenance
+ * budget warning (block dimension); the total char budget is this × the
+ * per-block char ceiling. Settings-derived like maxBlockChars: the default is
+ * sized for a fresh instance, and a growing corpus tunes its own number
+ * instead of the code baking in any instance-specific figure.
+ */
+export async function getMaxBlockCount(): Promise<number> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  if (settings.maxBlockCount == null) return DEFAULT_MAX_BLOCK_COUNT;
+  return clampMaxBlockCount(settings.maxBlockCount);
+}
+
 // blockType distinguishes the different kinds of entries that all live in the
 // memory_blocks table:
 //   - 'note': plain agent-managed knowledge block (the default). Subject to
@@ -2500,4 +2524,45 @@ export function setAllMemoryContextDirty(): void {
     .run(Date.now());
 }
 
-export { DEFAULT_MAX_BLOCK_CHARS, MIN_MAX_BLOCK_CHARS, MAX_MAX_BLOCK_CHARS };
+// ---- Token budgets for block attachment (stable prefix) ----
+// These govern what actually rides in every chat's context: how many tokens
+// of block content load FULL (rest rides as index lines). Settings-derived
+// like maxBlockChars: instance-agnostic defaults, clamped at read time.
+export const DEFAULT_GLOBAL_BLOCK_TOKEN_BUDGET = 3000;
+export const DEFAULT_PROJECT_BLOCK_TOKEN_BUDGET = 5000;
+export const MIN_BLOCK_TOKEN_BUDGET = 0;
+export const MAX_BLOCK_TOKEN_BUDGET = 10000;
+
+export interface BlockTokenBudgets {
+  global: number;
+  project: number;
+}
+
+function clampBlockTokenBudget(value: number | undefined, fallback: number): number {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  return Math.min(MAX_BLOCK_TOKEN_BUDGET, Math.max(MIN_BLOCK_TOKEN_BUDGET, Math.round(value)));
+}
+
+/**
+ * Read both attachment token budgets in a single settings read. The
+ * stable-prefix builder stores the returned values on its cache entry, so a
+ * budget change from ANY path (UI, API, hand-edit) invalidates the cached
+ * prefix at read time — no save-path hook required.
+ */
+export async function getBlockTokenBudgets(): Promise<BlockTokenBudgets> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  return {
+    global: clampBlockTokenBudget(settings.globalBlockTokenBudget, DEFAULT_GLOBAL_BLOCK_TOKEN_BUDGET),
+    project: clampBlockTokenBudget(settings.projectBlockTokenBudget, DEFAULT_PROJECT_BLOCK_TOKEN_BUDGET),
+  };
+}
+
+export {
+  DEFAULT_MAX_BLOCK_CHARS,
+  MIN_MAX_BLOCK_CHARS,
+  MAX_MAX_BLOCK_CHARS,
+  DEFAULT_MAX_BLOCK_COUNT,
+  MIN_MAX_BLOCK_COUNT,
+  MAX_MAX_BLOCK_COUNT,
+};

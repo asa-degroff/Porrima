@@ -46,6 +46,7 @@ describe("memory context after cache warming", () => {
       mmrRerank: vi.fn((items: unknown[], _embedding, limit: number) => items.slice(0, limit)),
       updateMemory: vi.fn(async () => true),
       getMemoryBlocksByScope: vi.fn(() => []),
+      getBlockTokenBudgets: vi.fn(async () => ({ global: 3000, project: 5000 })),
       getAllMemoryBlocks: vi.fn(() => []),
       isSystemManagedMemoryBlock: vi.fn(() => false),
       buildMemoryIndexText: (text: string, subject?: string) =>

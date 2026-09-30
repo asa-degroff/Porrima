@@ -96,6 +96,56 @@ describe("memory block storage", () => {
     }
   });
 
+  it("getMaxBlockCount defaults to 15, honors settings, and clamps", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const { getMaxBlockCount } = await loadMemoryStorage(homeDir);
+      // chat-storage's DB lives in .porrima — create it in the fake home
+      // (same setup as the chat-storage tests).
+      mkdirSync(join(homeDir, ".porrima"), { recursive: true });
+      const { saveSettings } = await import("../services/chat-storage.js");
+
+      // No settings row yet — the fresh-instance default.
+      expect(await getMaxBlockCount()).toBe(15);
+
+      // Configured value passes through (per-instance tuning of the budget).
+      await saveSettings({ maxBlockCount: 25 } as never);
+      expect(await getMaxBlockCount()).toBe(25);
+
+      // Out-of-range values clamp to [5, 100] like maxBlockChars does.
+      await saveSettings({ maxBlockCount: 5000 } as never);
+      expect(await getMaxBlockCount()).toBe(100);
+      await saveSettings({ maxBlockCount: 1 } as never);
+      expect(await getMaxBlockCount()).toBe(5);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("getBlockTokenBudgets defaults to 3000/5000, honors settings, and clamps to [0, 10000]", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const { getBlockTokenBudgets } = await loadMemoryStorage(homeDir);
+      mkdirSync(join(homeDir, ".porrima"), { recursive: true });
+      const { saveSettings } = await import("../services/chat-storage.js");
+
+      // No settings row yet — the fresh-instance defaults (historical budgets).
+      expect(await getBlockTokenBudgets()).toEqual({ global: 3000, project: 5000 });
+
+      // Configured values pass through (per-instance tuning of attachment).
+      await saveSettings({ globalBlockTokenBudget: 4500, projectBlockTokenBudget: 8000 } as never);
+      expect(await getBlockTokenBudgets()).toEqual({ global: 4500, project: 8000 });
+
+      // Out-of-range values clamp to [0, 10000]; non-finite falls back to default.
+      await saveSettings({ globalBlockTokenBudget: 99999, projectBlockTokenBudget: -5 } as never);
+      expect(await getBlockTokenBudgets()).toEqual({ global: 10000, project: 0 });
+      await saveSettings({ globalBlockTokenBudget: Number.NaN, projectBlockTokenBudget: -5 } as never);
+      expect(await getBlockTokenBudgets()).toEqual({ global: 3000, project: 0 });
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists blocks by query tokens across punctuation and content", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
     try {

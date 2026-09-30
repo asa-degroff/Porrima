@@ -14,7 +14,7 @@
 - **Data dir**: `~/.porrima/` (chats, projects, settings, memories, artifacts)
 - **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
 - **systemd services**:
-  - `porrima.service` — main server (auto-starts on boot)
+  - `porrima.service` — main server. **USER scope** (`~/.config/systemd/user/porrima.service`, drop-in override): manage with `systemctl --user`; system-scope `systemctl` reports "could not be found"
   - `llama-server.service` — llama.cpp router (port 32100, GPU inference)
   - `extraction-model.service` — memory extraction server (port 32101, CPU-only)
   - `reranker.service` — Qwen3-Reranker-0.6B (port 32102, CPU-only, memory retrieval)

@@ -35,6 +35,13 @@ function memory(overrides: Partial<Memory>): Memory {
   };
 }
 
+// Mutable attachment budgets for the memory-storage mock — tests tune these
+// to exercise the settings-derived budget path (default = historical 3000/5000).
+let blockTokenBudgets = { global: 3000, project: 5000 };
+function mockBlockTokenBudgets() {
+  return blockTokenBudgets;
+}
+
 function expectInOrder(text: string, markers: string[]): void {
   let previous = -1;
   for (const marker of markers) {
@@ -63,6 +70,7 @@ function mockMemoryContextDeps(options: {
     searchMemories: vi.fn(async () => memories.map((m) => ({ memory: m, score: 0.9 }))),
     mmrRerank: vi.fn((items: unknown[], _embedding, limit: number) => items.slice(0, limit)),
     updateMemory: vi.fn(async () => true),
+    getBlockTokenBudgets: vi.fn(async () => mockBlockTokenBudgets()),
     getMemoryBlocksByScope: vi.fn((scope: string, projectId?: string) => {
       if (scope === "global") return globalBlocks;
       if (scope === "project" && projectId === "proj-1") return projectBlocks;
@@ -182,6 +190,33 @@ describe("memory context stable prefix shape", () => {
     const beforeProjectContext = stablePrefix.slice(0, stablePrefix.indexOf("## Project Context"));
     expect(beforeProjectContext).not.toContain("Project loaded content.");
     expect(beforeProjectContext).not.toContain("Project indexed description.");
+  });
+
+  it("honors the settings token budgets and rebuilds the cached prefix when they change", async () => {
+    mockMemoryContextDeps({
+      globalBlocks: [
+        block({ id: "global-4000", name: "Global Mid", content: "Global mid content.", tokenEstimate: 4000 }),
+      ],
+    });
+
+    const { buildStablePrefix, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
+    resetAllMemoryContextCaches();
+
+    try {
+      // Default 3000t budget: a 4000t block doesn't fit → index line only.
+      blockTokenBudgets = { global: 3000, project: 5000 };
+      const defaultBudget = await buildStablePrefix("Base prompt.", "chat-1");
+      expect(defaultBudget.stablePrefix).not.toContain("Global mid content.");
+      expect(defaultBudget.stablePrefix).toContain("## Available Memory Blocks");
+
+      // Raise the budget (same effect as a UI save, API write, or hand-edit):
+      // the cached entry for chat-1 must be rebuilt, not served stale.
+      blockTokenBudgets = { global: 10000, project: 5000 };
+      const raised = await buildStablePrefix("Base prompt.", "chat-1");
+      expect(raised.stablePrefix).toContain("Global mid content.");
+    } finally {
+      blockTokenBudgets = { global: 3000, project: 5000 };
+    }
   });
 
   it("makes the no-project global prefix a byte-identical prefix of project prompts", async () => {
