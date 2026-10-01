@@ -258,7 +258,7 @@ porrima/
 │   ├── sw.ts                        # Service worker (PWA, offline cache, push)
 │   ├── types.ts                     # Shared interfaces (client copy)
 │   ├── api/                         # Fetch API clients: client.ts, auth, tts, user, persona, push, extraction-prompt
-│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useOnlineStatus, useAuth, usePushNotifications, useSlotAssignments, useCacheResidency, etc.)
+│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useOnlineStatus, useAuth, usePushNotifications, useCacheResidency, etc.)
 │   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, NotebookView, MemoryGraphView, MemoryDebugPanel, PinnedPanel, ReminderCard, ThemePicker, SystemPromptEditor, ModelStatsModal, SystemStatsBar, SetupModal, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
 │   │   └── ui/                      # Primitives (MarkdownRenderer, Dropdown, ContextMenu, ToggleSwitch, SpeakerButton, DiffView, etc.)
 │   ├── contexts/                    # PinnedItemContext

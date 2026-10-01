@@ -138,4 +138,4 @@ The current corpus backend focuses on storage, enrichment, clustering, cleanup, 
 - Image description and analysis with pluggable presets
 - Conversation about analyzed images
 - Stored in `~/.porrima/vision/`
-- UI: `VisionGallery`, `VisionChat`, `VisionControls`
+- UI: `VisionChat`, `VisionControls`

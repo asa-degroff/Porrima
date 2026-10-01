@@ -25,7 +25,7 @@
 ## Conversation Search
 
 - **Sidebar inline** (`SidebarSearch.tsx`): inline search embedded in the sidebar (2-char minimum, 300ms debounce, jump-to-message via `chatId` + `messageIndex`)
-- There is **no** separate modal search surface — `ConversationSearch.tsx` is dead code and is no longer mounted
+- There is **no** separate modal search surface — the former `ConversationSearch.tsx` modal was removed as dead code (10-01)
 - Backend: FTS5 via the `search_conversation` tool and `POST /api/memory/conversations/search`
 
 ## Memory Inspection
@@ -54,7 +54,7 @@ Desktop-only right-hand column (`PinnedPanel.tsx` + `PinnedItemContext.tsx`). "P
 
 - **Model Stats modal** (`ModelStatsModal.tsx`): per-model token throughput, latency, and prompt-cache residency; opened from the sidebar. Calls `getCacheResidency` directly rather than through the hook
 - **System stats bar** (`SystemStatsBar.tsx`): CPU/GPU telemetry in the sidebar, polled every 3s, with per-GPU hiding via `settings.systemStatsHiddenGpus`
-- **Cache residency affordances**: `useCacheResidency.ts` polls every 3s and drives per-chat warming spinners, warm-queue position, warm-error toasts, and a manual "warm cache" action, plus a separate new-chat-baseline spinner. (`useSlotAssignments.ts` polls the slot-lease map but is currently **not wired up** anywhere.)
+- **Cache residency affordances**: `useCacheResidency.ts` polls every 3s and drives per-chat warming spinners, warm-queue position, warm-error toasts, and a manual "warm cache" action, plus a separate new-chat-baseline spinner.
 - **Setup wizard** (`SetupModal.tsx`): auto-opens on first run when `!settings.setupCompleted`
 - **Sidebar automation rail**: `AutomationRunnerDropdown` + `PrefillActivityIcon` + system-pause controls, driven by a 10s poll of `/api/memory/synthesis-status` that reports which task holds the global automation lock. On completion the client refreshes notebooks and forces a system-chat reload
 
