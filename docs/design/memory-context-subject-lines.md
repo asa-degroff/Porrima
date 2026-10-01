@@ -339,10 +339,14 @@ practice.
 ### No changes needed
 
 - `memory-tools.ts` `save_memory` tool definition — user-authored memories are explicit, no subject parameter
-- `memory-extraction-observability.ts` — subject is metadata, not observability
-- Client/UI components — subject is injected server-side into the LLM prompt, not displayed to the user (though it flows through API responses typed as `string`)
-- Embedding/search — subject is NOT embedded into the memory text (would corrupt vector search); it's pure display context
-- `fts_memories` — indexes `text` only; subject stays out of the FTS index for the same reason
+- Client/UI components — subject is injected server-side into the LLM prompt; it does flow through API responses typed as `string`
+- `fts_memories` — indexes `text` only; subject stays out of the FTS index
+
+### Subsequently changed (resolved against the original design)
+
+- **`memory-extraction-observability.ts`** — subject *is* surfaced in observability after all (`subject?: string` on `ExtractionResults`, described as "Subject line from the extraction wrapper, providing conversational context"), and the debug panel renders it.
+- **Embedding/search** — the subject **is** part of the search representation. `buildMemoryIndexText(text, subject)` prepends it, precisely so subject-only topic keywords participate in vector search. The original concern that this would corrupt vector search did not hold: the subject is short, topical, and orthogonal to the fact.
+- **Reranker input** — reranker documents are built with `buildMemoryIndexText(text, subject)` in both `memory-context.ts` and `passive-memory-recall.ts`. This is now the implemented behaviour; the open question below is closed.
 
 ## Open Questions
 
@@ -350,7 +354,7 @@ practice.
 
 2. **Subject quality monitoring** — The extraction model may produce vague subjects ("coding discussion") or subjects that restate the memory text. Worth observing after deployment; the extraction prompt is the lever.
 
-3. **Reranker input** — Currently the reranker sees only `memory.text`. Including the subject in the reranker document could improve relevance scoring by giving the reranker topical context. This would be a separate change (reranker documents come from `memory.text` in `memory-context.ts`).
+3. ~~**Reranker input**~~ — **RESOLVED.** Reranker documents include the subject via `buildMemoryIndexText`.
 
 4. **Passive recall injection** — Mid-turn passive recall injects memories. Should it include subjects? Likely yes — same `formatRetrievedMemoryForContext` function handles both paths, so this is automatic once the formatter is updated.
 

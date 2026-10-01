@@ -15,7 +15,7 @@ The current design fixes both while keeping the existing `Chat.messages` API sha
 
 Chat storage has three message-related layers:
 
-- `chats.messages`: legacy JSON snapshot of the current `Chat.messages` array. It is still written by `saveChat()` for compatibility.
+- `chats.messages`: legacy JSON snapshot of the `Chat.messages` array. It is written **only** by `createChat()` and the startup backfill, and is then intentionally left **stale** — the row table is authoritative (`CHAT_ROWS_ARE_AUTHORITATIVE` in `chat-storage.ts`), and `saveChat()` deliberately does not rewrite the full message blob on every streaming save. Treat it as a last-resort fallback, not a freshness source.
 - `chat_message_rows`: full-fidelity row store keyed by `(chat_id, sequence)`. Each row stores the original `ChatMessage` in `payload_json` plus indexed metadata (`role`, `timestamp`, context flags, and a durable `row_id`). This is the preferred source when populated.
 - `chat_messages` + `chat_messages_fts`: denormalized search projection for conversation FTS. This is not the full-fidelity message source.
 
@@ -47,7 +47,9 @@ The API supports recent-window and older-window reads:
 - `GET /api/chats/:id/messages?before=<sequence>&limit=<n>` returns the window ending before an absolute sequence.
 - The HTTP route and storage layer clamp `limit` to 1000.
 
-The client requests the most recent 200 messages on chat selection, caches that window in IndexedDB, and loads older windows when the user scrolls near the top. `messageOffset` is added to local indexes before sending edit/retry calls, so server-side message indexes remain absolute.
+The client requests the most recent 200 messages on chat selection, caches that window in IndexedDB, and loads older windows when the user scrolls near the top. The 1000 clamp is centralized in `server/src/utils/message-window.ts` and shared by three consumers: the initial fetch, the paged endpoint, and `GET /api/chat/status/:chatId?includeWindow=1`.
+
+**Edit/retry resolution is by row identity, not array index.** Because sequence numbers are *not* durable identifiers — any later insert shifts them — the client sends `messageSequence` (the row's `_rowSequence`) alongside the computed index, and the server **prefers** it, resolving via `_rowSequence ?? index`. The route then **fails closed** unless the target is a `user` row, tolerating exactly one form of drift: a locally-rendered empty assistant placeholder immediately following a user row.
 
 ## Canonical Tool-Loop Rows
 
@@ -116,4 +118,11 @@ Keep these invariants when changing chat history code:
 
 ## Future Work
 
-The next structural step is to reduce reliance on the legacy `chats.messages` JSON snapshot. Once all callers can operate on row windows or explicit full-history reads, `saveChat()` can avoid rewriting the full chat JSON on every completion and update only the changed message rows plus metadata.
+Resolved. The legacy `chats.messages` JSON snapshot is no longer rewritten on completion — `saveChat()` updates only the changed message rows plus metadata, and the snapshot is left stale as a fallback. What remains open is reducing the number of callers that still read full history rather than row windows.
+
+## Provider-Boundary Normalization (`pi-message-utils.ts`)
+
+Two mechanisms sit at the provider boundary and are part of replay fidelity, because a malformed history that replays fine in pi-ai can still fail at the wire.
+
+- **`transformMessagesForProvider()`** — a local copy of pi-ai's normalization (the re-export was removed). It rewrites tool-call ids via `normalizeToolCallId`, downgrades cross-model `thinking` blocks to plain text and drops `redacted` ones, and **synthesizes `"No result provided"` error tool results** for dangling tool calls. That last one matters: a persisted history with a truncated tool pair would otherwise reach llama.cpp malformed and fail the whole request.
+- **`sanitizeProviderText()`** — strips lone surrogates, C0 control characters, and **llama.cpp vision media markers** (`<|vision_start|>`, `<|image_pad|>`, `<|image_end|>`, `<|video_pad|>`, and friends). This one has bitten in production: a tool result that dumps a Qwen chat template containing those literals makes the request fail with *"number of media markers in text (N) exceeds number of bitmaps (0)"* before generating anything at all.

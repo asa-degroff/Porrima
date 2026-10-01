@@ -1,6 +1,6 @@
 # Turn Engine — Unifying the Context-Pressure Path
 
-**Status**: Design
+**Status**: Design. **§3 ("Current state") is a historical snapshot as of Aug 23 and is not the current file layout.** Deltas D1–D3 shipped; **D4–D7 have not landed** — see the table below.
 **Author**: quje
 **Date**: 2026-08-23
 
@@ -447,14 +447,15 @@ Each is a named change with a verification gate. None are silent.
 | D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip — **Done 09-03** (verdict above; `midTurnPressureDecision` owns the mapping, shadow retired) |
 | D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week — **Done 09-03** (synthesis + wake adopt `runEndOfTurnCompaction` with the usage anchor; the negative-path log now covers headless) |
 | D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip) |
-| D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference |
-| D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats |
-| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B |
-| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | off by default; system-chat decides |
+| D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference — **NOT LANDED**. Headless paths still pass `undefined` for `onBeforeArchive`, so the flush is skipped entirely |
+| D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats — **NOT LANDED**. Still `MAX_MID_TURN_COMPACTION_CYCLES = 3` in `chat-turn-runner.ts` (the HTTP path is already 5) |
+| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B — **NOT LANDED**. No `persistMidTurnHandoff()` exists; the row is still written inline at `chat.ts:3609` and `chat-turn-runner.ts:984` with duplicate logic, and `turn-compaction.ts` contains only `runEndOfTurnCompaction` |
+| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | off by default; system-chat decides — **NOT LANDED** |
 
-D7's value is deliberately bounded: synthesis phases already get a pre-send
-rebuild (`resetMemoryContext`) **between** phases (system-chat.ts:956, 1309),
-so frozen-prefix staleness only bites *within* a single long phase that
+D7's value is deliberately bounded: each synthesis or wake run rebuilds before
+its phases (`resetMemoryContext` — a hard reset, then a retrieval-skipped
+rebuild) at system-chat.ts:1050, 1398,
+so frozen-prefix staleness only bites *within* a single long run that
 compacts mid-turn. "Off by default" stays correct; the hook exists for the day
 a long single phase shows it matters.
 

@@ -336,6 +336,15 @@ alternative is a read-only warm mode, which is a real code-path change. Also
 check: warm's Case 3 retrieval runs `updateAccessMetadata`, inflating access
 stats for memories the user never saw — minor, same class.
 
+**Resolved (10-01):** the delivery-receipt model closes this. Case 3 claims
+nothing; `deltaIds` grows only in `commitMemoryDelta`, which routes call after
+the save that makes the delta durable. Under the Phase-2 variant above, warm's
+discarded Case 3 delta would be left unclaimed (`dirty` stays set), so the next
+real turn retrieves and delivers it; the `updateAccessMetadata` inflation for
+an uncommitted delta remains minor. Note the reset is still in the code
+(cache-warm.ts:298), so warm currently always takes Case 1 — this is the safety
+net for when Phase 2 lands, not a live behavior change.
+
 ## 5. What this does NOT fix (scope)
 
 - **Block-edit prefills.** Editing a memory block changes `stablePrefix`
@@ -354,8 +363,9 @@ stats for memories the user never saw — minor, same class.
    (sha1 compare, not string-equal — the artifact is the hash), and no
    retrieval runs.
 2. No row → Case 1 → row written with the frozen payload.
-3. Dirty row + new memories → Case 3 → row updated: `delta_ids` grown,
-   `dirty=0`.
+3. Dirty row + new memories → Case 3 → returns `memoriesMessage` +
+   `newMemoryIds` unclaimed (`dirty` stays 1, `delta_ids` unchanged);
+   `commitMemoryDelta(ids)` then grows `delta_ids` and clears `dirty`.
 4. `invalidateMemoriesCache` with an empty Map → row-level `dirty=1` (write
    point 3 fall-through); `invalidateAllMemoriesCaches` → bulk row update.
 5. `markMemoryDeltaInjected` → `delta_ids` upserted (write point 5).
@@ -364,6 +374,10 @@ stats for memories the user never saw — minor, same class.
    intact**; next build is Case 2.
 8. `skipMemoryRetrieval` → no hydration (row not read); hydrate failure
    (DB throw) → warn + Case 1 fallback.
+9. `commitMemoryDelta` no-ops on empty ids or missing live state — a failed
+   retrieval must not be recorded clean.
+10. `stableOnly` with live state → no retrieval, section byte-exact, `dirty`/
+    `delta_ids` untouched; with no state → falls through to Case 1.
 
 Storage-level (real SQLite, tmpdir home): upsert/get/delete round-trip,
 `section_hash` = sha1(section), `INSERT OR REPLACE` single-row invariant,

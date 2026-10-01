@@ -54,7 +54,10 @@ Five dedicated llama.cpp server roles, each managed as a systemd user service wi
 | Embedding | `embedding-model.service` | 32103 | single | no |
 | Title generation | `title-generation.service` | 32104 | single | no |
 
-- **Symlink-based binary management** (`llama-path.ts`): All services reference `~/bin/llama-current` as their binary path. Updating the llama.cpp build is a single symlink swap (`ln -sfn`) followed by a service restart. `updateLlamaPath()` handles the swap, `systemctl daemon-reload`, service restart, health polling (8s timeout per service), and automatic rollback if any service fails to come up.
+- **Symlink-based binary management** (`llama-path.ts`): All services reference `~/bin/llama-current` as their binary path. Updating the llama.cpp build is a single symlink swap (`ln -sfn`) followed by a service restart. `updateLlamaPath()` handles the swap, `systemctl daemon-reload`, service restart, health polling (8s timeout per service), and automatic rollback if any service fails to come up. Note the restart list is **four** units — `llama-server`, `reranker`, `extraction-model`, `title-generation`; `embedding-model.service` is not included, so a build swap leaves the embedding server on the previous binary.
+- **Slot leases** (`llama-slot-leases.ts`): An optional allocator for llama.cpp router slots. `acquire()` finds a free slot, else evicts the least-recently-used inactive chat, and returns a lease of `{ slotId, maxInstances, evictedChatId }`. Capacity comes from `GET /props` → `max_instances` (cached 5 min). Pools are keyed by `(baseUrl, modelId, contextWindow)` but sharing is coordinated *across* pools on the same base URL. Bindings persist to `~/.porrima/llama-slot-bindings.json`, and "fossil" bindings are purged after 24h. **Off by default** — it only engages when `settings.llamacppSlotBindingMode === "enforced"` (or the `LLAMACPP_ID_SLOT` env var is set); otherwise `acquire()` returns `null` and llama.cpp picks slots itself.
+- **Prompt-cache residency** (`llama-cache-residency.ts`): Tracks observed KV-cache state per chat as `warming | warm | stale` with a confidence of `confirmed-hit | partial-hit | filled-after-miss | unknown` (hit ratios above 0.9 / 0.5). `markLlamaCachePrefillComplete()` flips `warming` → `warm` at generation start. Records expire to `stale` after 12h and are deleted after a further 24h grace, with a global cap of 256 and a per-pool warm cap of 4 (overridable via `LLAMACPP_CACHE_RESIDENCY_LIMIT`, `_TTL_MS`, `_REMOVAL_GRACE_MS`). `checkLlamaServerRestart()` wipes every record for a base URL when the systemd PID changes, so a crash or model swap cannot leave phantom warmth. This feeds the sidebar warming spinners and the manual "warm cache" action.
+- **Cache warming** (`cache-warm.ts`, `cache-warm-queue.ts`): Queues targeted prompt warms. After a successful synthesis cycle the queue reads capacity from llama.cpp capacity (`/props.max_instances`, falling back to the configured inference `parallel`) and builds a prioritized plan: synthetic new-agent-chat baseline first, system chat second, then recent agent chats. Execution warms lower-priority recent chats *first* and the baseline *last*, so llama.cpp's `--kv-unified` longest-prefix selection can reuse that baseline for new global chats.
 - **Per-slot binary overrides** (`llama-launch-templates.ts`): Each slot can use a different binary via `settings.llamaServerBins[slotId]`. Custom binaries (e.g. an ik_llama fork with dynamic `.so` libraries) automatically get `LD_LIBRARY_PATH` injected pointing to their directory. Binary resolution order: override in settings → systemd drop-in → hardcoded default (`~/bin/llama-current/llama-server`).
 - **Service configuration** (`llama-service-config.ts`): Per-slot defaults for mode, ctx size, parallelism, extra args, and environment. `mergeServiceConfig()` overlays user settings onto defaults. `renderServiceExecStart()` builds the full command line; `renderManagedDropIn()` writes a `zz-porrima-managed.conf` systemd drop-in override. `parseManagedServiceConfig()` reverse-parses a running service's ExecStart back into a config object.
 - **Service supervisor** (`llama-supervisor.ts`): Queries systemd for live process state (PID, active state, fragment path, working directory), HTTP health (`/health`, `/v1/models`), and override status. Detects server restarts by PID change to invalidate KV cache residency tracking. Supports start/stop/restart actions and journal log retrieval.
@@ -68,6 +71,16 @@ Memory services are in `server/src/services/memory-*.ts`. Simple one-shot LLM ca
 **Memory extraction** is deferred during active tool loops — queued and executed after the agent loop completes to prevent concurrent LLM calls from interfering with the active conversation (e.g., triggering model reloads on llama.cpp).
 
 **Synthesis** runs inside the persistent system chat (`server/src/services/system-chat.ts`) using the main model with full tool access. Synthesis is now a built-in automation, so scheduler dispatch flows through `automation-scheduler.ts` / `automation-runner.ts`, while manual memory endpoints remain for direct dispatch. Synthesis is serialized against user chat via the `synthesisLock` mutex: the chat route awaits `getSynthesisLock()` before processing user messages, and the scheduler's enrichment/delayed-extraction passes skip while `isSynthesisActive()` is true. See [memory-system.md](memory-system.md) § Synthesis.
+
+## Observability
+
+Three sampling subsystems feed a debug UI and each writes to its own store.
+
+- **System telemetry** (`system-stats.ts`): Polls every 2s into a 60s circular buffer, sampling per-GPU AMD/NVIDIA/Intel metrics keyed by **PCI address** (so a device keeps its identity across reorderings), with a PCI-codename → LLVM-gfx table for AMD and NVIDIA/CDNA. `PATCH /api/system-stats` mutates exactly two things — `bufferSeconds` and `hiddenGpus` — and does so in process-local module state, **not** in settings, so both are lost on restart. (The `systemStatsEnabled` / `systemStatsBufferSeconds` / `systemStatsHiddenGpus` fields in `types.ts` are declared but never read; polling starts unconditionally.)
+- **Model stats** (`model-stats.ts`): Per-request rows of token counts and timings, retaining 50 runs per model. `resolveCanonicalCachedTokens()` resolves the reported-vs-delta divergence between llama.cpp's `prompt_tokens` and the local prompt-eval counters, guarded by a one-warning-per-model canary so a persistent divergence is visible without spamming. This is the same data behind the prompt-cache observability in the Model Stats modal.
+- **Reranker stats** (`reranker-stats.ts`): Per-call reranking samples (model used, latency, document count, top-N, score distribution, plus `chatType` and `source` for attribution), retaining 100 runs.
+
+Both stats services open `~/.porrima/porrima.db` **directly** rather than through a shared `getDb()` handle, keeping observability writes out of the main `app.db` transaction path.
 
 ## Automations
 
@@ -99,21 +112,59 @@ Memory augmentation has two cache-preserving paths. Normal turn-start retrieval 
 
 Compaction replaces narrative LLM summaries with **indexed archives** (inspired by Memex and Letta):
 
-1. **Pre-send compaction** (85% trigger → 30% target): Proactively truncates before LLM call. Decoupling the trigger from the target prevents a second compaction from firing immediately at end-of-turn in the same exchange.
-2. **Post-response compaction** (85% trigger → 30% target): Triggered after response if usage is high
-3. **Mid-turn compaction** (85% threshold): Detects overflow during tool loops, breaks the agent loop, compacts, and resumes with a handoff message. Multi-cycle (up to 5 cycles) for very long tasks.
-4. **Hard-cap safety pass** (95% char-estimate): Defensive net that runs after the pre-send path. If the pure char-based estimate alone exceeds 95% of the window (e.g., the usage anchor went stale because the system prompt grew), forces aggressive compaction via `truncateChatHistory(forceCompact=true)` targeting 30%.
+1. **Pre-send compaction** (three triggers → 30% target): Proactively truncates before the LLM call. Decoupling the trigger from the target prevents a second compaction from firing immediately at end-of-turn in the same exchange. The three triggers are the normal 0.85 check against the usage-anchored `refinedTokens`, an anchor-bounded hard-cap estimate above **0.95**, and a pure char estimate above **1.15** of the window (the char band is looser than the hard cap because char estimation is the less trustworthy estimator).
+2. **Post-response compaction** (**0.80** trigger → 30% target): Triggered after the response if usage is high. It fires *earlier* than pre-send's 0.85 because it runs while the user is reading rather than waiting.
+3. **Mid-turn compaction** (85% threshold, 95% hard cap): Detects overflow during tool loops, breaks the agent loop, compacts, and resumes with a handoff message. Up to 5 cycles on the HTTP path, **3** on the headless path.
+4. **Hard-cap safety pass**: a defensive net inside the pre-send path. If `hardCapTokens` (the anchor-bounded upper bound, *not* the char estimate alone) exceeds 0.95, **or** the pure char estimate `pathBTokens` exceeds 1.15, it forces `truncateChatHistory(forceCompact=true)` targeting 30% — so a blown anchor can't mask an oversized real payload.
 
-When compaction runs, it follows a strict sequence: **archive** → **flush** → **reset** → **rebuild**:
+The primitive itself does: **collect removed → await `onBeforeArchive` (the memory flush) → archive & index → mark `_outOfContext` / clear stale `usage` → splice the summary**. The flush runs *before* index generation on purpose, so it continues the extraction session's cached prompt rather than having it evicted. Index descriptions are written in `sync` mode (end-of-turn, mid-turn, `/compact`) or `deferred` mode (pre-send, where a mechanical description is written immediately and an LLM enrichment runs in the background) so the user's turn is never blocked on the CPU model.
 
-1. **Archive & Index**: Messages grouped into logical blocks, stored in `context_archives` with FTS5. LLM generates one-line descriptions per block.
-2. **Memory Flush** (`preCompactionFlush`, awaited): Extracts atomic memories from removed messages, processes block updates (importance ≥ 7), deduplicates against existing memories.
-3. **Reset** (`resetMemoryContext`): Clears delta tracking state so the next prompt build does a full retrieval.
-4. **Rebuild** (`buildSplitAugmentedPrompt`): Full retrieval includes freshly extracted memories, frozen into system prompt.
+The memory-context reset and prompt rebuild are **caller-owned aftermath**, not part of the primitive:
 
-See [docs/compaction.md](compaction.md) for full details.
+1. **Soft reset** (`softResetMemoryContext`): clears `deltaIds`, marks dirty. `frozenIds` and the frozen memories section are retained **byte-exact** — the next build is a Case 3 delta, not a Case 1 freeze. A hard `resetMemoryContext` is no longer used after compaction; it survives only for chat deletion, automation start, zeitgeist rewrite, and cache-warm preparation. (Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 sequence was observed in one night — which broke the prefix at the section boundary and orphaned the KV pool each time.)
+2. **Rebuild** (`buildSplitAugmentedPrompt`): re-retrieves, so memories just extracted by the flush are eligible.
 
-**Context estimation** returns the max of two paths: **Path A** anchors on the last in-context assistant's reported `usage.totalTokens` and adds char-estimates for anything added since; **Path B** is a pure char-based estimate of the full system prompt + in-context messages + tool schemas. Path A wins in steady state (it captures framing/tokenizer overhead char estimation misses). Path B wins when the anchor has gone stale — system prompt grew after a `resetMemoryContext` re-froze memories, AGENTS.md / persona / memory blocks expanded, or tool schemas changed. The hard-cap safety pass uses Path B alone, so a blown anchor can't mask an oversized real payload.
+One consequence of the stale-`usage` strip is easy to miss: immediately after any compaction the estimator has **no** usage anchor, so `selectedPath` falls back to `char_estimate` and only the 0.95 hard cap is live until the next provider call reports usage.
+
+The memory flush is **HTTP-only**: the chat route passes `preCompactionFlush` as the `onBeforeArchive` hook, while headless paths (synthesis, wake, automation, headless mid-turn) pass `undefined` and skip it. See [docs/compaction.md](compaction.md) for the full path matrix and the delta-delivery model.
+
+**Context estimation** returns the max of two paths: **Path A** anchors on the last in-context assistant's reported `usage.totalTokens` and adds char-estimates for anything added since; **Path B** is a pure char-based estimate of the full system prompt + in-context messages + tool schemas. Path A wins in steady state (it captures framing/tokenizer overhead char estimation misses). Path B wins when the anchor has gone stale — the system prompt grew, AGENTS.md / persona / memory blocks expanded, tool schemas changed, or (most commonly right after a compaction) the anchor was stripped entirely.
+
+## Turn Gate (`turn-gate.ts`)
+
+There is **one global turn slot**, not one per chat. A module-global state holds a single `active` lease plus a FIFO `waiters` queue, deliberately stashed on `globalThis` so it survives dev-mode module reloads.
+
+- **Lease kinds**: `chat`, `system`, `cache-warm`. Kinds are informational; capacity is one slot.
+- **Priority**: waiters carry a foreground/background class, and a foreground waiter is spliced ahead of queued background cache warms.
+- **Abortable waits**: `acquireTurn()` wires the wait to the live stream's abort signal, so a client disconnect releases a queued turn.
+- **Heartbeat and stale-lease recovery**: healthy turns touch the lease every loop iteration, every LLM stream event, and during compaction keepalives. A lease silent for `TURN_GATE_STALE_LEASE_MS` (15 min) is considered dead and is stolen by the next acquire, with a 60s reaper sweep as a backstop. `isTurnGateBusy()` deliberately *ignores* stale leases.
+- **Five acquire sites, and the lease is not held for the whole turn**: `acquireTurnGate` is called for send, resume, `/edit`, follow-up re-acquire, and artifact repair. Before end-of-turn compaction the lease is **released early** when a separate extraction model is configured (that work is CPU-only), then re-acquired for a queued follow-up.
+
+This is the outer serialization point: automation runs acquire the turn lease *before* the automation lock, which is why a manual automation run queues behind an in-flight user turn rather than failing.
+
+## Live Streams & Reconnect (`live-streams.ts`)
+
+The SSE registry that makes a turn reconnectable. Buffer replay has been **retired entirely** (the old up-to-10 MB per-turn buffer and its `?replay` parameter are gone) — reconnection is snapshot-based, not replay-based.
+
+- **Resync snapshot contract**: each stream owner installs a `buildResync` hook that returns the current state to splice into a reconnecting client. Three owners: the chat route's queue state, its turn tail, and the headless `SynthesisEmitter`. This is why `/api/chat/reconnect/:chatId` works for the system chat too.
+- **Pending turn intents**: registered synchronously at request entry, so `POST /api/chat/stop` can abort a turn that is still doing pre-stream work (prompt construction, memory retrieval, pre-send compaction) and has no live stream yet.
+- **Ownership guards**: `endLiveStreamIfCurrent` / `closeLiveSSEIfCurrent` exist because a superseded turn's late teardown would otherwise close the *newer* turn's stream.
+- **Retention**: ended streams are kept for `LIVE_END_RETENTION_MS` (60s).
+- `GET /api/chat/status/:chatId` is the liveness probe and optionally folds a message window into the same response (`?includeWindow=1`, and only when a stream is actually live) — that is what makes "is it still going, and what did I miss" a single round trip on refresh.
+
+`synthesis-stream.ts` (`SynthesisEmitter`) is a deliberate re-implementation of the chat route's wire format frame-for-frame, which is the other half of why system-chat reconnect works. It installs a headless `LiveStream` with a 10s keepalive comment so the client's 95s inactivity timer doesn't fire during model loads; splices a tool result immediately after its matching `tool_call` segment so visuals produced during the run stay after the pair; refuses zero-token usage so a thinking-only iteration doesn't blank the TokenIndicator; and reads pending text *without flushing* it when building a resync payload so segment boundaries survive the reconnect.
+
+## Context Accounting: Three Systems
+
+Three modules with confusingly similar names do three different jobs. They are not interchangeable.
+
+| Module | Job | Feeds |
+| --- | --- | --- |
+| `context-pressure.ts` | The **trigger estimator**. Returns `estimatedTokens` / `refinedTokens` / `hardCapTokens` + `selectedPath`, plus `evaluateTurnGuards()` (iteration caps) and `midTurnPressureDecision()`. | Compaction and turn-guard decisions |
+| `context-high-water.ts` | A **denominator floor**, not an estimator. `recordContextObservation()` is fed at stream end and `getContextWindowFloor()` floors the *discovered* window, keyed by `(chatId, modelId, baseUrl)`. Survives compaction, resets on model swap. Exists because model discovery under-reports `--ctx`, which otherwise pushes every ratio above 1.0. | `getEffectiveContextWindow()` |
+| `context-breakdown.ts` | A **display-only attribution view**. Called solely from `GET /api/chats/:id/context-breakdown`, and it rescales input-side rows so they sum exactly to the LLM-reported input. | The TokenIndicator breakdown popover |
+
+`context-breakdown` is a read-out, not a decision input. Do not wire it into a trigger.
 
 ## GPU Coordination
 

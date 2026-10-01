@@ -24,7 +24,7 @@ interface MemoryBlock {
   updatedAt: string;
   updatedBy: "agent" | "user";
   tokenEstimate: number;   // Approximate tokens (~content.length / 4)
-  blockType: "note" | "notebook" | "synthesis" | "zeitgeist-archive";
+  blockType: "note" | "notebook" | "synthesis" | "zeitgeist" | "zeitgeist-archive";
   attachments?: BlockAttachments; // Reference-only JSON (images, artifacts, ...)
   supersededBy?: string;   // Links to newer version
   supersedes?: string;     // Links to older version
@@ -36,7 +36,8 @@ interface MemoryBlock {
 - **Table**: `memory_blocks` in `app.db`
 - **FTS5**: `memory_blocks_fts` virtual table indexes content, name, and description for full-text search
 - **Auto-sync triggers**: FTS kept in sync via INSERT/UPDATE/DELETE triggers
-- **Character limit**: 4000 chars per block (~1000 tokens) by default (configurable). Updates exceeding the limit are rejected with the exact overage — the agent trims, splits, or supersedes explicitly.
+- **Character limit**: 6000 chars per block (~1500 tokens) by default, configurable in the range 5000–20000. Updates exceeding the limit are rejected with the exact overage — the agent trims, splits, or supersedes explicitly. The zeitgeist archive threshold derives from this limit (see [zeitgeist.md](zeitgeist.md)).
+- **System-managed blocks**: blocks with `blockType` of `zeitgeist`, plus the `notebook`, `synthesis`, and `zeitgeist-archive` blocks, are excluded from the generic block injection and rendered by dedicated sections instead.
 
 ## Scoping
 
@@ -110,7 +111,7 @@ Blocks use the same supersession lineage system as atomic memories:
 
 ## Extraction Integration
 
-The extraction system prompt includes loaded block content (first 300 chars each):
+Extraction sees loaded blocks through a slim **digest** rather than full content: per block, the name, up to 250 chars of description, and the first 400 chars of content, capped at 12 000 characters total, sorted by `(createdAt, id)` so the digest is byte-stable against `updatedAt` churn:
 
 ```
 ## Existing Knowledge Blocks
@@ -124,7 +125,7 @@ Only extract information that is:
 3. Worth remembering beyond what blocks already capture
 ```
 
-This directly prevents redundant extraction of facts already in blocks.
+Two placement details are load-bearing. The digest lives in the extraction session's **user turn**, not the system prompt, and it is re-rendered only when its hash changes. That is deliberate: in the system prompt, any block edit invalidated the entire cached prefix *and* reset the session identity, costing a full cold re-prefill plus discarded history. Moving it to the user turn makes a block edit free for a warm extraction session.
 
 ## User Interface
 
