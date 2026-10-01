@@ -1066,6 +1066,15 @@ export interface MemoryAugmentationOptions {
    * delivers the memories as an appended delta and locks the empty frozen
    * section instead, preserving the warm KV prefix. */
   allowLateFreeze?: boolean;
+  /** When true (buildSplitAugmentedPrompt only), return the stable prompt
+   *  without running the Case 3 delta retrieval. Use this at callers that
+   *  cannot deliver a `memoriesMessage` on this turn (end-of-turn rebuild,
+   *  queued follow-up, `/compact` budget estimate): the frozen section is
+   *  retained byte-exact and the delta stays owed to the next delivering
+   *  build at zero retrieval cost. With no state, the build falls through to
+   *  Case 1 unchanged — a freeze is delivered by the prompt itself and owes
+   *  no claim. */
+  stableOnly?: boolean;
 }
 
 export async function buildMemoryAugmentedPrompt(
@@ -1262,6 +1271,17 @@ async function buildSplitAugmentedPromptInner(
   }
 
   const state = chatId ? contextState.get(chatId) : undefined;
+
+  // Stable-only: callers that cannot deliver a delta this turn (no turn to
+  // carry it, or a budget estimate) skip the Case 3 re-retrieval and take the
+  // retained frozen section; the delta stays owed to the next delivering
+  // build. A build with no state falls through to Case 1 — a freeze is
+  // delivered by the prompt itself and owes no claim.
+  if (state && options?.stableOnly) {
+    const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
+    log(`[memory-context] chat=${chatId} stable-only build: section ${state.frozenMemoriesSection.length} ch retained, delta ${state.dirty ? "deferred" : "none owed"}`);
+    return { systemPrompt, memoriesMessage: "", newMemoryIds: [], combined: systemPrompt };
+  }
 
   // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
   if (!state) {

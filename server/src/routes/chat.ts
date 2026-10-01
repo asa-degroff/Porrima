@@ -3978,11 +3978,15 @@ async function handleChatStream(
 
               // Soft reset after compaction (doc §10.4) — frozen section
               // survives; new memories flow in as a delta on the next build.
+              // stableOnly: no turn is left to carry the delta here, so skip
+              // the Case 3 re-retrieval and let the next delivering build
+              // (send/resume/edit) deliver it.
               if (isMemoryAugmentedChatType(chat.type)) {
                 softResetMemoryContext(chat.id);
                 const split = await buildSplitAugmentedPrompt(
                   chat.systemPrompt || "You are a helpful assistant.",
-                  chat.messages, chat.id, chat.projectId, chat.type, projectPath
+                  chat.messages, chat.id, chat.projectId, chat.type, projectPath,
+                  { stableOnly: true }
                 );
                 systemPrompt = split.systemPrompt;
 
@@ -4130,8 +4134,10 @@ async function handleChatStream(
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
       }
 
+      // stableOnly: the follow-up path has no delta delivery point; leave any
+      // owed delta to the next send/resume/edit build.
       let followUpSystemPrompt = isMemoryAugmentedChatType(chat.type)
-        ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)).systemPrompt
+        ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath, { stableOnly: true })).systemPrompt
         : chat.systemPrompt || "You are a helpful assistant.";
 
       // Reinjected skills on follow-up turn — buildSplitAugmentedPrompt builds
@@ -4567,6 +4573,8 @@ router.post("/", async (req, res) => {
       // Manual compaction must budget for the real prompt shape. Passing no
       // system prompt/tools makes the compactor think overhead is zero, which
       // can leave an oversized post-compact prompt that fails on the next turn.
+      // stableOnly: this build only estimates; it must not run (and waste) the
+      // Case 3 delta retrieval or claim anything.
       if (isMemoryAugmentedChatType(chat.type)) {
         const split = await buildSplitAugmentedPrompt(
           chat.systemPrompt || "You are a helpful assistant.",
@@ -4575,6 +4583,7 @@ router.post("/", async (req, res) => {
           chat.projectId,
           chat.type,
           compactProjectPath,
+          { stableOnly: true }
         );
         compactSystemPrompt = split.systemPrompt;
       }
