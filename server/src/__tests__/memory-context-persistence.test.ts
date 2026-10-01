@@ -353,7 +353,7 @@ describe("memory context persistence (service)", () => {
     expect(mocks.upsertMemoryContextState.mock.calls[0][0]).toBe("chat-1");
   });
 
-  it("dirty row + new memories: Case 3 keeps the section, grows delta_ids, dirty=0 (write point 2)", async () => {
+  it("dirty row + new memories: Case 3 returns the delta unclaimed; commit receipts it", async () => {
     const rows = new Map<string, EmulatedRow>();
     seedRow(rows, { dirty: true });
     const { mod, mocks } = await loadMemoryContext(rows);
@@ -367,7 +367,14 @@ describe("memory context persistence (service)", () => {
     expect(result.systemPrompt.endsWith(SECTION)).toBe(true);
     expect(result.memoriesMessage).toContain("New prompt memory.");
     expect(result.memoriesMessage).not.toContain("Frozen topic memory.");
+    expect(result.newMemoryIds).toEqual(["n1"]);
 
+    // The build claims nothing: dirty stays set and the ids stay unclaimed
+    // until the delivering caller commits after its save.
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+    expect(rows.get("chat-1")!.dirty).toBe(true);
+
+    mod.commitMemoryDelta("chat-1", result.newMemoryIds);
     const row = rows.get("chat-1")!;
     expect(row.deltaIds).toEqual(["n1"]);
     expect(row.dirty).toBe(false);
@@ -422,6 +429,27 @@ describe("memory context persistence (service)", () => {
     expect(lastUpsert[1].deltaIds).toContain("p1");
     expect(lastUpsert[1].deltaIds).toContain("p2");
     expect(rows.get("chat-1")!.deltaIds).toContain("p1");
+  });
+
+  it("commitMemoryDelta no-ops on empty ids or missing live state", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    seedRow(rows, { dirty: false });
+    rows.set("chat-2", { frozenSection: "S2", frozenIds: [], deltaIds: [], dirty: true });
+    const { mod } = await loadMemoryContext(rows);
+
+    // No live Map state for chat-2 → nothing to commit onto.
+    mod.commitMemoryDelta("chat-2", ["x"]);
+    expect(rows.get("chat-2")!.deltaIds).toEqual([]);
+    expect(rows.get("chat-2")!.dirty).toBe(true);
+
+    mod.softResetMemoryContext("chat-1"); // hydrate: dirty=true, deltas cleared
+    mod.commitMemoryDelta("chat-1", []); // empty ids must NOT record clean
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+    expect(rows.get("chat-1")!.dirty).toBe(true);
+
+    mod.commitMemoryDelta("chat-1", ["m1"]);
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["m1"]);
+    expect(rows.get("chat-1")!.dirty).toBe(false);
   });
 
   it("resetMemoryContext deletes the row; next build is Case 1", async () => {
@@ -536,7 +564,7 @@ describe("clobber guard + soft reset (doc §10)", () => {
     expect(row.deltaIds).toEqual([]);
   });
 
-  it("post-soft-reset build is Case 3 — section retained, delta runs, no full retrieval", async () => {
+  it("post-soft-reset build is Case 3 — section retained, delta runs unclaimed, commit receipts", async () => {
     const rows = new Map<string, EmulatedRow>();
     seedRow(rows);
     const { mod, mocks, log } = await loadMemoryContext(rows);
@@ -549,11 +577,17 @@ describe("clobber guard + soft reset (doc §10)", () => {
     ]);
     expect(result.systemPrompt.endsWith(SECTION)).toBe(true);
     expect(result.memoriesMessage).toContain("New prompt memory.");
+    expect(result.newMemoryIds).toEqual(["n1"]);
     const allLogs = log.mock.calls.map((c) => String(c[0])).join("\n");
     expect(allLogs).toContain("delta:");
     expect(allLogs).not.toContain("full retrieval:");
     expect(allLogs).toContain("soft reset");
-    expect(rows.get("chat-1")!.dirty).toBe(false); // consumed by Case 3
+    // Unclaimed until the delivering caller commits after its save.
+    expect(rows.get("chat-1")!.dirty).toBe(true);
+    expect(rows.get("chat-1")!.deltaIds).toEqual([]);
+
+    mod.commitMemoryDelta("chat-1", result.newMemoryIds);
+    expect(rows.get("chat-1")!.dirty).toBe(false);
     expect(rows.get("chat-1")!.deltaIds).toEqual(["n1"]);
     expect(mocks.getMemoryContextState).toHaveBeenCalled(); // hydrated inside softReset
   });
@@ -633,15 +667,23 @@ describe("late-freeze guard (empty first retrieval then mid-chat freeze)", () =>
     expect(second.memoriesMessage).toContain("New prompt memory.");
     expect(second.combined).toContain(second.memoriesMessage);
 
+    expect(second.newMemoryIds).toEqual(["f1", "n1"]);
+
+    // The empty section is locked, but the delta stays owed until a
+    // delivering caller commits it.
     const row = rows.get("chat-1")!;
     expect(row).toBeDefined();
     expect(row.frozenSection).toBe(""); // empty section locked byte-exact
     expect(row.frozenIds).toEqual([]);
-    expect(row.deltaIds).toEqual(["f1", "n1"]); // recorded as delivered on the wire
-    expect(row.dirty).toBe(false);
+    expect(row.deltaIds).toEqual([]);
+    expect(row.dirty).toBe(true);
     const allLogs = log.mock.calls.map((c) => String(c[0])).join("\n");
     expect(allLogs).toContain("late retrieval");
     expect(allLogs).not.toContain("frozen in system prompt");
+
+    mod.commitMemoryDelta("chat-1", second.newMemoryIds);
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["f1", "n1"]);
+    expect(rows.get("chat-1")!.dirty).toBe(false);
 
     // Turn 3: state exists, clean → Case 2 against the SAME prefix — no
     // re-retrieval, byte-identical system prompt (the invariant the 00:45

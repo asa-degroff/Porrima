@@ -135,7 +135,14 @@ async function loadProjectContext(projectId?: string, projectPath?: string): Pro
 // to just the delta + new user message (~200-500 tokens) instead of reprocessing
 // the entire context.
 //
-// On compaction the frozen set is rebuilt from scratch (full reset).
+// Delivery is receipted: a build returns the delta + its ids but claims nothing.
+// Only a caller that actually puts the delta on the wire (and saves the row)
+// calls commitMemoryDelta afterwards. Uncommitted deltas stay owed, so the next
+// delivering build re-retrieves them — possible duplicates, never silent loss.
+//
+// On compaction the state is soft-reset: the frozen set is retained byte-exact,
+// the state is marked dirty, and the next build delivers new memories as a
+// delta against the compacted history.
 
 interface MemoryContextState {
   /** Memory IDs baked into the system prompt */
@@ -314,6 +321,27 @@ export function markMemoryDeltaInjected(chatId: string, memoryIds: string[]): vo
 }
 
 /**
+ * Delivery receipt for a prompt-builder memory delta: call only AFTER the
+ * message carrying `memoriesMessage` has been durably saved (same contract as
+ * passive recall's `markPersisted`). Committing grows `deltaIds` and clears
+ * `dirty`. Callers that never commit leave the delta owed, so the next
+ * delivering build re-retrieves it — a possible duplicate, never a silent
+ * loss. Empty id lists are a no-op on purpose: a failed retrieval must not be
+ * recorded clean.
+ */
+export function commitMemoryDelta(chatId: string, memoryIds: string[]): void {
+  if (memoryIds.length === 0) return;
+  const state = contextState.get(chatId);
+  if (!state) return;
+  for (const id of memoryIds) {
+    state.deltaIds.add(id);
+  }
+  state.dirty = false;
+  persistContextState(chatId, state);
+  log(`[memory-context] chat=${chatId} delta committed: ${memoryIds.length} ids (${state.deltaIds.size} total delta in context)`);
+}
+
+/**
  * Invalidate the stable prefix cache for a chat (e.g., after block modifications).
  */
 export function invalidateStablePrefixCache(chatId: string): void {
@@ -359,6 +387,9 @@ export function resetAllMemoryContextCaches(): void {
 export interface AugmentedPromptResult {
   systemPrompt: string;        // Stable system prompt (with frozen memories)
   memoriesMessage: string;     // Delta: only NEW memories not already in context
+  /** Memory ids carried by `memoriesMessage`. Nothing is claimed as in-context
+   *  until the delivering caller invokes `commitMemoryDelta` after its save. */
+  newMemoryIds: string[];
   combined: string;            // Legacy: full combined prompt for prompt viewer
 }
 
@@ -1132,7 +1163,9 @@ async function buildMemoryAugmentedPromptInner(
  * 2. State exists, not dirty → return frozen systemPrompt, empty delta.
  * 3. State exists, dirty (extraction added memories, or post-soft-reset)
  *    → re-retrieve, diff against frozenIds ∪ deltaIds, return only new
- *    memories as memoriesMessage.
+ *    memories as memoriesMessage + newMemoryIds. The ids are claimed only
+ *    when the delivering caller calls commitMemoryDelta after its save;
+ *    otherwise the delta stays owed for the next delivering build.
  */
 export async function buildSplitAugmentedPrompt(
   baseSystemPrompt: string,
@@ -1191,7 +1224,7 @@ async function buildSplitAugmentedPromptInner(
     ));
   } catch (e) {
     console.error("[memory] buildStablePrefix failed, falling back to base prompt:", e);
-    return { systemPrompt: baseSystemPrompt, memoriesMessage: "", combined: baseSystemPrompt };
+    return { systemPrompt: baseSystemPrompt, memoriesMessage: "", newMemoryIds: [], combined: baseSystemPrompt };
   }
 
   const prefixCached = stablePrefixCache.get(cacheKey);
@@ -1214,7 +1247,7 @@ async function buildSplitAugmentedPromptInner(
     log(`[memory-context] chat=${chatId} skipping retrieval (automation start)`);
     // Don't establish any state — the next real user turn should do a full
     // retrieval with an actual conversational query.
-    return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
+    return { systemPrompt: stablePrefix, memoriesMessage: "", newMemoryIds: [], combined: stablePrefix };
   }
 
   // Hydrate from the durable row when this process has no in-memory state for
@@ -1247,7 +1280,7 @@ async function buildSplitAugmentedPromptInner(
       // keeps even that path free of empty writes.
       if (memories.length === 0) {
         log(`[memory-context] chat=${chatId} full retrieval returned 0 — not freezing, will retry next build`);
-        return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
+        return { systemPrompt: stablePrefix, memoriesMessage: "", newMemoryIds: [], combined: stablePrefix };
       }
 
       updateAccessMetadata(memories);
@@ -1267,18 +1300,21 @@ async function buildSplitAugmentedPromptInner(
         if (chatId) {
           contextState.set(chatId, {
             frozenIds: new Set(),
-            deltaIds: new Set(memories.map((r) => r.memory.id)),
+            deltaIds: new Set(),
             frozenMemoriesSection: "",
-            dirty: false,
+            // dirty until a delivering caller commits the delta below — an
+            // uncommitted late retrieval must stay owed.
+            dirty: true,
           });
-          // Write point 1 (deferred variant) — empty section canonical,
-          // retrieved memories recorded as already delivered on the wire.
+          // Write point 1 (deferred variant) — empty section canonical. Ids
+          // are not claimed here; the delivering caller commits them.
           persistContextState(chatId, contextState.get(chatId)!);
         }
         log(`[memory-context] chat=${chatId} late retrieval: ${memories.length} memories appended as delta (history cached without a frozen section — empty section locked)`);
         return {
           systemPrompt: stablePrefix,
           memoriesMessage,
+          newMemoryIds: memories.map((r) => r.memory.id),
           combined: memoriesMessage ? `${stablePrefix}\n\n${memoriesMessage}` : stablePrefix,
         };
       }
@@ -1299,13 +1335,13 @@ async function buildSplitAugmentedPromptInner(
       }
 
       log(`[memory-context] chat=${chatId} full retrieval: ${memories.length} memories frozen in system prompt`);
-      return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+      return { systemPrompt, memoriesMessage: "", newMemoryIds: [], combined: systemPrompt };
     } catch (e) {
       // Retrieval failed on first turn — keep stablePrefix (with persona/blocks),
       // skip memories. Don't establish state so the next turn retries retrieval
       // with whatever the new query is.
       console.error(`[memory] chat=${chatId} initial retrieval failed, returning stablePrefix without memories:`, e);
-      return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
+      return { systemPrompt: stablePrefix, memoriesMessage: "", newMemoryIds: [], combined: stablePrefix };
     }
   }
 
@@ -1313,10 +1349,18 @@ async function buildSplitAugmentedPromptInner(
   if (!state.dirty) {
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
     log(`[memory-context] chat=${chatId} cache hit: system prompt stable, no delta needed`);
-    return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+    return { systemPrompt, memoriesMessage: "", newMemoryIds: [], combined: systemPrompt };
   }
 
   // Case 3: State exists, dirty — re-retrieve and compute delta.
+  //
+  // Delivery is receipted: this build claims NOTHING. The returned ids are
+  // committed to `deltaIds` by the caller (commitMemoryDelta) only after the
+  // message carrying the delta has been persisted. A caller that cannot
+  // deliver leaves `dirty` set and the ids unclaimed, so the next delivering
+  // build re-retrieves them — possible duplicates, never silent loss.
+  // A successful retrieval with nothing new needs no claim, so it clears
+  // dirty here (retrieval failures keep it in the catch below).
   try {
     const memories = await retrieveMemories(recentMessages, chatId, chatType, projectId);
     const inContextIds = new Set([...state.frozenIds, ...state.deltaIds]);
@@ -1325,14 +1369,12 @@ async function buildSplitAugmentedPromptInner(
     updateAccessMetadata(memories, inContextIds);
 
     const newMemories = memories.filter((r) => !inContextIds.has(r.memory.id));
+    const newMemoryIds = newMemories.map((r) => r.memory.id);
 
-    state.dirty = false;
-    for (const r of newMemories) {
-      state.deltaIds.add(r.memory.id);
+    if (newMemoryIds.length === 0) {
+      state.dirty = false;
+      if (chatId) persistContextState(chatId, state);
     }
-
-    // Write point 2 — the delta. dirty=0, deltaIds grown.
-    if (chatId) persistContextState(chatId, state);
 
     let memoriesMessage = "";
     if (newMemories.length > 0) {
@@ -1341,13 +1383,13 @@ async function buildSplitAugmentedPromptInner(
 
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
 
-    log(`[memory-context] chat=${chatId} delta: ${memories.length} retrieved, ${newMemories.length} new (${state.frozenIds.size} frozen + ${state.deltaIds.size} delta in context)`);
+    log(`[memory-context] chat=${chatId} delta: ${memories.length} retrieved, ${newMemories.length} new (${state.frozenIds.size} frozen + ${state.deltaIds.size} committed + ${newMemoryIds.length} pending)`);
 
     if (state.deltaIds.size > 20) {
       log(`[memory-context] chat=${chatId} delta accumulation high (${state.deltaIds.size}), will reset on next compaction`);
     }
 
-    return { systemPrompt, memoriesMessage, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
+    return { systemPrompt, memoriesMessage, newMemoryIds, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
   } catch (e) {
     // Delta retrieval failed — frozen memories in the system prompt are still
     // valid, so preserve them and skip the delta. Leave state.dirty=true so
@@ -1355,6 +1397,6 @@ async function buildSplitAugmentedPromptInner(
     // failures like a brief embed server hiccup recover automatically).
     console.warn(`[memory-context] chat=${chatId} delta retrieval failed, using frozen state (skipping delta):`, e);
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
-    return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+    return { systemPrompt, memoriesMessage: "", newMemoryIds: [], combined: systemPrompt };
   }
 }
