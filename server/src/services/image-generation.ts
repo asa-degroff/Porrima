@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import type { ImageGenerationParams, GeneratedImage } from "../types.js";
+import type { ImageGenerationParams } from "../types.js";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 import { getSettings } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";

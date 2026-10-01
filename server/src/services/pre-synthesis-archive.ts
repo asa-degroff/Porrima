@@ -1,5 +1,5 @@
 import type { ChatMessage } from "../types.js";
-import { getDb, getSettings, type ContextArchive, getNextArchiveSequence, saveArchives } from "./chat-storage.js";
+import { getDb, type ContextArchive, getNextArchiveSequence, saveArchives } from "./chat-storage.js";
 import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
 import { withExtractionMutex } from "./memory-extraction.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";

@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import {
   shouldRunSystemSynthesis,
   runSystemSynthesis,
@@ -8,7 +7,7 @@ import {
   SYSTEM_CHAT_ID,
 } from "./system-chat.js";
 import { acquireTurn, isTurnGateBusy, releaseTurn, reapStaleTurnLease } from "./turn-gate.js";
-import { getDb, getSettings, saveSettings } from "./chat-storage.js";
+import { getDb, getSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";

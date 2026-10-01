@@ -25,7 +25,7 @@ import {
 import { isBlockScope, resolveBlockScopeTarget } from "../services/memory-block-scope.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
-import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
+import { invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep-cycle.js";
 import { getActiveAutomationTaskId, isAutomationActive } from "../services/automation-lock.js";
 import { runAutomationTask } from "../services/automation-runner.js";

@@ -1,5 +1,5 @@
 import { join } from "path";
-import { mkdir, writeFile, readFile, access } from "fs/promises";
+import { mkdir, writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import type { ImageCorpusEntry } from "./image-corpus.js";
 import { appDataPath } from "./paths.js";

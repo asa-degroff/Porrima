@@ -1,6 +1,5 @@
 import { Router } from "express";
 import {
-  getCorpus,
   getAllCorpusEntries,
   getCorpusEntry,
   getCorpusStats,

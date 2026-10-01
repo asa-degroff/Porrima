@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { Message, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
 import { resolveMessageLimit } from "../utils/message-window.js";
@@ -35,11 +35,11 @@ import {
   estimateContextPressure,
   type PressureEstimate,
 } from "../services/context-pressure.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, softResetMemoryContext, commitMemoryDelta } from "../services/memory-context.js";
+import { buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, softResetMemoryContext, commitMemoryDelta } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
-import { acquireTurn, releaseTurn, heartbeatTurnLease, isTurnGateBusy, turnGateStatus, type TurnLease, type TurnQueueInfo } from "../services/turn-gate.js";
+import { acquireTurn, releaseTurn, heartbeatTurnLease, turnGateStatus, type TurnLease, type TurnQueueInfo } from "../services/turn-gate.js";
 import { preemptBackgroundWarms } from "../services/cache-warm-queue.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";

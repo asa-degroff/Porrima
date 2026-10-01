@@ -1,4 +1,4 @@
-import { readFile, readdir, mkdir, rename, unlink, writeFile } from "fs/promises";
+import { readFile, readdir, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import type { NotebookEntry, NotebookIndex, NotebookLink } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";

@@ -1,4 +1,4 @@
-import compression from "compression";
+
 import express from "express";
 import http from "node:http";
 import { createRequire } from "node:module";

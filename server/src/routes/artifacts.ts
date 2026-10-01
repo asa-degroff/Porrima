@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import { join } from "path";
 import { readFile } from "fs/promises";
 import { lookup } from "../utils/mime.js";

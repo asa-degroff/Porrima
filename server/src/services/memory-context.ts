@@ -950,7 +950,7 @@ export async function buildStablePrefix(
   // Load zeitgeist continuity block (global scope)
   let zeitgeistSection = "";
   try {
-    const { getZeitgeistContent, getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
+    const { getZeitgeistContent } = await import("./zeitgeist.js");
     const zeitgeistContent = getZeitgeistContent();
     if (zeitgeistContent) {
       zeitgeistSection = `\n\n## Continuity Context (Zeitgeist)\n\n${zeitgeistContent}`;

@@ -1,6 +1,6 @@
 import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { readFile, readdir, rm } from "fs/promises";
+import { readFile, rm } from "fs/promises";
 import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
