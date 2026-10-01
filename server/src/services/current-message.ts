@@ -41,3 +41,40 @@ export function resolveTrailingRow(
   if (currentRow && messages.includes(currentRow)) return currentRow;
   return messages[messages.length - 1];
 }
+
+export type EditTargetSource = "rowId" | "sequence" | "index";
+
+export interface EditTargetResolution {
+  /** -1 when no candidate resolves within the loaded messages. */
+  index: number;
+  via: EditTargetSource;
+}
+
+/**
+ * Resolve an /edit target against the currently loaded messages. Prefers the
+ * durable `_rowId` (stable across rebases and truncations) over the legacy
+ * dense `_rowSequence` (moves whenever rows are inserted or edited away) and
+ * the absolute UI index (last resort). Returns index -1 when nothing
+ * resolves — callers must fail closed rather than guess, because an edit is a
+ * destructive truncation.
+ */
+export function resolveEditTargetIndex(
+  messages: ChatMessage[],
+  target: { rowId?: string; sequence?: number; index?: number },
+): EditTargetResolution {
+  const hasRowId = typeof target.rowId === "string" && target.rowId.length > 0;
+  const hasSequence = Number.isInteger(target.sequence);
+
+  if (hasRowId) {
+    const idx = messages.findIndex((m) => m._rowId === target.rowId);
+    if (idx >= 0) return { index: idx, via: "rowId" };
+  }
+  if (hasSequence) {
+    const idx = messages.findIndex((m, i) => (m._rowSequence ?? i) === target.sequence);
+    if (idx >= 0) return { index: idx, via: "sequence" };
+  }
+  if (typeof target.index === "number" && target.index >= 0 && target.index < messages.length) {
+    return { index: target.index, via: "index" };
+  }
+  return { index: -1, via: hasRowId ? "rowId" : hasSequence ? "sequence" : "index" };
+}

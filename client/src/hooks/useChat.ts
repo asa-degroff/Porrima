@@ -2151,15 +2151,22 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   );
 
   const editMessage = useCallback(
-    (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number) => {
+    (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
       markRecentlyStreaming(targetChatId);
       const currentOffset = messageOffsetRef.current;
+      const rowIdLocalIndex = messageRowId == null
+        ? -1
+        : messages.findIndex((m) => m._rowId === messageRowId);
       const sequenceLocalIndex = messageSequence == null
         ? -1
         : messages.findIndex((m) => m._rowSequence === messageSequence);
-      const localIndex = sequenceLocalIndex >= 0 ? sequenceLocalIndex : index - messageOffsetRef.current;
+      const localIndex = rowIdLocalIndex >= 0
+        ? rowIdLocalIndex
+        : sequenceLocalIndex >= 0
+          ? sequenceLocalIndex
+          : index - messageOffsetRef.current;
       if (localIndex < 0 || localIndex >= messages.length) return;
       const targetAbsoluteIndex = messageSequence ?? index;
 
@@ -2191,7 +2198,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       prepareStream();
 
       const callbacks = makeStreamCallbacks(targetChatId);
-      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages, messageSequence);
+      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages, messageSequence, messageRowId);
       bg.abortController = controller;
       abortRef.current = controller;
     },
@@ -2206,7 +2213,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       const localIndex = sequenceLocalIndex >= 0 ? sequenceLocalIndex : index - messageOffsetRef.current;
       const msg = localIndex >= 0 ? messages[localIndex] : undefined;
       if (msg) {
-        editMessage(index, msg.content, msg.images, messageSequence ?? msg._rowSequence);
+        editMessage(index, msg.content, msg.images, messageSequence ?? msg._rowSequence, msg._rowId);
       }
     },
     [editMessage, messages]

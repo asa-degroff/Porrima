@@ -180,10 +180,11 @@ interface Props {
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
-  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number) => void;
+  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => void;
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   messageIndex?: number;
   messageSequence?: number;
+  messageRowId?: string;
   editable?: boolean;
   onReadAloud?: ReadAloudHandler;
   isPlayingTts?: boolean;
@@ -263,6 +264,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRetryMessage,
   messageIndex,
   messageSequence,
+  messageRowId,
   editable,
   onReadAloud,
   isPlayingTts,
@@ -380,7 +382,7 @@ export const MessageBubble = memo(function MessageBubble({
     const imagesChanged = editImages.length !== (message.images?.length || 0);
     
     if (textChanged || imagesChanged) {
-      onEditMessage?.(messageIndex, trimmed, editImages, messageSequence);
+      onEditMessage?.(messageIndex, trimmed, editImages, messageSequence, messageRowId);
     }
     if (editDraftKey) {
       messageEditDrafts.delete(editDraftKey);

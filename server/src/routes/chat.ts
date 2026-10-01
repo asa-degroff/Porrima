@@ -7,8 +7,9 @@ import type { Message, ToolResultMessage, AssistantMessage, Model } from "@earen
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
 import { resolveMessageLimit } from "../utils/message-window.js";
-import { resolveCurrentMessageIndex, resolveTrailingRow } from "../services/current-message.js";
+import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow } from "../services/current-message.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
+import { splitNextUserContext } from "../services/pending-user-context.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
@@ -82,7 +83,6 @@ import {
   activeStreams,
   beginTurnIntent,
   abortPendingTurnIntent,
-  emitToStream,
   detachSubscriber,
   closeLiveSSEIfCurrent,
   installLiveStream,
@@ -791,44 +791,9 @@ function buildUserPiMessage(
   return { role: "user", content: contentWithAnchor, timestamp: Date.now() };
 }
 
-function isPendingNextUserContextMessage(message: ChatMessage | undefined): message is ChatMessage {
-  return (
-    !!message &&
-    message.role === "system" &&
-    (message._mergeIntoNextUserMessage === true || message._isPassiveMemoryRecall === true) &&
-    typeof message.content === "string" &&
-    message.content.trim().length > 0
-  );
-}
-
-function splitNextUserContext(opts: {
-  messages: ChatMessage[];
-  currentUserIndex: number;
-  memoryDeltaContext: string;
-}): { persistedHistoryEnd: number; systemContexts: string[] } {
-  let persistedHistoryEnd = opts.currentUserIndex;
-  const systemContexts: string[] = [];
-
-  const takeContextRow = (row: ChatMessage) => {
-    systemContexts.unshift(row.content);
-    persistedHistoryEnd--;
-  };
-
-  const rowBeforeUser = opts.messages[persistedHistoryEnd - 1];
-  if (
-    opts.memoryDeltaContext &&
-    rowBeforeUser?.role === "system" &&
-    rowBeforeUser.content === opts.memoryDeltaContext
-  ) {
-    takeContextRow(rowBeforeUser);
-  }
-
-  while (persistedHistoryEnd > 0 && isPendingNextUserContextMessage(opts.messages[persistedHistoryEnd - 1])) {
-    takeContextRow(opts.messages[persistedHistoryEnd - 1]);
-  }
-
-  return { persistedHistoryEnd, systemContexts };
-}
+// `splitNextUserContext` and `isPendingNextUserContextMessage` live in
+// ../services/pending-user-context.js so the storage rebase and both wire
+// builders (send/edit) agree on which hidden rows are "next user context".
 
 /** Persist images to disk and enrich attachments with id/url/thumbUrl (fire-and-forget safe) */
 async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment[]> {
@@ -4556,8 +4521,6 @@ router.post("/", async (req, res) => {
 
     // Wrap the whole compaction + flush in a keepalive ping loop.
     const compaction = await withSSEKeepalive(res, async () => {
-      // Get settings for context window resolution.
-      const settings = await getSettings();
       const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
       const allModels = await discoverAllModels();
       const inferenceModel = allModels.find(m => m.id === chat.modelId);
@@ -4982,6 +4945,10 @@ router.post("/", async (req, res) => {
         role: "system",
         content: deltaContext,
         timestamp: Date.now(),
+        // Structural "next user context" marker: wire builds exclude this row
+        // and merge its content into the following user message; replay merges
+        // the persisted row identically.
+        _mergeIntoNextUserMessage: true,
       });
       await saveChat(chat);
       // Delivery receipt — the delta is on the wire and the replay row is saved.
@@ -5247,6 +5214,12 @@ router.post("/", async (req, res) => {
         role: "system",
         content: memoryDeltaContext,
         timestamp: Date.now(),
+        // Structural "next user context" marker: wire builds exclude this row
+        // and merge its content into the following user message; replay merges
+        // the persisted row identically. Also lets a later send/edit recognize
+        // a leftover delta from an aborted turn instead of flushing it as a
+        // standalone user message (which would diverge from replay).
+        _mergeIntoNextUserMessage: true,
       });
       await saveChat(chat);
       // Delivery receipt — only now are these ids claimed as in-context.
@@ -5701,16 +5674,17 @@ function refuseStaleEdit(res: Response, err: RevisionConflictError): void {
 }
 
 router.post("/edit", async (req, res) => {
-  const { chatId, messageIndex, messageSequence, message, images } = req.body as {
+  const { chatId, messageIndex, messageSequence, messageRowId, message, images } = req.body as {
     chatId: string;
     messageIndex?: number;
     messageSequence?: number;
+    messageRowId?: string;
     message: string;
     images?: ImageAttachment[];
   };
 
-  if (!chatId || (messageIndex == null && messageSequence == null) || !message) {
-    return res.status(400).json({ error: "chatId, messageIndex/messageSequence, and message are required" });
+  if (!chatId || (messageIndex == null && messageSequence == null && !messageRowId) || !message) {
+    return res.status(400).json({ error: "chatId, messageIndex/messageSequence/messageRowId, and message are required" });
   }
 
   beginTurnIntent(chatId, res);
@@ -5718,17 +5692,32 @@ router.post("/edit", async (req, res) => {
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  if (messageIndex != null && (messageIndex < 0 || messageIndex >= chat.messages.length)) {
-    return res.status(400).json({ error: "messageIndex out of bounds" });
-  }
-
-  const hasStableSequence = Number.isInteger(messageSequence);
-  let targetIndex = hasStableSequence
-    ? chat.messages.findIndex((m, index) => (m._rowSequence ?? index) === messageSequence)
-    : messageIndex!;
+  // Target resolution prefers the durable row identity (`_rowId` — stable
+  // across rebases and truncations) over the legacy sequence (a dense index
+  // that moves whenever rows are inserted or edited away) and the absolute UI
+  // index (last resort). Row-id targeting is what keeps an edit pointed at
+  // the same row when a concurrent writer has shifted sequences since the
+  // client loaded the chat.
+  const editTarget = resolveEditTargetIndex(chat.messages, {
+    rowId: messageRowId,
+    sequence: messageSequence,
+    index: messageIndex,
+  });
+  const targetResolution = editTarget.via;
+  let targetIndex = editTarget.index;
 
   if (targetIndex < 0) {
-    return res.status(400).json({ error: "messageSequence not found" });
+    // Historically silent for the sequence path: a stale client target
+    // (sequence renumbered by a rebase, or a row truncated away) surfaced as
+    // a bare 400 and the pre-edit message stayed in place. Keep the refusal —
+    // an ambiguous destructive target must fail closed — but make it
+    // traceable.
+    console.warn(
+      `[chat] edit rejected: chat=${chatId.slice(0, 8)} target not found ` +
+      `(rowId=${messageRowId ?? "none"}, sequence=${messageSequence ?? "none"}, index=${messageIndex ?? "none"}, ` +
+      `messages=${chat.messages.length})`,
+    );
+    return res.status(400).json({ error: "Edit target not found" });
   }
 
   // Edits are destructive truncations, so fail closed if the client target is
@@ -5745,7 +5734,7 @@ router.post("/edit", async (req, res) => {
     } else {
       console.warn(
         `[chat] edit rejected: target index ${targetIndex} is ${chat.messages[targetIndex].role}; ` +
-        `messageSequence=${messageSequence ?? "none"} messageIndex=${messageIndex ?? "none"}`
+        `messageRowId=${messageRowId ?? "none"} messageSequence=${messageSequence ?? "none"} messageIndex=${messageIndex ?? "none"}`
       );
       return res.status(400).json({ error: "Edit target must be a user message" });
     }
@@ -5816,6 +5805,15 @@ router.post("/edit", async (req, res) => {
     if (err instanceof RevisionConflictError) return refuseStaleEdit(res, err);
     throw err;
   }
+
+  // Traceability for "my edit didn't stick" reports: the target row identity,
+  // the replacement row identity, and the resulting depth. The row ids also
+  // let a later rebase investigation map a reverted edit to the writer that
+  // overwrote it.
+  console.log(
+    `[chat] edit applied: chat=${chat.id.slice(0, 8)} target=${originalMessage._rowId?.slice(0, 8) ?? "?"}@${targetIndex} via=${targetResolution} ` +
+    `editedRow=${userMsg._rowId?.slice(0, 8) ?? "?"} messages=${chat.messages.length}`,
+  );
 
   // Build context with skills (using delta-aware prompt builder for memory-augmented chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
@@ -5969,25 +5967,29 @@ router.post("/edit", async (req, res) => {
       role: "system",
       content: editMemoryDeltaContext,
       timestamp: Date.now(),
+      // Structural "next user context" marker — see the send path above.
+      _mergeIntoNextUserMessage: true,
     });
     await saveChat(chat);
     // Delivery receipt — only now are these ids claimed as in-context.
     commitMemoryDelta(chat.id, editMemoriesDeltaIds);
   }
 
-  // Context = all messages before the current edited user prompt. If this edit
-  // has a fresh memory delta, merge that delta into the current user message
-  // instead of sending it as a standalone mid-transcript system message.
-  // Resolve by id, never by position: a rebase may have interleaved rows.
+  // Context = all messages before the current edited user prompt. Pending
+  // "next user context" rows immediately before the edited message (this
+  // turn's fresh memory delta, a leftover delta from an aborted send, a
+  // post-turn passive recall) are excluded from the replayed history and
+  // merged into the edited user message on the wire — exactly how
+  // chatMessagesToPiMessages will merge the persisted system rows back into
+  // this user row on every future replay. Resolve by id, never by position: a
+  // rebase may have interleaved rows.
   const currentEditUserIndex = resolveCurrentMessageIndex(chat.messages, userMsg);
-  const editPersistedHistoryEnd =
-    editMemoryDeltaContext &&
-    currentEditUserIndex > 0 &&
-    chat.messages[currentEditUserIndex - 1]?.role === "system" &&
-    chat.messages[currentEditUserIndex - 1]?.content === editMemoryDeltaContext
-      ? currentEditUserIndex - 1
-      : currentEditUserIndex;
-  const editPersistedHistory = chat.messages.slice(0, editPersistedHistoryEnd);
+  const editNextUserContext = splitNextUserContext({
+    messages: chat.messages,
+    currentUserIndex: currentEditUserIndex,
+    memoryDeltaContext: editMemoryDeltaContext,
+  });
+  const editPersistedHistory = chat.messages.slice(0, editNextUserContext.persistedHistoryEnd);
   const editReplayIdentity = replayIdentityForModel(chat.modelId);
   const contextMessages = await chatMessagesToHydratedPiMessages(editPersistedHistory, chat.modelId, editReplayIdentity);
 
@@ -6002,7 +6004,7 @@ router.post("/edit", async (req, res) => {
     chatId: chat.id,
     source: "edit",
     systemPromptChars: systemPrompt.length,
-    deltaChars: editMemoriesDelta.length,
+    deltaChars: editNextUserContext.systemContexts.reduce((sum, content) => sum + content.length, 0),
     newMsgChars: message.length,
     persistedRows: editPersistedHistory.length,
     contextPiMessages: contextMessages,
@@ -6015,7 +6017,7 @@ router.post("/edit", async (req, res) => {
   }
 
   const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
-  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext, editTimeAnchor);
+  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editNextUserContext.systemContexts, editTimeAnchor);
 
   const editLease = await acquireTurnGate(chat, req, res);
   if (!editLease) return;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../types.js";
-import { resolveCurrentMessageIndex, resolveTrailingRow } from "../services/current-message.js";
+import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow } from "../services/current-message.js";
 
 /**
  * Plan test 11 — route-level current-message tracking by id.
@@ -105,5 +105,55 @@ describe("current-message resolution (id-anchored, route-level)", () => {
       "repair prompt",
       "[Agent from other chat] post",
     ]);
+  });
+});
+
+describe("edit target resolution (rowId > sequence > index)", () => {
+  const rows: ChatMessage[] = [
+    { role: "user", content: "u1", timestamp: 1, _rowId: "r-u1", _rowSequence: 0 },
+    { role: "assistant", content: "a1", timestamp: 2, _rowId: "r-a1", _rowSequence: 1 },
+    { role: "user", content: "u2", timestamp: 3, _rowId: "r-u2", _rowSequence: 2 },
+  ];
+
+  it("prefers the durable row id even when sequence and index are stale", () => {
+    expect(resolveEditTargetIndex(rows, { rowId: "r-u2", sequence: 999, index: 0 })).toEqual({
+      index: 2,
+      via: "rowId",
+    });
+  });
+
+  it("falls back to the sequence when the row id no longer exists (row replaced by an edit)", () => {
+    expect(resolveEditTargetIndex(rows, { rowId: "r-gone", sequence: 1, index: 0 })).toEqual({
+      index: 1,
+      via: "sequence",
+    });
+  });
+
+  it("falls back to the index when neither identity resolves", () => {
+    expect(resolveEditTargetIndex(rows, { rowId: "r-gone", sequence: 99, index: 1 })).toEqual({
+      index: 1,
+      via: "index",
+    });
+  });
+
+  it("returns -1 for an out-of-bounds index so callers fail closed", () => {
+    expect(resolveEditTargetIndex(rows, { index: 3 })).toEqual({ index: -1, via: "index" });
+    expect(resolveEditTargetIndex(rows, {})).toEqual({ index: -1, via: "index" });
+  });
+
+  it("matches a renumbered sequence at its shifted position (rebases renumber)", () => {
+    const renumbered = rows.map((m) => ({ ...m, _rowSequence: (m._rowSequence ?? 0) + 1 }));
+    expect(resolveEditTargetIndex(renumbered, { sequence: 2, index: 0 })).toEqual({
+      index: 1,
+      via: "sequence",
+    });
+  });
+
+  it("uses the array position for rows with no pinned sequence", () => {
+    const unpinned: ChatMessage[] = [
+      { role: "user", content: "u1", timestamp: 1, _rowId: "r1" },
+      { role: "user", content: "u2", timestamp: 2, _rowId: "r2" },
+    ];
+    expect(resolveEditTargetIndex(unpinned, { sequence: 1 })).toEqual({ index: 1, via: "sequence" });
   });
 });

@@ -620,11 +620,12 @@ export function editMessage(
   message: string,
   callbacks: StreamCallbacks,
   images?: ImageAttachment[],
-  messageSequence?: number
+  messageSequence?: number,
+  messageRowId?: string
 ): AbortController {
   return streamSSE(
     `${BASE}/chat/edit`,
-    withDeviceId({ chatId, messageIndex, messageSequence, message, images: images?.length ? images : undefined }),
+    withDeviceId({ chatId, messageIndex, messageSequence, messageRowId, message, images: images?.length ? images : undefined }),
     callbacks
   );
 }

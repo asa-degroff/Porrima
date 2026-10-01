@@ -886,4 +886,88 @@ describe("chat storage revision + row identity", () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("drops a stale writer's pending-context row when its user row was truncated", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-orphan-pending", [
+        { role: "user", content: "u1", timestamp: 1 },
+        { role: "assistant", content: "a1", timestamp: 2 },
+        { role: "user", content: "u2", timestamp: 3 },
+        { role: "assistant", content: "a2", timestamp: 4 },
+      ]));
+
+      // A send-style writer holds the full thread and splices this turn's
+      // memory delta in front of u2 (the row it is about to replace).
+      const stale = await storage.getChat("edit-orphan-pending");
+      stale!.messages.splice(2, 0, {
+        role: "system",
+        content: "[System context — updated memories]\nrecalled mid-race",
+        timestamp: 5,
+        _mergeIntoNextUserMessage: true,
+      });
+
+      // /edit truncates at u2 and saves its replacement first; the stale
+      // writer's u2/a2 rows are now gone from the DB.
+      const edit = await storage.getChat("edit-orphan-pending");
+      edit!.messages = edit!.messages.slice(0, 2);
+      edit!.messages.push({ role: "user", content: "u2 (edited)", timestamp: 6 });
+      await storage.saveChat(edit!, { allowTruncation: true, rejectOnRevisionConflict: true });
+
+      // The stale save rebases. Its delta belonged to the deleted u2, so it
+      // must be dropped with u2/a2 instead of splicing in front of
+      // "u2 (edited)" (which would make the next replay merge context the
+      // edit's wire never saw — the KV-cache prefix split).
+      await storage.saveChat(stale!);
+
+      const final = await storage.getChat("edit-orphan-pending");
+      expect(final?.messages.map((m) => m.content)).toEqual(["u1", "a1", "u2 (edited)"]);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a racing pending-context row when its user row was never persisted", async () => {
+    const homeDir = makeTempHome();
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("edit-orphan-keep", [
+        { role: "user", content: "u1", timestamp: 1 },
+        { role: "assistant", content: "a1", timestamp: 2 },
+        { role: "user", content: "u2", timestamp: 3 },
+        { role: "assistant", content: "a2", timestamp: 4 },
+      ]));
+
+      // A queued send holds the full thread and appends its own new user turn
+      // (delta + queued message) while /edit rewrites the u2 tail.
+      const queued = await storage.getChat("edit-orphan-keep");
+      queued!.messages.push({
+        role: "system",
+        content: "[System context — updated memories]\nqueued delta",
+        timestamp: 5,
+        _mergeIntoNextUserMessage: true,
+      });
+      queued!.messages.push({ role: "user", content: "queued message", timestamp: 6 });
+
+      const edit = await storage.getChat("edit-orphan-keep");
+      edit!.messages = edit!.messages.slice(0, 2);
+      edit!.messages.push({ role: "user", content: "u2 (edited)", timestamp: 7 });
+      await storage.saveChat(edit!, { allowTruncation: true, rejectOnRevisionConflict: true });
+
+      await storage.saveChat(queued!);
+
+      // The queued turn's own new user row is a legitimate concurrent append:
+      // its delta must survive together with it (unlike the orphan above).
+      const final = await storage.getChat("edit-orphan-keep");
+      const contents = final!.messages.map((m) => m.content);
+      expect(contents).toContain("queued message");
+      expect(contents).toContain("[System context — updated memories]\nqueued delta");
+      expect(contents).not.toContain("u2");
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });

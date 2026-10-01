@@ -1334,10 +1334,10 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   );
 
   const handleEditMessage = useCallback(
-    (index: number, newText: string, images?: import("./types").ImageAttachment[], messageSequence?: number) => {
+    (index: number, newText: string, images?: import("./types").ImageAttachment[], messageSequence?: number, messageRowId?: string) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
       autoReadPendingTurnRef.current = true;
-      editMessage(index, newText, images, messageSequence);
+      editMessage(index, newText, images, messageSequence, messageRowId);
     },
     [activeChatId, editMessage]
   );

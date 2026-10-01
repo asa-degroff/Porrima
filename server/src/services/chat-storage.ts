@@ -5,6 +5,7 @@ import os from "os";
 import { join } from "path";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection, ThemePreset } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
+import { isPendingNextUserContextMessage } from "./pending-user-context.js";
 import {
   DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
   DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
@@ -834,7 +835,9 @@ export async function saveChat(
         console.log(
           `[chat-storage] rebase chat=${chat.id.slice(0, 8)} baseRev=${baseRevision} ` +
           `currentRev=${currentRevision} preserved=${result.preserved} removed=${result.removed} ` +
-          `ephemeral=${result.droppedEphemeral} truncatedDropped=${result.droppedTruncated}`,
+          `ephemeral=${result.droppedEphemeral} truncatedDropped=${result.droppedTruncated}` +
+          (result.preservedSummaries.length > 0 ? ` preservedRows=[${result.preservedSummaries.join(", ")}]` : "") +
+          (result.droppedTruncatedSummaries.length > 0 ? ` droppedRows=[${result.droppedTruncatedSummaries.join(", ")}]` : ""),
         );
       }
 
@@ -1833,6 +1836,13 @@ function parseRowPayload(payloadJson: string): ChatMessage | null {
  * spliced after the emitted position of their nearest preceding claimed row,
  * in array order. Callers renumber densely after this returns.
  */
+/** Compact role/id/sequence tag for the rebase log. */
+function describeRowForRebase(message: ChatMessage): string {
+  const id = message._rowId ? message._rowId.slice(0, 8) : "new";
+  const seq = typeof message._rowSequence === "number" ? `@${message._rowSequence}` : "";
+  return `${message.role}#${id}${seq}`;
+}
+
 function rebaseMessageArray(
   dbRows: ChatMessageRowIdentity[],
   messages: ChatMessage[],
@@ -1843,6 +1853,8 @@ function rebaseMessageArray(
   removed: number;
   droppedEphemeral: number;
   droppedTruncated: number;
+  preservedSummaries: string[];
+  droppedTruncatedSummaries: string[];
 } {
   // Capture which rows the writer actually loaded (had an id before the
   // identity pass below). After the pass every row has an id, so this set is
@@ -1863,6 +1875,8 @@ function rebaseMessageArray(
 
   const base: ChatMessage[] = [];
   const baseIndexById = new Map<string, number>();
+  const preservedSummaries: string[] = [];
+  const droppedTruncatedSummaries: string[] = [];
   let preserved = 0;
   let removed = 0;
   let droppedEphemeral = 0;
@@ -1893,12 +1907,49 @@ function rebaseMessageArray(
       baseIndexById.set(row.row_id, base.length);
     }
     preserved++;
+    if (preservedSummaries.length < 5) {
+      preservedSummaries.push(`${payload.role}#${(row.row_id ?? "?").slice(0, 8)}@${row.sequence}`);
+    }
     base.push(payload);
+  }
+
+  // A stale writer can still hold the pending-context rows (memory delta,
+  // passive recall) that belonged to a user message a truncating writer has
+  // since deleted (`/edit`). Splicing an orphaned context row in front of the
+  // replacement user row would make the next replay merge context the current
+  // wire never saw — the exact wire-vs-replay prefix split that silently busts
+  // the KV cache (issue #10). Drop pending rows together with the user row
+  // they were attached to.
+  const isClaimedRow = (message: ChatMessage): boolean =>
+    !!message._rowId && baseIndexById.has(message._rowId);
+  const isLoadedMissingRow = (message: ChatMessage): boolean =>
+    !!message._rowId && loadedIds.has(message._rowId) && !baseIndexById.has(message._rowId);
+
+  const orphanedPending = new Set<number>();
+  for (let i = 0; i < messages.length; i++) {
+    if (isClaimedRow(messages[i]) || isLoadedMissingRow(messages[i])) continue;
+    if (!isPendingNextUserContextMessage(messages[i])) continue;
+    // Collapse the run of consecutive new pending rows that share one anchor
+    // user row.
+    let j = i + 1;
+    while (
+      j < messages.length &&
+      !isClaimedRow(messages[j]) &&
+      !isLoadedMissingRow(messages[j]) &&
+      isPendingNextUserContextMessage(messages[j])
+    ) {
+      j++;
+    }
+    const next = messages[j];
+    if (next && next.role === "user" && isLoadedMissingRow(next)) {
+      for (let k = i; k < j; k++) orphanedPending.add(k);
+    }
   }
 
   const buckets = new Map<number, ChatMessage[]>();
   let lastAnchor = -1;
-  for (const message of messages) {
+  for (let idx = 0; idx < messages.length; idx++) {
+    const message = messages[idx];
     const anchorIndex = message._rowId ? baseIndexById.get(message._rowId) : undefined;
     if (anchorIndex !== undefined) {
       lastAnchor = anchorIndex;
@@ -1910,6 +1961,15 @@ function rebaseMessageArray(
       // it honors that writer's intent — resurrecting it would silently undo
       // the truncation. (New rows have fresh ids and are not in loadedIds.)
       droppedTruncated++;
+      if (droppedTruncatedSummaries.length < 5) droppedTruncatedSummaries.push(describeRowForRebase(message));
+      continue;
+    }
+    if (orphanedPending.has(idx)) {
+      // Pending context whose user row was truncated away — dropped above.
+      droppedTruncated++;
+      if (droppedTruncatedSummaries.length < 5) {
+        droppedTruncatedSummaries.push(`${describeRowForRebase(message)}(orphaned-pending)`);
+      }
       continue;
     }
     const bucket = buckets.get(lastAnchor);
@@ -1924,7 +1984,15 @@ function rebaseMessageArray(
     for (const message of buckets.get(i) ?? []) merged.push(message);
   }
 
-  return { merged, preserved, removed, droppedEphemeral, droppedTruncated };
+  return {
+    merged,
+    preserved,
+    removed,
+    droppedEphemeral,
+    droppedTruncated,
+    preservedSummaries,
+    droppedTruncatedSummaries,
+  };
 }
 
 /**

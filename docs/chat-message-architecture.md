@@ -115,6 +115,8 @@ Keep these invariants when changing chat history code:
 - Writers without an in-memory array append via `appendChatMessageRow()`; writers holding an array save via `saveChat()`, whose rebase preserves concurrent appends.
 - Never call `saveChat()` with a paged window (`getChatWithWindow` result); it refuses, by design.
 - Declare intentional same-turn removals with `saveChat(chat, { removedRowIds })` rather than dropping rows from the array silently.
+- Mark hidden "next user context" rows (memory deltas, passive recalls) with `_mergeIntoNextUserMessage` when persisting them. Send and edit build their wire user message via `splitNextUserContext()` so it merges exactly the rows `chatMessagesToPiMessages()` will merge back — a pending row the wire skips but replay merges (or vice versa) silently splits the KV prefix at that message.
+- The storage rebase drops a stale writer's pending-context row together with the user row it was attached to when a truncating writer (`/edit`) deleted that user row; do not weaken that rule without keeping wire and replay in lockstep.
 
 ## Future Work
 

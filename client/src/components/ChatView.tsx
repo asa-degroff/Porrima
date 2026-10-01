@@ -358,7 +358,7 @@ interface Props {
   playbackState?: import("../hooks/useTTS").PlaybackState;
   ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
-  onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[], messageSequence?: number) => void;
+  onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[], messageSequence?: number, messageRowId?: string) => void;
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   onLoadOlderMessages?: () => Promise<boolean>;
   onAbort: () => void;
@@ -1072,6 +1072,7 @@ export function ChatView({
                               onRetryMessage={msg.role === "user" && !isCrossChatPost && !isReminder ? onRetryMessage : undefined}
                               messageIndex={i}
                               messageSequence={msg._rowSequence}
+                              messageRowId={msg._rowId}
                               availableSkills={availableSkillNames}
                               streamingSegmentIndex={adjustedStreamingSegmentIndex}
                               showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
