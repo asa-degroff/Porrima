@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchUserUIState, saveUserUIState, type UserUIState } from "../api/client";
+import { fetchUserUIState, saveUserUIState } from "../api/client";
 import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 interface SidebarState {

@@ -1,9 +1,6 @@
 import { Suspense, memo, lazy, useRef, useCallback, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment, InlineVisual } from "../types";
-import type { ChatListItem } from "../types";
-import { ChatLinkPicker } from "./ChatLinkPicker";
-import { NotebookLinkPicker } from "./NotebookLinkPicker";
+import type { NotebookEntry, ImageAttachment } from "../types";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 

@@ -41,7 +41,7 @@ import { useNotebooks } from "./hooks/useNotebooks";
 import { useCacheResidency } from "./hooks/useCacheResidency";
 import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
 import type { ReadAloudOptions, SystemStatsSample } from "./types";
-import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle, pauseSystem, resumeSystem } from "./api/client";
+import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatMessage, ChatType, CornerRadius } from "./types";
 import {
@@ -1166,7 +1166,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     clearCachedChat(modelFallback.chatId).catch(() => {});
   }, [modelFallback]); // eslint-disable-line react-hooks/exhaustive-deps
 
-
   // Find context window for active model
   // Priority: chat override → detected value → fallback
   // Must match server-side getEffectiveContextWindow priority order
@@ -1464,28 +1463,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       setTimeout(() => setSleepModeActive(false), 5000);
     }
   }, [isSynthesizing]);
-
-  const handleSynthesisRun = useCallback(async () => {
-    if (isSynthesizing) return;
-    setSynthesisComplete(false);
-    try {
-      await triggerSynthesis();
-      setIsSynthesizing(true);
-      wasSynthesizingRef.current = true;
-    } catch (e: any) {
-      console.error("Synthesis failed:", e.message);
-    }
-  }, [isSynthesizing]);
-
-  const handleWakeRun = useCallback(async () => {
-    if (isWakeCycleRunning) return;
-    try {
-      await triggerWakeCycle();
-      setIsWakeCycleRunning(true);
-    } catch (e: any) {
-      console.error("Wake cycle failed:", e.message);
-    }
-  }, [isWakeCycleRunning]);
 
   const handlePauseSystem = useCallback(async (durationMs: number | null) => {
     try {

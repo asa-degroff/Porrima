@@ -1,5 +1,4 @@
-import { useState, useRef, useEffect } from "react";
-import { searchConversations } from "../api/client";
+import { useRef, useEffect } from "react";
 import type { ConversationSearchResult } from "../types";
 
 interface Props {
@@ -7,12 +6,9 @@ interface Props {
   query: string;
   onQueryChange: (query: string) => void;
   onClose: () => void;
-  onSelectResult: (result: ConversationSearchResult) => void;
 }
 
-export function SidebarSearch({ isActive, query, onQueryChange, onClose, onSelectResult }: Props) {
-  const [results, setResults] = useState<ConversationSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
+export function SidebarSearch({ isActive, query, onQueryChange, onClose }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -20,37 +16,6 @@ export function SidebarSearch({ isActive, query, onQueryChange, onClose, onSelec
       inputRef.current.focus();
     }
   }, [isActive]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (query.trim().length >= 2) {
-        doSearch();
-      } else {
-        setResults([]);
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [query]);
-
-  async function doSearch() {
-    setLoading(true);
-    try {
-      const r = await searchConversations(query, undefined, 20);
-      setResults(r);
-    } catch (e: any) {
-      console.error("Search failed:", e);
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function handleSelect(result: ConversationSearchResult) {
-    onSelectResult(result);
-    onQueryChange("");
-    onClose();
-  }
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
@@ -76,7 +41,7 @@ export function SidebarSearch({ isActive, query, onQueryChange, onClose, onSelec
       />
       {query && (
         <button
-          onClick={() => { onQueryChange(""); setResults([]); }}
+          onClick={() => onQueryChange("")}
           className="text-white/30 hover:text-white/60 transition-colors p-0.5 shrink-0"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

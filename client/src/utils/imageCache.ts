@@ -7,7 +7,6 @@ import { useState, useEffect } from "react";
 
 const CACHE_VERSION = "v1";
 const CACHE_PREFIX = "porrima-images-";
-const LEGACY_CACHE_PREFIX = "quje-images-";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
 // Track in-flight requests to avoid duplicates

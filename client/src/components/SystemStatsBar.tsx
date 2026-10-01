@@ -188,7 +188,6 @@ export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
   // VRAM usage — also multi-series
   const gpuVramSeries = useMemo(() => {
     return gpuIndices.map((id, idx) => {
-      const total = filteredHistory[filteredHistory.length - 1]?.gpus.find((g) => (g.pci || g.id) === id)?.vramTotal ?? 0;
       return {
         data: filteredHistory.map((s) => {
           const gpu = s.gpus.find((g) => (g.pci || g.id) === id);

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { TTSSettings } from "../types";
-import { getTTSSettings, getTTSStatus, updateTTSSettings } from "../api/tts";
+import { getTTSSettings, getTTSStatus } from "../api/tts";
 import { useStreamingTTS } from "./useStreamingTTS";
 
 const DEFAULT_SETTINGS: TTSSettings = {
@@ -87,7 +87,7 @@ export function useTTS() {
     audioUrl: null,
   });
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
 
   // MediaSource streaming hook for "data" mode
   const streamingTTS = useStreamingTTS();

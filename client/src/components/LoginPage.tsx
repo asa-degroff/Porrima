@@ -1,5 +1,4 @@
 import { lazy, Suspense, useState, type FormEvent } from "react";
-import type { AuthState } from "../hooks/useAuth";
 import { OctahedronLogo } from "./PolyhedronLogo";
 
 const RippleDotsBackground = lazy(() =>

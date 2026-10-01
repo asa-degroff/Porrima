@@ -11,7 +11,7 @@ import {
   OfflineError,
 } from "../api/client";
 import { readStoredValue, writeStoredValue } from "../lib/storage";
-import type { NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, ImageAttachment } from "../types";
+import type { NotebookIndex, NotebookLink, NotebookSearchResult, ImageAttachment } from "../types";
 
 const NOTEBOOK_LAST_SEEN_KEY = "porrima-notebook-agent-last-seen";
 const LEGACY_NOTEBOOK_LAST_SEEN_KEY = "quje-notebook-agent-last-seen";
@@ -27,7 +27,7 @@ export function useNotebooks() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notebookLastSeen, setNotebookLastSeen] = useState<string | null>(null);
-  const [synced, setSynced] = useState(false);
+  const [, setSynced] = useState(false);
   const [searchResults, setSearchResults] = useState<NotebookSearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);

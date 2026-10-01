@@ -233,11 +233,6 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
   };
 
   const currentVersionInfo = versions.find(v => v.version === selectedVersion);
-  const formattedDate = currentVersionInfo 
-    ? new Date(currentVersionInfo.createdAt).toLocaleDateString(undefined, { 
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-      })
-    : '';
 
   return (
     <div className={`relative depth-raised ${isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl border border-white/10 bg-black/20" : "mt-3 rounded-xl border border-white/10 bg-black/20"}`}>

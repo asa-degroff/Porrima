@@ -19,9 +19,9 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppUpdateStatus } from "../api/client";
-import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppUpdateStatus } from "../api/client";
+import { getPersona, updatePersona } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
@@ -594,7 +594,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
 
 export function SettingsModal({ settings, models, refreshModels, highEfficiencyMode, onHighEfficiencyModeChange, onApply, onSave, onClose, onLogout, onOpenSetup }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
-  const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
+  const [defaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
   const [agentName, setAgentName] = useState(settings.agentName || "");
   const [persona, setPersona] = useState<PersonaStore | null>(null);
@@ -634,9 +634,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [imageSettingsTab, setImageSettingsTab] = useState<ImageSettingsTab>("backend");
   // llama.cpp server settings
-  const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
+  const [llamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
-  const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
+  const [llamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction runtime and request settings
@@ -654,30 +654,30 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [midTurnExtractionTimeoutMs, setMidTurnExtractionTimeoutMs] = useState(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS);
   const [midTurnExtractionTimeoutSecondsDraft, setMidTurnExtractionTimeoutSecondsDraft] = useState(String(timeoutMsToSeconds(settings.midTurnExtractionTimeoutMs ?? DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
-  const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
+  const [rerankerEnabled] = useState(settings.rerankerEnabled ?? true);
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || DEFAULT_RERANKER_URL);
   const [rerankerModelId, setRerankerModelId] = useState(settings.rerankerModelId || "qwen3-reranker");
   const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [rerankerModels, setRerankerModels] = useState<DiscoveredModel[]>([]);
-  const [rerankerModelsLoading, setRerankerModelsLoading] = useState(false);
+  const [, setRerankerModelsLoading] = useState(false);
   const [rerankerUseCustom, setRerankerUseCustom] = useState(false);
   // Title generation server settings
-  const [titleGenerationEnabled, setTitleGenerationEnabled] = useState(settings.titleGenerationEnabled !== false);
+  const [titleGenerationEnabled] = useState(settings.titleGenerationEnabled !== false);
   const [titleGenerationUrl, setTitleGenerationUrl] = useState(settings.titleGenerationUrl || DEFAULT_TITLE_GENERATION_URL);
   const [titleGenerationModelId, setTitleGenerationModelId] = useState(settings.titleGenerationModelId || "qwen3.5-0.8b");
   const [titleGenerationModels, setTitleGenerationModels] = useState<DiscoveredModel[]>([]);
-  const [titleGenerationModelsLoading, setTitleGenerationModelsLoading] = useState(false);
+  const [, setTitleGenerationModelsLoading] = useState(false);
   const [titleGenerationUseCustom, setTitleGenerationUseCustom] = useState(false);
   // Embedding server settings
   const savedEmbeddingProvider = settings.embeddingProvider ?? "llamacpp";
   const savedEmbeddingUrl =
     settings.embeddingUrl || DEFAULT_EMBEDDING_URL;
   const savedEmbeddingModel = settings.embeddingModel || "qwen3-embedding:0.6b";
-  const [embeddingProvider, setEmbeddingProvider] = useState(savedEmbeddingProvider);
+  const [embeddingProvider] = useState(savedEmbeddingProvider);
   const [embeddingUrl, setEmbeddingUrl] = useState(savedEmbeddingUrl);
   const [embeddingModel, setEmbeddingModel] = useState(savedEmbeddingModel);
   const [embeddingModels, setEmbeddingModels] = useState<DiscoveredModel[]>([]);
-  const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
+  const [, setEmbeddingModelsLoading] = useState(false);
   const [chatDiskModels, setChatDiskModels] = useState<DiscoveredModel[]>([]);
   const [chatDiskModelsLoading, setChatDiskModelsLoading] = useState(false);
   const [defaultModelScanDir, setDefaultModelScanDir] = useState<string | undefined>(undefined);
@@ -751,7 +751,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamaBinaryScanMessage, setLlamaBinaryScanMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   // Model scan paths
   const [scanPaths, setScanPaths] = useState<Array<{ path: string; modelCount: number; valid: boolean; error?: string }>>([]);
-  const [scanPathsLoading, setScanPathsLoading] = useState(false);
+  const [, setScanPathsLoading] = useState(false);
   const [scanPathsVersion, setScanPathsVersion] = useState(0);
   const [scanPathDraft, setScanPathDraft] = useState("");
   const [scanPathPreview, setScanPathPreview] = useState<{ path: string; modelCount: number; models: Array<{ id: string; kind: string; hasMmproj: boolean }>; valid: boolean; error?: string } | null>(null);
@@ -890,7 +890,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [extractionServerModels, setExtractionServerModels] = useState<DiscoveredModel[]>([]);
-  const [extractionServerModelsLoading, setExtractionServerModelsLoading] = useState(false);
+  const [, setExtractionServerModelsLoading] = useState(false);
   const [extractionUseCustom, setExtractionUseCustom] = useState(false);
   // Tool options — read_file truncation
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
@@ -2644,13 +2644,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setPresetSaving(false);
   }, [editingPresetId, editingPresetContent, handleUpdatePreset]);
 
-  const handleCancelPresetEdit = useCallback(() => {
-    setEditingPresetId(null);
-    setEditingPresetContent("");
-    setPresetMessage(null);
-  }, []);
-
-
   const handleAddPasskey = useCallback(async () => {
     setPasskeyAdding(true);
     setPasskeyMessage(null);
@@ -2699,50 +2692,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       setSdcppStatus("unavailable");
     }
   }, [sdcppUrl]);
-
-  const handleTestLlamaCpp = useCallback(async () => {
-    setLlamacppStatus("checking");
-    try {
-      const res = await fetch("/api/models/llamacpp/health", { credentials: "include" });
-      if (res.ok) {
-        setLlamacppStatus("connected");
-      } else {
-        setLlamacppStatus("unavailable");
-      }
-    } catch {
-      setLlamacppStatus("unavailable");
-    }
-  }, []);
-
-  const handleTestExtractionModel = useCallback(async () => {
-    if (!extractionModelUrl) return;
-    setExtractionModelStatus("checking");
-    try {
-      const res = await fetch(`/api/models/llamacpp/health?url=${encodeURIComponent(extractionModelUrl)}`, { credentials: "include" });
-      if (res.ok) {
-        setExtractionModelStatus("connected");
-      } else {
-        setExtractionModelStatus("unavailable");
-      }
-    } catch {
-      setExtractionModelStatus("unavailable");
-    }
-  }, [extractionModelUrl]);
-
-  const handleTestReranker = useCallback(async () => {
-    if (!rerankerUrl) return;
-    setRerankerStatus("checking");
-    try {
-      const res = await fetch(`/api/models/llamacpp/health?url=${encodeURIComponent(rerankerUrl)}`, { credentials: "include" });
-      if (res.ok) {
-        setRerankerStatus("connected");
-      } else {
-        setRerankerStatus("unavailable");
-      }
-    } catch {
-      setRerankerStatus("unavailable");
-    }
-  }, [rerankerUrl]);
 
   // --- Embedding migration ---
 
@@ -4379,7 +4328,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                          )}
 	              </div>
             )}
-
 
 		                      {/* Details section */}
 		                      {isSelected && llamaServerDetailTab === "overview" && (

@@ -158,13 +158,8 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     }
   };
 
-  const handleQuickPath = (quickPath: string) => {
-    setPath(quickPath);
-  };
-
   const isValid = name.trim().length > 0 && validation?.valid === true;
   const hasRemoteTarget = locationType === "local" || Boolean(sshConnectionId);
-  const isInvalid = path.trim().length > 0 && validation && !validation.valid;
 
   return (
     <div

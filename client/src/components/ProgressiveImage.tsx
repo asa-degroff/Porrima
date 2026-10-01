@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getCachedImage } from "../utils/imageCache";
 
 interface Props {
@@ -50,7 +50,6 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
   // Preload full image via Cache API, swap when ready
   useEffect(() => {
     let cancelled = false;
-    let blobUrl: string | null = null;
     
     setLoaded(false);
     setDisplaySrc(thumbSrc);
@@ -74,7 +73,6 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
 
       // Track blob URL for cleanup
       if (resolvedUrl !== src) {
-        blobUrl = resolvedUrl;
         blobUrlRef.current = resolvedUrl;
       }
 

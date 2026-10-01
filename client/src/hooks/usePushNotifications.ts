@@ -61,7 +61,7 @@ function detectSupport(): PushSupport {
 const PRESENCE_PING_INTERVAL_MS = 20_000;
 
 export function usePushNotifications(): UsePushNotificationsResult {
-  const [support, setSupport] = useState<PushSupport>(() => detectSupport());
+  const [support] = useState<PushSupport>(() => detectSupport());
   const [status, setStatus] = useState<PushStatus>("idle");
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
     () => (typeof Notification !== "undefined" ? Notification.permission : "unsupported")

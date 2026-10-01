@@ -1241,7 +1241,6 @@ export function Sidebar({
                 query={searchQuery}
                 onQueryChange={setSearchQuery}
                 onClose={() => { setSearchActive(false); setSearchQuery(""); }}
-                onSelectResult={handleSelectResult}
               />
             </div>
           ) : (
@@ -1812,7 +1811,6 @@ export function Sidebar({
             </div>
           </div>
         </section>
-
 
       </div>
 

@@ -139,7 +139,6 @@ export function ImageSandbox({ defaultModelId }: Props) {
     reanalyzeImage,
     deleteImage,
     selectImage,
-    setSelectedImage: setSelectedAnalyzedImage,
     setSelectedPreset,
   } = useVisionSandbox(defaultModelId);
 
@@ -216,16 +215,6 @@ export function ImageSandbox({ defaultModelId }: Props) {
   // Gesture hooks for mobile drawers
   const controlsDrawerRef = useRef<HTMLDivElement>(null);
   const detailsDrawerRef = useRef<HTMLDivElement>(null);
-
-  const controlsGesture = useMemo(() => ({
-    isOpen: controlsOpen,
-    onClose: () => setControlsOpen(false),
-  }), [controlsOpen]);
-
-  const detailsGesture = useMemo(() => ({
-    isOpen: detailsOpen,
-    onClose: () => setDetailsOpen(false),
-  }), [detailsOpen]);
 
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
@@ -598,7 +587,6 @@ export function ImageSandbox({ defaultModelId }: Props) {
                     const startY = touch.clientY;
                     const drawer = controlsDrawerRef.current;
                     if (!drawer) return;
-                    const rect = drawer.getBoundingClientRect();
                     const scrollTop = drawer.querySelector('.overflow-y-auto')?.scrollTop || 0;
                     
                     // Only drag if at top of scrollable content

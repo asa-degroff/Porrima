@@ -48,7 +48,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [seed, setSeed] = useState<string>(initialParams?.seed?.toString() || "-1");
   const [sampler, setSampler] = useState(initialParams?.sampler || "euler");
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
-  const [lastSeed, setLastSeed] = useState<number | null>(null);
+  const [lastSeed] = useState<number | null>(null);
   const [batchCount, setBatchCount] = useState<string>("1");
   const [customResolutions, setCustomResolutions] = useState<CustomResolutions>({});
   const modelDd = useDropdown();

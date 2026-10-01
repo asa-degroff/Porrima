@@ -81,7 +81,6 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const insertSkillChips = (text: string, container: HTMLElement, skillsList: string[]): { html: string } => {
     const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
     let html = text;
-    const matches = [...text.matchAll(skillPattern)];
     
     // Replace each /skill with a chip span only if it's a recognized skill
     html = text.replace(skillPattern, (match, skillName) => {

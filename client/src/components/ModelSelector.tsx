@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import type { InferenceModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
 import { Dropdown } from "./ui/Dropdown";

@@ -83,7 +83,6 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
   const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
-  const hasCacheIndicator = effectiveCacheWarming || isQueued || Boolean(cacheWarmError);
 
   // Queued messages (server-side message queue) — binary indicator; the count
   // lives in the tooltip. Non-reactive read: the tooltip text just needs to be

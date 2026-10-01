@@ -155,7 +155,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
 
   // Memories tab state
   const [memoryStatus, setMemoryStatus] = useState<{ memoryCount: number; lastSynthesis: string | null; embeddingModelAvailable: boolean } | null>(null);
-  const [synthesisRunning, setSynthesisRunning] = useState(false);
+  const [synthesisRunning] = useState(false);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -284,19 +284,6 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   }, [activeTab, isOpen, projects.length]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
-  const handleRunSynthesis = useCallback(async () => {
-    setSynthesisRunning(true);
-    try {
-      const res = await fetch("/api/memory/synthesis/run", { method: "POST", credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setMemoryStatus((prev) =>
-          prev ? { ...prev, memoryCount: data.memoryCount, lastSynthesis: data.lastSynthesis } : prev
-        );
-      }
-    } catch {}
-    setSynthesisRunning(false);
-  }, []);
 
   const handleMemorySortChange = useCallback((sort: string) => {
     setMemorySortBy(sort);

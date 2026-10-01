@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect, memo } from "react";
+import { useRef, useEffect, memo } from "react";
 import type { GeneratedImage } from "../types";
 
 interface Props {

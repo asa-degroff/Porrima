@@ -2,7 +2,6 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
-import { useStreamingTTS } from "./useStreamingTTS";
 import {
   enqueueMessage,
   dequeueMessage,
