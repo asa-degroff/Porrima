@@ -35,7 +35,7 @@ import {
   estimateContextPressure,
   type PressureEstimate,
 } from "../services/context-pressure.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, softResetMemoryContext } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, invalidateMemoriesCache, softResetMemoryContext, commitMemoryDelta } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
@@ -3484,6 +3484,10 @@ async function handleChatStream(
       // 95s inactivity timeout doesn't fire during slow LLM/embed steps.
       let compactionAborted = false;
       let compaction: Awaited<ReturnType<typeof truncateChatHistory>> | undefined;
+      // Post-compaction memory delta: delivered inside the handoff row below,
+      // then receipted via commitMemoryDelta after the handoff save.
+      let midTurnMemoriesDelta = "";
+      let midTurnMemoriesDeltaIds: string[] = [];
       await withSSEKeepalive(res, async () => {
         try {
           // Wait for any in-flight mid-turn pulse so its cursor is settled
@@ -3562,6 +3566,10 @@ async function handleChatStream(
             chat.messages, chat.id, chat.projectId, chat.type, projectPath
           );
           systemPrompt = split.systemPrompt;
+          // Deliver the delta on this continuation by folding it into the
+          // handoff row below (persisted before agentLoopContinue resumes).
+          midTurnMemoriesDelta = split.memoriesMessage;
+          midTurnMemoriesDeltaIds = split.newMemoryIds;
           if (chat.activeSkills?.length) {
             const skillsCache = new Map<string, Skill>();
             const allSkills = await discoverSkills(chat.projectId);
@@ -3577,6 +3585,9 @@ async function handleChatStream(
       // Build handoff message with progress summary + freshly extracted memories.
       // This runs AFTER preCompactionFlush so memories from removed context are included.
       const handoffParts = [...progressParts];
+      // Freshly recalled memories ride the handoff itself — this is the
+      // delivery that lets the rebuild's ids be committed below.
+      if (midTurnMemoriesDelta) handoffParts.push(midTurnMemoriesDelta);
       try {
         const { getMemoriesFromChat } = await import("../services/memory-storage.js");
         const chatMemories = getMemoriesFromChat(chat.id, 10);
@@ -3616,6 +3627,8 @@ async function handleChatStream(
         _compactionCycle: compactionCycle,
       });
       await saveChat(chat);
+      // Delivery receipt — the handoff row carrying the delta is now durable.
+      commitMemoryDelta(chat.id, midTurnMemoriesDeltaIds);
 
       if (compaction?.truncated) {
         // Emit after prompt rebuild and handoff persistence so the estimated
@@ -4831,13 +4844,14 @@ router.post("/", async (req, res) => {
     contextMessages.push(toolResultMsg);
 
     // Show the answer in the UI as a user message
-    chat.messages.push({
+    const resumeAnswerRow: ChatMessage = {
       role: "user",
       content: message,
       images: persistedImages?.length ? persistedImages : undefined,
       timestamp: Date.now(),
       timeAnchor: resumeTimeAnchor,
-    });
+    };
+    chat.messages.push(resumeAnswerRow);
     await saveChat(chat);
 
     // Discover model for pre-send truncation
@@ -4849,6 +4863,12 @@ router.post("/", async (req, res) => {
       console.error("[compaction] model discovery failed (resume):", err.message);
       model = undefined; // Skip truncation if providers are unreachable
     }
+
+    // Post-compaction memory delta for the resumed turn: merged into the
+    // ask_user toolResult on the wire and receipted after the hidden replay
+    // row is saved (see the delivery block below).
+    let resumeMemoriesDelta = "";
+    let resumeMemoriesDeltaIds: string[] = [];
 
     // Pre-send context protection for resume path.
     // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
@@ -4904,6 +4924,9 @@ router.post("/", async (req, res) => {
                 resumeProjectPath
               );
               systemPrompt = split.systemPrompt;
+              // Deliver the post-reset delta on this resumed turn (see below).
+              resumeMemoriesDelta = split.memoriesMessage;
+              resumeMemoriesDeltaIds = split.newMemoryIds;
               // Reinjected skills after compaction — they were lost when
               // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
               if (chat.activeSkills?.length) {
@@ -4936,6 +4959,24 @@ router.post("/", async (req, res) => {
           console.error("[compaction] pre-send truncation failed (resume):", err);
         }
       });
+    }
+
+    // Deliver the post-compaction memory delta on the resumed turn: merge it
+    // into the ask_user toolResult (the user-turn boundary on this wire) and
+    // persist a hidden row before the answer row so future replays reconstruct
+    // it. Mirrors the send/edit hidden-row + merged-message pattern.
+    if (resumeMemoriesDelta) {
+      const deltaContext = `[System context — updated memories]\n${resumeMemoriesDelta}`;
+      toolResultMsg.content = [{ type: "text", text: `${message}${resumeTimeAnchor}\n\n${deltaContext}` }];
+      const insertAt = Math.max(0, resolveCurrentMessageIndex(chat.messages, resumeAnswerRow));
+      chat.messages.splice(insertAt, 0, {
+        role: "system",
+        content: deltaContext,
+        timestamp: Date.now(),
+      });
+      await saveChat(chat);
+      // Delivery receipt — the delta is on the wire and the replay row is saved.
+      commitMemoryDelta(chat.id, resumeMemoriesDeltaIds);
     }
 
     // Safety check: warn if context is empty for resume
@@ -5031,6 +5072,7 @@ router.post("/", async (req, res) => {
     // automation-initiated system turns so both entry points have recall parity.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     let memoriesDelta = "";
+    let memoriesDeltaIds: string[] = [];
     if (isMemoryAugmentedChatType(chat.type)) {
       // Get project path for AGENTS.md loading
       let projectPath: string | undefined;
@@ -5048,6 +5090,7 @@ router.post("/", async (req, res) => {
       );
       systemPrompt = split.systemPrompt;
       memoriesDelta = split.memoriesMessage;
+      memoriesDeltaIds = split.newMemoryIds;
     }
 
     // Inject active skills into system prompt
@@ -5130,7 +5173,13 @@ router.post("/", async (req, res) => {
                 projectPath
               );
               systemPrompt = split.systemPrompt;
-              // split.memoriesMessage is always empty after reset (case 1: full retrieval)
+              // Deliver the post-reset delta on this turn: the call at :5033 ran
+              // before compaction/flush, so this is the build that carries the
+              // freshly extracted memories. The pre-reset delta's ids were
+              // unclaimed by the soft reset and stay re-retrievable if this
+              // retrieval doesn't return them.
+              memoriesDelta = split.memoriesMessage;
+              memoriesDeltaIds = split.newMemoryIds;
 
               // Reinject skills after compaction — they were lost when
               // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
@@ -5191,6 +5240,8 @@ router.post("/", async (req, res) => {
         timestamp: Date.now(),
       });
       await saveChat(chat);
+      // Delivery receipt — only now are these ids claimed as in-context.
+      commitMemoryDelta(chat.id, memoriesDeltaIds);
     }
 
     // Context = all messages before the current user prompt. If this turn has
@@ -5425,6 +5476,7 @@ router.post("/artifact-error", async (req, res) => {
 
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let memoriesDelta = "";
+  let memoriesDeltaIds: string[] = [];
   if (isMemoryAugmentedChatType(chat.type)) {
     let projectPath: string | undefined;
     if (chat.projectId) {
@@ -5441,6 +5493,7 @@ router.post("/artifact-error", async (req, res) => {
     );
     systemPrompt = split.systemPrompt;
     memoriesDelta = split.memoriesMessage;
+    memoriesDeltaIds = split.newMemoryIds;
   }
 
   if (chat.activeSkills?.length) {
@@ -5463,6 +5516,8 @@ router.post("/artifact-error", async (req, res) => {
       timestamp: Date.now(),
     });
     await saveChat(chat);
+    // Delivery receipt — the hidden delta row is durable.
+    commitMemoryDelta(chat.id, memoriesDeltaIds);
   }
 
   setCachedAugmentedPrompt(chat.id, systemPrompt);
@@ -5756,6 +5811,7 @@ router.post("/edit", async (req, res) => {
   // Build context with skills (using delta-aware prompt builder for memory-augmented chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let editMemoriesDelta = "";
+  let editMemoriesDeltaIds: string[] = [];
   if (isMemoryAugmentedChatType(chat.type)) {
     let editProjectPath: string | undefined;
     if (chat.projectId) {
@@ -5767,6 +5823,7 @@ router.post("/edit", async (req, res) => {
     );
     systemPrompt = split.systemPrompt;
     editMemoriesDelta = split.memoriesMessage;
+    editMemoriesDeltaIds = split.newMemoryIds;
   }
 
   // Load settings for context window resolution
@@ -5851,6 +5908,7 @@ router.post("/edit", async (req, res) => {
             );
             systemPrompt = split.systemPrompt;
             editMemoriesDelta = split.memoriesMessage;
+            editMemoriesDeltaIds = split.newMemoryIds;
 
             // Reinject skills after compaction — they were lost when
             // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
@@ -5904,6 +5962,8 @@ router.post("/edit", async (req, res) => {
       timestamp: Date.now(),
     });
     await saveChat(chat);
+    // Delivery receipt — only now are these ids claimed as in-context.
+    commitMemoryDelta(chat.id, editMemoriesDeltaIds);
   }
 
   // Context = all messages before the current edited user prompt. If this edit
