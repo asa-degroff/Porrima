@@ -301,7 +301,7 @@ describe("memory context persistence (service)", () => {
   const build = (
     mod: Awaited<ReturnType<typeof loadMemoryContext>>["mod"],
     messages: ChatMessage[],
-    options?: { skipMemoryRetrieval?: boolean },
+    options?: { skipMemoryRetrieval?: boolean; stableOnly?: boolean },
   ) =>
     mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
   const firstTurnMsgs: ChatMessage[] = [{ role: "user", content: "frozen topic", timestamp: 1000 }];
@@ -380,6 +380,44 @@ describe("memory context persistence (service)", () => {
     expect(row.dirty).toBe(false);
     expect(row.frozenIds).toEqual(["f1"]);
     expect(mocks.upsertMemoryContextState).toHaveBeenCalled();
+  });
+
+  it("stableOnly returns the retained section with no retrieval and no state mutation", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    seedRow(rows, { dirty: true, deltaIds: ["d1"] });
+    const { mod, mocks } = await loadMemoryContext(rows);
+
+    const result = await build(mod, [
+      ...firstTurnMsgs,
+      { role: "assistant", content: "ok", timestamp: 2000 },
+      { role: "user", content: "new prompt", timestamp: 3000 },
+    ], { stableOnly: true });
+
+    expect(mocks.searchMemories).not.toHaveBeenCalled();
+    expect(result.memoriesMessage).toBe("");
+    expect(result.newMemoryIds).toEqual([]);
+    expect(result.systemPrompt.endsWith(SECTION)).toBe(true);
+    // The owed delta is untouched for the next delivering build.
+    expect(rows.get("chat-1")!.dirty).toBe(true);
+    expect(rows.get("chat-1")!.deltaIds).toEqual(["d1"]);
+
+    const next = await build(mod, [
+      ...firstTurnMsgs,
+      { role: "assistant", content: "ok", timestamp: 2000 },
+      { role: "user", content: "new prompt", timestamp: 3000 },
+    ]);
+    expect(next.memoriesMessage).toContain("New prompt memory.");
+    expect(next.newMemoryIds).toEqual(["n1"]);
+  });
+
+  it("stableOnly with no state falls through to Case 1 (freeze still owed)", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod, mocks } = await loadMemoryContext(rows);
+
+    const result = await build(mod, firstTurnMsgs, { stableOnly: true });
+    expect(mocks.searchMemories).toHaveBeenCalled(); // Case 1 ran — a freeze owes no claim
+    expect(result.systemPrompt).toContain("Frozen topic memory.");
+    expect(rows.get("chat-1")!.frozenIds).toEqual(["f1"]);
   });
 
   it("invalidateMemoriesCache: Map entry persists dirty; empty Map lands on the row (write point 3)", async () => {
