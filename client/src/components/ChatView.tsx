@@ -17,6 +17,9 @@ import { PinnedPanel } from "./PinnedPanel";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
 import { ProgressRing } from "./ProgressRing";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityStyle";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useGreeting } from "../hooks/useGreeting";
 
 const hamburgerIconLg = (
@@ -122,6 +125,36 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Chat-switch loading view — shown in place of the message area while
+ * selectChat's cache-miss server fetch is in flight. The previous chat's
+ * title (dimmed in the header) and messages are replaced by this centered
+ * view, so the stale content reads as "loading" instead of "frozen".
+ * Uses the polyhedron's prefill animation (the slow continuous CSS spin)
+ * — the "waiting on I/O" member of the spinner family, as opposed to
+ * decode (active inference) and queued (frozen). Under prefers-reduced-
+ * motion it collapses to a static shape, per the Five Beats precedent.
+ */
+function ChatLoadingView() {
+  const shape = useActivityShape();
+  const reducedMotion = useReducedMotion();
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="relative z-20 flex flex-col items-center gap-3">
+        <PolyhedronLogo
+          isActive={!reducedMotion}
+          animation="prefill"
+          shape={shape}
+          count={1}
+          size={28}
+          gap={0}
+        />
+        <span className="text-sm text-white/40">Loading chat</span>
+      </div>
     </div>
   );
 }
@@ -284,6 +317,10 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
 interface Props {
   chatId: string | null;
   chatTitle: string;
+  /** Chat id whose cache-miss server fetch is in flight (selectChat).
+   *  Render the loading indicator when it equals chatId — until then the
+   *  header title and messages are the previous chat's stale content. */
+  switchingChatId?: string | null;
   messages: ChatMessage[];
   messageOffset?: number;
   messageTotal?: number;
@@ -347,6 +384,7 @@ interface Props {
 export function ChatView({
   chatId,
   chatTitle,
+  switchingChatId = null,
   messages,
   messageOffset = 0,
   messageTotal,
@@ -631,6 +669,11 @@ export function ChatView({
 
   const isFirstMessageMode = messages.length === 0 && !hasMoreMessages && !olderMessagesLoading;
 
+  // True while selectChat's cache-miss fetch is in flight for this chat.
+  // The message area shows the loading view and the header title dims —
+  // the content on screen is the previous chat's stale data.
+  const isSwitching = switchingChatId === chatId;
+
   const handleFirstMessageSend = useCallback<Props["onSend"]>((text, images) => {
     setFocusAfterFirstSend(true);
     onSend(text, images);
@@ -760,7 +803,12 @@ export function ChatView({
           >
             {hamburgerIconSm}
           </button>
-          <h2 className="text-sm font-medium text-white/80 truncate">
+          <h2
+            className={`text-sm font-medium text-white/80 truncate transition-opacity duration-300 ${
+              isSwitching ? "opacity-40" : ""
+            }`}
+            title={isSwitching ? `${chatTitle} — loading chat from server` : undefined}
+          >
             {chatTitle}
           </h2>
           {activeSkills?.length ? (
@@ -911,8 +959,10 @@ export function ChatView({
             scrollbarGutter: "stable",
           }}
         >
-          <div ref={contentRef} className={isFirstMessageMode ? "h-full" : undefined}>
-            {isFirstMessageMode ? (
+          <div ref={contentRef} className={isFirstMessageMode || isSwitching ? "h-full" : undefined}>
+            {isSwitching ? (
+              <ChatLoadingView />
+            ) : isFirstMessageMode ? (
               <div className="h-full flex items-center justify-center">
                 <div className="relative z-20 w-full max-w-3xl mx-auto">
                   <p className="text-left text-xl md:text-2xl text-white/30 font-bold mb-4">

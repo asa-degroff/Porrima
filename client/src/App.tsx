@@ -219,6 +219,11 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   } = useCacheResidency();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  /** The chat whose cache-miss server fetch (selectChat) is in flight, or
+   *  null when idle. The previous chat's title + messages stay on screen
+   *  until the fetch resolves; this drives ChatView's loading view and the
+   *  dimmed header title. */
+  const [switchingChatId, setSwitchingChatId] = useState<string | null>(null);
   const [autoFocusInput, setAutoFocusInput] = useState(false);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const activeChatIdStateRef = useRef<string | null>(null);
@@ -1210,7 +1215,10 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         return;
       }
 
-      // No cache — must fetch from server (blocking)
+      // No cache — must fetch from server (blocking). The previous chat's
+      // content stays on screen the whole time; switchingChatId tells the
+      // header a switch is in flight so the stale content reads as "loading".
+      setSwitchingChatId(id);
       try {
         const chat = await fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT });
         if (activeChatIdStateRef.current !== id) return;
@@ -1229,6 +1237,10 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         activeChatIdStateRef.current = null;
         setActiveChat(null);
         activeChatStateRef.current = null;
+      } finally {
+        // Guarded: a stale resolve for an earlier switch must not clear the
+        // state of a newer in-flight one.
+        setSwitchingChatId(prev => (prev === id ? null : prev));
       }
     },
     [loadMessages, refreshActiveChatFromServer, setActiveChatData]
@@ -1711,6 +1723,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       <ChatView
         chatId={activeChatId}
         chatTitle={activeChat?.title || "New Chat"}
+        switchingChatId={switchingChatId}
         onOpenSidebar={handleOpenSidebar}
         messages={messages}
         messageOffset={messageOffset}
