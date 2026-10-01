@@ -66,7 +66,7 @@ interface MemoryBlock {
 
 ## Context Injection
 
-In `buildStablePrefix` / `buildMemoryAugmentedPrompt`, blocks and project context are injected in this order:
+In `buildStablePrefix` (the shared head of `buildSplitAugmentedPrompt`), blocks and project context are injected in this order:
 
 ```
 1. Base system prompt

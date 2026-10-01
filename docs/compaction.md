@@ -262,7 +262,7 @@ The system prompt is the authoritative source — it contains semantically retri
 
 ### Why buildSplitAugmentedPrompt everywhere?
 
-The legacy `buildMemoryAugmentedPrompt` returns a single string without setting up the delta tracking state (`contextState`). This means:
+The legacy single-string builder (`buildMemoryAugmentedPrompt`) returned a prompt without setting up the delta tracking state (`contextState`). Routing a turn through it meant:
 - Subsequent turns through `buildSplitAugmentedPrompt` find no state and do a full retrieval (redundant embedding + reranking)
 - Or worse, find stale state from before compaction and compute a wrong delta
 
@@ -271,7 +271,7 @@ By using `buildSplitAugmentedPrompt` everywhere, we ensure:
 2. Subsequent turns can do efficient delta retrieval (case 2: not dirty → reuse frozen prompt)
 3. KV cache prefix matching works correctly across turns
 
-The legacy `buildMemoryAugmentedPrompt` has no remaining call sites; the chat listing path reads the per-chat prompt cache (`getCachedAugmentedPrompt`) instead.
+The legacy builder has been removed; the chat listing path reads the per-chat prompt cache (`getCachedAugmentedPrompt`) instead.
 
 ### Memory delta injection
 
