@@ -8,7 +8,15 @@ const captured: {
   headless?: any;
   splitPromptArgs?: any[];
   toolArgs?: any[];
+  commitMemoryDelta?: any;
 } = {};
+
+// Configurable build result so the delta-delivery test can exercise a
+// late-freeze memoriesMessage; reset in afterEach.
+const deltaConfig: { memoriesMessage: string; newMemoryIds: string[] } = {
+  memoriesMessage: "",
+  newMemoryIds: [],
+};
 
 async function loadModules(homeDir: string) {
   vi.resetModules();
@@ -65,15 +73,20 @@ async function loadModules(homeDir: string) {
   vi.doMock("../services/turn-compaction.js", () => ({
     runEndOfTurnCompaction: vi.fn(async () => {}),
   }));
-  vi.doMock("../services/memory-context.js", () => ({
-    buildSplitAugmentedPrompt: vi.fn(async (...args: any[]) => {
-      captured.splitPromptArgs = args;
-      return { systemPrompt: "wake system prompt", memoriesMessage: "" };
-    }),
-    invalidateAllStablePrefixCaches: vi.fn(),
-    resetMemoryContext: vi.fn(),
-    buildTimeAnchor: vi.fn(() => "\n\n[time: test]"),
-  }));
+  vi.doMock("../services/memory-context.js", () => {
+    const commitMemoryDelta = vi.fn();
+    captured.commitMemoryDelta = commitMemoryDelta;
+    return {
+      buildSplitAugmentedPrompt: vi.fn(async (...args: any[]) => {
+        captured.splitPromptArgs = args;
+        return { systemPrompt: "wake system prompt", ...deltaConfig };
+      }),
+      commitMemoryDelta,
+      invalidateAllStablePrefixCaches: vi.fn(),
+      resetMemoryContext: vi.fn(),
+      buildTimeAnchor: vi.fn(() => "\n\n[time: test]"),
+    };
+  });
   vi.doMock("../services/synthesis-stream.js", () => {
     class FakeEmitter {
       state = { artifacts: [], visuals: [], generatedImages: [], segments: [], finalUsage: undefined };
@@ -130,6 +143,9 @@ afterEach(async () => {
   captured.headless = undefined;
   captured.splitPromptArgs = undefined;
   captured.toolArgs = undefined;
+  captured.commitMemoryDelta = undefined;
+  deltaConfig.memoriesMessage = "";
+  deltaConfig.newMemoryIds = [];
 });
 
 function makeChat(id: string, title: string, modelId: string, type: Chat["type"] = "agent"): Chat {
@@ -190,6 +206,50 @@ describe("cross-chat wake turns", () => {
       expect(target?.title).toBe("Target Chat");
       expect(target?.modelId).toBe("target-model");
       expect(target?.messages).toHaveLength(2);
+      chatStorage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers a late-freeze memory delta before the wake post, then commits it", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-wake-delta-"));
+    try {
+      deltaConfig.memoriesMessage = "## Updated context — my newly recalled memories:\n- [m1] Remember the build status.";
+      deltaConfig.newMemoryIds = ["m1"];
+
+      const { chatStorage, automationStorage, runner } = await loadModules(homeDir);
+      await chatStorage.createChat(makeChat("origin", "Origin Chat", "origin-model"));
+      await chatStorage.createChat(makeChat("target", "Target Chat", "target-model"));
+
+      const task = await automationStorage.createCrossChatTask({
+        targetChatId: "target",
+        targetChatTitle: "Target Chat",
+        fromChatId: "origin",
+        fromChatTitle: "Origin Chat",
+        subject: "Report",
+        body: "Build is green.",
+        runAt: new Date().toISOString(),
+        wake: true,
+      });
+
+      const result = await runner.runAutomationTask(task.id, "scheduler");
+      expect(result.success).toBe(true);
+
+      const target = await chatStorage.getChat("target");
+      // The delta lands directly before the post (the row this run answers),
+      // so the replay merge folds it into that user message.
+      expect(target?.messages.map((message) => message.role)).toEqual(["system", "user", "assistant"]);
+      expect(target?.messages[0].content).toContain("[System context — updated memories]");
+      expect(target?.messages[0].content).toContain("Remember the build status.");
+      expect(target?.messages[1]._crossChatPost?.originTaskId).toBe(task.id);
+
+      // Delivery receipt: committed only after the save, like the HTTP paths.
+      expect(captured.commitMemoryDelta).toHaveBeenCalledWith("target", ["m1"]);
+
+      // The headless turn's persisted context carries the delta row.
+      expect(captured.headless?.chat.messages[0].role).toBe("system");
+      expect(captured.headless?.chat.messages[0].content).toContain("Remember the build status.");
       chatStorage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

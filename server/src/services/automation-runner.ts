@@ -214,7 +214,8 @@ async function runPromptAutomation(
   const { getAgentTools } = await import("./agent-tools.js");
   const { estimateContextTokens, truncateBeforeSend } = await import("./compaction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
-  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
+  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext, commitMemoryDelta } = await import("./memory-context.js");
+  const { resolveCurrentMessageIndex } = await import("./current-message.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   const emitter = new SynthesisEmitter(task.chatId);
@@ -332,6 +333,32 @@ async function runPromptAutomation(
       );
       await saveChat(chat);
     }
+
+    // Deliver the built memory delta on this run. Unlike the HTTP routes, the
+    // runner has no user-message assembly step, so persist the delta as a
+    // hidden system row directly before the row this run answers (the trigger,
+    // or the delivered cross-chat post for wakes). agent.ts merges pending
+    // system rows into the following user message, so both this run's context
+    // and future replays carry it — and commitMemoryDelta receipts the
+    // delivery after the save, per the delivery-receipt contract. An anchor
+    // miss leaves the ids unclaimed, so the next build re-retrieves them.
+    if (splitPrompt.memoriesMessage) {
+      const anchorRow = [...chat.messages]
+        .reverse()
+        .find((m) => m.role === "user" && !m._outOfContext);
+      if (anchorRow) {
+        const deltaContext = `[System context — updated memories]\n${splitPrompt.memoriesMessage}`;
+        const insertAt = resolveCurrentMessageIndex(chat.messages, anchorRow);
+        chat.messages.splice(insertAt, 0, {
+          role: "system",
+          content: deltaContext,
+          timestamp: Date.now(),
+        });
+        await saveChat(chat);
+        commitMemoryDelta(task.chatId, splitPrompt.newMemoryIds);
+      }
+    }
+
     promptTokenEstimate = estimateContextTokens(chat.messages, systemPrompt, tools);
 
     let stepIndex = 0;
