@@ -6,8 +6,8 @@ Automations are configurable recurring system-chat tasks. They replace the older
 
 `ensureAutomationDefaults()` creates or repairs built-ins once during server startup:
 
-- **Daily Synthesis** (`builtin:synthesis`) — enabled by default, runs every 24 hours when idle, uses the persistent `system` chat, and executes the multi-phase synthesis prompts.
-- **Wake Cycle** (`builtin:wake`) — follows `wakeCycleEnabled` / `wakeCycleIntervalHours`, runs only during sleep mode, uses the persistent `system` chat.
+- **Daily Synthesis** (`builtin:synthesis`) — enabled by default, with an `absent` activation policy (it runs when the user has been *away*, not merely idle). Its schedule comes from `settings.synthesisScheduleType`: an `interval` of 1440 minutes by default, or a `daily` wall-clock time from `synthesisScheduleTimeOfDay` (default `03:00`). Limits are `maxIterations: 30` and `timeoutMs: 90 min`. Uses the persistent `system` chat and executes the multi-phase synthesis prompts.
+- **Wake Cycle** (`builtin:wake`) — follows `wakeCycleEnabled` (default **false** — the wake cycle ships disabled) / `wakeCycleIntervalHours`, also uses the `absent` activation policy, and is bounded by `maxIterations: 20` and `timeoutMs: 60 min`. An existing 30-minute timeout is auto-migrated up to 60 minutes. Uses the persistent `system` chat.
 
 Built-ins can be disabled, reordered, rescheduled, and have their prompt steps edited. They cannot be deleted. The UI exposes a reset action to restore their default prompts.
 
@@ -56,16 +56,30 @@ The `schedule_reminder` tool creates a once-task (kind `custom`, `createdBy: "ag
 - loads enabled tasks ordered by `orderIndex`
 - starts at most one due task per tick
 - skips while another automation, synthesis, wake cycle, or user chat is active
+- skips while the **turn gate** is busy (a turn is queued) and while the **system pause** is active (`POST /api/system/pause`)
 - requires a short idle grace after the latest chat activity, assistant completion, or foreground user interaction
 - skips while cache-warm work or llama.cpp slot processing is active
-- honors `manual_only` and `absent` activation policies; `absent` also respects the optional per-task `absentWindow` (see Custom Tasks)
+- honors `manual_only` and `absent` activation policies; `manual_only` tasks are hard-skipped rather than idle-gated, and `absent` also respects the optional per-task `absentWindow` (see Custom Tasks)
 - skips synthesis if there are no memories or the sleep-mode cooldown is active
 
-The legacy `checkAndRunSynthesis()` / wake helper functions still exist in `scheduler.ts`, but startup scheduling is owned by `automation-scheduler.ts`.
+The legacy `checkAndRunSynthesis()` and `checkAndRunWakeCycle()` functions in `scheduler.ts` are unreachable — they are unexported with no call sites, and their interval constants are unused. Startup scheduling is owned entirely by `automation-scheduler.ts`; these can be deleted.
+
+## System Pause
+
+`system-pause.ts` is a user-facing kill switch for background work, independent of the automation framework itself. It is a single piece of user intent persisted as three settings fields (`systemPauseStartedAt`, `systemPauseUntil`, `systemPauseIndefinite`).
+
+- `pauseSystem()` accepts either an indefinite flag or a positive `durationMs` stamped to an absolute `until`; a non-positive duration is rejected
+- A pause is **active** while indefinite is set, or while `until > now`
+- An expired pause **lazily self-clears** on the next read, so the fields don't linger in settings
+- It gates the automation scheduler entirely (before any task dispatch) and delayed extraction
+- It does **not** stop a run already in flight — only new dispatch
+- It is **independent of the sleep cycle**: sleep is a *condition* derived from inactivity, pause is a user *override* on top of it. A chat can be both asleep and paused, and neither module knows about the other. Both read the same `user-activity.ts` stamps
+
+**Routes**: `GET /api/system/pause` (state plus a `pending` flag reporting whether an automation or extraction is still running), `POST /api/system/pause` (`{ indefinite }` or `{ durationMs }`), `POST /api/system/resume`.
 
 ## Execution Model
 
-`runAutomationTask()` records an `automation_runs` row, acquires the global automation lock, executes the task, optionally sends a push notification, updates run status, and releases the lock in `finally`.
+`runAutomationTask()` acquires the global turn lease (`acquireTurn(SYSTEM_CHAT_ID)`) **first**, then the automation lock, records an `automation_runs` row, executes the task, optionally sends a push notification, updates run status, and releases both in `finally`. Because the turn gate is the outer serialization point, a *manual* automation run queues behind an in-flight user turn rather than failing.
 
 Execution paths:
 

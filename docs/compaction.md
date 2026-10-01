@@ -6,48 +6,104 @@ The compaction system uses an **indexed summary** approach — full messages are
 
 ## Trigger Paths
 
-There are five compaction paths, each with different timing and constraints:
+Compaction runs at many sites, and they differ in three axes: **trigger**, **mid-turn cycle cap**, and **whether the memory flush runs**.
 
-| Path | Trigger | Threshold | Blocking |
-|------|---------|-----------|----------|
-| **End-of-turn** | After agent response completes | >85% context or `stopReason=length` | Yes — awaits flush |
-| **Mid-turn** | During tool loop (>85% context) | >85% context | Yes — awaits flush |
-| **Pre-send (normal)** | Before sending to LLM | >85% trigger → 30% target | Yes — awaits flush |
-| **Pre-send (resume)** | Before resuming after crash/ask_user | >85% trigger → 30% target | Yes — awaits flush |
-| **`/compact` command** | User-triggered | Forced | Yes — awaits flush |
+| Path | Trigger | Threshold | Cycles | Flush? | Blocking? |
+|------|---------|-----------|--------|--------|-----------|
+| Pre-send, send | Before POST to LLM | 3 triggers (below) → 30% target | — | yes | yes |
+| Pre-send, resume | Before resuming after crash / `ask_user` | same | — | yes | yes |
+| Pre-send, `/edit` | Before resending an edited message | same | — | yes | yes |
+| Pre-send, artifact repair | Before a hidden repair turn | same | — | yes | yes |
+| Pre-send, synthesis | System-chat turn start | same | — | **no** | yes |
+| Pre-send, wake | System-chat turn start | same | — | **no** | yes |
+| Pre-send, automation | Automation turn start | same | — | **no** | yes |
+| Mid-turn, HTTP | During tool loop | >85% normal, >95% hard cap | 5 | yes (agent chats only) | yes |
+| Mid-turn, headless | During tool loop | same | **3** | **no** | yes |
+| End-of-turn, HTTP | After the response completes | **>80%** or `stopReason=length` | — | yes | yes |
+| End-of-turn, synthesis | After the response completes | >80% | — | **no** | yes |
+| End-of-turn, wake | After the response completes | >80% | — | **no** | yes |
+| End-of-turn, automation | After the response completes | >80% | — | **no** | **computed and logged only** |
+| `/compact` | User-triggered | Forced | — | yes | yes |
+| Hard-cap safety | Inside pre-send | see below | — | inherits | yes |
 
-All paths now **await** `preCompactionFlush` before rebuilding the system prompt, ensuring extracted memories are available for retrieval.
+Three numbers are easy to confuse:
+
+- **0.80** — `END_OF_TURN_COMPACTION_TRIGGER_RATIO`. End-of-turn fires *earlier* than pre-send's 0.85, because it runs while the user is reading rather than waiting.
+- **0.85** — `COMPACTION_TRIGGER_RATIO`, the normal pre-send trigger, measured against the usage-anchored `refinedTokens`.
+- **0.95 / 1.15** — `COMPACTION_HARD_CAP_RATIO` and `CHAR_ESTIMATE_SAFETY_RATIO`. Pre-send actually has **three** independent triggers: the normal 0.85 check, an anchor-bounded hard-cap estimate above 0.95, and a pure char estimate above **1.15** of the window. The char band is deliberately looser than the hard cap because char estimation is the less trustworthy of the two.
+
+**The memory flush is HTTP-only.** The HTTP chat route passes `preCompactionFlush` as the `onBeforeArchive` hook. Headless paths — synthesis, wake, automation, and headless mid-turn — pass `undefined` for that argument and therefore **skip the flush entirely**. This is tracked as delta D4 in [design/turn-engine.md](design/turn-engine.md); the automation end-of-turn compaction is additionally still gated behind `logOnly: true`.
 
 ## Compaction Sequence
 
-Every compaction path follows this standardized sequence:
+Compaction itself is a primitive. It collects the removed messages, runs the flush hook, archives and indexes, and splices in a summary. **The memory-context reset and prompt rebuild are caller-owned aftermath**, not part of the primitive.
 
 ```
-1. Archive & Index   — truncateChatHistory() / truncateBeforeSend()
+IN truncateChatHistory() / truncateBeforeSend():
+
+1. Collect removed messages
+
+2. Memory Flush     — await onBeforeArchive(preCompactionFlush)   [HTTP paths only]
+   ├── Sends removed messages to the extraction LLM
+   ├── Extracts atomic memories (facts, decisions, context)
+   ├── Processes block updates for importance >= 7
+   └── Invalidates memory cache (invalidateMemoriesCache)
+
+3. Archive & Index   — archiveAndIndex()
    ├── Groups removed messages into logical blocks
-   ├── Generates LLM-written index descriptions for each block
+   ├── Writes index descriptions per block (see "Index Generation" below)
    ├── Stores full messages in context_archives (SQLite + FTS5)
    ├── Returns indexed summary text to inject into conversation
    └── Marks removed messages as _outOfContext, strips large content
 
-2. Memory Flush     — await preCompactionFlush()
-   ├── Sends removed messages to extraction LLM
-   ├── Extracts atomic memories (facts, decisions, context)
-   ├── Processes block updates for importance ≥ 7
-   ├── Deduplicates against existing memories
-   └── Invalidates memory cache (invalidateMemoriesCache)
+4. Stale-anchor strip
+   ├── Every KEPT role:"system" row is marked _outOfContext
+   └── Every KEPT assistant row's `usage` is cleared
+       (a surviving pre-compaction anchor would inflate Path A and
+        trigger a spurious compaction on the next turn)
 
-3. Reset Context    — resetMemoryContext()
-   └── Clears frozenIds, deltaIds, frozenMemoriesSection
-
-4. Rebuild Prompt   — buildSplitAugmentedPrompt()
-   ├── Does full retrieval (no delta state → case 1)
-   ├── Finds freshly extracted memories via vector+FTS+rerank
-   ├── Freezes all retrieved memories into system prompt
-   └── Sets up new delta tracking state for subsequent turns
+5. Splice summary into the conversation
 ```
 
-The order matters: **flush before rebuild** ensures the system prompt includes memories just extracted from the removed messages.
+The flush runs **before** archive/index generation, not after, and the ordering is deliberate: the flush continues the extraction session's cached prompt, and index generation would evict it.
+
+Step 4 has a significant consequence that is easy to miss: immediately after any compaction the estimator has **no** usage anchor at all. `selectedPath` falls back to `char_estimate`, and only the 0.95 hard-cap ratio is live until the next provider call reports usage.
+
+### Caller-owned aftermath
+
+After the primitive returns, the HTTP route does:
+
+```
+6. Soft reset     — softResetMemoryContext(chatId)
+   └── Clears deltaIds and marks dirty; frozenIds and the frozen
+       memories section are retained BYTE-EXACT
+
+7. Rebuild        — buildSplitAugmentedPrompt()
+   └── Case 3 (dirty): re-retrieves and returns BOTH a system prompt
+       and a memories delta + its new memory ids — claims nothing yet
+
+8. Deliver        — caller puts the delta on the wire and saves, then
+   calls commitMemoryDelta(ids) to record delivery
+
+9. Reinject skills + setCachedAugmentedPrompt()
+```
+
+A **hard** `resetMemoryContext()` (which clears the frozen set entirely and forces a Case 1 freeze) is no longer used after compaction. It survives only where a re-roll is genuinely owed: chat deletion, automation start, zeitgeist rewrite, and cache-warm preparation. Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 frozen-set sequence was observed in one night — which broke the prefix at the section boundary and orphaned the KV pool each time.
+
+> ### Delta delivery across paths
+>
+> The delivery-receipt model: Case 3 no longer writes ids into `deltaIds`. It returns the delta plus `newMemoryIds`, and `deltaIds` grows only in `commitMemoryDelta`, which callers invoke after the save that makes the delta durable. A caller that never commits leaves `dirty` set, so the next delivering build re-retrieves the same memories — the failure direction is a possible duplicate, never a silent loss (the same contract passive recall enforces with `markPersisted`).
+>
+> Same-turn delivery is in place at every path that has a turn to carry it:
+> - send persists a hidden row and merges it into the user message (`:5176` rebuild, commit `:5253`)
+> - resume merges into the ask_user toolResult and persists a hidden replay row (`:4927`, commit `:4988`)
+> - mid-turn folds it into the handoff row (`:3590`, commit `:3631`)
+> - `/edit` merges into the edited user message (`:5910`, commit `:5975`)
+> - automation runs — in-chat reminders and wakes with `enableMemoryRetrieval: true` — persist a hidden row directly before the row the run answers (the trigger, or the delivered cross-chat post) and commit it (`automation-runner.ts:294` build, delivery `:337`, commit `:358`). `agent.ts` merges that row into the following user message, so both the live run and later replays carry it.
+>
+> Sites with no turn to carry it pass `stableOnly: true`: the build hydrates and returns the retained frozen section but skips the Case 3 re-retrieval, so the delta stays owed to the next delivering build at zero retrieval cost (with no live state it falls through to Case 1, where a freeze is delivered by the prompt itself) — end-of-turn rebuild (`:3986`), queued follow-up (`:4140`), and the `/compact` budget estimate (`:4579`; the "not enough messages to compact" branch `:4677` returns without a follow-up).
+>
+> Cache warm (`cache-warm.ts:300-314`) hard-resets first, so its build is always Case 1: the frozen section it establishes is what the warm bakes, and the next turn's delta rides on top.
 
 ## Three Preservation Layers
 
@@ -83,10 +139,10 @@ Archived blocks:
 
 ### Layer 3: System Prompt (buildSplitAugmentedPrompt)
 
-After compaction, the system prompt is rebuilt from scratch:
-- All memories (including freshly extracted ones) are retrieved via vector search + FTS5 + reranking
-- Retrieved memories are frozen into the system prompt for KV cache efficiency
-- Delta tracking state is reset, so subsequent turns use the frozen prompt as a stable prefix
+After compaction the prompt is rebuilt, but the frozen set survives:
+- `softResetMemoryContext()` keeps `frozenIds` and the frozen memories section byte-exact — no re-roll
+- Memories extracted by the flush are retrieved on the next build (Case 3) and returned as an appended delta, not folded back into the system prompt (delivering callers must commit it — see the delta-delivery note above)
+- Accumulated delta tracking is cleared, so subsequent turns reuse the frozen prompt as a stable prefix
 
 ## Mid-Turn Compaction
 
@@ -94,13 +150,13 @@ Mid-turn compaction has additional complexity because the agent is in the middle
 
 1. **Build progress summary** — captures the assistant's text output and tool calls so far
 2. **Archive & flush** — standard compaction sequence (awaited)
-3. **Rebuild system prompt** — includes freshly extracted memories
+3. **Rebuild system prompt** — `softResetMemoryContext()` retains the frozen section byte-exact; the recall delta is returned alongside it (see the delta-delivery note above)
 4. **Fetch chat memories** — `getMemoriesFromChat(chatId, 10)` after flush, so newly extracted memories are included
 5. **Assemble handoff message** — combines progress summary + memories + "continue from where you left off"
 6. **Resume via `agentLoopContinue`** — the handoff message is appended as a user message
 
 The handoff message gives the resumed agent two things:
-- **System prompt**: Contains freshly extracted memories (frozen) + memory blocks + project context
+- **System prompt**: The retained frozen memories section + memory blocks + project context
 - **Handoff message**: Explicit list of what was done, what tools were called, and key memories
 
 This belt-and-suspenders approach ensures continuity even if the semantic retrieval misses something.
@@ -113,7 +169,7 @@ The `buildSplitAugmentedPrompt` function manages a delta-based memory context fo
 - **Case 2 (State exists, not dirty)**: Reuse the frozen system prompt. No delta needed.
 - **Case 3 (State exists, dirty)**: Re-retrieve, compute delta (only new memories not already in context). Delta is appended as a message after the conversation history.
 
-After compaction, `resetMemoryContext()` deletes the state, forcing Case 1 on the next `buildSplitAugmentedPrompt` call. This is critical — the frozen system prompt referenced stale messages that are now archived.
+After compaction, `softResetMemoryContext()` clears `deltaIds` and marks the state dirty while keeping the frozen set byte-exact. The next `buildSplitAugmentedPrompt` call is therefore **Case 3**: it re-retrieves against the compacted history and returns new memories as a delta plus their ids. Nothing is claimed until the caller delivers the delta and commits the ids (`commitMemoryDelta`); a site without a delivery point leaves the delta owed (see the delta-delivery note above).
 
 ## Archive Format
 
@@ -151,7 +207,12 @@ Messages are grouped into logical blocks before archiving:
 
 ### Index Generation
 
-Each block gets an LLM-generated one-line description using the dedicated CPU extraction model (avoids GPU contention). If the LLM call fails, a fallback description is generated from truncated content previews.
+Each block gets a one-line description, produced in one of two modes:
+
+- **`sync`** (end-of-turn, mid-turn, `/compact`): the LLM (dedicated CPU extraction model, avoiding GPU contention) writes the description and blocks the compaction. Used where the summary may be consumed immediately, because the agent loop resumes right after.
+- **`deferred`** (**pre-send**, the common case): the archive is written immediately with a mechanical `generateFallbackDescription()` derived from truncated content previews, then `enrichArchiveDescriptions()` runs fire-and-forget in the background. It upgrades the archive rows *and* patches the persisted `_isCompactionSummary` message under the chat write lock (best-effort, 3 retries) so future contexts see the richer text. The point is not to make the user turn wait on a CPU model.
+
+So on the pre-send path the summary the model actually sees in the immediately following turn is the *mechanical* one; the LLM description lands a moment later.
 
 The extraction prompt focuses on:
 - **What** the block contains (commands run, files read, decisions made)
@@ -171,7 +232,7 @@ Two tools access archived context:
 
 Previous implementations used `.catch()` (fire-and-forget) for `preCompactionFlush`. This created a race condition: `buildSplitAugmentedPrompt` ran before the flush completed, so freshly extracted memories weren't in the store during retrieval. The system prompt would be rebuilt without the context that was just removed.
 
-By awaiting the flush, we guarantee that the rebuilt system prompt includes all memories extracted from the removed messages.
+On the **HTTP paths**, awaiting the flush guarantees that the rebuilt system prompt includes memories extracted from the removed messages. The headless paths have not adopted this — the `onBeforeArchive` hook is `undefined` there, so the flush is skipped (see [design/turn-engine.md](design/turn-engine.md) delta D4).
 
 ### Why indexed summaries instead of narrative summaries?
 
@@ -210,11 +271,11 @@ By using `buildSplitAugmentedPrompt` everywhere, we ensure:
 2. Subsequent turns can do efficient delta retrieval (case 2: not dirty → reuse frozen prompt)
 3. KV cache prefix matching works correctly across turns
 
-The only remaining uses of `buildMemoryAugmentedPrompt` are in non-compaction contexts (chat listing cache) where delta tracking is not needed.
+The legacy `buildMemoryAugmentedPrompt` has no remaining call sites; the chat listing path reads the per-chat prompt cache (`getCachedAugmentedPrompt`) instead.
 
 ### Memory delta injection
 
-The `buildSplitAugmentedPrompt` returns both `systemPrompt` and `memoriesMessage` (the delta). For compaction paths, the delta is always empty because `resetMemoryContext` forces a full retrieval (case 1). For normal turns, the delta contains only memories not already in the frozen system prompt, and is injected as a user message at the end of context:
+The `buildSplitAugmentedPrompt` returns both `systemPrompt` and `memoriesMessage` (the delta), plus the delta's `newMemoryIds`. Post-compaction builds are Case 3, not Case 1: `softResetMemoryContext` keeps the frozen section byte-exact while memories extracted by the flush arrive as a delta; the delivering caller commits the ids after its save (see the delta-delivery note above for sites that defer it). For normal turns, the delta contains only memories not already in the frozen system prompt, and is injected as a user message at the end of context:
 
 ```
 [System context — updated memories]

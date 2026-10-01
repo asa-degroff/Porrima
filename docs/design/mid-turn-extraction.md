@@ -77,18 +77,11 @@ Review the complete conversation exchange below. The agent has finished its turn
 
 Both markers go in the user prompt, not the system prompt, keeping the system prefix stable for KV cache.
 
-### Pre-Compaction Bypass
+### Pre-Compaction: no bypass
 
-Track `lastExtractedMessageIndex` on the chat (stored in `chat.extractionState`). Updated after:
-- Each mid-turn pulse (highest message index covered)
-- Turn-completion extraction
+`preCompactionFlush` runs on **every** compaction — there is no bypass. The `lastExtractedMessageIndex` / `chat.extractionState` design was never implemented; no such field exists anywhere in the codebase.
 
-When `preCompactionFlush` runs:
-1. Compare `removedMessages` indices against `lastExtractedMessageIndex`
-2. If all removed messages have `index <= lastExtractedMessageIndex` → skip extraction entirely
-3. If there's a gap → extract only the delta (messages between `lastExtractedMessageIndex` and the compaction point), using the existing pre-compaction prompt as a safety net
-
-This preserves the pre-compaction prompt's task-state focus for the tail window that mid-turn pulses missed, without re-extracting everything.
+What delivers the intended KV benefit instead is session continuity: the mid-turn pulses and the pre-compaction flush share **one extraction session**, so the flush continues from the pulses' cached prefix rather than re-evaluating cold. Only non-substantive rows are filtered before the call (compaction summaries, out-of-context rows, system rows, synthesis rows, automation prompts).
 
 ### Content Format
 
@@ -104,23 +97,23 @@ The user message included in each pulse is the original user message that trigge
 
 ### Integration Point
 
-The counter accumulates in `agent-loop-runner.ts`, after each tool execution step. The agent loop already has visibility into:
-- The current message being built (tool calls, results)
-- Accumulated LLM usage (from `llm-stream.ts`)
+The trigger lives in `routes/chat.ts` (`maybeDispatchMidTurnPulse`), **not** in `agent-loop-runner.ts`.
 
-After a tool result is appended to the current message:
-1. Estimate signal tokens for the new content
-2. Add to the turn-level accumulator
-3. If accumulator >= threshold → trigger mid-turn extraction pulse
-4. Reset accumulator
+The signal window is **cursor-derived** rather than a token counter: the trigger tracks offsets into `fullText` / `thinkingText` / `allToolCalls` / `allToolResults`. After a tool result is appended:
+1. Advance the cursors past the new content
+2. Estimate signal tokens for the newly-uncovered span
+3. If that span meets the token threshold **or** estimated context usage crosses `DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO` (0.65) → trigger a pulse
+4. The pressure branch also requires a +0.05 step latch that re-arms only after the ratio falls back out of the zone. Without it, one tool round-trip trivially exceeds the token floor and the 0.65–0.85 band would fire at nearly every iteration boundary — each costing a 4B CPU extraction call plus a session dialogue pair that prunes and re-prefills at the 8-pair cap
 
-The extraction call is synchronous (runs through `withExtractionMutex`) but bounded by a timeout (15s). If the mutex doesn't release in time, the pulse is skipped — the next pulse or turn completion will cover the content.
+Because the window is cursor-derived, a failed or timed-out pulse simply rolls its cursors back and the next pulse retries the same content.
+
+The extraction call is synchronous (runs through `withExtractionMutex`) but bounded by a timeout. If the mutex doesn't release in time, the pulse is skipped — the next pulse or turn completion will cover the content.
 
 ### Extraction Model Mutex
 
 Mid-turn pulses go through `withExtractionMutex` like immediate extraction. Under normal conditions the extraction model (CPU, Qwen 3.5 9B) is fast. Under heavy load (compaction flush + delayed extraction competing), the mutex may block.
 
-Timeout behavior: 15-second gate. If extraction doesn't complete, skip the pulse and continue the agent loop. The content is not lost — it's covered by the next pulse or turn completion.
+Timeout behavior: if extraction doesn't complete within the gate, the pulse is skipped and the agent loop continues. The content is not lost — it's covered by the next pulse or turn completion.
 
 ### Same-Turn Retrieval Guard
 
@@ -133,25 +126,25 @@ Memories extracted by mid-turn pulses are tagged with the current `turnId` (or m
 | Agent loop latency | Extraction is CPU-bound (separate model). Mutex adds 2-5s under normal load. 15s timeout prevents indefinite blocking. |
 | KV cache invalidation | System prompt is stable. Session history accumulates within a turn. Cache carries across all pulses. New turn = new session (existing behavior). |
 | Duplicate memories | Session history gives the extraction model context of what it already extracted. Vector dedup at save time catches remaining overlap. Supersession handling for delayed extraction. |
-| Pre-compaction quality loss | Mid-turn pulses use the general extraction prompt, not the task-state-focused pre-compaction prompt. Resolved by extracting the tail delta with the pre-compaction prompt if a gap exists. |
+| Pre-compaction quality loss | Mid-turn pulses use the general extraction prompt, not the task-state-focused pre-compaction prompt. Accepted: the flush always runs and shares the pulses' extraction session, so it continues from their cached prefix. |
 | Token counting accuracy | Signal estimate mirrors truncation rules but doesn't run the full formatter. Good enough for thresholding — exact token count isn't required. |
 
 ## Configuration
 
 - `extractionMidTurnThreshold`: Signal tokens before a mid-turn pulse fires. Default: 6000.
-- `extractionMidTurnTimeoutMs`: Max time to wait for extraction mutex. Default: 15000.
+- `extractionMidTurnTimeoutMs`: Max time to wait for the extraction mutex. **Default: 120000 (2 min)**; range 15000–900000. The upper bound must stay in sync with the client Settings modal cap.
 
-Both configurable via Settings, persisted to `settings.json`.
+Both configurable via Settings, persisted to settings.
 
 ## Files Affected
 
 | File | Change |
 |---|---|
-| `server/src/services/memory-extraction.ts` | Signal token estimator, mid-turn pulse formatting, session marker support, pre-compaction bypass logic |
-| `server/src/services/agent-loop-runner.ts` | Token counter accumulation, pulse trigger hook |
-| `server/src/services/chat-storage.ts` | `lastExtractedMessageIndex` tracking on chat entity |
-| `server/src/types.ts` | New chat fields, settings fields |
-| `server/src/services/compaction.ts` | Pre-compaction bypass check |
+| `server/src/services/memory-extraction.ts` | Signal token estimator, mid-turn pulse formatting, session marker support, pre-compaction flush |
+| `server/src/routes/chat.ts` | `maybeDispatchMidTurnPulse` — trigger, pressure latch, cursor bookkeeping and rollback |
+| `server/src/services/extraction-settings.ts` | Threshold, timeout, context-ratio, and min-signal-token defaults and clamps |
+| `server/src/services/passive-memory-recall.ts` | Same-turn retrieval guard (drops memories tagged with the current `turnId`) |
+| `server/src/types.ts` | Settings fields |
 
 ## Open Questions
 

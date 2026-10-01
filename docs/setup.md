@@ -6,7 +6,7 @@
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) server running locally (default port 32100)
 - A chat model loaded in llama.cpp (e.g., a Qwen3 GGUF model in the models directory)
 - An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 32103). Configurable in Settings → Inference Servers → Embedding server.
-- (Optional) ComfyUI for image generation
+- (Optional) An image backend: ComfyUI (`comfyui.service`) or stable-diffusion.cpp (`sd-server.service`). Porrima drives both via `systemctl --user`, so they need user-scope units, not just a running process. stable-diffusion.cpp additionally runs a stop-when-idle lifecycle with a 5-minute timer.
 - (Optional) Python packages for the `read_pdf` tool: `pip install pymupdf pymupdf4llm`
 - (Optional) TTS backends installed with `./scripts/install-tts-backend.sh kokoro|qwen3-tts|supertonic-3`
 
@@ -94,7 +94,9 @@ Porrima manages llama.cpp builds through a `llama-current` symlink. Place your l
 ln -sfn ~/bin/llama-b9500 ~/bin/llama-current
 ```
 
-All five llama.cpp services reference `~/bin/llama-current/llama-server` by default. To update to a new build, just swap the symlink and restart services — or use the Settings → Inference Servers → Binary Path panel, which handles the swap, service restart, and automatic rollback on failure.
+All five llama.cpp services reference `~/bin/llama-current/llama-server` by default. To update to a new build, swap the symlink and restart services — or use the Settings → Inference Servers → Binary Path panel, which handles the swap, service restart, and automatic rollback on failure.
+
+> The automatic swap restarts only **four** units — `llama-server`, `reranker`, `extraction-model`, and `title-generation`. `embedding-model.service` is not in the restart list, so after a build swap you must restart it yourself to pick up the new binary.
 
 Custom binaries (e.g. a fork with dynamic `.so` libraries) can be set per-slot in Settings. Porrima auto-injects `LD_LIBRARY_PATH` pointing to the custom binary's directory.
 

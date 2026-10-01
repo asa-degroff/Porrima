@@ -10,9 +10,9 @@ Sleep cycle: button is a "release" signal (stamps `sleepModeTriggeredAt`, 2h syn
 Wake cycle: autonomous exploration on inactivity (15-min check, 20-iter cap, 30-min timeout). Mutual exclusivity enforced.
 
 ## Chat System
-Two types: agent (memory-augmented), quick. `chat.ts`: memory augmentation, LLM streaming, tools (max 20 iters, pi-ai native, `ask_user` persists). SQLite + FTS5, multi-provider.
+Three types: agent (memory-augmented), quick, and system (synthesis, wake cycles, automations). `chat.ts`: memory augmentation, LLM streaming, tools (pi-ai native, `ask_user` persists, 500-iteration guard in the HTTP route). SQLite + FTS5, multi-provider.
 Stranded tool recovery: detects `<function=` in thinking after stopReason="stop", triggers continuation.
-SSE: `LiveStream` with headless flag for background tasks. Bounded replay, grace timer. Mid-turn compaction resume via `onCompaction(midTurn=true)`.
+SSE via the reconnectable `LiveStream` registry (`live-streams.ts`). Buffer replay has been **retired entirely** — reconnection is snapshot-based, not replay-based, and ended streams are retained for 60s. Mid-turn compaction resumes via `runAgentLoop({ mode: "continue", context: activeContext })`, not a callback. Pending turn intents are registered at request entry so `/stop` can abort a turn that hasn't started streaming yet.
 Activity stamping: chat sends stamp `lastUserActivityAt` and `lastUserInteractionAt` before synthesis wait; assistant responses stamp `lastAgentCompletedAt` after `done` (non-system only). Non-chat foreground actions such as manual cache pre-warm stamp `lastUserInteractionAt`.
 **Recap**: long assistant messages (>1500 chars) get 15-40 word summary via Qwen 3.5 0.8B. `callServer` accepts optional `maxTokens` (default 30; recaps pass 80). Persisted on message row, sent via SSE `done`, displayed as italic with `▸` marker. Push notifications use recap as body. Fire-and-forget, 15s timeout.
 **Thinking block toggle**: `onMessageComplete` preserves thinking visibility across tool-loop SSE fragments — doesn't clear `streamingThinking` during inter-fragment gaps.
@@ -24,7 +24,7 @@ KV cache was lost during tool loops because storage collapsed multiple iteration
 - Accumulators (`committedTextLength`, `committedToolCallCount`) track committed positions for delta-only persistence.
 - Display layer: `buildDisplayMessages` + `mergeToolLoopMessages` handle visual merging. Raw rows = source of truth.
 - **Phase 1 migration**: dual-write/dual-read, incremental sync (`syncChatMessageRows`), transaction-wrapped saves.
-- **Phase 2 planned**: `getChatMessageWindow` (recent-window loading), scroll-to-top paging, removing 200-message hard cap.
+- **Phase 2 (shipped)**: `getChatMessageWindow` recent-window loading, `messageOffset`-based scroll-to-top paging via `GET /api/chats/:id/messages`, and removal of the 200-message hard cap. The 200-message cap is gone; windows are now bounded by a `messageLimit` capped at 1000.
 
 ## Compaction & KV Cache
 Compaction-as-cache-reset strategy — system messages counted toward budget, included in `icIndices`. Stale delta stripping marks old system messages `_outOfContext` to prevent double-injection.
@@ -45,9 +45,9 @@ BM25 ranking, 6000-char output budget with truncation flags. SQL alias: `message
 
 ## Automation System
 Synthesis/wake cycles generalized into user-configurable automation framework. Shared agent turn runner (`chat-turn-runner.ts`) — core loop returns raw results; callers handle presentation (SSE for chat, push-dispatch for headless). Built-in tasks reuse `runSystemSynthesis()`/`runWakeCycle()`. Custom automations via `runPromptAutomation`.
-`ensureAutomationDefaults()` moved from per-route to single startup call (was ~6 DB queries/min). Scheduler checks every 60s.
+`ensureAutomationDefaults()` moved from per-route to single startup call (was ~6 DB queries/min). Scheduler checks every 5 minutes (`AUTOMATION_CHECK_INTERVAL_MS`), and requires 2 minutes of idle before a due task may start.
 `automation-lock.ts`: promise-based mutex. Lock is exception-safe (outer `runAutomationTask` has try/finally). `producedNothing` check duplicated across 3 paths.
-Task activation policies: `sleep_only`, `manual_only`, `always`.
+Task activation policies: `idle`, `absent` (the absence-threshold policy both built-ins use), `manual_only`. Legacy `sleep_only` normalizes to `absent`; there is no `always` policy, and `manual_only` tasks are hard-skipped by the scheduler rather than gated on idle.
 
 ## Push Notifications
 Cold start: `?chat=` via `URLSearchParams` on mount. Hot start: `push-click` via `navigator.serviceWorker.messages`. Race condition fixed by ordering `selectChat` effect before push-click/restore listeners in App.tsx.
@@ -56,7 +56,7 @@ Cold start: `?chat=` via `URLSearchParams` on mount. Hot start: `push-click` via
 Async IIFE for `reconnectChat` was missing try/catch — unhandled rejection could leave `reconnecting` state stuck true. Fixed by wrapping IIFE in try/catch, clearing state on error. User-facing message: "Connection lost — your message was saved on the server." Race guard: `bgStreams.get(streamChatId) === bg` to prevent stale updates.
 
 ## UI
-PWA theme adapts via `var(--theme-bg-flat)`. Skill chips use theme-accent variables. TTS button bottom-right. MemoryDebugPanel: Memories/Blocks/Extraction tabs.
+PWA theme adapts via `var(--theme-bg-flat)`. Skill chips use theme-accent variables. TTS button bottom-right. MemoryDebugPanel: Memories/Blocks/Graph/Extraction tabs. Theming: 13 preset themes plus a custom mode with a luminance-gated background and saved named presets (see [ui-patterns.md](ui-patterns.md)).
 Automation settings: expandable prompt editors (collapsible by default). Custom dropdowns in SettingsModal (replaced native `<select>`, fixed React #310 with keyed state + centralized click-outside handler).
 Mobile layout corrections: `w-full` on row wrappers, `flex-wrap` on rigid flex rows, "show what matters, hide what doesn't" responsive philosophy. Context indicator visible on mobile (hides arrows on narrow screens). Provider icon hidden on mobile in model selector.
 ImageSandbox: unified `useGestureDrawer` hook for slide-over drawers. iPad portrait (768-834px) now treated as mobile with drawers (breakpoint moved from `md` to `lg`). Vision Controls button: Eye icon (replaced gear).
@@ -64,5 +64,6 @@ Search provider checkboxes: Brave/Exa/Tavily visibility toggles, default Brave e
 **Planned**: settings modal mobile redesign.
 
 ## Image Generation
-ComfyUI w/ `waitForFreeVRAM`. Dual-GPU: GPU 0 for LLMs, GPU 1 for ComfyUI. Themes: Emerald, Copper, Iron, Rust.
-sdcpp: stable-diffusion.cpp pipeline.
+Pluggable backend (`image-backend.ts`): ComfyUI or stable-diffusion.cpp. `waitForFreeVRAM` gate. Dual-GPU: GPU 0 for LLMs, GPU 1 for image backends.
+
+Theming (`ThemePicker` + `utils/custom-theme.ts`): 12 built-in themes (Lapis, Ocean, Forest, Crimson, Asphalt, Strawberry, Coffee, Emerald, Copper, Verdigris, Iron, Rust) plus a `custom` mode where the user sets background and accent colors directly. Custom colors can be saved as named presets (unique case-insensitive names, 32-char cap, edit-in-place by id); presets persist server-side, and `chat-storage.ts` owns the authoritative `normalizeThemePresetName` rules that the client mirrors.
