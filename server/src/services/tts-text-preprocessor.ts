@@ -33,7 +33,6 @@ export function extractTextForTTS(markdown: string, mode: TTSTextMode = "strippe
   const keepFencedCode = mode === "minimal";
   const keepInlineCode = mode === "minimal" || mode === "standard";
   const keepUrls = mode === "minimal";
-  const stripLatex = true; // Always strip LaTeX — never speaks well
 
   // Handle fenced code blocks based on mode
   let text = markdown;

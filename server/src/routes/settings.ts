@@ -24,7 +24,6 @@ import {
   getHeaderImageInfo,
   deleteHeaderImage,
   getHeaderImagePath,
-  headerImageExists,
 } from "../services/header-image-storage.js";
 import { invalidateModelCache } from "../services/models.js";
 import { getStorageMigrationDiagnostics } from "../services/storage-diagnostics.js";

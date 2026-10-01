@@ -116,13 +116,6 @@ async function readCpuStats(): Promise<{ total: number; idle: number }> {
   return { total, idle };
 }
 
-function computeCpuUsage(stats: { total: number; idle: number }): number {
-  if (!lastCpuStats) return -1;
-  const idleDelta = stats.idle - lastCpuStats.idle;
-  const totalDelta = stats.total - lastCpuStats.total;
-  if (totalDelta === 0) return 0;
-  return Math.max(0, Math.min(100, ((totalDelta - idleDelta) / totalDelta) * 100));
-}
 
 // ---------------------------------------------------------------------------
 // RAM / Swap from /proc/meminfo
@@ -318,10 +311,6 @@ async function discoverGpus(): Promise<GpuInfo[]> {
         const vendor = (await fs.readFile(`${devicePath}/vendor`, "utf-8")).trim();
         const deviceId = (await fs.readFile(`${devicePath}/device`, "utf-8")).trim();
         const uevent = await fs.readFile(`${devicePath}/uevent`, "utf-8");
-        const driver = uevent
-          .split("\n")
-          .find((l) => l.startsWith("DRIVER="))
-          ?.split("=")[1];
         // PCI_SLOT_NAME is stable across reboots — use it for hidden GPU identification
         const pci = uevent
           .split("\n")

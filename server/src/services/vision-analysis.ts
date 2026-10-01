@@ -295,20 +295,6 @@ function base64ToBuffer(base64: string): Buffer {
   return Buffer.from(base64Data, "base64");
 }
 
-async function waitForLlamaCpp(baseUrl: string, timeout = 30000): Promise<boolean> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) return true;
-    } catch {
-      // Not reachable yet
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  return false;
-}
-
 export async function analyzeImage(
   imageData: string, // base64
   presetKey: string,

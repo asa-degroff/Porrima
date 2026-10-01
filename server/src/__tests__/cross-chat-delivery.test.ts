@@ -179,7 +179,7 @@ describe("cross-chat scheduled delivery", () => {
   it("delivers once at fire time and is idempotent on a second run", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-crosschat-"));
     try {
-      const { chatStorage, automationStorage, crossChat } = await loadModules(homeDir);
+      const { chatStorage, automationStorage } = await loadModules(homeDir);
       await chatStorage.createChat(makeChat("origin", "Origin Chat"));
       await chatStorage.createChat(makeChat("target", "Target Chat"));
 

@@ -200,9 +200,6 @@ function getDb(): Database.Database {
     END;
   `);
 
-  // Column migrations (for existing databases)
-  const cols = db.prepare("PRAGMA table_info(corpus_entries)").all() as Array<{ name: string }>;
-  const colNames = new Set(cols.map(c => c.name));
   // ── Migrate from JSON ────────────────────────────────────────────
   if (needsMigration) {
     migrateFromJson(db);
@@ -913,7 +910,6 @@ export async function searchCorpusHybrid(
   limit = 10
 ): Promise<Array<ImageCorpusEntry & { score: number }>> {
   console.log("[image-corpus] hybrid search starting for:", query);
-  const startTime = Date.now();
   const db = getDb();
   const RRF_K = 60; // standard RRF constant
 

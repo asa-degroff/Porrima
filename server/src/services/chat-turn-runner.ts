@@ -118,17 +118,6 @@ function extractThinkingFromAssistantMessage(msg: AssistantMessage): string {
     .join("\n");
 }
 
-function extractToolCallsFromAssistantMessage(msg: AssistantMessage): ToolCall[] {
-  return msg.content
-    .filter((block) => block.type === "toolCall")
-    .map((block) => ({
-      type: "toolCall" as const,
-      id: block.id,
-      name: block.name,
-      arguments: block.arguments,
-      thoughtSignature: block.thoughtSignature,
-    }));
-}
 
 function usageFromAssistantMessage(msg: AssistantMessage): ChatMessage["usage"] | undefined {
   return msg.usage

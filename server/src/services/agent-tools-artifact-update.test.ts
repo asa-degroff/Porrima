@@ -61,7 +61,7 @@ describe("agent artifact update tool", () => {
     const { getAgentTools } = await loadAgentTools();
     const { effects, artifacts, visuals } = createEffects();
 
-    const createResult = await callTool(getAgentTools, effects, "create_artifact", "create-visual", {
+    await callTool(getAgentTools, effects, "create_artifact", "create-visual", {
         title: "Inline chart",
         html: "<html><head></head><body>v1</body></html>",
         display: "inline",

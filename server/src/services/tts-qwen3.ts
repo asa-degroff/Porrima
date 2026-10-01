@@ -161,7 +161,6 @@ export async function generateQwen3TTS(request: TTSGenerateRequest, settings: TT
   // Check cache
   if (existsSync(cachePath)) {
     console.log(`[TTS-Qwen3] Cache hit: ${cacheKey}`);
-    const audio = readFileSync(cachePath);
     const stat = statSync(cachePath);
     return {
       audioUrl: `/api/tts/audio/${cacheKey}.wav`,

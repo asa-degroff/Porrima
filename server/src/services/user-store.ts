@@ -15,20 +15,6 @@ export interface UserStore {
   lastModified: string | null;
 }
 
-const DEFAULT_USER = `# About Me
-
-**Name:** 
-
-**Communication style:** 
-
-**Technical background:** 
-
-**Preferences:** 
-
----
-
-*Feel free to share as much or as little as you want. This information helps me understand you better.*
-`;
 
 /**
  * Ensure user data directory exists.

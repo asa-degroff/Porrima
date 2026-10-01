@@ -110,7 +110,7 @@ export async function validateLlamaPath(dirPath: string): Promise<{ valid: boole
   try {
     await stat(binaryPath);
     // Check execute permission (rough check)
-    const { stdout } = await execFileAsync("test", ["-x", binaryPath], { timeout: 2000 });
+    await execFileAsync("test", ["-x", binaryPath], { timeout: 2000 });
   } catch (e: any) {
     // test command returns 0 on success, 1 on failure — execFile throws on non-zero
     if (e.code === 1) {

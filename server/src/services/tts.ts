@@ -198,7 +198,6 @@ export async function generateTTS(request: TTSGenerateRequest, settings: TTSSett
   // Check cache
   if (existsSync(cachePath)) {
     console.log(`[TTS] Cache hit: ${cacheKey}`);
-    const audio = readFileSync(cachePath);
     const stat = statSync(cachePath);
     return {
       audioUrl: `/api/tts/audio/${cacheKey}.wav`,

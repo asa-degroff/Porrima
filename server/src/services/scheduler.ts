@@ -1,91 +1,19 @@
-import {
-  shouldRunSystemSynthesis,
-  runSystemSynthesis,
-  isSynthesisActive,
-  runWakeCycle,
-  isWakeCycleActive,
-  SYSTEM_CHAT_ID,
-} from "./system-chat.js";
-import { acquireTurn, isTurnGateBusy, releaseTurn, reapStaleTurnLease } from "./turn-gate.js";
+import { isSynthesisActive } from "./system-chat.js";
+import { reapStaleTurnLease } from "./turn-gate.js";
 import { getDb, getSettings } from "./chat-storage.js";
-import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
-import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";
 import { enrichCorpusBatchDetailed } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
-import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
 import { isSystemPauseActive } from "./system-pause.js";
 
-const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const WAKE_CYCLE_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes (same as synthesis)
 const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
-const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60; // 1 hour of inactivity → sleep cycle
-const DEFAULT_WAKE_CYCLE_INTERVAL_HOURS = 6; // wake every 6 hours during sleep
 
 let delayedExtractionCheckRunning = false;
 const delayedExtractionsInProgress = new Set<string>();
 
-
-// ---------------------------------------------------------------------------
-// Daily Synthesis Check
-// ---------------------------------------------------------------------------
-
-async function checkAndRunSynthesis() {
-  try {
-    // Skip if a system synthesis is already running (manual trigger may have locked)
-    if (isSynthesisActive()) {
-      console.log("[scheduler] Skipping synthesis check — system synthesis already active");
-      return;
-    }
-    // Skip if any chat is actively streaming — synthesis uses the main model
-    // and will contend with the user's live chat for the single GPU slot,
-    // causing the synthesis call to fail with stopReason=error.
-    if (hasActiveChats()) {
-      console.log("[scheduler] Skipping synthesis check — active chat(s) in progress");
-      return;
-    }
-    // Also skip when turns are queued at the gate — the user is about to be
-    // active, and queueing synthesis ahead of their turn would delay it.
-    if (isTurnGateBusy()) {
-      console.log("[scheduler] Skipping synthesis check — turn gate busy");
-      return;
-    }
-    // Respect sleep mode cooldown — the /sleep endpoint triggers synthesis
-    // manually and stamps a timestamp; we skip periodic runs for 2 hours
-    // after that so we don't immediately re-synthesize.
-    const { getSettings } = await import("./chat-storage.js");
-    const settings = await getSettings();
-    if (settings.sleepModeTriggeredAt) {
-      const elapsedMs = Date.now() - new Date(settings.sleepModeTriggeredAt).getTime();
-      if (elapsedMs < 2 * 60 * 60 * 1000) {
-        console.log("[scheduler] Skipping synthesis check — sleep mode cooldown active");
-        return;
-      }
-    }
-    if (await shouldRunSystemSynthesis()) {
-      console.log("[scheduler] Synthesis due, starting system synthesis...");
-      // The idle checks above can race with a user turn starting; the gate
-      // lease is the authoritative serialization point.
-      const lease = await acquireTurn(SYSTEM_CHAT_ID);
-      let result;
-      try {
-        result = await runSystemSynthesis();
-      } finally {
-        releaseTurn(lease);
-      }
-      if (result.success) {
-        console.log(`[scheduler] System synthesis complete: ${result.summary.length} chars`);
-      } else {
-        console.error(`[scheduler] System synthesis failed: ${result.error}`);
-      }
-    }
-  } catch (e) {
-    console.error("[scheduler] Synthesis check failed:", e);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Delayed Extraction Check
@@ -156,7 +84,6 @@ async function checkAndRunEnrichment() {
  */
 export async function findChatsNeedingDelayedExtraction(thresholdMs: number): Promise<string[]> {
   const db = getDb();
-  const now = new Date().toISOString();
   const thresholdDate = new Date(Date.now() - thresholdMs).toISOString();
 
   const rows = db.prepare(`
@@ -179,105 +106,6 @@ export async function findChatsNeedingDelayedExtraction(thresholdMs: number): Pr
   }>;
 
   return rows.map(r => r.id);
-}
-
-// ---------------------------------------------------------------------------
-// Sleep Cycle & Wake Cycle
-// ---------------------------------------------------------------------------
-
-/**
- * Check if the sleep cycle is currently active.
- * Sleep cycle activates when EITHER:
- * 1. sleepModeTriggeredAt is set (user clicked the release button) — immediate activation
- * 2. Agent has been idle longer than the configured threshold (measured from lastAgentCompletedAt)
- * A newer user message suppresses sleep until the next assistant completion stamps lastAgentCompletedAt.
- * In both cases, no active chats must be streaming.
- */
-function isSleepCycleActive(settings: any): boolean {
-  return computeSleepCycleActive(settings, {
-    hasActiveChats: hasActiveChats(),
-    defaultThresholdMinutes: DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES,
-  });
-}
-
-/**
- * Check and run a wake cycle during the sleep cycle.
- * Gated by:
- * - Sleep cycle must be active (user inactive)
- * - Wake cycles must be enabled in settings
- * - No synthesis currently running (don't overlap)
- * - No wake cycle currently running (don't overlap with self)
- * - Interval must have elapsed since last wake cycle
- */
-async function checkAndRunWakeCycle() {
-  try {
-    const settings = await getSettings();
-    
-    // Must be enabled
-    if (!settings.wakeCycleEnabled) return;
-    
-    // Must be in sleep cycle
-    if (!isSleepCycleActive(settings)) {
-      console.log("[scheduler] Skipping wake cycle — not in sleep cycle");
-      return;
-    }
-    
-    // Don't overlap with synthesis
-    if (isSynthesisActive()) {
-      console.log("[scheduler] Skipping wake cycle — synthesis active");
-      return;
-    }
-    
-    // Don't overlap with a running wake cycle
-    if (isWakeCycleActive()) {
-      console.log("[scheduler] Skipping wake cycle — wake cycle already running");
-      return;
-    }
-
-    // Don't contend with user turns (active or queued) for the GPU slot.
-    if (hasActiveChats() || isTurnGateBusy()) {
-      console.log("[scheduler] Skipping wake cycle — turn gate busy");
-      return;
-    }
-
-    // Don't start a wake cycle while a cache-warm or llama.cpp prefill is in
-    // progress. The runtime probe catches timed-out warm requests that are no
-    // longer in the JS queue but are still burning GPU inside llama.cpp.
-    if (await isCacheWarmOrLlamaRuntimeBusy(settings.defaultModelId)) {
-      console.log("[scheduler] Skipping wake cycle — cache-warm/llama runtime busy");
-      return;
-    }
-    
-    // Check interval
-    const intervalHours = settings.wakeCycleIntervalHours ?? DEFAULT_WAKE_CYCLE_INTERVAL_HOURS;
-    const lastWake = await getLastWakeCycleAt();
-    if (lastWake) {
-      const elapsed = (Date.now() - new Date(lastWake).getTime()) / (1000 * 60 * 60); // hours
-      if (elapsed < intervalHours) {
-        return; // Not yet due
-      }
-    }
-    
-    // Fire the wake cycle
-    console.log("[scheduler] Wake cycle due, starting...");
-    // The idle checks above can race with a user turn starting; the gate
-    // lease is the authoritative serialization point.
-    const wakeLease = await acquireTurn(SYSTEM_CHAT_ID);
-    let result;
-    try {
-      result = await runWakeCycle({ modelId: settings.defaultModelId });
-    } finally {
-      releaseTurn(wakeLease);
-    }
-
-    if (result.success) {
-      console.log(`[scheduler] Wake cycle complete: ${result.summary.length} chars, ${result.toolCalls.length} tool calls`);
-    } else {
-      console.error(`[scheduler] Wake cycle failed: ${result.error}`);
-    }
-  } catch (e) {
-    console.error("[scheduler] Wake cycle check failed:", e);
-  }
 }
 
 // ---------------------------------------------------------------------------

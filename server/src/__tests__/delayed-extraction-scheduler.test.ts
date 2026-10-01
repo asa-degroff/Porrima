@@ -4,8 +4,6 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "../types.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 afterEach(() => {
   vi.doUnmock("os");
   vi.doUnmock("../services/memory-extraction.js");

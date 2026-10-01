@@ -774,7 +774,7 @@ router.delete("/:id/supersession", async (req, res) => {
 
 // Get memories by time range
 router.get("/timeline", async (req, res) => {
-  const { from, to, groupedBy } = req.query;
+  const { from, to } = req.query;
 
   const memories = await getAllMemories();
 

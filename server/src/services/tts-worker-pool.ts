@@ -100,7 +100,6 @@ class TTSWorker {
   public get ready(): boolean { return this._ready; }
   private requestCounter = 0;
   private pending = new Map<number, { resolve: (v: TTSWorkerResult) => void; reject: (e: Error) => void }>();
-  private pythonPath: string | null = null;
   private _drainTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
   private _initPromise: Promise<void> | null = null;
@@ -138,7 +137,6 @@ class TTSWorker {
 
   private async doInitialize(): Promise<void> {
     const { pythonPath } = await resolveTtsPython(this.backend);
-    this.pythonPath = pythonPath;
 
     return new Promise<void>((resolve, reject) => {
       if (this.destroyed) {

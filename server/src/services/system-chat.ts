@@ -747,7 +747,7 @@ export async function buildMaintenancePhase2Trigger(
     inventoryLines.push("");
   }
 
-  for (const [projectId, info] of projectBlocks) {
+  for (const [, info] of projectBlocks) {
     inventoryLines.push(`**${info.name}:**\n`);
     const split = projectSplitFor(info.blocks);
     for (const b of info.blocks) {

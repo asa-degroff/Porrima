@@ -164,7 +164,7 @@ describe("turn-gate", () => {
   });
 
   it("reaps a stale lease so the queue drains without a new acquirer", async () => {
-    const first = await acquireTurn("chat-a");
+    await acquireTurn("chat-a");
     const queued = acquireTurn("chat-b");
     ageActiveLease(20 * 60_000);
 

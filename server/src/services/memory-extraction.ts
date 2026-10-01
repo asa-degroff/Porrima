@@ -65,8 +65,6 @@ let _extractionMutexQueue: Promise<void> = Promise.resolve();
  * concurrent queued HTTP requests.
  */
 export function withExtractionMutex<T>(fn: () => Promise<T>): Promise<T> {
-  let release: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
   const waiting = _extractionMutexQueue.then(() => fn());
   // Chain: next caller waits for this one to finish (success or failure)
   _extractionMutexQueue = waiting.then(() => {}, () => {});
