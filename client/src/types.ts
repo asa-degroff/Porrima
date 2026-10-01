@@ -882,29 +882,6 @@ export interface TTSBackendStatus {
 }
 
 // Vision Analysis Types (re-export from API client for convenience)
-export interface VisionPreset {
-  key: string;
-  name: string;
-  prompt: string;
-  markdown: boolean;
-}
-
-export interface VisionMessage {
-  role: "user" | "assistant";
-  content: string;
-  timestamp: number;
-}
-
-export interface AnalyzedImage {
-  id: string;
-  filename: string;
-  url: string;
-  description: string;
-  preset: string;
-  model: string;
-  conversation: VisionMessage[];
-  createdAt: string;
-}
 
 export interface NotebookLink {
   notebooks?: { entryId: string; author: 'user' | 'agent' }[];

@@ -150,13 +150,6 @@ export function getPersonaPath(): string {
 }
 
 /**
- * Get the path to the persona history directory.
- */
-export function getPersonaHistoryPath(): string {
-  return PERSONA_HISTORY_DIR;
-}
-
-/**
  * List all persona versions in history.
  */
 export async function listPersonaHistory(): Promise<string[]> {
@@ -184,19 +177,6 @@ export async function getPersonaVersion(
   } catch {
     return null;
   }
-}
-
-/**
- * Append a change reason to the changelog.
- */
-export async function appendToChangelog(reason: string): Promise<void> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const logFile = path.join(PERSONA_HISTORY_DIR, "CHANGELOG.md");
-  const logExists = await pathExists(logFile);
-  const changelog = logExists
-    ? await readFile(logFile, "utf-8")
-    : "# Persona Change Log\n\n";
-  await writeFile(logFile, changelog + `#${timestamp} - ${reason}\n`, "utf-8");
 }
 
 async function pathExists(filepath: string): Promise<boolean> {

@@ -107,12 +107,6 @@ export function getAllGenerations(): GenerationState[] {
   );
 }
 
-export function getGenerationsByChat(chatId: string): GenerationState[] {
-  return Array.from(generations.values())
-    .filter((g) => g.chatId === chatId)
-    .sort((a, b) => b.createdAt - a.createdAt);
-}
-
 export function updateGeneration(
   id: string,
   updates: Partial<GenerationState>
@@ -193,12 +187,6 @@ export function failGeneration(
     error,
     progress: null,
   });
-}
-
-export function deleteGeneration(id: string): boolean {
-  const deleted = generations.delete(id);
-  if (deleted) persistGenerations();
-  return deleted;
 }
 
 // SSE subscription

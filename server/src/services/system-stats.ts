@@ -116,7 +116,6 @@ async function readCpuStats(): Promise<{ total: number; idle: number }> {
   return { total, idle };
 }
 
-
 // ---------------------------------------------------------------------------
 // RAM / Swap from /proc/meminfo
 // ---------------------------------------------------------------------------
@@ -496,21 +495,6 @@ export function startSystemStatsPolling() {
   console.log(`[system-stats] Polling every ${pollIntervalMs}ms, buffer ${bufferSeconds}s`);
 }
 
-export function stopSystemStatsPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
 // Allow overriding poll interval (for testing)
-function setPollInterval(ms: number) {
-  pollIntervalMs = ms;
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = setInterval(pollOnce, pollIntervalMs);
-  }
-}
 
 // Export for testing/config
-export const systemStatsConfig = { setPollInterval };

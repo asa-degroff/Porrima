@@ -336,16 +336,6 @@ export async function updateArtifact(
   return { url: `/api/artifacts/${id}/versions/${newVersion}`, version: newVersion };
 }
 
-export async function getArtifactMetadata(id: string): Promise<ArtifactMetadata | null> {
-  try {
-    const metadataPath = join(ARTIFACTS_DIR, id, "metadata.json");
-    const content = await readFile(metadataPath, "utf-8");
-    return JSON.parse(content) as ArtifactMetadata;
-  } catch {
-    return null;
-  }
-}
-
 export async function existsVisual(id: string): Promise<boolean> {
   try {
     const metadataPath = join(VISUALS_DIR, id, "metadata.json");

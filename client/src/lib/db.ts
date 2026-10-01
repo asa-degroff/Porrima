@@ -150,21 +150,11 @@ export async function dequeueMessage(id: number): Promise<void> {
   await db.delete("messageQueue", id);
 }
 
-export async function getQueuedMessages(): Promise<QueuedMessage[]> {
-  const db = await getDB();
-  return db.getAll("messageQueue");
-}
-
 export async function getQueuedMessagesForChat(
   chatId: string
 ): Promise<QueuedMessage[]> {
   const db = await getDB();
   return db.getAllFromIndex("messageQueue", "by-chatId", chatId);
-}
-
-export async function getQueuedMessageCount(): Promise<number> {
-  const db = await getDB();
-  return db.count("messageQueue");
 }
 
 export type { QueuedMessage };

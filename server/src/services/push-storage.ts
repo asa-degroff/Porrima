@@ -71,10 +71,6 @@ export function markPresence(deviceId: string, source: "sse" | "ping"): void {
   pushPresence.set(deviceId, { visibleAt: Date.now(), source });
 }
 
-export function clearPresence(deviceId: string): void {
-  pushPresence.delete(deviceId);
-}
-
 export function isPresent(deviceId: string): boolean {
   const entry = pushPresence.get(deviceId);
   if (!entry) return false;

@@ -85,38 +85,6 @@ export function invalidateClusterCache(): void {
   clusterCache = null;
 }
 
-/**
- * Clear clusters entirely — both in-memory cache and persisted file.
- */
-export async function clearClusters(): Promise<void> {
-  clusterCache = null;
-  try {
-    await ensureClustersDir();
-    if (existsSync(CLUSTERS_FILE)) {
-      await writeFile(CLUSTERS_FILE, JSON.stringify({
-        clusters: [],
-        similarityThreshold: 0.85,
-        lastRebuilt: Date.now(),
-        corpusSize: 0,
-      } as ClusterMap, null, 2));
-    }
-  } catch (err) {
-    console.error("[cluster-storage] clear error:", err);
-  }
-}
-
-export async function getClusterById(id: string): Promise<PromptCluster | null> {
-  const map = await getClusters();
-  if (!map) return null;
-  return map.clusters.find(c => c.id === id) || null;
-}
-
-export async function getClusterByImageId(imageId: string): Promise<PromptCluster | null> {
-  const map = await getClusters();
-  if (!map) return null;
-  return map.clusters.find(c => c.memberIds.includes(imageId)) || null;
-}
-
 export function computeCentroid(members: ImageCorpusEntry[]): number[] {
   if (members.length === 0) return [];
   

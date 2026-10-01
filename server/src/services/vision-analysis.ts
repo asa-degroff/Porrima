@@ -251,10 +251,6 @@ async function ensureVisionDir() {
   }
 }
 
-export function getVisionImageDir(id: string): string {
-  return join(VISION_DIR, "images", id);
-}
-
 export function getVisionThumbPath(id: string): string {
   return join(VISION_DIR, "images", id, "thumb.webp");
 }

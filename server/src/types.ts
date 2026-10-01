@@ -373,24 +373,6 @@ export interface ChatMessageWindow {
 
 export type InferenceProvider = "llamacpp";
 
-export type MemoryBlockScope = "global" | "project" | "archived";
-
-export interface MemoryBlock {
-  id: string;
-  name: string;
-  description: string;
-  content: string;
-  scope: MemoryBlockScope;
-  projectId?: string;
-  createdAt: string;
-  updatedAt: string;
-  updatedBy: "agent" | "user";
-  tokenEstimate: number;
-  blockType?: "note" | "notebook" | "synthesis" | "zeitgeist-archive";
-  supersededBy?: string;
-  supersedes?: string;
-}
-
 export interface InferenceModel {
   id: string;
   name: string;
@@ -413,7 +395,7 @@ export interface ThemePreset {
   background: string;
   accent: string;
 }
-export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
+
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
 export interface SystemPromptPreset {
@@ -731,22 +713,6 @@ export interface ComfyUIStatus {
   available: boolean;
   queueSize: number;
   models: string[];
-}
-
-export type GenerationStatus = "queued" | "processing" | "completed" | "error";
-
-export interface GenerationState {
-  id: string;
-  chatId?: string;
-  promptId?: string;
-  clientId: string;
-  params: ImageGenerationParams;
-  status: GenerationStatus;
-  progress: { step: number; total: number } | null;
-  imageUrl?: string;
-  error?: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface NotebookLink {

@@ -165,19 +165,3 @@ function fallbackOrder(count: number): Array<{ index: number; score: number }> {
   }));
 }
 
-/**
- * Check if the reranker service is available.
- */
-export async function isRerankerAvailable(): Promise<boolean> {
-  try {
-    const settings = await getSettings();
-    if (settings.rerankerEnabled === false) return false;
-    const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
-    const res = await fetch(`${rerankerUrl}/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}

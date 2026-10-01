@@ -1,46 +1,5 @@
 import type { TTSBackend, TTSBackendStatus, TTSSettings, TTSVoiceCategory } from "../types";
 
-export interface TTSGenerateRequest {
-  text: string;
-  voice?: string;
-  speed?: number;
-  pitch?: number;
-  backend?: TTSBackend;
-  supertonicPitchSemitones?: number;
-  supertonicLanguage?: string;
-  supertonicSteps?: number;
-  supertonicMaxChunkLength?: number;
-  supertonicSilenceDuration?: number;
-  supertonicTrailingSilence?: number;
-  kokoroPitchShiftProcessor?: "resample" | "rubberband";
-  supertonicPitchShiftProcessor?: "resample" | "rubberband";
-}
-
-export interface TTSGenerateResponse {
-  audioUrl: string;
-  duration: number;
-  fileSize: number;
-}
-
-/**
- * Generate TTS audio from text
- */
-export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGenerateResponse> {
-  const res = await fetch("/api/tts/generate", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: "Failed to generate audio" }));
-    throw new Error(error.error || "Failed to generate audio");
-  }
-
-  return res.json();
-}
-
 /**
  * Get available TTS voices
  * @param backend - TTS backend

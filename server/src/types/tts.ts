@@ -54,13 +54,6 @@ export interface TTSGenerateResponse {
   fileSize: number;
 }
 
-export interface TTSVoiceInfo {
-  id: string;
-  name: string;
-  gender: "female" | "male";
-  accent: "american" | "british" | "other";
-}
-
 export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   voice: "af_heart",
   speed: 1.0,
