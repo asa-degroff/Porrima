@@ -30,12 +30,11 @@ export interface ImageAttachment {
 
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual" | "compaction_marker";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "visual" | "compaction_marker";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
-  generatedImage?: GeneratedImage;
   visual?: InlineVisual;
 }
 
@@ -75,7 +74,6 @@ export interface ChatMessage {
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
-  generatedImages?: GeneratedImage[];
   visuals?: InlineVisual[];
   images?: ImageAttachment[];
   segments?: MessageSegment[];
@@ -412,7 +410,6 @@ export interface Settings {
   /** True after first-time setup wizard has been completed */
   setupCompleted?: boolean;
   defaultModelId: string;
-  defaultVisionModelId?: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
@@ -421,10 +418,6 @@ export interface Settings {
   exaSearchEnabled?: boolean;
   tavilySearchEnabled?: boolean;
   defaultWebSearchProvider?: WebSearchProvider;
-  comfyuiUrl?: string;
-  sdcppUrl?: string;            // default "http://127.0.0.1:1234" — stable-diffusion.cpp sd-server
-  imageBackend?: "comfyui" | "sdcpp";  // default "comfyui"
-  imageSandboxEnabled?: boolean;        // default true — shows the Image Sandbox launcher
   theme?: Theme;
   customTheme?: CustomTheme;
   /** User-saved custom themes (named bookmarks of the custom mode). */
@@ -436,7 +429,6 @@ export interface Settings {
   activityHue?: number;
   activitySaturation?: number;
   systemPromptPresets?: SystemPromptPreset[];
-  defaultVisionPreset?: string;
   // Delayed memory extraction settings
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
@@ -683,36 +675,6 @@ export interface InlineVisual {
   html: string;
   url: string;
   version?: number;     // version number (defaults to 1 for backward compat)
-}
-
-export interface ImageGenerationParams {
-  positivePrompt: string;
-  negativePrompt?: string;
-  model: string;
-  steps: number;
-  cfgScale: number;
-  width: number;
-  height: number;
-  seed?: number;
-  sampler?: string;
-  scheduler?: string;
-}
-
-export interface GeneratedImage {
-  id: string;
-  url: string;
-  params: ImageGenerationParams;
-  resolvedSeed: number;
-  createdAt: string;
-  chatId?: string;
-  generatedBy?: 'user' | 'agent';  // Track generation source
-  description?: string;  // For analyzed images (search results may include these)
-}
-
-export interface ComfyUIStatus {
-  available: boolean;
-  queueSize: number;
-  models: string[];
 }
 
 export interface NotebookLink {

@@ -36,7 +36,6 @@ function makeErrorResult(message: string): AutomationExecutionResult {
     toolCalls: [],
     artifacts: [],
     visuals: [],
-    generatedImages: [],
     memoryUpdates: [],
     success: false,
     error: message,
@@ -304,12 +303,10 @@ async function runPromptAutomation(
 
     const artifacts: any[] = [];
     const visuals: any[] = [];
-    const generatedImages: any[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
       visuals,
-      generatedImages,
     });
     const { getSettings } = await import("./chat-storage.js");
     const { timeMarkerIntervalMinutes } = await getSettings();
@@ -475,7 +472,6 @@ async function runPromptAutomation(
       toolCalls: turn.toolCalls,
       artifacts,
       visuals,
-      generatedImages,
       memoryUpdates: turn.memoryUpdates,
       success: true,
       chatId: task.chatId,
@@ -653,7 +649,6 @@ async function runCrossChatPost(task: AutomationTask, run: AutomationRun): Promi
       toolCalls: [],
       artifacts: [],
       visuals: [],
-      generatedImages: [],
       memoryUpdates: [],
       success: true,
       chatId: delivery.chatId,

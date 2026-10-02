@@ -5,7 +5,6 @@ import { existsSync } from "fs";
 import { dirname, join } from "path";
 import { closeChatDb, getChatDbPath, getDb as getChatDb, backupChatDb, getSettings } from "./chat-storage.js";
 import { closeMemoryDb, getDb as getMemoryDb, getMemoryDbPath } from "./memory-storage.js";
-import { closeCorpusDb, getCorpusDb, getCorpusDbPath } from "./image-corpus.js";
 import { resetAllMemoryContextCaches } from "./memory-context.js";
 import { appDataPath } from "./paths.js";
 
@@ -18,7 +17,6 @@ const COUNT_TABLES = new Set([
   "context_archives",
   "memories",
   "memory_blocks",
-  "corpus_entries",
 ]);
 
 export interface AgentSnapshotManifest {
@@ -33,7 +31,6 @@ export interface AgentSnapshotManifest {
   includes: {
     app: true;
     memories: true;
-    corpus: boolean;
   };
   embedding: {
     provider: string;
@@ -47,18 +44,15 @@ export interface AgentSnapshotManifest {
     contextArchives: number;
     memories: number;
     memoryBlocks: number;
-    corpus?: number;
   };
   sourceSizes: {
     appBytes: number;
     memoriesBytes: number;
-    corpusBytes?: number;
   };
 }
 
 export interface CreateAgentSnapshotOptions {
   label?: string;
-  includeCorpus?: boolean;
   createdBy?: "user" | "system";
   reason?: "manual" | "pre-restore";
   protected?: boolean;
@@ -133,20 +127,14 @@ async function createAgentSnapshotUnlocked(
 
   const appDest = join(dir, "app.db");
   const memoriesDest = join(dir, "memories.db");
-  const corpusDest = join(dir, "corpus.db");
-
   await backupChatDb(appDest);
   await getMemoryDb().backup(memoriesDest);
-  if (options.includeCorpus) {
-    await getCorpusDb().backup(corpusDest);
-  }
 
   const settings = await getSettings();
-  const counts = countRows(options.includeCorpus === true);
-  const [appBytes, memoriesBytes, corpusBytes] = await Promise.all([
+  const counts = countRows();
+  const [appBytes, memoriesBytes] = await Promise.all([
     fileSize(appDest),
     fileSize(memoriesDest),
-    options.includeCorpus ? fileSize(corpusDest) : Promise.resolve(undefined),
   ]);
 
   const manifest: AgentSnapshotManifest = {
@@ -161,7 +149,6 @@ async function createAgentSnapshotUnlocked(
     includes: {
       app: true,
       memories: true,
-      corpus: options.includeCorpus === true,
     },
     embedding: {
       provider: settings.embeddingProvider ?? "llamacpp",
@@ -173,7 +160,6 @@ async function createAgentSnapshotUnlocked(
     sourceSizes: {
       appBytes,
       memoriesBytes,
-      ...(corpusBytes !== undefined ? { corpusBytes } : {}),
     },
   };
 
@@ -209,20 +195,15 @@ async function restoreAgentSnapshotUnlocked(
 
   const appSrc = join(dir, "app.db");
   const memoriesSrc = join(dir, "memories.db");
-  const corpusSrc = join(dir, "corpus.db");
   if (!existsSync(appSrc) || !existsSync(memoriesSrc)) {
     throw new Error("Snapshot is missing required database files");
   }
 
   validateSqliteDb(appSrc, false);
   validateSqliteDb(memoriesSrc, true);
-  if (manifest.includes.corpus && existsSync(corpusSrc)) {
-    validateSqliteDb(corpusSrc, true);
-  }
 
   const preRestoreSnapshot = await createAgentSnapshotUnlocked({
     label: `pre-restore ${id}`,
-    includeCorpus: manifest.includes.corpus,
     createdBy: "system",
     reason: "pre-restore",
   });
@@ -230,33 +211,21 @@ async function restoreAgentSnapshotUnlocked(
   const rollbackSources = getSnapshotSources(preRestoreSnapshot);
 
   try {
-    checkpointActiveDbs(manifest.includes.corpus);
+    checkpointActiveDbs();
     closeChatDb();
     closeMemoryDb();
-    if (manifest.includes.corpus) {
-      closeCorpusDb();
-    }
 
     await replaceSqliteFile(appSrc, getChatDbPath());
     await replaceSqliteFile(memoriesSrc, getMemoryDbPath());
-    if (manifest.includes.corpus && existsSync(corpusSrc)) {
-      await replaceSqliteFile(corpusSrc, getCorpusDbPath());
-    }
 
-    reopenRestoredDbs(manifest.includes.corpus);
+    reopenRestoredDbs();
   } catch (restoreError: any) {
     try {
       closeChatDb();
       closeMemoryDb();
-      if (manifest.includes.corpus) {
-        closeCorpusDb();
-      }
       await replaceSqliteFile(rollbackSources.app, getChatDbPath());
       await replaceSqliteFile(rollbackSources.memories, getMemoryDbPath());
-      if (manifest.includes.corpus && rollbackSources.corpus && existsSync(rollbackSources.corpus)) {
-        await replaceSqliteFile(rollbackSources.corpus, getCorpusDbPath());
-      }
-      reopenRestoredDbs(manifest.includes.corpus);
+      reopenRestoredDbs();
     } catch (rollbackError: any) {
       throw new Error(
         `Restore failed and rollback also failed. Restore error: ${restoreError?.message || restoreError}. Rollback error: ${rollbackError?.message || rollbackError}`
@@ -272,7 +241,7 @@ async function restoreAgentSnapshotUnlocked(
   return { restored: manifest, preRestoreSnapshot };
 }
 
-function countRows(includeCorpus: boolean): AgentSnapshotManifest["counts"] {
+function countRows(): AgentSnapshotManifest["counts"] {
   const appDb = getChatDb();
   const memoryDb = getMemoryDb();
 
@@ -283,10 +252,6 @@ function countRows(includeCorpus: boolean): AgentSnapshotManifest["counts"] {
     memories: countTable(memoryDb, "memories"),
     memoryBlocks: countTable(memoryDb, "memory_blocks"),
   };
-
-  if (includeCorpus) {
-    counts.corpus = countTable(getCorpusDb(), "corpus_entries");
-  }
 
   return counts;
 }
@@ -384,17 +349,15 @@ async function replaceSqliteFile(sourcePath: string, destinationPath: string): P
 function getSnapshotSources(manifest: AgentSnapshotManifest): {
   app: string;
   memories: string;
-  corpus?: string;
 } {
   const dir = snapshotDir(manifest.id);
   return {
     app: join(dir, "app.db"),
     memories: join(dir, "memories.db"),
-    ...(manifest.includes.corpus ? { corpus: join(dir, "corpus.db") } : {}),
   };
 }
 
-function checkpointActiveDbs(includeCorpus: boolean): void {
+function checkpointActiveDbs(): void {
   try {
     getChatDb().pragma("wal_checkpoint(TRUNCATE)");
   } catch (e) {
@@ -405,21 +368,11 @@ function checkpointActiveDbs(includeCorpus: boolean): void {
   } catch (e) {
     console.warn("[snapshots] memory wal_checkpoint failed:", e);
   }
-  if (includeCorpus) {
-    try {
-      getCorpusDb().pragma("wal_checkpoint(TRUNCATE)");
-    } catch (e) {
-      console.warn("[snapshots] corpus wal_checkpoint failed:", e);
-    }
-  }
 }
 
-function reopenRestoredDbs(includeCorpus: boolean): void {
+function reopenRestoredDbs(): void {
   getChatDb();
   getMemoryDb();
-  if (includeCorpus) {
-    getCorpusDb();
-  }
 }
 
 function validateSqliteDb(path: string, loadVec: boolean): void {

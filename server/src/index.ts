@@ -13,10 +13,6 @@ import appRouter from "./routes/app.js";
 import memoryRouter from "./routes/memory.js";
 import artifactsRouter from "./routes/artifacts.js";
 import visualsRouter from "./routes/visuals.js";
-import imagesRouter from "./routes/images.js";
-import visionRouter from "./routes/vision.js";
-import imageCorpusRouter from "./routes/image-corpus.js";
-import corpusRouter from "./routes/corpus.js";
 import authRouter, { assertProductionWebAuthnConfig } from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
 import extractionPromptRouter from "./routes/extraction-prompt.js";
@@ -187,10 +183,6 @@ app.use("/api/extraction-prompt", extractionPromptRouter);
 app.use("/api/user", userRouter);
 app.use("/api/artifacts", artifactsRouter);
 app.use("/api/visuals", visualsRouter);
-app.use("/api/images", imagesRouter);
-app.use("/api/vision", visionRouter);
-app.use("/api/image-corpus", imageCorpusRouter);
-app.use("/api/corpus", corpusRouter);
 app.use("/api/tts", ttsRouter);
 app.use("/api/skills", skillsRouter);
 app.use("/api/user-images", userImagesRouter);
@@ -208,24 +200,6 @@ app.use("/api/push", pushRouter);
 app.use("/api/automations", automationsRouter);
 app.use("/api/system-stats", systemStatsRouter);
 app.use("/api/system", systemRouter);
-
-// Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
-// Set CORPUS_CLEANUP=true to enable
-if (process.env.CORPUS_CLEANUP === "true") {
-  console.log("[startup] Running corpus orphan cleanup...");
-  const { cleanupOrphanedEntries } = await import("./services/image-corpus.js");
-  cleanupOrphanedEntries()
-    .then((report) => {
-      if (report.orphanedCount > 0) {
-        console.log(`[startup] Cleaned up ${report.orphanedCount} orphaned corpus entries (${report.generatedOrphans} generated, ${report.analyzedOrphans} analyzed)`);
-      } else {
-        console.log("[startup] No orphaned corpus entries found");
-      }
-    })
-    .catch((err) => {
-      console.error("[startup] Corpus cleanup failed:", err);
-    });
-}
 
 // Production static serving
 if (isProd) {

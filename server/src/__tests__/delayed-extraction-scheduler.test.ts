@@ -9,7 +9,6 @@ afterEach(() => {
   vi.doUnmock("../services/memory-extraction.js");
   vi.doUnmock("../services/memory-storage.js");
   vi.doUnmock("../services/system-chat.js");
-  vi.doUnmock("../services/image-corpus.js");
   vi.doUnmock("../services/llama-router-client.js");
   vi.doUnmock("../services/automation-scheduler.js");
   vi.doUnmock("../services/cache-warm-queue.js");
@@ -38,9 +37,6 @@ async function loadScheduler(homeDir: string) {
     runWakeCycle: vi.fn(),
     isWakeCycleActive: vi.fn(() => false),
     SYSTEM_CHAT_ID: "system",
-  }));
-  vi.doMock("../services/image-corpus.js", () => ({
-    enrichCorpusBatchDetailed: vi.fn(),
   }));
   vi.doMock("../services/llama-router-client.js", () => ({
     normalizeRouterModelId: vi.fn((id: string) => id),

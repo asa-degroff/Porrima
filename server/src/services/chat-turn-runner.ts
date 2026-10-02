@@ -314,7 +314,6 @@ export function splitAssistantMessageIntoCanonicalToolLoopRows(
     usage,
     artifacts,
     visuals,
-    generatedImages,
     segments,
     ...base
   } = message;
@@ -329,7 +328,6 @@ export function splitAssistantMessageIntoCanonicalToolLoopRows(
     ...(toolResults?.length ? { toolResults } : {}),
     ...(artifacts?.length ? { artifacts } : {}),
     ...(visuals?.length ? { visuals } : {}),
-    ...(generatedImages?.length ? { generatedImages } : {}),
     timestamp: message.timestamp,
     _toolLoopId: toolLoopId,
     _toolLoopFragment: true,
@@ -432,7 +430,6 @@ export async function runHeadlessChatTurn(
     iterations: 0,
     artifacts: 0,
     visuals: 0,
-    generatedImages: 0,
     segments: 0,
   };
   let assistantMessageIndex = -1;
@@ -489,7 +486,6 @@ export async function runHeadlessChatTurn(
       iterations,
       artifacts: emitter.state.artifacts.length,
       visuals: emitter.state.visuals.length,
-      generatedImages: emitter.state.generatedImages.length,
       segments: emitter.state.segments.length,
     };
     // The persisted rows now carry this work, so the transient per-iteration
@@ -504,7 +500,6 @@ export async function runHeadlessChatTurn(
     output: {
       artifacts: ChatMessage["artifacts"];
       visuals: ChatMessage["visuals"];
-      generatedImages: ChatMessage["generatedImages"];
       segments: ChatMessage["segments"];
     },
   ): ChatMessage => {
@@ -525,9 +520,6 @@ export async function runHeadlessChatTurn(
       toolResults: orderedToolResults.length > 0 ? orderedToolResults : undefined,
       artifacts: output.artifacts && output.artifacts.length > 0 ? output.artifacts : undefined,
       visuals: output.visuals && output.visuals.length > 0 ? output.visuals : undefined,
-      generatedImages: output.generatedImages && output.generatedImages.length > 0
-        ? output.generatedImages
-        : undefined,
       segments: output.segments && output.segments.length > 0 ? output.segments : undefined,
       timestamp: Date.now(),
       _isSystemMessage: true,
@@ -564,7 +556,6 @@ export async function runHeadlessChatTurn(
     const output = {
       artifacts: emitter.state.artifacts.slice(lastPersistedAssistantBoundary.artifacts),
       visuals: emitter.state.visuals.slice(lastPersistedAssistantBoundary.visuals),
-      generatedImages: emitter.state.generatedImages.slice(lastPersistedAssistantBoundary.generatedImages),
       segments: emitter.state.segments.slice(lastPersistedAssistantBoundary.segments),
     };
     if (
@@ -575,7 +566,6 @@ export async function runHeadlessChatTurn(
       toolResults.length === 0 &&
       output.artifacts.length === 0 &&
       output.visuals.length === 0 &&
-      output.generatedImages.length === 0 &&
       output.segments.length === 0
     ) {
       advancePersistedAssistantBoundary();
@@ -1016,7 +1006,6 @@ export async function runHeadlessChatTurn(
       buildAssistantMessageForState(stateSinceLastPersistedBoundary(), [], {
         artifacts: [],
         visuals: [],
-        generatedImages: [],
         segments: [],
       });
     const doneMessage = options.decorateAssistantMessage

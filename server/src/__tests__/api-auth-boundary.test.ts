@@ -3,16 +3,26 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 
 describe("API auth boundary", () => {
-  it("keeps corpus routes behind the global /api auth middleware", () => {
+  it("keeps image-serving routes behind the global /api auth middleware", () => {
     const indexSource = readFileSync(join(process.cwd(), "src", "index.ts"), "utf-8");
 
     const authRoutesMount = indexSource.indexOf('app.use("/api/auth", authRouter)');
     const authBoundaryMount = indexSource.indexOf('app.use("/api", requireAuth)');
-    const corpusMount = indexSource.indexOf('app.use("/api/corpus", corpusRouter)');
 
     expect(authRoutesMount).toBeGreaterThanOrEqual(0);
     expect(authBoundaryMount).toBeGreaterThan(authRoutesMount);
-    expect(corpusMount).toBeGreaterThan(authBoundaryMount);
+
+    // Chat attachments, tool-result figures, and on-demand scratch images all
+    // serve user files, so each has to sit behind the boundary.
+    for (const mount of [
+      'app.use("/api/user-images", userImagesRouter)',
+      'app.use("/api/tool-result-images", toolResultImagesRouter)',
+      'app.use("/api/local-images", localImagesRouter)',
+    ]) {
+      const index = indexSource.indexOf(mount);
+      expect(index, `${mount} is not mounted`).toBeGreaterThanOrEqual(0);
+      expect(index, `${mount} is mounted before requireAuth`).toBeGreaterThan(authBoundaryMount);
+    }
   });
 
   it("does not mount non-auth API routers before requireAuth", () => {

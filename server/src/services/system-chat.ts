@@ -15,7 +15,6 @@ export interface SynthesisResult {
   toolCalls: ToolCall[];
   artifacts: any[];
   visuals: any[];
-  generatedImages: any[];
   memoryUpdates: string[];
   blockId?: string;
   success: boolean;
@@ -916,7 +915,6 @@ function makeErrorResult(message: string): SynthesisResult {
     toolCalls: [],
     artifacts: [],
     visuals: [],
-    generatedImages: [],
     memoryUpdates: [],
     success: false,
     error: message,
@@ -1065,12 +1063,10 @@ export async function runSystemSynthesis(options?: {
     // the model stuck prefilling a near-full context on reload.
     const artifacts: any[] = [];
     const visuals: any[] = [];
-    const generatedImages: any[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
       visuals,
-      generatedImages,
     });
 
     const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
@@ -1299,7 +1295,6 @@ export async function runSystemSynthesis(options?: {
       toolCalls: allToolCalls,
       artifacts,
       visuals,
-      generatedImages,
       memoryUpdates,
       success: true,
     };
@@ -1410,12 +1405,10 @@ export async function runWakeCycle(options?: {
     // Build tools
     const artifacts: any[] = [];
     const visuals: any[] = [];
-    const generatedImages: any[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
       visuals,
-      generatedImages,
     });
     const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
       .filter((tool) => tool.name !== "ask_user");
@@ -1515,7 +1508,6 @@ export async function runWakeCycle(options?: {
         toolCalls: allToolCalls,
         artifacts,
         visuals,
-        generatedImages,
         memoryUpdates,
         success: false,
         error: errorMessage,
@@ -1549,7 +1541,6 @@ export async function runWakeCycle(options?: {
       toolCalls: allToolCalls,
       artifacts,
       visuals,
-      generatedImages,
       memoryUpdates,
       success: true,
     };

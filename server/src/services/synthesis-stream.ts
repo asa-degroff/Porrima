@@ -3,7 +3,6 @@ import type {
   ChatMessage,
   ChatToolCall,
   ChatToolResult,
-  GeneratedImage,
   InlineVisual,
   MessageUsage,
   TurnResyncPayload,
@@ -29,12 +28,11 @@ import {
 
 export interface OutputSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "visual";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
-  generatedImage?: GeneratedImage;
   visual?: InlineVisual;
 }
 
@@ -45,7 +43,6 @@ export interface SynthesisStreamState {
   toolResults: ChatToolResult[];
   artifacts: Artifact[];
   visuals: InlineVisual[];
-  generatedImages: GeneratedImage[];
   segments: OutputSegment[];
   seqCounter: number;
   pendingText: string;
@@ -69,7 +66,6 @@ export class SynthesisEmitter {
       toolResults: [],
       artifacts: [],
       visuals: [],
-      generatedImages: [],
       segments: [],
       seqCounter: 0,
       pendingText: "",
@@ -196,16 +192,6 @@ export class SynthesisEmitter {
     this.writeEvent("visual", visual);
   }
 
-  emitGeneratedImage(image: GeneratedImage): void {
-    this.state.generatedImages.push(image);
-    this.state.segments.push({
-      seq: ++this.state.seqCounter,
-      type: "generated_image",
-      generatedImage: image,
-    });
-    this.writeEvent("generated_image", image);
-  }
-
   /**
    * Per-iteration update with usage + estimate. The client's TokenIndicator
    * reads this to update the bar mid-loop.
@@ -271,8 +257,6 @@ export class SynthesisEmitter {
       toolResults: this.state.toolResults.length > 0 ? this.state.toolResults : undefined,
       artifacts: this.state.artifacts.length > 0 ? this.state.artifacts : undefined,
       visuals: this.state.visuals.length > 0 ? this.state.visuals : undefined,
-      generatedImages:
-        this.state.generatedImages.length > 0 ? this.state.generatedImages : undefined,
       segments: this.state.segments.length > 0 ? this.state.segments : undefined,
       timestamp: Date.now(),
       _isSystemMessage: true,
@@ -314,7 +298,6 @@ export class SynthesisEmitter {
       s.toolCalls.length > 0 ||
       s.artifacts.length > 0 ||
       s.visuals.length > 0 ||
-      s.generatedImages.length > 0 ||
       segments.length > 0;
     const message: ChatMessage | null = hasActivity
       ? {
@@ -326,7 +309,6 @@ export class SynthesisEmitter {
           toolResults: s.toolResults.length > 0 ? s.toolResults : undefined,
           artifacts: s.artifacts.length > 0 ? s.artifacts : undefined,
           visuals: s.visuals.length > 0 ? s.visuals : undefined,
-          generatedImages: s.generatedImages.length > 0 ? s.generatedImages : undefined,
           segments: segments.length > 0 ? segments : undefined,
           timestamp: Date.now(),
           _isSystemMessage: true,
@@ -368,7 +350,6 @@ export class SynthesisEmitter {
 export interface EffectBuckets {
   artifacts: Artifact[];
   visuals: InlineVisual[];
-  generatedImages: GeneratedImage[];
 }
 
 export function createEmitterSideEffects(
@@ -377,7 +358,6 @@ export function createEmitterSideEffects(
 ): {
   onArtifact: (a: Artifact) => void;
   onVisual: (v: InlineVisual) => void;
-  onGeneratedImage: (img: GeneratedImage) => void;
   onPendingReviewImage: () => void;
   onAskUser: () => void;
 } {
@@ -389,10 +369,6 @@ export function createEmitterSideEffects(
     onVisual: (v) => {
       buckets.visuals.push(v);
       emitter.emitVisual(v);
-    },
-    onGeneratedImage: (img) => {
-      buckets.generatedImages.push(img);
-      emitter.emitGeneratedImage(img);
     },
     onPendingReviewImage: () => {},
     onAskUser: () => {},

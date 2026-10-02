@@ -2,14 +2,11 @@ import { isSynthesisActive } from "./system-chat.js";
 import { reapStaleTurnLease } from "./turn-gate.js";
 import { getDb, getSettings } from "./chat-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
-import { enrichCorpusBatchDetailed } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
 import { isSystemPauseActive } from "./system-pause.js";
 
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
 
 let delayedExtractionCheckRunning = false;
 const delayedExtractionsInProgress = new Set<string>();
@@ -18,57 +15,6 @@ const delayedExtractionsInProgress = new Set<string>();
 // ---------------------------------------------------------------------------
 // Delayed Extraction Check
 // ---------------------------------------------------------------------------
-
-/**
- * Check and run corpus enrichment for entries missing embeddings or elements.
- * Called every 30 minutes to process backlog from failed fire-and-forget enrichments.
- * Uses small batch size to avoid overwhelming the LLM API.
- */
-async function checkAndRunEnrichment() {
-  try {
-    // Skip if a chat is actively streaming — enrichment uses the same
-    // extraction server and would just queue behind compaction work.
-    if (hasActiveChats()) {
-      console.log("[scheduler] Skipping enrichment — active chat(s) in progress");
-      return;
-    }
-    // Skip if system synthesis is running — it uses the main model and
-    // should have priority over background enrichment.
-    if (isSynthesisActive()) {
-      console.log("[scheduler] Skipping enrichment — system synthesis active");
-      return;
-    }
-
-    const settings = await getSettings();
-    const batchSize = settings.enrichmentBatchSize ?? DEFAULT_ENRICHMENT_BATCH_SIZE;
-    const configuredExtractionModelId = settings.extractionModelId || settings.defaultModelId;
-    const extractionModelId = configuredExtractionModelId
-      ? normalizeRouterModelId(configuredExtractionModelId)
-      : configuredExtractionModelId;
-
-    const result = await enrichCorpusBatchDetailed(batchSize, extractionModelId);
-
-    if (result.processed === 0) {
-      return;
-    }
-
-    if (result.changed > 0) {
-      console.log(
-        `[scheduler] Enriched ${result.changed}/${result.processed} corpus entries ` +
-        `(${result.embedded} embeddings, ${result.extractedElements} element sets; ` +
-        `model: ${extractionModelId || 'default'})`
-      );
-    } else {
-      console.log(
-        `[scheduler] Enrichment processed ${result.processed} candidate(s) but made no changes ` +
-        `(selected ${result.selectedForEmbedding} for embedding, ${result.selectedForElements} for elements; ` +
-        `model: ${extractionModelId || 'default'})`
-      );
-    }
-  } catch (e) {
-    console.error("[scheduler] Enrichment check failed:", e);
-  }
-}
 
 /**
  * Find agent chats that are inactive and need delayed extraction.
@@ -277,17 +223,8 @@ export function startScheduler(): void {
     checkAndRunDelayedExtractions();
   }, 2 * 60 * 1000);
   
-  // Enrichment: wait 1 minute on startup before processing backlog
-  setTimeout(() => {
-    console.log("[scheduler] Running initial enrichment check (after 1min delay)...");
-    checkAndRunEnrichment();
-  }, 1 * 60 * 1000);
-  
   // Check every 5 minutes for delayed extractions
   setInterval(checkAndRunDelayedExtractions, DELAYED_EXTRACTION_CHECK_INTERVAL_MS);
-  
-  // Check every 30 minutes for corpus enrichment
-  setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
   // Check llama.cpp server PIDs every 30 seconds to detect restarts and clear
   // stale cache residency records. The KV cache is process-local — when the
@@ -299,5 +236,5 @@ export function startScheduler(): void {
   // arrives to trigger the steal-on-acquire path.
   setInterval(reapStaleTurnLease, 60_000);
 
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s, turn-gate reap every 1min)");
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min)");
 }

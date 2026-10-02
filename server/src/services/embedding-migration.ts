@@ -6,11 +6,9 @@
  *   ~/.porrima/backups/<id>/
  *     manifest.json
  *     memories.db
- *     corpus.db
  *
- * Migration rebuilds vec_memories and vec_corpus at whatever dimension the
- * currently-configured embedding model produces, then re-embeds every stored
- * memory text and corpus prompt/description.
+ * Migration rebuilds vec_memories at whatever dimension the currently-configured
+ * embedding model produces, then re-embeds every stored memory text.
  */
 
 import { copyFile, mkdir, readdir, readFile, stat, writeFile, rm } from "fs/promises";
@@ -23,12 +21,6 @@ import {
   rebuildVecMemoriesTable,
   buildMemoryIndexText,
 } from "./memory-storage.js";
-import {
-  getCorpusDb,
-  closeCorpusDb,
-  getCorpusDbPath,
-  rebuildCorpusVecTable,
-} from "./image-corpus.js";
 import {
   embedBatchWithConfig,
   getEmbeddingConfig,
@@ -107,16 +99,14 @@ export interface BackupManifest {
   };
   counts: {
     memories: number;
-    corpus: number;
   };
   sourceSizes: {
     memoriesBytes: number;
-    corpusBytes: number;
   };
 }
 
 export interface MigrationProgress {
-  phase: "probe" | "memories" | "corpus" | "commit" | "done" | "error";
+  phase: "probe" | "memories" | "commit" | "done" | "error";
   processed?: number;
   total?: number;
   message?: string;
@@ -163,7 +153,6 @@ export async function createBackup(label?: string): Promise<BackupManifest> {
   await mkdir(dir, { recursive: true });
 
   const memoryPath = getMemoryDbPath();
-  const corpusPath = getCorpusDbPath();
 
   // Checkpoint WAL before copy so the snapshot is self-contained.
   try {
@@ -171,22 +160,12 @@ export async function createBackup(label?: string): Promise<BackupManifest> {
   } catch (e) {
     console.warn("[migration] memory wal_checkpoint failed:", e);
   }
-  try {
-    getCorpusDb().pragma("wal_checkpoint(TRUNCATE)");
-  } catch (e) {
-    console.warn("[migration] corpus wal_checkpoint failed:", e);
-  }
 
   const destMemory = join(dir, "memories.db");
-  const destCorpus = join(dir, "corpus.db");
   if (existsSync(memoryPath)) await copyFile(memoryPath, destMemory);
-  if (existsSync(corpusPath)) await copyFile(corpusPath, destCorpus);
 
-  const [memoryCount, corpusCount] = countRows();
-  const [memSize, corpSize] = await Promise.all([
-    fileSize(destMemory),
-    fileSize(destCorpus),
-  ]);
+  const memoryCount = countRows();
+  const memSize = await fileSize(destMemory);
 
   const settings = await getSettings();
   const manifest: BackupManifest = {
@@ -199,8 +178,8 @@ export async function createBackup(label?: string): Promise<BackupManifest> {
       model: settings.embeddedByModel ?? settings.embeddingModel ?? "qwen3-embedding:0.6b",
       dimension: settings.embeddingDimension,
     },
-    counts: { memories: memoryCount, corpus: corpusCount },
-    sourceSizes: { memoriesBytes: memSize, corpusBytes: corpSize },
+    counts: { memories: memoryCount },
+    sourceSizes: { memoriesBytes: memSize },
   };
 
   await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
@@ -225,17 +204,13 @@ export async function restoreBackup(id: string): Promise<void> {
   const manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as BackupManifest;
 
   const srcMemory = join(dir, "memories.db");
-  const srcCorpus = join(dir, "corpus.db");
 
   closeMemoryDb();
-  closeCorpusDb();
 
   if (existsSync(srcMemory)) await copyFile(srcMemory, getMemoryDbPath());
-  if (existsSync(srcCorpus)) await copyFile(srcCorpus, getCorpusDbPath());
 
   // Reopen by touching getDb (via a trivial call)
   getMemoryDb();
-  getCorpusDb();
 
   // Restore the embedding settings recorded at backup time so subsequent
   // reads/writes use the same model that produced the restored vectors.
@@ -252,7 +227,7 @@ export async function restoreBackup(id: string): Promise<void> {
 
 export async function migrate(
   onProgress: (p: MigrationProgress) => void
-): Promise<{ memories: number; corpus: number; dimension: number }> {
+): Promise<{ memories: number; dimension: number }> {
   const cfg = await getEmbeddingConfig();
 
   const startedAt = new Date().toISOString();
@@ -283,28 +258,9 @@ export async function migrate(
       wrapProgress({ phase: "memories", processed, total: memRows.length })
   );
 
-  // Gather corpus entries that have prompt text, falling back to descriptions
-  // for analyzed/uploaded images.
-  const corpusDb = getCorpusDb();
-  const corpusRows = corpusDb
-    .prepare(
-      `SELECT id, COALESCE(NULLIF(prompt, ''), NULLIF(description, '')) AS text
-       FROM corpus_entries
-       WHERE (prompt IS NOT NULL AND prompt != '') OR description != ''`
-    )
-    .all() as Array<{ id: string; text: string }>;
-
-  const corpusVectors = await embedInBatches(
-    cfg,
-    corpusRows.map((r) => r.text),
-    (processed) =>
-      wrapProgress({ phase: "corpus", processed, total: corpusRows.length })
-  );
-
   wrapProgress({ phase: "commit", message: "Rebuilding vector tables" });
 
   rebuildVecMemoriesTable(dimension);
-  rebuildCorpusVecTable(dimension);
 
   const insertMemVec = memoryDb.prepare(
     "INSERT INTO vec_memories (id, embedding) VALUES (?, ?)"
@@ -316,16 +272,6 @@ export async function migrate(
   });
   insertMem();
 
-  const insertCorpusVec = corpusDb.prepare(
-    "INSERT INTO vec_corpus (id, embedding) VALUES (?, ?)"
-  );
-  const insertCorpus = corpusDb.transaction(() => {
-    for (let i = 0; i < corpusRows.length; i++) {
-      insertCorpusVec.run(corpusRows[i].id, new Float32Array(corpusVectors[i]));
-    }
-  });
-  insertCorpus();
-
   // Record the new dimension and source model in user settings so the UI can
   // warn if config drifts without a migration, and so createBackup() records
   // the correct model name for the vectors that actually live in the DB.
@@ -336,13 +282,13 @@ export async function migrate(
     embeddedByModel: cfg.model,
   });
 
-  const doneMsg = `Re-embedded ${memRows.length} memories + ${corpusRows.length} corpus entries at dim ${dimension}`;
+  const doneMsg = `Re-embedded ${memRows.length} memories at dim ${dimension}`;
   wrapProgress({ phase: "done", message: doneMsg });
 
   // Clear persisted progress on success so a fresh open shows clean state.
   await persistProgress(null);
 
-  return { memories: memRows.length, corpus: corpusRows.length, dimension };
+  return { memories: memRows.length, dimension };
 }
 
 // ---------------------------------------------------------------------------
@@ -364,20 +310,12 @@ async function embedInBatches(
   return out;
 }
 
-function countRows(): [number, number] {
-  let memoryCount = 0;
-  let corpusCount = 0;
+function countRows(): number {
   try {
-    memoryCount = (getMemoryDb().prepare("SELECT COUNT(*) c FROM memories").get() as { c: number }).c;
+    return (getMemoryDb().prepare("SELECT COUNT(*) c FROM memories").get() as { c: number }).c;
   } catch {
-    // ignore
+    return 0;
   }
-  try {
-    corpusCount = (getCorpusDb().prepare("SELECT COUNT(*) c FROM corpus_entries").get() as { c: number }).c;
-  } catch {
-    // ignore
-  }
-  return [memoryCount, corpusCount];
 }
 
 async function fileSize(path: string): Promise<number> {

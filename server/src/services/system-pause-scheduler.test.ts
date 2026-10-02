@@ -19,7 +19,6 @@ const MOCKED_MODULES = [
   "./automation-lock.js",
   "./automation-runner.js",
   "./system-chat.js",
-  "./image-corpus.js",
   "./llama-router-client.js",
   "./automation-scheduler.js",
 ];
@@ -102,9 +101,6 @@ describe("system pause scheduler gates", () => {
     }));
     vi.doMock("./cache-warm-queue.js", () => ({
       getQueueLength: vi.fn(() => 0),
-    }));
-    vi.doMock("./image-corpus.js", () => ({
-      enrichCorpusBatch: vi.fn(),
     }));
     vi.doMock("./llama-router-client.js", () => ({
       normalizeRouterModelId: vi.fn((id: string) => id),

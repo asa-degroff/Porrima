@@ -5650,7 +5650,6 @@ function isEmptyAssistantPlaceholder(message: ChatMessage | undefined): boolean 
     !message.toolCalls?.length &&
     !message.toolResults?.length &&
     !message.artifacts?.length &&
-    !message.generatedImages?.length &&
     !message.visuals?.length &&
     !message.segments?.length
   );

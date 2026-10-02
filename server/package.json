@@ -20,7 +20,6 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",
-    "icodec": "^0.6.0",
     "linkedom": "^0.18.12",
     "puppeteer-core": "^25.4.0",
     "sentence-tokenizer": "^1.0.1",

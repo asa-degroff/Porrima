@@ -20,10 +20,8 @@ router.get("/", async (_req, res) => {
 router.post("/", async (req, res) => {
   try {
     const label = typeof req.body?.label === "string" ? req.body.label.trim() : "";
-    const includeCorpus = req.body?.includeCorpus === true;
     const manifest = await createAgentSnapshot({
       label: label || undefined,
-      includeCorpus,
     });
     res.json({ manifest });
   } catch (e: any) {
