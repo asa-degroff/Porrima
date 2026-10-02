@@ -99,7 +99,6 @@ const SECTIONS = [
   { id: 'user-doc', label: 'About You' },
   { id: 'presets', label: 'Quick chats' },
   { id: 'api-keys', label: 'API Keys' },
-  { id: 'images', label: 'Images' },
   { id: 'vision', label: 'Vision' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
@@ -5471,7 +5470,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div id="vision" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Vision</h3>
             <p className="text-white/30 text-xs">
-              Images sent to the vision model are downscaled to the size below.
+              Images sent to the model are downscaled to the size below.
             </p>
 
             <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
