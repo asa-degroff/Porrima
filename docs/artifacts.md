@@ -1,4 +1,4 @@
-# Artifacts & Image Systems
+# Artifacts
 
 ## Artifact System
 
@@ -77,67 +77,3 @@ Minimal pattern:
   });
 </script>
 ```
-
-## Image Corpus & Clustering
-
-**Corpus Storage** (`server/src/services/image-corpus.ts`):
-- Migrated from JSON to SQLite (`~/.porrima/image-corpus/corpus.db`) with sqlite-vec for vector search
-- Stores all images: generated (ComfyUI), analyzed (vision), uploaded (user)
-- **Schema**: `corpus_entries` table with JSON `elements` column (themes, settings, characters, concepts, styles, mood)
-- **Vector search**: `vec_corpus` virtual table with 1024-dim prompt embeddings, cosine distance
-- **FTS5**: `fts_corpus` on prompt + description with auto-sync triggers
-- **Hybrid search**: `searchCorpusHybrid()` combines FTS5 + vector similarity via RRF (Reciprocal Rank Fusion)
-- **Novelty scoring**: `computeNovelty(embedding)` returns 1.0 - maxSimilarity against corpus
-
-**Clustering** (`server/src/services/cluster-engine.ts`, `cluster-storage.ts`):
-- Exemplar clustering using pairwise cosine similarity matrix
-- Threshold: 0.97 similarity (configurable); images above threshold are grouped around the densest remaining exemplar
-- **Cluster properties**: centroid (average embedding), dominantElements (top 5 themes/settings/etc.), variance, size
-- **Singletons**: unclustered images become single-member clusters
-- **Persistence**: clusters saved to `~/.porrima/clusters/clusters.json`
-- **UI**: CorpusView with force-directed graph visualization (D3), cluster detail panels
-
-## Corpus Utilities
-
-The current corpus backend focuses on storage, enrichment, clustering, cleanup, and visualization:
-
-- `image-corpus.ts` stores entries, embeddings, FTS rows, enrichment metadata, and orphan cleanup.
-- `cluster-engine.ts` rebuilds density-based clusters from the current corpus.
-- `cluster-storage.ts` persists cluster maps in `~/.porrima/clusters/clusters.json`.
-- `visualization.ts` generates the D3 force-directed graph served by `/api/corpus/visualization`.
-
-## Image Generation
-
-**Pluggable backend** (`server/src/services/image-backend.ts`): `getImageBackendByName()` returns `sdcppBackend` when `settings.imageBackend === "sdcpp"`, otherwise `comfyuiBackend`. Both implement the same `ImageBackend` interface (`getStatus` / `getModels` / `generate`) and share the resource coordinator.
-
-**ComfyUI** (`comfyui.ts`, `image-generation.ts`):
-- Queue-based generation with progress tracking via SSE
-- Generation state tracked in-memory with clientId for SSE subscriptions
-- Links ComfyUI promptId to internal generationId for progress correlation
-
-**stable-diffusion.cpp** (`sdcpp.ts`):
-- A1111-compatible `/sdapi/v1/txt2img` synchronous API against `settings.sdcppUrl` (default `http://127.0.0.1:1234`)
-- Maps A1111 scheduler names onto what sd-server accepts (`normal` → `discrete`, `beta` → `simple`); seeds are resolved client-side
-- Uses a 30-minute undici dispatcher because Vulkan generations can be very slow
-- Manages a `sd-server.service` lifecycle: starts on demand, polls for HTTP readiness, restarts the service on HTTP-500 zombie-context errors, and stops it after a 5-minute idle delay
-
-**Generation state**: a debounced (500ms) JSON registry at `~/.porrima/images/generations.json` serializes all in-memory `GenerationState` objects. Records older than 24h are dropped on load, and any surviving `queued`/`processing` row is force-marked `error` on restart. Image *blobs* live separately at `~/.porrima/images/{id}/image.{ext}` (JXL-capable) + `thumb.webp` + `metadata.json`. On completion, a `type: "generated"` corpus entry is auto-created and `enrichCorpusEntry()` runs asynchronously with the extraction model.
-
-**Model presets** (`image-presets.ts`): per-model default `steps` / `cfgScale` / `sampler` / `scheduler` for `z-image-base` (30 steps, CFG 4.0, euler/normal) and `z-image-turbo` (9 steps, CFG 0.0, euler/sgm_uniform).
-
-**Agent-driven generation**: none. No image-generation tool is registered in `agent-tools.ts`. The agent can only *ingest* images — `read_pdf` with `extractImages` returns inline figures, `browser_screenshot` returns page images, and artifact previews return render screenshots. Generation is driven from the `ImageSandbox` / `GeneratedImagePanel` UI through `POST /api/images/generate`.
-
-**Inline local images**: when the agent links an image it rendered to a scratch path (`![before/after](/tmp/render.png)`), the client rewrites the src to `/api/local-images?path=...` and the server serves it on demand from disk. Nothing is copied or persisted — the message row and the wire context stay byte-identical — so a reference works only as long as the file exists. Serving is limited to allowed roots (home, `/tmp`, `/var/tmp`, local project roots), real image bytes (magic-byte check), and a 64 MB cap. See the local filesystem images section in [api-reference.md](api-reference.md).
-
-**GPU coordination**: `resource-coordinator.ts` `acquireResources()` waits for in-flight LLM streams to finish, then unloads llama.cpp models smallest-first until the VRAM deficit is covered. SDCPP additionally declares a RAM requirement (~15GB free) because `sd-server` pins memory via `--offload-to-cpu`.
-
-**Header images** (`header-image-storage.ts`): a single custom chat header image at `~/.porrima/header-image/`, center-cropped to a 96×96 WebP thumbnail, with mtime-based `?v=` cache-busting and cleanup of superseded extensions.
-
-**UI**: `ImageSandbox`, `ImageGallery`, `GeneratedImagePanel`, `CorpusView`
-
-## Vision Analysis
-
-- Image description and analysis with pluggable presets
-- Conversation about analyzed images
-- Stored in `~/.porrima/vision/`
-- UI: `VisionChat`, `VisionControls`

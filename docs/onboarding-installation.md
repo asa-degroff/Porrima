@@ -13,10 +13,9 @@ The default profile is `core`.
 
 - `core`: Porrima, Node dependencies, SQLite/vector storage, llama.cpp, and managed llama.cpp user services.
 - `tts`: optional Python TTS environment and audio tooling.
-- `images`: optional image backend such as ComfyUI or stable-diffusion.cpp.
 - `automations`: optional onboarding defaults for scheduled routines.
 
-First-time users should start with `core`. Voice and image generation can be added later from Settings.
+First-time users should start with `core`. Voice can be added later from Settings.
 
 ## Website Options
 
@@ -34,7 +33,7 @@ node install/render-agent-prompt.mjs --repo=https://github.com/YOUR_ORG/porrima.
 Generate a full prompt:
 
 ```bash
-node install/render-agent-prompt.mjs --repo=https://github.com/YOUR_ORG/porrima.git --ref=main --features=core,tts,images,automations
+node install/render-agent-prompt.mjs --repo=https://github.com/YOUR_ORG/porrima.git --ref=main --features=core,tts,automations
 ```
 
 ## Probe

@@ -59,11 +59,7 @@ Async IIFE for `reconnectChat` was missing try/catch — unhandled rejection cou
 PWA theme adapts via `var(--theme-bg-flat)`. Skill chips use theme-accent variables. TTS button bottom-right. MemoryDebugPanel: Memories/Blocks/Graph/Extraction tabs. Theming: 13 preset themes plus a custom mode with a luminance-gated background and saved named presets (see [ui-patterns.md](ui-patterns.md)).
 Automation settings: expandable prompt editors (collapsible by default). Custom dropdowns in SettingsModal (replaced native `<select>`, fixed React #310 with keyed state + centralized click-outside handler).
 Mobile layout corrections: `w-full` on row wrappers, `flex-wrap` on rigid flex rows, "show what matters, hide what doesn't" responsive philosophy. Context indicator visible on mobile (hides arrows on narrow screens). Provider icon hidden on mobile in model selector.
-ImageSandbox: unified `useGestureDrawer` hook for slide-over drawers. iPad portrait (768-834px) now treated as mobile with drawers (breakpoint moved from `md` to `lg`). Vision Controls button: Eye icon (replaced gear).
 Search provider checkboxes: Brave/Exa/Tavily visibility toggles, default Brave enabled.
 **Planned**: settings modal mobile redesign.
-
-## Image Generation
-Pluggable backend (`image-backend.ts`): ComfyUI or stable-diffusion.cpp. `waitForFreeVRAM` gate. Dual-GPU: GPU 0 for LLMs, GPU 1 for image backends.
 
 Theming (`ThemePicker` + `utils/custom-theme.ts`): 12 built-in themes (Lapis, Ocean, Forest, Crimson, Asphalt, Strawberry, Coffee, Emerald, Copper, Verdigris, Iron, Rust) plus a `custom` mode where the user sets background and accent colors directly. Custom colors can be saved as named presets (unique case-insensitive names, 32-char cap, edit-in-place by id); presets persist server-side, and `chat-storage.ts` owns the authoritative `normalizeThemePresetName` rules that the client mirrors.

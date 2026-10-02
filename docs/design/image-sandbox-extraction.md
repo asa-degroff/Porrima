@@ -1,7 +1,12 @@
 # Image Sandbox Extraction
 
-**Status:** Proposed
+**Status:** Executed
 **Date:** 2026-10-02
+
+> **This plan has been carried out.** The Image Sandbox now lives in its own repository
+> (`image-studio`). The file names below are the Porrima-side names at the time this was
+> written; most of them no longer exist here.
+
 **Decision:** Cut the Image Sandbox (analyze / generate / corpus) out of Porrima. Ship it as a separate standalone app built from the extracted code.
 
 ## Why

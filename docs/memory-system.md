@@ -191,7 +191,7 @@ In headless automation turns (`chat-turn-runner.ts`), the search context include
 
 ## Memory Graph (`memory-graph.ts`)
 
-Beyond pairwise retrieval, the system maintains an explicit similarity graph over memories so the client can visualise relationships and inspect neighbours the agent never asked for. **It is a read-only analysis surface** — no retrieval path and no agent tool traverses it. Edges are pure nearest-neighbour cosine (thresholded, then top-k per source); there is no multi-hop expansion and no recency, importance, or durability term in a semantic edge's score. Clusters are plain connected-components over the semantic subgraph, so lineage links do not merge them. (`cluster-engine.ts`'s 0.97 density clustering over *images* is a different algorithm and a different corpus.)
+Beyond pairwise retrieval, the system maintains an explicit similarity graph over memories so the client can visualise relationships and inspect neighbours the agent never asked for. **It is a read-only analysis surface** — no retrieval path and no agent tool traverses it. Edges are pure nearest-neighbour cosine (thresholded, then top-k per source); there is no multi-hop expansion and no recency, importance, or durability term in a semantic edge's score. Clusters are plain connected-components over the semantic subgraph, so lineage links do not merge them.
 
 - **Defaults**: `minSimilarity` 0.9, `neighbors` 6, `limit` 500 (capped at 2500).
 - **Edge building has two paths**, chosen by size and reported in `stats.edgeSource`:

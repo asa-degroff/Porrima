@@ -2,7 +2,7 @@
 
 ## Project
 
-**Porrima** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
+**Porrima** — A feature-rich agent framework and user interface with persistent memory, project context, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
 
 ## Quick Reference
 
@@ -54,15 +54,12 @@ Automations are configurable recurring system-chat tasks. Built-ins cover synthe
 
 See also: [docs/memory-blocks.md](docs/memory-blocks.md) for the block system details.
 
-## Artifacts & Image Systems
+## Artifacts & Images
 
-See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full details.
+See [docs/artifacts.md](docs/artifacts.md) for full details.
 
 - **Artifacts**: `create_artifact` tool writes HTML to `~/.porrima/artifacts/`. Blob URLs for iframe src (critical for Chrome animation performance).
-- **Image Corpus**: SQLite + sqlite-vec + FTS5. Hybrid search via RRF. Density-based clustering (0.97 threshold — distinct from the 0.85 memory-dedup threshold).
-- **Corpus/Clustering**: SQLite corpus storage, enrichment, FTS/vector search, density-based clustering, and D3 visualization.
-- **Image Generation**: Pluggable backend selection (`image-backend.ts`; ComfyUI and stable-diffusion.cpp) with GPU/resource coordination for agent/tool-initiated image work.
-- **Vision**: Pluggable analysis presets with conversation support.
+- **Chat images**: Porrima ingests images but does not generate or analyze them. Attachments, tool-result figures, and artifact screenshots are stored under `~/.porrima/user-images/` and `~/.porrima/tool-result-images/`. Image generation, vision analysis, and the image corpus moved to a separate app.
 
 ## Integrations & Features
 
@@ -112,8 +109,6 @@ porrima/
 │   │   ├── embedding-migration.ts   # Embedding backup/migrate/restore (SSE progress)
 │   │   ├── extraction-prompt.ts     # Editable extraction prompt + version history
 │   │   ├── tts.ts                   # TTS settings, voices, generation, cached audio
-│   │   ├── vision.ts                # Vision analysis presets, streaming, re-analysis, chat
-│   │   ├── images.ts                # Image generation via pluggable backend
 │   │   ├── user-images.ts           # Attachment serving + removal
 │   │   ├── tool-result-images.ts    # Images emitted as tool results
 │   │   ├── artifacts.ts             # Versioned artifact serving (+ /visuals aliases)
@@ -122,8 +117,6 @@ porrima/
 │   │   ├── persona.ts               # Persona + version history
 │   │   ├── auth.ts                  # Passkey auth
 │   │   ├── push.ts                  # VAPID push subscriptions + presence
-│   │   ├── corpus.ts                # Corpus clusters, stats, cleanup, visualization
-│   │   ├── image-corpus.ts          # Corpus entry CRUD + element search + enrichment
 │   │   ├── notebooks.ts             # Notebook entry CRUD (user/agent) + search + bulk
 │   │   ├── ui-state.ts              # UI state persistence
 │   │   ├── user.ts                  # User profile document
@@ -206,7 +199,6 @@ porrima/
 │   │   ├── llama-router-client.ts   # llama.cpp router client
 │   │   ├── llama-slot-leases.ts     # Slot lease allocation
 │   │   ├── llama-prompt-debug.ts    # Prompt debugging helpers
-│   │   ├── resource-coordinator.ts  # GPU/VRAM resource coordination
 │   │   ├── tts.ts                   # Kokoro TTS integration
 │   │   ├── tts-qwen3.ts             # Qwen3-TTS backend
 │   │   ├── tts-supertonic.ts        # Supertonic-3 TTS backend
@@ -217,18 +209,6 @@ porrima/
 │   │   ├── tts-chunking.ts          # TTS text chunking
 │   │   ├── tts-retry.ts             # TTS retry policy
 │   │   ├── tts-text-preprocessor.ts # Markdown-to-speech text extraction
-│   │   ├── image-backend.ts         # Pluggable image backend selection (ComfyUI / SDCPP)
-│   │   ├── comfyui.ts               # ComfyUI API client
-│   │   ├── sdcpp.ts                 # stable-diffusion.cpp client
-│   │   ├── image-generation.ts      # Generation state tracking + SSE progress
-│   │   ├── image-storage.ts         # Generated image persistence + metadata
-│   │   ├── image-presets.ts         # Image generation presets
-│   │   ├── image-corpus.ts          # SQLite corpus + FTS5 + vector search + hybrid RRF
-│   │   ├── element-extraction.ts    # Structured extraction into 10 visual categories
-│   │   ├── cluster-engine.ts        # Density-based clustering with cosine similarity
-│   │   ├── cluster-storage.ts       # Cluster persistence + centroid/element computation
-│   │   ├── visualization.ts         # D3 force-directed graph HTML generation
-│   │   ├── vision-analysis.ts       # Vision model analysis
 │   │   ├── artifact-guidance.ts     # Artifact authoring guidance injected into prompts
 │   │   ├── artifact-preview.ts      # Artifact preview generation
 │   │   ├── tool-result-image-storage.ts # Persist images emitted as tool results
@@ -259,7 +239,7 @@ porrima/
 │   ├── types.ts                     # Shared interfaces (client copy)
 │   ├── api/                         # Fetch API clients: client.ts, auth, tts, user, persona, push, extraction-prompt
 │   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useOnlineStatus, useAuth, usePushNotifications, useCacheResidency, etc.)
-│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, NotebookView, MemoryGraphView, MemoryDebugPanel, PinnedPanel, ReminderCard, ThemePicker, SystemPromptEditor, ModelStatsModal, SystemStatsBar, SetupModal, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
+│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, NotebookView, MemoryGraphView, MemoryDebugPanel, PinnedPanel, ReminderCard, ThemePicker, SystemPromptEditor, ModelStatsModal, SystemStatsBar, SetupModal, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
 │   │   └── ui/                      # Primitives (MarkdownRenderer, Dropdown, ContextMenu, ToggleSwitch, SpeakerButton, DiffView, etc.)
 │   ├── contexts/                    # PinnedItemContext
 │   ├── styles/                      # Tailwind styles
@@ -274,7 +254,7 @@ porrima/
 
 Architecture and subsystems:
 
-- [API Reference](docs/api-reference.md) — Full endpoint table (229 endpoints)
+- [API Reference](docs/api-reference.md) — Full endpoint table (220 endpoints)
 - [Architecture](docs/architecture.md) — Chat types, provider layer, storage, compaction
 - [Chat Message Architecture](docs/chat-message-architecture.md) — Row canonicalization and replay fidelity
 - [Compaction](docs/compaction.md) — Indexed archival and the five compaction paths
@@ -283,7 +263,7 @@ Architecture and subsystems:
 - [Memory Blocks](docs/memory-blocks.md) — Structured knowledge document system
 - [Automations](docs/automations.md) — Configurable recurring system-chat tasks
 - [Cross-Chat Messaging](docs/cross-chat-messaging.md) — Delivering messages between chats
-- [Artifacts & Images](docs/artifacts-and-images.md) — Versioned artifacts, image backends, corpus
+- [Artifacts](docs/artifacts.md) — Versioned artifacts and visuals
 - [UI Patterns](docs/ui-patterns.md) — Streaming, theming, effects, client state
 - [Key Patterns](docs/key-patterns.md) — Cross-cutting invariants and important notes
 - [Data Storage](docs/data-storage.md) — Directory layout and all SQLite schemas

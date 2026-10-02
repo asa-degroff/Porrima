@@ -176,7 +176,7 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/snapshots` | List agent database snapshots |
-| POST | `/api/snapshots` | Create a snapshot (`{ label?, includeCorpus? }`) containing `app.db` and `memory/memories.db`, optionally `image-corpus/corpus.db`. Filesystem assets are not included |
+| POST | `/api/snapshots` | Create a snapshot (`{ label? }`) containing `app.db` and `memory/memories.db`. Filesystem assets are not included |
 | DELETE | `/api/snapshots/:id` | Delete a snapshot |
 | POST | `/api/snapshots/:id/restore` | Restore as a full database replacement. Creates a pre-restore snapshot first; automatic ones retain the latest 10 for up to 30 days |
 | GET | `/api/embedding/backups` | List embedding migration backups |
@@ -247,78 +247,6 @@ Artifacts and visuals are versioned. `create_artifact` writes to `~/.porrima/art
 | GET | `/api/artifacts/visuals/:id/metadata` | Alias of `/api/visuals/:id/metadata` |
 | GET | `/api/artifacts/visuals/:id/versions` | Alias of `/api/visuals/:id/versions` |
 | GET | `/api/artifacts/visuals/:id/versions/:version` | Alias of `/api/visuals/:id/versions/:version` |
-
-## Image generation (`routes/images.ts`)
-
-Backed by a pluggable backend (`services/image-backend.ts`; ComfyUI and SDCPP are supported).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/images/status` | Backend status |
-| GET | `/api/images/list` | List generated images |
-| GET | `/api/images/models` | Available backend models (`?url=` override) |
-| POST | `/api/images/search` | Search generated images (`{ query, limit? }`) |
-| GET | `/api/images/generations` | All generation records (recovery) |
-| GET | `/api/images/generation/:id/events` | SSE progress for one generation |
-| POST | `/api/images/generate` | Start a generation |
-| GET | `/api/images/:id` | Serve a generated image |
-| GET | `/api/images/:id/thumb` | Serve a thumbnail |
-| GET | `/api/images/:id/metadata` | Image metadata |
-| POST | `/api/images/:id/favorite` | Toggle favorite, returns new state |
-| DELETE | `/api/images/:id` | Delete a generated image |
-
-## Vision (`routes/vision.ts`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/vision/images` | List analyzed images |
-| GET | `/api/vision/presets` | List analysis presets |
-| GET | `/api/vision/images/:id` | Get one analyzed image |
-| GET | `/api/vision/images/:id/thumb` | Thumbnail |
-| GET | `/api/vision/images/:id/:filename` | Serve a derived file |
-| POST | `/api/vision/analyze` | Analyze an image |
-| POST | `/api/vision/analyze-stream` | Analyze an image (SSE) |
-| POST | `/api/vision/images/:id/reanalyze` | Re-run analysis |
-| POST | `/api/vision/images/:id/chat` | Chat about an analyzed image |
-| POST | `/api/vision/save` | Save an analyzed image to the corpus |
-| DELETE | `/api/vision/images/:id` | Delete an analyzed image |
-
-## Image corpus (`routes/image-corpus.ts`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/image-corpus` | List all corpus entries |
-| GET | `/api/image-corpus/stats` | Corpus statistics |
-| GET | `/api/image-corpus/:id` | Get one corpus entry |
-| GET | `/api/image-corpus/element/:type/:value` | Entries containing a given extracted element |
-| GET | `/api/image-corpus/chat/:chatId` | Entries produced in a chat |
-| GET | `/api/image-corpus/project/:projectId` | Entries from a project |
-| POST | `/api/image-corpus/enrich` | Batch corpus enrichment |
-
-## Corpus clustering (`routes/corpus.ts`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/corpus/clusters` | Get all clusters |
-| GET | `/api/corpus/clusters/:id` | Get one cluster with members |
-| POST | `/api/corpus/rebuild-clusters` | Rebuild clusters from the current corpus |
-| GET | `/api/corpus/visualization` | D3 force-directed graph HTML |
-| GET | `/api/corpus/stats` | Corpus statistics |
-| GET | `/api/corpus/stats-public` | Aggregate corpus statistics (legacy route name; still auth-gated) |
-| POST | `/api/corpus/cleanup` | Delete orphaned entries whose backing files no longer exist |
-| GET | `/api/corpus/cleanup/dry-run` | Preview orphaned entries without deleting |
-
-## TTS (`routes/tts.ts`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/tts/settings` | Get TTS settings |
-| POST | `/api/tts/settings` | Update TTS settings |
-| GET | `/api/tts/voices` | List available voices |
-| GET | `/api/tts/status` | Backend availability for one backend (`?backend=kokoro\|qwen3-tts\|supertonic-3`) |
-| POST | `/api/tts/generate` | Synthesize text |
-| POST | `/api/tts/generate-stream` | Synthesize with streaming |
-| GET | `/api/tts/audio/:cacheKey.wav` | Serve a cached audio clip |
 
 ## Images uploaded by the user (`routes/user-images.ts`)
 

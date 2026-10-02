@@ -6,7 +6,6 @@
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) server running locally (default port 32100)
 - A chat model loaded in llama.cpp (e.g., a Qwen3 GGUF model in the models directory)
 - An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 32103). Configurable in Settings → Inference Servers → Embedding server.
-- (Optional) An image backend: ComfyUI (`comfyui.service`) or stable-diffusion.cpp (`sd-server.service`). Porrima drives both via `systemctl --user`, so they need user-scope units, not just a running process. stable-diffusion.cpp additionally runs a stop-when-idle lifecycle with a 5-minute timer.
 - (Optional) Python packages for the `read_pdf` tool: `pip install pymupdf pymupdf4llm`
 - (Optional) TTS backends installed with `./scripts/install-tts-backend.sh kokoro|qwen3-tts|supertonic-3`
 
@@ -203,9 +202,9 @@ Then in Settings → Inference Servers → Embedding server, switch the provider
 Embeddings from different models are not comparable — existing memory searches will return poor results until all vectors are regenerated. To switch models safely:
 
 1. Open Settings → Inference Servers → Embedding server → Migration & Backups.
-2. Click **Back up now** (optionally with a label). This writes `memories.db` and `corpus.db` under `~/.porrima/backups/<timestamp>/`.
+2. Click **Back up now** (optionally with a label). This writes `memories.db` under `~/.porrima/backups/<timestamp>/`.
 3. Change the provider / URL / model to the new embedding config and save.
-4. Click **Re-embed all memories & corpus**. The UI shows progress; the operation may take several minutes for large stores and the chat is unavailable while vectors are being rewritten.
+4. Click **Re-embed all memories**. The UI shows progress; the operation may take several minutes for large stores and the chat is unavailable while vectors are being rewritten.
 5. If anything goes wrong, the backup can be restored from the same panel (the restored config will also overwrite your current embedding settings).
 
 ### Enable Services

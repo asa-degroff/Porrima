@@ -11,7 +11,7 @@
 - Messages synced from server after compaction to ensure correct chronological ordering
 - Context window editing restricted to fresh chats (no messages yet) to prevent mid-conversation model reloads
 - Long-history loading: initial chat fetch requests the most recent 200 messages, and `ChatView` loads older windows on scroll-to-top via `GET /api/chats/:id/messages`. Absolute indexes are preserved with `messageOffset`
-- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text. Hidden system rows, including passive memory recalls, are filtered from the display projection and do not split the bubble; mid-turn compaction handoff rows pass through as their own indicator card (grouping still breaks on them)
+- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, visuals, thinking, and final text. Hidden system rows, including passive memory recalls, are filtered from the display projection and do not split the bubble; mid-turn compaction handoff rows pass through as their own indicator card (grouping still breaks on them)
 - **Steering (mid-turn follow-up)**: sending while a turn is streaming optimistically appends the queued user message *plus an empty assistant placeholder* marked `_steeringPending`, and the drained response streams into that bubble. `lib/steeringPlaceholders.ts` (`applyFollowUpStart()`) owns the transition; `_steeringPending` gates delta application so pre-steering in-flight content cannot leak into the follow-up bubble. Triggered by the server's `follow_up_start` SSE event
 - **Reconnect on refresh**: `useChat` re-attaches to a still-active stream via `GET /api/chat/status/:chatId` (which folds the message window into the same response) and then `GET /api/chat/reconnect/:chatId`. A stale, ended stream is never in the live registry, so the probe distinguishes "finished while you were away" from "still going"
 
@@ -87,18 +87,16 @@ No state-management library. Client state is split across:
 - React hooks, plus two local contexts — `PinnedItemContext` and `ActivityStyleContext` (via `ActivityStyleProvider` at the app root)
 - Module-level singletons that outlive components: `bgStreams` / `drafts` (background stream and draft stores in `useChat`), `breakdownCache` (`TokenIndicator`), `blocksCache` (`BlockIndicator`), and `recentlyStreamingExpiries` (sessionStorage-backed)
 - **IndexedDB** (`lib/db.ts`): three object stores — `chatList`, `chats`, and `messageQueue` (the latter with a `by-chatId` index)
-- The **Cache API** for images (`utils/imageCache.ts`)
 - **localStorage** with legacy `quje-*` → `porrima-*` key migration (`lib/storage.ts`)
 - The **server** as a UI-state store: `GET/PUT /api/ui-state` persists five keys — `sidebarState`, `notebookLastSeen`, `activeChatId`, `activeView`, and `memoryGraphSettings`
 
 ### Lazy loading
 
-`lazy()` covers `ImageSandbox` and all four animated background effects (ripple-grid, scan-lines, ripple-dots, graph-paper), `MarkdownRenderer` (which additionally gets its own `markdown` Rollup chunk, split from `vendor`), and `ArtifactPanel` / `InlineVisual` in the notebook path.
+`lazy()` covers all four animated background effects (ripple-grid, scan-lines, ripple-dots, graph-paper), `MarkdownRenderer` (which additionally gets its own `markdown` Rollup chunk, split from `vendor`), and `ArtifactPanel` / `InlineVisual` in the notebook path.
 
 ## Other
 
 - Per-chat model selector showing models from llama.cpp server — **quick chats only**. Agent, project, and system chats show the configured default model read-only so their long-lived KV cache stays warm
-- Favorites exist for **generated images** only (heart toggle in the Image Sandbox plus a Favorites filter). There is no per-model favorite
 - System prompt presets: the editor (`SystemPromptEditor.tsx`) renders only for a **fresh quick chat** (quick type and zero messages), because editing the system prompt mid-conversation would invalidate the whole KV cache. The "Add preset" trigger label appears when no preset matches. The agent-only "None (persona only)" entry is currently unreachable — agent chats always pass `hidden` — and can be removed along with the now-dead `isAgent` prop
 - Markdown rendering with GFM support
 - Message edit preserves images from the original message

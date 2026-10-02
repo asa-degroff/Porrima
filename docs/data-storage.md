@@ -13,7 +13,7 @@ The project was renamed from `quje-agent` to `Porrima`. `paths.ts` performs both
 | `~/.quje-agent/` | `~/.porrima/` | Directory `renameSync` (skipped when `PORRIMA_DATA_DIR` is set or the target already exists) |
 | `~/.porrima/quje-agent.db` | `~/.porrima/porrima.db` | File `renameSync`, only when the target does not already exist |
 
-`QUJE_DATA_DIR` still overrides the legacy source path. The client carries the same pattern for `localStorage` keys and its IndexedDB database name (`LEGACY_*` constants in `App.tsx`, `lib/db.ts`, `hooks/useSidebarState.ts`, `hooks/useNotebooks.ts`, `utils/imageCache.ts`, `components/ImageControls.tsx`, `components/ImageSandbox.tsx`).
+`QUJE_DATA_DIR` still overrides the legacy source path. The client carries the same pattern for `localStorage` keys and its IndexedDB database name (`LEGACY_*` constants in `App.tsx`, `lib/db.ts`, `hooks/useSidebarState.ts`, `hooks/useNotebooks.ts`).
 
 ## Directory Layout
 
@@ -32,7 +32,6 @@ The project was renamed from `quje-agent` to `Porrima`. `paths.ts` performs both
 ├── chats/              # Legacy JSON files (migrated to app.db on startup)
 ├── projects/           # Legacy JSON files (migrated to app.db on startup)
 ├── pending/            # Legacy JSON files (migrated to app.db on startup)
-├── clusters/           # Legacy cluster data (clusters.json)
 ├── logs/               # Server logs
 ├── queue/              # Offline message queue
 ├── skills/             # Installed skill definitions
@@ -42,12 +41,7 @@ The project was renamed from `quje-agent` to `Porrima`. `paths.ts` performs both
 ├── tool-result-images/ # Images emitted as tool results
 ├── workspace/          # Sandbox/workspace scratch space
 ├── header-image/       # Custom chat header image (+ thumb)
-├── images/             # Generated images ({id}/image.jxl or image.png + metadata.json) + generations.json
 ├── user-images/        # User-uploaded attachments (originals + WebP thumbs)
-├── image-corpus/
-│   ├── corpus.db       # SQLite: corpus_entries + vec_corpus (sqlite-vec) + fts_corpus (FTS5)
-│   └── corpus.json.bak # Legacy JSON (migrated on first startup)
-├── vision/             # Analyzed images
 ├── notebooks/          # Notebook entry files — migration source/backup only; see below
 ├── push/               # VAPID keys for browser push notifications
 ├── settings.json       # Legacy JSON file (migrated to app.db on startup)
@@ -60,7 +54,7 @@ TTS audio caches (`tts-cache/`, `tts-cache-qwen3/`, `tts-cache-supertonic/`) are
 
 ## SQLite Schemas
 
-Three live databases plus a legacy fourth. The owning service determines the handle: `chat-storage.ts` (`app.db`), `memory-storage.ts` (`memories.db`), `image-corpus.ts` (`corpus.db`), and `model-stats.ts` / `reranker-stats.ts` (`porrima.db`, which each open directly rather than through a shared `getDb()`).
+Three live databases. The owning service determines the handle: `chat-storage.ts` (`app.db`), `memory-storage.ts` (`memories.db`), and `model-stats.ts` / `reranker-stats.ts` (`porrima.db`, which each open directly rather than through a shared `getDb()`).
 
 ### `app.db`
 
@@ -97,13 +91,6 @@ Opened via `memory-storage.ts` `getDb()`. Also the handle used by `notebook-stor
 - `user_notebook_entries_fts` — FTS5 virtual table over notebook content
 - `metadata` — key-value migration/version metadata
 
-### `image-corpus/corpus.db`
-
-- `corpus_entries` — image corpus metadata (`type`, `imagePath`, `prompt`, `description`, `elements` JSON, chat/project/direction IDs)
-- `vec_corpus` — sqlite-vec virtual table
-- `fts_corpus` — FTS5 virtual table (`id`, `prompt`, `description`) with auto-sync triggers
-- `metadata` — key-value schema version
-
 ### `porrima.db`
 
 - `model_stats` — per-request sampling rows: `modelId`, `provider`, `timestamp`, `promptTokens`, `predictedTokens`, `promptMs`, `predictedMs`, `sampleMs`, and derived `promptTokensPerSec` / `predictedTokensPerSec`
@@ -123,7 +110,7 @@ Canonical tool-loop rows are stored without flattening: each persisted assistant
 
 ## Backups
 
-`/api/snapshots` captures `app.db` and `memory/memories.db`, optionally `image-corpus/corpus.db` — filesystem assets are not included, and `porrima.db` is not captured. Restores replace databases wholesale after taking a pre-restore snapshot; automatic pre-restore snapshots retain the latest 10 for up to 30 days.
+`/api/snapshots` captures `app.db` and `memory/memories.db` — filesystem assets are not included, and `porrima.db` is not captured. Restores replace databases wholesale after taking a pre-restore snapshot; automatic pre-restore snapshots retain the latest 10 for up to 30 days.
 
 ## Maintenance Migrations
 

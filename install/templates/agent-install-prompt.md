@@ -14,14 +14,14 @@ Before installing:
   - public Porrima hostname, if remote access should be configured
   - Cloudflare account/zone and whether Cloudflare Access is available
   - model choices or model download preferences
-  - whether optional TTS, image generation, and automations should be installed now
+  - whether optional TTS and automations should be installed now
 - Do not overwrite existing services, data directories, model directories, or Cloudflare tunnel config without making backups and explaining the change.
 
 Requirements:
 - This is a desktop-GPU application. If no capable NVIDIA CUDA or AMD ROCm GPU is available, stop and report that the machine does not meet the recommended requirements.
 - Prefer reversible user-local installation.
 - Use systemd user services, not root services, unless OS package installation is required.
-- Install the core llama.cpp-based agent first. TTS and image generation are optional packs; only install the packs listed in the install profile.
+- Install the core llama.cpp-based agent first. TTS and automations are optional packs; only install the packs listed in the install profile.
 - Do not expose first-run Porrima on a public URL unless the raw first-run setup token has been printed to the `porrima.service` journal, the hash state exists at `~/.porrima/auth/setup-token.txt`, and `ORIGIN`/`RP_ID` are configured for that public origin.
 
 Probe:
@@ -105,9 +105,6 @@ Passkey and Cloudflare setup:
 
 Optional TTS pack:
 {{TTS_INSTRUCTIONS}}
-
-Optional image pack:
-{{IMAGE_INSTRUCTIONS}}
 
 Validation:
 - Run `systemctl --user daemon-reload`.
