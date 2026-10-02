@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { MarkdownImage } from "./MarkdownImage";
 
 // KaTeX CSS — provides rendering styles for inline and block math
 import "katex/dist/katex.min.css";
@@ -40,6 +41,13 @@ export function MarkdownRenderer({ content, isStreaming }: Props) {
             >
               {children}
             </a>
+          ),
+          img: ({ src, alt, title }) => (
+            <MarkdownImage
+              src={typeof src === "string" ? src : undefined}
+              alt={alt}
+              title={title}
+            />
           ),
         }}
       >

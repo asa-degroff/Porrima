@@ -336,6 +336,14 @@ Attachments are uploaded **inline** as base64 in the `POST /api/chat` / `POST /a
 |--------|----------|-------------|
 | GET | `/api/tool-result-images/:id/image.:ext` | Serve an image emitted as a tool result |
 
+## Local filesystem images (`routes/local-images.ts`)
+
+Markdown images in message content that point at a local filesystem path (`/tmp/render.png`, `~/out.png`, `file:///...`) are rewritten client-side to this endpoint. Files are served **on demand, straight from disk** — nothing is copied into `~/.porrima` and the persisted message row is never modified. Serving requires an allowed root (home, `/tmp`, `/var/tmp`, or a local project root), image magic bytes (extension is irrelevant), and a file size of at most 64 MB. Scratch files that are later cleaned up simply stop resolving; the client renders an inline "image unavailable" note instead of a broken image icon.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/local-images?path=...` | Serve a local image referenced by markdown |
+
 ## Push notifications (`routes/push.ts`)
 
 | Method | Endpoint | Description |

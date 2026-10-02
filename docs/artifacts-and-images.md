@@ -127,6 +127,8 @@ The current corpus backend focuses on storage, enrichment, clustering, cleanup, 
 
 **Agent-driven generation**: none. No image-generation tool is registered in `agent-tools.ts`. The agent can only *ingest* images — `read_pdf` with `extractImages` returns inline figures, `browser_screenshot` returns page images, and artifact previews return render screenshots. Generation is driven from the `ImageSandbox` / `GeneratedImagePanel` UI through `POST /api/images/generate`.
 
+**Inline local images**: when the agent links an image it rendered to a scratch path (`![before/after](/tmp/render.png)`), the client rewrites the src to `/api/local-images?path=...` and the server serves it on demand from disk. Nothing is copied or persisted — the message row and the wire context stay byte-identical — so a reference works only as long as the file exists. Serving is limited to allowed roots (home, `/tmp`, `/var/tmp`, local project roots), real image bytes (magic-byte check), and a 64 MB cap. See the local filesystem images section in [api-reference.md](api-reference.md).
+
 **GPU coordination**: `resource-coordinator.ts` `acquireResources()` waits for in-flight LLM streams to finish, then unloads llama.cpp models smallest-first until the VRAM deficit is covered. SDCPP additionally declares a RAM requirement (~15GB free) because `sd-server` pins memory via `--offload-to-cpu`.
 
 **Header images** (`header-image-storage.ts`): a single custom chat header image at `~/.porrima/header-image/`, center-cropped to a 96×96 WebP thumbnail, with mtime-based `?v=` cache-busting and cleanup of superseded extensions.
