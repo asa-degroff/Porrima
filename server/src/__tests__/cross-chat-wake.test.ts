@@ -89,7 +89,7 @@ async function loadModules(homeDir: string) {
   });
   vi.doMock("../services/synthesis-stream.js", () => {
     class FakeEmitter {
-      state = { artifacts: [], visuals: [], generatedImages: [], segments: [], finalUsage: undefined };
+      state = { artifacts: [], visuals: [], segments: [], finalUsage: undefined };
       stream = { abort: new AbortController() };
       emitError = vi.fn();
       end = vi.fn();

@@ -1359,6 +1359,25 @@ const DEFAULT_SETTINGS: Settings = {
   llamaBinaryScanDir: `${os.homedir()}/bin`,
 };
 
+// Settings keys for subsystems that no longer exist. They were introduced for
+// the Image Sandbox, which moved to its own app. Persisted rows still carry
+// them, and saveSettings merges rather than replaces, so they would otherwise
+// linger forever. Setting them to undefined here drops them from every
+// normalizeSettings() result, which is the single choke point both reads and
+// writes pass through.
+const RETIRED_SETTINGS_KEYS = [
+  "imageSandboxEnabled",
+  "imageBackend",
+  "comfyuiUrl",
+  "sdcppUrl",
+  "defaultVisionPreset",
+  "defaultVisionModelId",
+] as const;
+
+const RETIRED_SETTINGS_STRIPPED: Record<string, undefined> = Object.fromEntries(
+  RETIRED_SETTINGS_KEYS.map((key) => [key, undefined])
+);
+
 export function normalizeSettings(settings: Settings): Settings {
   const extraction = normalizeExtractionRequestSettings(settings);
   const clamp = (value: unknown, fallback: number, min: number, max: number): number => {
@@ -1374,6 +1393,7 @@ export function normalizeSettings(settings: Settings): Settings {
       : undefined;
   return {
     ...settings,
+    ...RETIRED_SETTINGS_STRIPPED,
     customTheme: normalizeCustomTheme(settings.customTheme),
     themePresets: themePresets.length > 0 ? themePresets : undefined,
     activeThemePresetId,
@@ -2761,7 +2781,7 @@ export interface UserUIState {
   };
   notebookLastSeen?: string | null;
   activeChatId?: string | null;
-  activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+  activeView?: 'chats' | 'notebooks';
   memoryGraphSettings?: MemoryGraphSettings;
 }
 

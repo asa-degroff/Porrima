@@ -86,12 +86,11 @@ export interface ChatToolResult {
 /** A segment represents one unit of agent output in chronological order */
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual" | "compaction_marker";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "visual" | "compaction_marker";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
-  generatedImage?: GeneratedImage;
   visual?: InlineVisual;
   /** Client-only: live tool status during streaming (not persisted) */
   liveStatus?: { name: string; status: "running" | "done" | "error"; result?: string };
@@ -149,7 +148,6 @@ export interface ChatMessage {
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
-  generatedImages?: GeneratedImage[];
   visuals?: InlineVisual[];
   images?: ImageAttachment[];
   queued?: boolean;
@@ -471,7 +469,6 @@ export interface Settings {
   /** True after first-time setup wizard has been completed */
   setupCompleted?: boolean;
   defaultModelId: string;
-  defaultVisionModelId?: string;
   useChatModelForVision?: boolean;
   defaultSystemPrompt: string;
   braveApiKey: string;
@@ -481,10 +478,6 @@ export interface Settings {
   exaSearchEnabled?: boolean;
   tavilySearchEnabled?: boolean;
   defaultWebSearchProvider?: WebSearchProvider;
-  comfyuiUrl?: string;
-  sdcppUrl?: string;
-  imageBackend?: "comfyui" | "sdcpp";
-  imageSandboxEnabled?: boolean;
   theme?: Theme;
   customTheme?: CustomTheme;
   /** User-saved custom themes (named bookmarks of the custom mode). */
@@ -502,7 +495,6 @@ export interface Settings {
   activityHue?: number;
   activitySaturation?: number;
   systemPromptPresets?: SystemPromptPreset[];
-  defaultVisionPreset?: string;
   // Delayed memory extraction settings
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
@@ -775,53 +767,6 @@ export interface InlineVisual {
   html: string;
   url: string;
   version?: number;     // version number (defaults to 1 for backward compat)
-}
-
-export interface ImageGenerationParams {
-  positivePrompt: string;
-  negativePrompt?: string;
-  model: string;
-  steps: number;
-  cfgScale: number;
-  width: number;
-  height: number;
-  seed?: number;
-  sampler?: string;
-  scheduler?: string;
-}
-
-export interface GeneratedImage {
-  id: string;
-  url: string;
-  params: ImageGenerationParams;
-  resolvedSeed: number;
-  createdAt: string;
-  chatId?: string;
-  generatedBy?: 'user' | 'agent';  // Track generation source
-  description?: string;  // For analyzed images (search results may include these)
-  type?: 'generated' | 'analyzed' | 'uploaded';  // For search results
-  score?: number;  // For search results (relevance score)
-  isFavorite?: boolean;  // User favorite status
-}
-
-export interface ComfyUIStatus {
-  available: boolean;
-  queueSize: number;
-  models: string[];
-}
-
-export interface GenerationState {
-  id: string;
-  chatId?: string;
-  promptId?: string;
-  clientId: string;
-  params: ImageGenerationParams;
-  status: "queued" | "processing" | "completed" | "error";
-  progress: { step: number; total: number } | null;
-  imageUrl?: string;
-  error?: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 // TTS Types

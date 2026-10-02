@@ -107,7 +107,6 @@ export interface StorageMigrationDiagnostics {
       userBackup: number;
       agentBackup: number;
     };
-    corpusJsonBackup: LegacyJsonSummary;
   };
   warnings: string[];
 }
@@ -425,7 +424,6 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
     projectJsonFiles: countJsonFiles(join(APP_DATA_DIR, "projects")),
     settingsJson: fileSummary(join(APP_DATA_DIR, "settings.json")),
     notebookJsonFiles,
-    corpusJsonBackup: fileSummary(join(APP_DATA_DIR, "image-corpus", "corpus.json.bak")),
   };
 
   const warnings: string[] = [];

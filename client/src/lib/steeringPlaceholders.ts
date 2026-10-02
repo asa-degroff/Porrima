@@ -10,7 +10,6 @@ export function isEmptyAssistantPlaceholder(message: ChatMessage | undefined): b
     !message.toolCalls?.length &&
     !message.segments?.length &&
     !message.artifacts?.length &&
-    !message.generatedImages?.length &&
     !message.visuals?.length
   );
 }

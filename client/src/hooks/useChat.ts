@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
+import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -40,7 +40,6 @@ interface BackgroundStream {
   tools: ToolStatus[];
   artifacts: Artifact[];
   visuals: InlineVisual[];
-  generatedImages: GeneratedImage[];
   messages: ChatMessage[];
   streaming: boolean;
   waitingForInput: boolean;
@@ -171,7 +170,6 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     tools: [],
     artifacts: [],
     visuals: [],
-    generatedImages: [],
     messages: [],
     streaming: true,
     waitingForInput: false,
@@ -245,7 +243,6 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
     toolCalls: m.toolCalls ? m.toolCalls.map((tc) => ({ ...tc, arguments: { ...(tc.arguments ?? {}) } })) : undefined,
     toolResults: m.toolResults ? m.toolResults.map((tr) => ({ ...tr })) : undefined,
     artifacts: m.artifacts ? m.artifacts.map((artifact) => ({ ...artifact })) : undefined,
-    generatedImages: m.generatedImages ? m.generatedImages.map((image) => ({ ...image })) : undefined,
     visuals: m.visuals ? m.visuals.map((visual) => ({ ...visual })) : undefined,
     segments: m.segments ? m.segments.map((segment) => ({ ...segment })) : undefined,
   }));
@@ -335,7 +332,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   const streamingThinkingLastStartRef = useRef(0);
   const [activeTools, setActiveTools] = useState<ToolStatus[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<StreamWarning | null>(null);
@@ -420,7 +416,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       streamingThinkingLastStartRef.current = bg.thinkingActive ? bg.thinkingLastStart : 0;
       setActiveTools([...bg.tools]);
       setArtifacts([...bg.artifacts]);
-      setGeneratedImages([...bg.generatedImages]);
       setWaitingForInput(bg.waitingForInput);
       setError(bg.error);
       setWarning(bg.warning);
@@ -453,8 +448,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       streamingThinkingLastStartRef.current = 0;
       setActiveTools([]);
       setArtifacts([]);
-      setGeneratedImages([]);
-      setWaitingForInput(false);
+        setWaitingForInput(false);
       setError(null);
       setWarning(null);
       setCompacting(false);
@@ -633,25 +627,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
       },
-      onGeneratedImage: (image) => {
-        const bg = bgStreams.get(streamChatId);
-        if (!bg) return;
-        bg.generatedImages.push(image);
-
-        // Add generated image segment
-        bg.segments.push({ seq: bg.seqCounter++, type: "generated_image", generatedImage: image });
-
-        if (activeChatIdRef.current === streamChatId) {
-          setGeneratedImages([...bg.generatedImages]);
-          // Generated image segments indicate text is complete
-          setStreamingSegmentIndex(null);
-          // Schedule segment flush
-          if (rafRef.current === null) {
-            streamingContentRef.current = bg.content;
-            rafRef.current = requestAnimationFrame(flushStreamingContent);
-          }
-        }
-      },
       onVisual: (visual) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
@@ -670,7 +645,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
       },
-      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment, messageSequence, userMessageSequence }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment, messageSequence, userMessageSequence }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -726,7 +701,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             thinkingDurationMs: thinkingDurationMs || undefined,
             usage: usage || undefined,
             artifacts: doneArtifacts || undefined,
-            generatedImages: doneImages || undefined,
             visuals: doneVisuals || undefined,
             toolCalls: toolCalls || undefined,
             toolResults: toolResults || undefined,
@@ -762,7 +736,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           !finalContent &&
           !thinking &&
           !doneArtifacts &&
-          !doneImages &&
           !doneVisuals &&
           !toolCalls
         ) {
@@ -1156,8 +1129,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           streamingThinkingLastStartRef.current = bg.thinkingActive ? bg.thinkingLastStart : 0;
           setActiveTools([...bg.tools]);
           setArtifacts([...bg.artifacts]);
-          setGeneratedImages([...bg.generatedImages]);
-          setModelProgress(bg.modelProgress);
+              setModelProgress(bg.modelProgress);
           setInferenceActivityPhase(bg.inferenceActivityPhase);
           setCompacting(bg.compacting);
           setWaitingForInput(bg.waitingForInput);
@@ -1278,7 +1250,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
               bg.tools = [];
               bg.artifacts = [];
               bg.visuals = [];
-              bg.generatedImages = [];
               bg.segments = [];
               bg.seqCounter = 0;
               // Mirror the server's post-compaction context boundary on rows
@@ -1346,7 +1317,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
                 streamingThinkingLastStartRef.current = 0;
                 setActiveTools([]);
                 setArtifacts([]);
-                setGeneratedImages([]);
                 setMessages([...bg.messages]);
               }
             }
@@ -1457,7 +1427,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           bg.tools = [];
           bg.artifacts = [];
           bg.visuals = [];
-          bg.generatedImages = [];
           bg.segments = [];
           bg.seqCounter = 0;
           bg.toolPreviews = new Map();
@@ -1471,7 +1440,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           streamingThinkingLastStartRef.current = 0;
           setActiveTools([]);
           setArtifacts([]);
-          setGeneratedImages([]);
           setInferenceActivityPhase(bg.inferenceActivityPhase);
         };
 
@@ -1822,7 +1790,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     setStreamingThinking("");
     setActiveTools([]);
     setArtifacts([]);
-    setGeneratedImages([]);
     setWaitingForInput(false);
     setError(null);
     setWarning(null);
@@ -2386,7 +2353,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     streamingThinkingLastStartRef,
     activeTools,
     artifacts,
-    generatedImages,
     waitingForInput,
     totalUsage,
     isUsageEstimated,

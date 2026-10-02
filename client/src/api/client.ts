@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, ContextBreakdown, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ContextBreakdown, ImageAttachment, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -257,7 +257,7 @@ export interface ArtifactRuntimeErrorReport {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
+  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   /** A tool call began composing: the model is streaming its arguments.
@@ -270,7 +270,6 @@ export interface StreamCallbacks {
   onToolCallDelta?: (info: { index: number; delta: string }) => void;
   onArtifact?: (artifact: Artifact) => void;
   onVisual?: (visual: InlineVisual) => void;
-  onGeneratedImage?: (image: GeneratedImage) => void;
   onSegment?: (segment: import("../types").MessageSegment) => void;
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
@@ -379,14 +378,6 @@ async function readSSEBody(
             clearTimeout(inactivityTimer);
             inactivityTimer = null;
           }
-        }
-        if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
-          receivedDoneOrError = true;
-          if (inactivityTimer) {
-            clearTimeout(inactivityTimer);
-            inactivityTimer = null;
-          }
-          console.log("[SSE] Vision completion event received:", currentEvent);
         }
         processSSEEvent(currentEvent, data, callbacks);
       } catch {
@@ -659,7 +650,6 @@ function processSSEEvent(
         thinkingDurationMs: data.message?.thinkingDurationMs,
         usage: data.message?.usage,
         artifacts: data.message?.artifacts,
-        generatedImages: data.message?.generatedImages,
         visuals: data.message?.visuals,
         toolCalls: data.message?.toolCalls,
         toolResults: data.message?.toolResults,
@@ -692,16 +682,8 @@ function processSSEEvent(
     case "visual":
       callbacks.onVisual?.(data);
       break;
-    case "generated_image":
-      callbacks.onGeneratedImage?.(data);
-      break;
     case "ask_user":
       callbacks.onAskUser?.(data.question);
-      break;
-    case "description_complete":
-    case "reanalyze_complete":
-      // Vision stream completion — forward the raw data as the done payload
-      callbacks.onDone(data);
       break;
     case "iteration":
       callbacks.onIteration?.(data);
@@ -769,449 +751,6 @@ function processSSEEvent(
       else if (data.message) callbacks.onDone({ thinking: data.message?.thinking, usage: data.message?.usage });
       else if (data.error) callbacks.onError(data.error);
   }
-}
-
-// --- Image Generation API ---
-
-export interface GenerationState {
-  id: string;
-  chatId?: string;
-  promptId?: string;
-  clientId: string;
-  params: ImageGenerationParams;
-  status: "queued" | "processing" | "completed" | "error";
-  progress: { step: number; total: number } | null;
-  imageUrl?: string;
-  error?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export async function fetchComfyUIStatus(): Promise<ComfyUIStatus> {
-  const res = await apiFetch(`${BASE}/images/status`);
-  if (!res.ok) return { available: false, queueSize: 0, models: [] };
-  return res.json();
-}
-
-export async function fetchImageModels(): Promise<string[]> {
-  const res = await apiFetch(`${BASE}/images/models`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function fetchGeneratedImages(): Promise<GeneratedImage[]> {
-  const res = await apiFetch(`${BASE}/images/list`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function searchImages(query: string, limit?: number): Promise<Array<GeneratedImage & { score: number }>> {
-  const res = await apiFetch(`${BASE}/images/search`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to search images");
-  }
-  return res.json();
-}
-
-export async function deleteGeneratedImage(id: string): Promise<void> {
-  const res = await apiFetch(`${BASE}/images/${id}`, { method: "DELETE" });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to delete image");
-  }
-}
-
-export async function toggleImageFavorite(id: string): Promise<boolean> {
-  const res = await apiFetch(`${BASE}/images/${id}/favorite`, { method: "POST" });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to toggle favorite");
-  }
-  const data = await res.json();
-  return data.isFavorite;
-}
-
-export async function fetchGenerations(): Promise<GenerationState[]> {
-  const res = await apiFetch(`${BASE}/images/generations`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export interface GenerationCallbacks {
-  onState: (state: GenerationState) => void;
-  onError: (error: string) => void;
-}
-
-/** Inactivity timeout for generation SSE streams (65s — matches chat stream timeout) */
-const GENERATION_SSE_INACTIVITY_TIMEOUT_MS = 65_000;
-
-export function subscribeToGeneration(
-  generationId: string,
-  callbacks: GenerationCallbacks
-): AbortController {
-  const controller = new AbortController();
-  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const resetInactivityTimer = () => {
-    if (inactivityTimer) clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(() => {
-      console.warn(`[generation-sse] inactivity timeout for ${generationId}`);
-      controller.abort();
-      callbacks.onError("Generation stream timed out — try again");
-    }, GENERATION_SSE_INACTIVITY_TIMEOUT_MS);
-  };
-
-  fetch(`${BASE}/images/generation/${generationId}/events`, {
-    signal: controller.signal,
-    credentials: "include",
-  })
-    .then(async (res) => {
-      if (res.status === 401) {
-        emitUnauthorized();
-        callbacks.onError("Authentication required");
-        return;
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        callbacks.onError((err as any).error || "Request failed");
-        return;
-      }
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let currentEvent = "";
-      let receivedState = false;
-
-      resetInactivityTimer();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        resetInactivityTimer();
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (currentEvent === "state") {
-                receivedState = true;
-                callbacks.onState(data);
-              }
-            } catch {}
-            currentEvent = "";
-          }
-        }
-      }
-
-      if (inactivityTimer) clearTimeout(inactivityTimer);
-
-      // Stream ended naturally — only report error if we never received any state
-      // (indicates the generation doesn't exist or is already complete)
-      if (!receivedState) {
-        console.warn(`[generation-sse] stream ended without state for ${generationId}`);
-        callbacks.onError("Generation not found or already completed");
-      }
-    })
-    .catch((e) => {
-      if (inactivityTimer) clearTimeout(inactivityTimer);
-      if (e.name === "AbortError") return;
-      callbacks.onError(e.message);
-    });
-
-  return controller;
-}
-
-export type CoordinatorPhase =
-  | "checking"
-  | "waiting-for-llm"
-  | "freeing-cache"
-  | "unloading"
-  | "restarting"
-  | "ready";
-
-export interface CoordinatorStatus {
-  phase: CoordinatorPhase;
-  message: string;
-}
-
-export interface ImageGenerateCallbacks {
-  onStarted: (generationId: string) => void;
-  onProgress: (step: number, totalSteps: number) => void;
-  onDone: (image: GeneratedImage) => void;
-  onError: (error: string) => void;
-  onStatus?: (status: CoordinatorStatus) => void;
-}
-
-export function generateImage(
-  params: ImageGenerationParams,
-  callbacks: ImageGenerateCallbacks
-): AbortController {
-  const controller = new AbortController();
-
-  fetch(`${BASE}/images/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-    signal: controller.signal,
-    credentials: "include",
-  })
-    .then(async (res) => {
-      if (res.status === 401) {
-        emitUnauthorized();
-        callbacks.onError("Authentication required");
-        return;
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        callbacks.onError((err as any).error || "Request failed");
-        return;
-      }
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let currentEvent = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (currentEvent === "started") {
-                callbacks.onStarted(data.id);
-              } else if (currentEvent === "progress") {
-                callbacks.onProgress(data.step, data.totalSteps);
-              } else if (currentEvent === "status") {
-                callbacks.onStatus?.(data as CoordinatorStatus);
-              } else if (currentEvent === "done") {
-                callbacks.onDone(data.image);
-              } else if (currentEvent === "error") {
-                callbacks.onError(data.error);
-              }
-            } catch {}
-            currentEvent = "";
-          }
-        }
-      }
-    })
-    .catch((e) => {
-      if (e.name === "AbortError") return;
-      callbacks.onError(e.message);
-    });
-
-  return controller;
-}
-
-// --- Vision Analysis API ---
-
-export interface VisionPreset {
-  key: string;
-  name: string;
-  prompt: string;
-  markdown: boolean;
-}
-
-export interface VisionMessage {
-  role: "user" | "assistant";
-  content: string;
-  timestamp: number;
-}
-
-export interface AnalyzedImage {
-  id: string;
-  filename: string;
-  url: string;
-  description: string;
-  thinking?: string;
-  preset: string;
-  model: string;
-  conversation: VisionMessage[];
-  createdAt: string;
-}
-
-export async function fetchVisionPresets(): Promise<VisionPreset[]> {
-  const res = await apiFetch(`${BASE}/vision/presets`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function fetchAnalyzedImages(): Promise<AnalyzedImage[]> {
-  const res = await apiFetch(`${BASE}/vision/images`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function fetchAnalyzedImage(id: string): Promise<AnalyzedImage> {
-  const res = await apiFetch(`${BASE}/vision/images/${id}`);
-  if (!res.ok) throw new Error("Failed to fetch analyzed image");
-  return res.json();
-}
-
-export async function analyzeImage(
-  imageData: string,
-  preset: string,
-  model?: string
-): Promise<AnalyzedImage> {
-  const res = await apiFetch(`${BASE}/vision/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageData, preset, model }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    let err: any = {};
-    try {
-      err = JSON.parse(errText);
-    } catch {
-      err = { error: errText || res.statusText };
-    }
-    throw new Error((err as any).error || "Failed to analyze image");
-  }
-  return res.json();
-}
-
-export async function saveAnalyzedImage(
-  imageData: string,
-  description: string,
-  preset: string,
-  model: string,
-  thinking?: string
-): Promise<AnalyzedImage> {
-  const res = await apiFetch(`${BASE}/vision/save`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageData, description, thinking, preset, model }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    let err: any = {};
-    try {
-      err = JSON.parse(errText);
-    } catch {
-      err = { error: errText || res.statusText };
-    }
-    throw new Error((err as any).error || "Failed to save analyzed image");
-  }
-  return res.json();
-}
-
-export interface VisionAnalyzeCallbacks {
-  onDelta: (delta: string) => void;
-  onThinkingDelta?: (delta: string) => void;
-  onDone: (result: { description: string; thinking?: string; preset: string; model: string }) => void;
-  onError: (error: string) => void;
-}
-
-export function streamAnalyzeImage(
-  imageData: string,
-  preset: string,
-  model: string | undefined,
-  callbacks: VisionAnalyzeCallbacks
-): AbortController {
-  return streamSSE(`${BASE}/vision/analyze-stream`, { imageData, preset, model }, {
-    onDelta: callbacks.onDelta,
-    onThinkingDelta: callbacks.onThinkingDelta ?? (() => {}),
-    onDone: (msg) => {
-      const m = msg as any;
-      if (m?.description) {
-        callbacks.onDone({
-          description: m.description,
-          ...(m.thinking ? { thinking: m.thinking } : {}),
-          preset: m.preset,
-          model: m.model,
-        });
-      }
-    },
-    onError: callbacks.onError,
-  });
-}
-
-export async function chatAboutImage(
-  id: string,
-  message: string,
-  model?: string
-): Promise<{ response: string }> {
-  const res = await apiFetch(`${BASE}/vision/images/${id}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, model }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to chat about image");
-  }
-  return res.json();
-}
-
-export async function reanalyzeImage(
-  id: string,
-  preset: string,
-  model?: string
-): Promise<AnalyzedImage> {
-  const res = await apiFetch(`${BASE}/vision/images/${id}/reanalyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ preset, model }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to re-analyze image");
-  }
-  return res.json();
-}
-
-export interface ReanalyzeCallbacks {
-  onDelta: (delta: string) => void;
-  onThinkingDelta?: (delta: string) => void;
-  onDone: (image: AnalyzedImage) => void;
-  onError: (error: string) => void;
-}
-
-export function streamReanalyzeImage(
-  id: string,
-  preset: string,
-  model: string | undefined,
-  callbacks: ReanalyzeCallbacks
-): AbortController {
-  return streamSSE(`${BASE}/vision/images/${id}/reanalyze`, { preset, model, stream: true }, {
-    onDelta: callbacks.onDelta,
-    onThinkingDelta: callbacks.onThinkingDelta ?? (() => {}),
-    onDone: (msg) => {
-      const m = msg as any;
-      if (m?.id) {
-        callbacks.onDone(m);
-      }
-    },
-    onError: callbacks.onError,
-  });
-}
-
-export async function deleteAnalyzedImage(id: string): Promise<void> {
-  const res = await apiFetch(`${BASE}/vision/images/${id}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error("Failed to delete analyzed image");
 }
 
 // --- Memory API ---
@@ -1793,7 +1332,7 @@ export interface UserUIState {
   };
   notebookLastSeen?: string | null;
   activeChatId?: string | null;
-  activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+  activeView?: 'chats' | 'notebooks';
   memoryGraphSettings?: MemoryGraphSettings;
 }
 

@@ -1,12 +1,11 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase, ReadAloudHandler } from "../types";
+import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, ReadAloudHandler } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { InlineVisual } from "./InlineVisual";
-import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { UserImage } from "./UserImage";
 import { ImageLightbox } from "./ImageLightbox";
@@ -149,8 +148,6 @@ function segmentKey(
       return `tool-result-${segment.toolResult?.toolCallId ?? segment.seq}`;
     case "artifact":
       return `artifact-${segment.artifact?.id ?? segment.seq}`;
-    case "generated_image":
-      return `generated-image-${segment.generatedImage?.id ?? segment.seq}`;
     case "visual":
       return `visual-${segment.visual?.id ?? segment.seq}`;
     case "compaction_marker":
@@ -179,7 +176,6 @@ interface Props {
   streamingThinkingLastStartRef?: React.RefObject<number>;
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
-  generatedImages?: GeneratedImage[];
   onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => void;
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   messageIndex?: number;
@@ -259,7 +255,6 @@ export const MessageBubble = memo(function MessageBubble({
   streamingThinkingLastStartRef,
   activeTools,
   artifacts,
-  generatedImages,
   onEditMessage,
   onRetryMessage,
   messageIndex,
@@ -739,11 +734,6 @@ export const MessageBubble = memo(function MessageBubble({
                         />
                       )
                     )}
-
-                    {/* Inline generated images - legacy fallback */}
-                    {(generatedImages || message.generatedImages)?.map((img) => (
-                      <GeneratedImagePanel key={img.id} image={img} />
-                    ))}
                   </>
                 )}
               </>
@@ -1254,10 +1244,6 @@ function SegmentRenderer({
         />
       );
     }
-    case "generated_image":
-      return segment.generatedImage ? (
-        <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />
-      ) : null;
     case "compaction_marker":
       return null;
     default:

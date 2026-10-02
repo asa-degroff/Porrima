@@ -9,7 +9,6 @@ import { SetupModal } from "./components/SetupModal";
 import { CreateProjectModal } from "./components/CreateProjectModal";
 import { LoginPage } from "./components/LoginPage";
 
-const ImageSandbox = lazy(() => import("./components/ImageSandbox").then((m) => ({ default: m.ImageSandbox })));
 
 const RippleGridBackground = lazy(() =>
   import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
@@ -234,7 +233,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   const [modelStatsOpen, setModelStatsOpen] = useState(false);
   const [setupModalOpen, setSetupModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [uiStateSynced, setUiStateSynced] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -364,7 +362,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
             selectChat(state.activeChatId);
           }
           if (state.activeView) setActiveView(state.activeView === 'notebooks' ? 'notebooks' : 'chats');
-          if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
           setUiStateSynced(true);
         })
         .catch((err) => {
@@ -377,10 +374,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
           const cachedView = readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY);
           if (cachedView === "notebooks") {
             setActiveView("notebooks");
-          }
-          if (cachedView === "image-sandbox") {
-            setActiveView("chats");
-            setImageSandboxOpen(true);
           }
           setUiStateSynced(true);
         });
@@ -493,7 +486,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     streamingThinkingLastStartRef,
     activeTools,
     artifacts,
-    generatedImages,
     waitingForInput,
     totalUsage,
     isUsageEstimated,
@@ -669,12 +661,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     try { writeStoredValue(SURFACE_DEPTH_KEY, depth); } catch {}
   }, [settings.surfaceDepth, settingsLoading]);
 
-  // Apply background effect
-  useEffect(() => {
-    if (settings.backgroundEffect === 'ripple-grid' && !imageSandboxOpen) {
-      // Ripple grid is rendered conditionally below
-    }
-  }, [settings.backgroundEffect, imageSandboxOpen]);
 
   // Persist active view and chat ID to server with debounce
   useEffect(() => {
@@ -705,7 +691,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
 
   useEffect(() => {
     if (!uiStateSynced) return;
-    if (imageSandboxOpen) return;
 
     // Also save to localStorage for backward compatibility and offline support
     writeStoredValue(ACTIVE_VIEW_KEY, activeView, LEGACY_ACTIVE_VIEW_KEY);
@@ -717,7 +702,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [activeView, imageSandboxOpen, uiStateSynced]);
+  }, [activeView, uiStateSynced]);
 
   // Load TTS settings on mount
   useEffect(() => {
@@ -1124,7 +1109,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   // current tab remains visible.
   useEffect(() => {
     if (!activeChatId) return;
-    if (activeView !== "chats" || imageSandboxOpen) return;
+    if (activeView !== "chats") return;
 
     let cancelled = false;
     const pollActiveChat = () => {
@@ -1140,7 +1125,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeChatId, activeView, imageSandboxOpen, refreshActiveChatFromServer]);
+  }, [activeChatId, activeView, refreshActiveChatFromServer]);
 
   // Update chat title when LLM-generated title arrives
   useEffect(() => {
@@ -1398,35 +1383,10 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     return model?.contextWindow || 32768;
   }, [models, activeChat?.modelId, settings.defaultModelId]);
 
-  const imageSandboxEnabled = settings.imageSandboxEnabled !== false;
 
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
-  const handleOpenImageSandbox = useCallback(() => {
-    if (!imageSandboxEnabled) return;
-    setActiveView('chats');
-    setImageSandboxOpen(true);
-    saveUserUIState({ activeView: 'image-sandbox' }).catch((err) => {
-      console.warn("Failed to save image sandbox state to server:", err);
-    });
-  }, [imageSandboxEnabled]);
-
-  const handleCloseImageSandbox = useCallback(() => {
-    setImageSandboxOpen(false);
-    saveUserUIState({ activeView: activeView }).catch((err) => {
-      console.warn("Failed to save active view to server:", err);
-    });
-  }, [activeView]);
-  useEffect(() => {
-    if (settingsLoading || imageSandboxEnabled || !imageSandboxOpen) return;
-    const fallbackView = activeView === 'notebooks' ? 'notebooks' : 'chats';
-    setImageSandboxOpen(false);
-    setActiveView(fallbackView);
-    saveUserUIState({ activeView: fallbackView }).catch((err) => {
-      console.warn("Failed to clear disabled image sandbox state:", err);
-    });
-  }, [activeView, imageSandboxEnabled, imageSandboxOpen, settingsLoading]);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleApplySettings = useCallback(
     async (s: import("./types").Settings) => {
@@ -1483,13 +1443,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       throw e;
     }
   }, []);
-
-  // Close image sandbox when switching to notebooks
-  useEffect(() => {
-    if (activeView === 'notebooks' && imageSandboxOpen) {
-      setImageSandboxOpen(false);
-    }
-  }, [activeView, imageSandboxOpen]);
 
   const handleSendToNotebook = useCallback(async (chatId: string, chatTitle: string) => {
     try {
@@ -1622,9 +1575,9 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         projects={projects}
         activeChatId={activeView === 'chats' ? activeChatId : null}
         activeView={activeView}
-        onSelectChat={(id) => { selectChat(id); setImageSandboxOpen(false); setActiveView('chats'); }}
+        onSelectChat={(id) => { selectChat(id); setActiveView('chats'); }}
         onSwitchView={handleSwitchView}
-        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setImageSandboxOpen(false); setActiveView('chats'); }}
+        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setActiveView('chats'); }}
         onNewProject={handleNewProject}
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
@@ -1638,7 +1591,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         onOpenSettings={handleOpenSettings}
         onOpenMemoryDebug={() => setMemoryDebugOpen(true)}
         onOpenModelStats={() => setModelStatsOpen(true)}
-        onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
         onOpen={handleOpenSidebar}
@@ -1661,8 +1613,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         onPauseSystem={handlePauseSystem}
         onResumeSystem={handleResumeSystem}
         onSynthesisSleep={handleSynthesisSleep}
-        isImageSandboxOpen={imageSandboxOpen}
-        imageSandboxEnabled={imageSandboxEnabled}
         systemStatsHistory={systemStatsHistory}
         systemStatsCurrent={systemStatsCurrent}
         systemStatsHiddenGpus={settings.systemStatsHiddenGpus}
@@ -1670,12 +1620,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         agentName={settings.agentName}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
-      {imageSandboxEnabled && imageSandboxOpen ? (
-        <ImageSandbox
-          defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
-          onClose={handleCloseImageSandbox}
-        />
-      ) : activeView === 'notebooks' ? (
+      {activeView === 'notebooks' ? (
         <NotebookView
           userNotebooks={userNotebooks}
           agentNotebooks={agentNotebooks}
@@ -1687,7 +1632,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
           onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}
           onReadAloud={ttsSettings.enabled ? handleStandaloneReadAloud : undefined}
           chats={chats}
-          onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); setImageSandboxOpen(false); }}
+          onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); }}
           onVisible={markAgentEntriesSeen}
           onOpenSidebar={() => setSidebarOpen(true)}
           searchResults={notebookSearchResults}
@@ -1715,7 +1660,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         streamingThinkingLastStartRef={streamingThinkingLastStartRef}
         activeTools={activeTools}
         artifacts={artifacts}
-        generatedImages={generatedImages}
         totalUsage={totalUsage}
         isUsageEstimated={isUsageEstimated}
         compacting={compacting}

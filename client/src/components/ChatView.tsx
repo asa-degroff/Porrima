@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler, SystemPromptPreset } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -176,7 +176,6 @@ function mergeToolLoopMessages(group: ChatMessage[]): ChatMessage {
   const toolCalls = group.flatMap((m) => m.toolCalls || []);
   const toolResults = group.flatMap((m) => m.toolResults || []);
   const artifacts = group.flatMap((m) => m.artifacts || []);
-  const generatedImages = group.flatMap((m) => m.generatedImages || []);
   const visuals = group.flatMap((m) => m.visuals || []);
   const segments = group.flatMap((m) => m.segments || []);
 
@@ -189,7 +188,6 @@ function mergeToolLoopMessages(group: ChatMessage[]): ChatMessage {
     toolCalls: toolCalls.length ? toolCalls : undefined,
     toolResults: toolResults.length ? toolResults : undefined,
     artifacts: artifacts.length ? artifacts : undefined,
-    generatedImages: generatedImages.length ? generatedImages : undefined,
     visuals: visuals.length ? visuals : undefined,
     segments: segments.length ? segments : undefined,
     _toolLoopId: last._toolLoopId,
@@ -326,7 +324,6 @@ interface Props {
   streamingThinkingLastStartRef: React.RefObject<number>;
   activeTools: ToolStatus[];
   artifacts: Artifact[];
-  generatedImages: GeneratedImage[];
   totalUsage: MessageUsage;
   isUsageEstimated?: boolean;
   compacting?: boolean;
@@ -390,7 +387,6 @@ export function ChatView({
   streamingThinkingLastStartRef,
   activeTools,
   artifacts,
-  generatedImages,
   totalUsage,
   isUsageEstimated,
   compacting,
@@ -1059,7 +1055,6 @@ export function ChatView({
                               streamingThinkingLastStartRef={streamingThinkingLastStartRef}
                               activeTools={isLast ? activeTools : undefined}
                               artifacts={isLast && streaming ? artifacts : undefined}
-                              generatedImages={isLast && streaming ? generatedImages : undefined}
                               editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext && !isCrossChatPost && !isReminder}
                               onEditMessage={msg.role === "user" && !isCrossChatPost && !isReminder ? onEditMessage : undefined}
                               onRetryMessage={msg.role === "user" && !isCrossChatPost && !isReminder ? onRetryMessage : undefined}
