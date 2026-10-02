@@ -660,7 +660,6 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.llamacppUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) settings.defaultModelId = (body.modelId as string).trim() || settings.defaultModelId;
       if (body.enabled !== undefined) settings.llamacppEnabled = Boolean(body.enabled);
-      if (body.sharesGpu !== undefined) settings.llamacppSharesGpu = Boolean(body.sharesGpu);
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
         pendingBinaryPath = v || "";

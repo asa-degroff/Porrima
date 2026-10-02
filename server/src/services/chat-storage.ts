@@ -1359,10 +1359,11 @@ const DEFAULT_SETTINGS: Settings = {
   llamaBinaryScanDir: `${os.homedir()}/bin`,
 };
 
-// Settings keys for subsystems that no longer exist. They were introduced for
-// the Image Sandbox, which moved to its own app. Persisted rows still carry
-// them, and saveSettings merges rather than replaces, so they would otherwise
-// linger forever. Setting them to undefined here drops them from every
+// Settings keys for subsystems that no longer exist. The Image Sandbox and the
+// corpus enrichment job moved to a separate app, and llamacppSharesGpu only ever
+// coordinated GPU use with image generation. Persisted rows still carry them,
+// and saveSettings merges rather than replaces, so they would otherwise linger
+// forever. Setting them to undefined here drops them from every
 // normalizeSettings() result, which is the single choke point both reads and
 // writes pass through.
 const RETIRED_SETTINGS_KEYS = [
@@ -1372,6 +1373,9 @@ const RETIRED_SETTINGS_KEYS = [
   "sdcppUrl",
   "defaultVisionPreset",
   "defaultVisionModelId",
+  "enrichmentBatchSize",
+  "llamacppSharesGpu",
+  "useChatModelForVision",
 ] as const;
 
 const RETIRED_SETTINGS_STRIPPED: Record<string, undefined> = Object.fromEntries(

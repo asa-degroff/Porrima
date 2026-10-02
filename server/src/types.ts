@@ -436,8 +436,6 @@ export interface Settings {
   // Zeitgeist continuity block settings
   zeitgeistEnabled?: boolean;
   zeitgeistInactivityThresholdHours?: number;
-  // Corpus enrichment batch size (how many entries to process per check)
-  enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
   extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:32101)
@@ -445,13 +443,12 @@ export interface Settings {
 // llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:32100"
-  llamacppSharesGpu?: boolean;  // default true — unload idle models before image generation
   // App-level behavior for llama.cpp physical slot routing. "auto" lets
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
   // id_slot based on app-managed leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
   // Vision image size cap preset — total-pixel budget applied before images are
-  // sent to llama.cpp (chat, tool-result, and vision-analysis paths share it).
+  // sent to llama.cpp (chat attachments and tool-result images share it).
   // "standard" (default, 1280 tokens / ~1 MP) is safe at any context size;
   // "detailed" (2048 tokens / ~1.6 MP) is for dense documents; "maximum" is the
   // engine's 4096-token ceiling (small contexts only). The provider clamps any

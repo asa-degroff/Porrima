@@ -396,8 +396,8 @@ export async function streamChat(
   // Extraction routing: if the requested model matches the configured extraction
   // model and an extraction URL is set, route directly to that server (typically
   // CPU-only) instead of hitting the chat router and contending with the GPU
-  // chat model. Background jobs (notebooks, corpus enrichment, zeitgeist, etc.)
-  // pass extractionModelId here and benefit automatically.
+  // chat model. Background jobs (notebooks, zeitgeist, etc.) pass
+  // extractionModelId here and benefit automatically.
   let piModel: Model<string>;
   const extractionRoute = await getExtractionRoute();
   const normalizedModelId = normalizeRouterModelId(modelId);

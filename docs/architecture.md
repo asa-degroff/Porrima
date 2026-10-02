@@ -40,7 +40,7 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
   - Retry on transient fetch failures (3 attempts, 1s delay) for TCP connection hiccups between rapid tool iterations
 - **Model Discovery** (`models.ts`): `discoverAllModels()` queries the llama.cpp server via `/v1/models`, tags each model with `provider: "llamacpp"`. HF-cached models (IDs with `/`) are filtered out. `createPiModelFromProvider()` creates openai-compat models. Vision detection uses `/props` modalities for loaded models, `--mmproj` args and name heuristics for unloaded.
 - **Reasoning Detection**: `supportsReasoning()` checks model family (`qwen3*`, `gemma4*`) — enables `chat_template_kwargs` for llama.cpp
-- **Settings**: `llamacppEnabled`, `llamacppUrl`, `llamacppSharesGpu` control llama.cpp integration. `favoriteModels`, `showOnlyFavorites` for model selector filtering.
+- **Settings**: `llamacppEnabled`, `llamacppUrl` control llama.cpp integration. `favoriteModels`, `showOnlyFavorites` for model selector filtering.
 
 ## llama.cpp Infrastructure
 

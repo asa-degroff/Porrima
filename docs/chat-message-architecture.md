@@ -66,7 +66,7 @@ assistant(final text)
 Persistence now mirrors that transcript:
 
 - Each `turn_end` with `stopReason === "toolUse"` is committed immediately as one assistant row.
-- That row contains only the current iteration's `toolCalls`, matching `toolResults`, segments, thinking, artifacts, visuals, and generated images.
+- That row contains only the current iteration's `toolCalls`, matching `toolResults`, segments, thinking, artifacts, and visuals.
 - Rows in one visible assistant response share `_toolLoopId`.
 - Rows that end in a tool call carry `_toolLoopFragment: true`.
 - The final assistant text is stored as a later assistant row with the same `_toolLoopId` and without `_toolLoopFragment`.
@@ -92,7 +92,7 @@ The client keeps the raw canonical rows in `messages` and IndexedDB. `ChatView` 
 
 - Consecutive assistant rows with the same `_toolLoopId` are merged into one visible bubble.
 - Hidden `system` rows, including passive memory recalls inserted between assistant fragments, are skipped and do not split the visible tool-loop bubble.
-- Content, thinking, segments, tool calls/results, artifacts, visuals, and generated images are concatenated for display.
+- Content, thinking, segments, tool calls/results, artifacts, and visuals are concatenated for display.
 - The raw `localStartIdx` is preserved for message indexes, and `localEndIdx` determines whether the merged bubble is the streaming tail.
 - Streaming segment indexes are offset by the number of segments in earlier rows in the group.
 

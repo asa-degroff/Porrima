@@ -2,7 +2,7 @@
 
 Server runs on port 3001. All `/api/*` routes except `/api/auth/*` and `/api/app/*` are behind `requireAuth` (`server/src/middleware/auth.ts`). JSON responses are compressed unless the route is an SSE stream (`server/src/middleware/compression.ts`).
 
-**Endpoint count: 229.** Tables are grouped by domain. Paths are the full mounted paths (mount prefix + router path), derived from `server/src/index.ts` and `server/src/routes/*.ts`.
+**Endpoint count: 185.** Tables are grouped by domain. Paths are the full mounted paths (mount prefix + router path), derived from `server/src/index.ts` and `server/src/routes/*.ts`.
 
 ---
 

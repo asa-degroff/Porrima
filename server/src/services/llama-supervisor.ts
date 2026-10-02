@@ -73,7 +73,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Router / chat completions",
     unitName: "llama-server.service",
     defaultUrl: getDefaultLlamaServerUrl("inference"),
-    description: "Main llama.cpp router used by chat, vision, and model discovery",
+    description: "Main llama.cpp router used by chat and model discovery",
     settingsModelKey: "defaultModelId",
   },
   extraction: {

@@ -244,7 +244,7 @@ porrima/
 │   ├── contexts/                    # PinnedItemContext
 │   ├── styles/                      # Tailwind styles
 │   ├── lib/                         # IndexedDB cache, device id, activity timings, steering placeholders, legacy-key migration
-│   └── utils/                       # Helpers (custom-theme, llamaPorts, imageCache, greeting, artifactErrorForwarder)
+│   └── utils/                       # Helpers (custom-theme, llamaPorts, greeting, artifactErrorForwarder)
 ├── docs/                            # Detailed documentation (see links in sections above)
 │   └── design/                      # Design docs: turn-engine, memory-durability, memory-context-persistence, mid-turn-extraction, p0b-storage-concurrency
 └── package.json                     # npm workspaces root
@@ -254,7 +254,7 @@ porrima/
 
 Architecture and subsystems:
 
-- [API Reference](docs/api-reference.md) — Full endpoint table (220 endpoints)
+- [API Reference](docs/api-reference.md) — Full endpoint table (185 endpoints)
 - [Architecture](docs/architecture.md) — Chat types, provider layer, storage, compaction
 - [Chat Message Architecture](docs/chat-message-architecture.md) — Row canonicalization and replay fidelity
 - [Compaction](docs/compaction.md) — Indexed archival and the five compaction paths

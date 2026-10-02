@@ -1,11 +1,10 @@
-// Process-local ref count of in-flight LLM inference streams. The resource
-// coordinator checks this before unloading models: interrupting a live
-// stream with an unload would drop the user's response mid-flight.
+// Process-local ref count of in-flight LLM inference streams. The prompt-cache
+// warm queue checks this before acquiring: warming rewrites the shared prompt
+// cache, which would disturb a live request that is reusing it.
 //
 // Instrumentation principle: only wrap calls that produce user-visible
-// streaming output (main chat, vision analysis). Fast background work
-// (title generation, memory extraction, embeddings) uses lighter models
-// on CPU — safe to ignore.
+// streaming output (main chat). Fast background work (title generation,
+// memory extraction, embeddings) uses lighter models on CPU — safe to ignore.
 
 let activeStreams = 0;
 const idleListeners: Array<() => void> = [];
@@ -28,10 +27,6 @@ export function endStream(): void {
 
 export function isActive(): boolean {
   return activeStreams > 0;
-}
-
-export function activeStreamCount(): number {
-  return activeStreams;
 }
 
 /**

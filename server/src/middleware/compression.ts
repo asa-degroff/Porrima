@@ -11,14 +11,15 @@ import type { Request, Response } from "express";
  * incrementally delivers them in one burst.
  *
  * The default filter does provide one escape hatch: it refuses to
- * compress responses carrying `Cache-Control: no-transform`. Only 3 of
- * this server's 13 SSE sites set that — routes/vision.ts, routes/tts.ts
- * and routes/memory.ts. The other 10 do not, including `ensureSSEStream`
+ * compress responses carrying `Cache-Control: no-transform`. Only 2 of
+ * this server's 4 SSE route files set that — routes/tts.ts and
+ * routes/memory.ts. The others do not, including `ensureSSEStream`
  * in routes/chat.ts, which backs the main chat stream, the reconnect
- * stream and artifact auto-repair, and which sets only `no-cache`. Those
- * would all be buffered under the default filter. Excluding by content
- * type covers every one of them, plus any SSE route added later, without
- * depending on each route remembering to set `no-transform`.
+ * stream and artifact auto-repair, and routes/embedding-migration.ts;
+ * both set only `no-cache`. Those would all be buffered under the default
+ * filter. Excluding by content type covers every one of them, plus any
+ * SSE route added later, without depending on each route remembering to
+ * set `no-transform`.
  *
  * `application/octet-stream` — `compressible()` also reports this as
  * compressible, so binary downloads (e.g. `.bin` tool-result images from

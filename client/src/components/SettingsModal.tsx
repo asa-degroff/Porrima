@@ -628,7 +628,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   // llama.cpp server settings
   const [llamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
-  const [llamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction runtime and request settings
@@ -687,7 +686,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [migrationProgress, setMigrationProgress] = useState<MigrationProgressEvent | null>(null);
   const [migrationRunning, setMigrationRunning] = useState(false);
   const [migrationError, setMigrationError] = useState<string | null>(null);
-  const [migrationResult, setMigrationResult] = useState<{ memories: number; corpus: number; dimension: number } | null>(null);
+  const [migrationResult, setMigrationResult] = useState<{ memories: number; dimension: number } | null>(null);
   const [confirmMigrate, setConfirmMigrate] = useState(false);
   const [confirmRestoreId, setConfirmRestoreId] = useState<string | null>(null);
   const migrationAbortRef = useRef<null | (() => void)>(null);
@@ -698,7 +697,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [agentSnapshotsLoading, setAgentSnapshotsLoading] = useState(false);
   const [agentSnapshotMessage, setAgentSnapshotMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [agentSnapshotLabel, setAgentSnapshotLabel] = useState("");
-  const [agentSnapshotIncludeCorpus, setAgentSnapshotIncludeCorpus] = useState(false);
   const [confirmAgentSnapshotRestoreId, setConfirmAgentSnapshotRestoreId] = useState<string | null>(null);
   // Llama.cpp binary path management
   const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
@@ -840,7 +838,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
   const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
   const [delayedExtractionCap, setDelayedExtractionCap] = useState(settings.delayedExtractionMessageCap ?? 50);
-  const [enrichmentBatchSize, setEnrichmentBatchSize] = useState(settings.enrichmentBatchSize ?? 5);
   // Sleep cycle and post-synthesis settings. Wake scheduling is owned by automations.
   const [sleepCycleThreshold, setSleepCycleThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
   const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
@@ -2151,7 +2148,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       imageCapPreset,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
-      llamacppSharesGpu,
       llamacppSlotBindingMode,
       extractionCtxSize: savedExtractionCtxSize,
       extractionMaxTokens: savedExtractionMaxTokens,
@@ -2189,7 +2185,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       delayedExtractionEnabled,
       delayedExtractionThresholdMinutes: delayedExtractionThreshold,
       delayedExtractionMessageCap: delayedExtractionCap,
-      enrichmentBatchSize,
       sleepCycleThresholdMinutes: sleepCycleThreshold,
       postSynthesisWarmCount,
       reminderMaxIterations,
@@ -2720,14 +2715,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const handleCreateAgentSnapshot = useCallback(async () => {
     setAgentSnapshotMessage(null);
     try {
-      await createAgentSnapshot(agentSnapshotLabel.trim() || undefined, agentSnapshotIncludeCorpus);
+      await createAgentSnapshot(agentSnapshotLabel.trim() || undefined);
       setAgentSnapshotLabel("");
       setAgentSnapshotMessage({ type: "ok", text: "Snapshot created" });
       await refreshAgentSnapshots();
     } catch (e: any) {
       setAgentSnapshotMessage({ type: "err", text: e?.message || "Snapshot failed" });
     }
-  }, [agentSnapshotIncludeCorpus, agentSnapshotLabel, refreshAgentSnapshots]);
+  }, [agentSnapshotLabel, refreshAgentSnapshots]);
 
   const handleDeleteAgentSnapshot = useCallback(async (id: string) => {
     setAgentSnapshotMessage(null);
@@ -3901,7 +3896,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              {embeddingConfigChanged && (
 	                                <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2 text-xs text-amber-200/90">
 	                                  <p className="font-medium">Embedding config changed.</p>
-	                                  <p className="text-amber-100/70">Save settings, then re-embed existing memories and corpus with the new model.</p>
+	                                  <p className="text-amber-100/70">Save settings, then re-embed existing memories with the new model.</p>
 	                                </div>
 	                              )}
 
@@ -5883,21 +5878,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                </button>
 	              </div>
 
-	              <label className="flex items-center gap-2 text-xs text-white/45">
-	                <input
-	                  type="checkbox"
-	                  checked={agentSnapshotIncludeCorpus}
-	                  onChange={(e) => setAgentSnapshotIncludeCorpus(e.target.checked)}
-	                  className="accent-purple-400"
-	                />
-	                Include image corpus database
-	              </label>
-
 	              {agentSnapshots.length > 0 && (
 	                <div className="space-y-1 max-h-52 overflow-y-auto">
 	                  {agentSnapshots.map((s) => {
 	                    const isConfirming = confirmAgentSnapshotRestoreId === s.id;
-	                    const sizeBytes = s.sourceSizes.appBytes + s.sourceSizes.memoriesBytes + (s.sourceSizes.corpusBytes || 0);
+	                    const sizeBytes = s.sourceSizes.appBytes + s.sourceSizes.memoriesBytes;
 	                    const sizeMb = sizeBytes / (1024 * 1024);
 	                    return (
 	                      <div key={s.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
@@ -5909,7 +5894,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            </div>
 	                            <div className="text-[11px] text-white/40 mt-0.5">
 	                              {s.counts.chats} chats · {s.counts.memories} memories · {s.counts.memoryBlocks} blocks · {s.counts.contextArchives} archives · {sizeMb.toFixed(1)} MB
-	                              {s.includes.corpus && s.counts.corpus !== undefined ? ` · ${s.counts.corpus} corpus` : ""}
 	                              {s.createdBy === "system" || s.reason === "pre-restore" ? " · automatic" : ""}
 	                            </div>
 	                          </div>
@@ -5997,7 +5981,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                <div className="space-y-1 max-h-48 overflow-y-auto">
 	                  {backups.map((b) => {
 	                    const isConfirming = confirmRestoreId === b.id;
-	                    const sizeMb = (b.sourceSizes.memoriesBytes + b.sourceSizes.corpusBytes) / (1024 * 1024);
+	                    const sizeMb = b.sourceSizes.memoriesBytes / (1024 * 1024);
 	                    return (
 	                      <div key={b.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
 	                        <div className="flex items-center justify-between gap-2">
@@ -6007,7 +5991,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              {b.label && <span className="text-white/50 truncate">— {b.label}</span>}
 	                            </div>
 	                            <div className="text-[11px] text-white/40 mt-0.5">
-	                              {b.counts.memories} memories · {b.counts.corpus} corpus · {sizeMb.toFixed(1)} MB · {b.embedding.model}
+	                              {b.counts.memories} memories · {sizeMb.toFixed(1)} MB · {b.embedding.model}
 	                              {b.embedding.dimension ? ` (dim ${b.embedding.dimension})` : ""}
 	                            </div>
 	                          </div>
@@ -6057,7 +6041,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                    onClick={() => setConfirmMigrate(true)}
 	                    className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all pressable"
 	                  >
-	                    Re-embed all memories &amp; corpus
+	                    Re-embed all memories
 	                  </button>
 	                )}
 
@@ -6132,7 +6116,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
 	                {migrationResult && !migrationRunning && (
 	                  <div className="text-xs p-2 rounded bg-green-500/10 border border-green-400/20 text-green-300/90">
-	                    Migrated {migrationResult.memories} memories and {migrationResult.corpus} corpus entries at dimension {migrationResult.dimension}.
+	                    Migrated {migrationResult.memories} memories at dimension {migrationResult.dimension}.
 	                  </div>
 	                )}
 	              </div>

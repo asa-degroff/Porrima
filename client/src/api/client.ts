@@ -1729,7 +1729,6 @@ export interface LlamaServerUpdate {
   url?: string;
   modelId?: string;
   enabled?: boolean;
-  sharesGpu?: boolean;
   ctxSize?: number;
   maxTokens?: number;
   timeoutMs?: number;
@@ -1859,12 +1858,12 @@ export interface EmbeddingBackup {
   createdAt: string;
   label?: string;
   embedding: { provider: string; url: string; model: string; dimension?: number };
-  counts: { memories: number; corpus: number };
-  sourceSizes: { memoriesBytes: number; corpusBytes: number };
+  counts: { memories: number };
+  sourceSizes: { memoriesBytes: number };
 }
 
 export interface MigrationProgressEvent {
-  phase: "probe" | "memories" | "corpus" | "commit" | "done" | "error";
+  phase: "probe" | "memories" | "commit" | "done" | "error";
   processed?: number;
   total?: number;
   message?: string;
@@ -1913,7 +1912,7 @@ export async function restoreEmbeddingBackup(id: string): Promise<void> {
 
 export interface EmbeddingMigrationCallbacks {
   onProgress: (ev: MigrationProgressEvent) => void;
-  onComplete: (result: { memories: number; corpus: number; dimension: number }) => void;
+  onComplete: (result: { memories: number; dimension: number }) => void;
   onError: (message: string) => void;
 }
 
@@ -1990,7 +1989,7 @@ export interface AgentSnapshot {
   createdBy?: "user" | "system";
   reason?: "manual" | "pre-restore";
   protected?: boolean;
-  includes: { app: true; memories: true; corpus: boolean };
+  includes: { app: true; memories: true };
   embedding: { provider: string; url: string; model: string; dimension?: number };
   counts: {
     chats: number;
@@ -1998,12 +1997,10 @@ export interface AgentSnapshot {
     contextArchives: number;
     memories: number;
     memoryBlocks: number;
-    corpus?: number;
   };
   sourceSizes: {
     appBytes: number;
     memoriesBytes: number;
-    corpusBytes?: number;
   };
 }
 
@@ -2014,11 +2011,11 @@ export async function listAgentSnapshots(): Promise<AgentSnapshot[]> {
   return data.snapshots || [];
 }
 
-export async function createAgentSnapshot(label?: string, includeCorpus = false): Promise<AgentSnapshot> {
+export async function createAgentSnapshot(label?: string): Promise<AgentSnapshot> {
   const res = await apiFetch(`${BASE}/snapshots`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, includeCorpus }),
+    body: JSON.stringify({ label }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

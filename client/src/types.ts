@@ -80,7 +80,7 @@ export interface ChatToolResult {
   toolName: string;
   content: string;
   isError: boolean;
-  images?: ImageAttachment[]; // For tools that return images (e.g., generate_and_review)
+  images?: ImageAttachment[]; // For tools that return images (e.g., read_pdf, browser_screenshot)
 }
 
 /** A segment represents one unit of agent output in chronological order */
@@ -469,7 +469,6 @@ export interface Settings {
   /** True after first-time setup wizard has been completed */
   setupCompleted?: boolean;
   defaultModelId: string;
-  useChatModelForVision?: boolean;
   defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
@@ -499,8 +498,6 @@ export interface Settings {
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
   delayedExtractionMessageCap?: number;
-  // Corpus enrichment batch size (how many entries to process per check)
-  enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
   extractionModelUrl?: string;      // Direct URL for dedicated extraction model (e.g., http://localhost:32101)
@@ -508,7 +505,6 @@ export interface Settings {
   // llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:32100"
-  llamacppSharesGpu?: boolean;  // default true
   // "auto" lets llama.cpp select physical slots and restore prompt cache;
   // "enforced" sends app-managed id_slot leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
@@ -825,8 +821,6 @@ export interface TTSBackendStatus {
   installCommand?: string;
   pythonCandidates?: TTSPythonCandidate[];
 }
-
-// Vision Analysis Types (re-export from API client for convenience)
 
 export interface NotebookLink {
   notebooks?: { entryId: string; author: 'user' | 'agent' }[];

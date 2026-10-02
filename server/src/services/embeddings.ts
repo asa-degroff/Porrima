@@ -63,11 +63,6 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   return embedLlamaCpp(cfg, texts);
 }
 
-export async function embedWithConfig(cfg: EmbeddingConfig, text: string): Promise<number[]> {
-  const vectors = await embedLlamaCpp(cfg, text);
-  return vectors[0];
-}
-
 export async function embedBatchWithConfig(cfg: EmbeddingConfig, texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
   return embedLlamaCpp(cfg, texts);
