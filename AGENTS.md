@@ -299,6 +299,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Memory Context Subject Lines](docs/design/memory-context-subject-lines.md)
 - [Mid-Turn Extraction](docs/design/mid-turn-extraction.md)
 - [P0B Storage Concurrency](docs/design/p0b-storage-concurrency.md)
+- [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
 
 Release and onboarding:
 
