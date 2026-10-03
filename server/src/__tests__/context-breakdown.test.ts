@@ -3,11 +3,11 @@ import type { Chat, ChatMessage } from "../types.js";
 import { computeContextBreakdown } from "../services/context-breakdown.js";
 import { setCachedAugmentedPrompt } from "../services/memory-context.js";
 
-function quickChat(messages: ChatMessage[], contextWindow = 32768): Chat {
+function testChat(messages: ChatMessage[], contextWindow = 32768): Chat {
   return {
     id: "chat-test",
     title: "Test",
-    type: "quick",
+    type: "agent",
     modelId: "test-model",
     systemPrompt: "You are a helpful assistant.",
     contextWindow,
@@ -32,7 +32,7 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
 
     const byKey = Object.fromEntries(result.rows.map((r) => [r.key, r.tokens]));
     expect(byKey.userMessages).toBeGreaterThan(0);
@@ -49,7 +49,7 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "Hi", timestamp: 2 },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
     const memoryDelta = result.rows.find((r) => r.key === "memoryDelta");
     expect(memoryDelta).toBeDefined();
     expect(memoryDelta!.tokens).toBeGreaterThan(0);
@@ -62,8 +62,8 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "hidden message that should not count", timestamp: 2, _outOfContext: true },
     ];
 
-    const withHidden = computeContextBreakdown(quickChat(messages), 32768);
-    const withoutHidden = computeContextBreakdown(quickChat([messages[0]]), 32768);
+    const withHidden = computeContextBreakdown(testChat(messages), 32768);
+    const withoutHidden = computeContextBreakdown(testChat([messages[0]]), 32768);
 
     const user = (r: ReturnType<typeof computeContextBreakdown>) =>
       r.rows.find((x) => x.key === "userMessages")?.tokens ?? 0;
@@ -83,7 +83,7 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.estimated).toBe(false);
     expect(result.outputTokens).toBe(realOutput);
@@ -101,7 +101,7 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "first message, no response yet", timestamp: 1 },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
     expect(result.estimated).toBe(true);
     expect(result.outputTokens).toBe(0);
     expect(result.inputTokens).toBeGreaterThan(0);
@@ -130,7 +130,7 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "continue", timestamp: 4 },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.usage).toBeNull();
     expect(result.estimated).toBe(true);
@@ -157,7 +157,7 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.estimated).toBe(false);
     expect(result.inputTokens).toBe(realInput);
@@ -171,7 +171,7 @@ describe("computeContextBreakdown", () => {
     // the base-prompt row.
     const chatId = "chat-cold-sections";
     setCachedAugmentedPrompt(chatId, "a warm cached prompt without sections");
-    const chat: Chat = { ...quickChat([]), id: chatId, type: "agent" };
+    const chat: Chat = { ...testChat([]), id: chatId };
 
     const result = computeContextBreakdown(chat, 32768);
 
@@ -184,7 +184,7 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "continue", timestamp: 2 },
     ];
 
-    const result = computeContextBreakdown(quickChat(messages), 32768);
+    const result = computeContextBreakdown(testChat(messages), 32768);
     const summary = result.rows.find((r) => r.key === "compactionSummary");
     expect(summary).toBeDefined();
     expect(summary!.tokens).toBeGreaterThan(0);

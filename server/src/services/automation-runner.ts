@@ -509,11 +509,10 @@ async function runPromptAutomation(
  * Fire-time dispatch for an in-chat reminder: an agent-created custom task
  * whose target is a real chat runs in that chat's own semantics — the
  * wake-shaped options, with the reminder's trigger row as the thread's
- * visible message. A target that no longer exists (or is a quick chat)
- * reroutes to the system chat via a CLONE — the task row keeps its original
- * target, and the run row records where the turn actually landed. No
- * resurrection: the system chat is the only chat ensureAutomationChat may
- * create, and it is permanent.
+ * visible message. A target that no longer exists reroutes to the system
+ * chat via a CLONE — the task row keeps its original target, and the run row
+ * records where the turn actually landed. No resurrection: the system chat is
+ * the only chat ensureAutomationChat may create, and it is permanent.
  *
  * Exported for tests — the decision, not the LLM, is what this pins.
  */
@@ -521,7 +520,7 @@ export function resolveInChatReminderDispatch(
   task: AutomationTask,
   liveChat: Chat | null,
 ): { task: AutomationTask; options: PromptAutomationOptions } {
-  if (liveChat && (liveChat.type === "agent" || liveChat.type === "system")) {
+  if (liveChat) {
     return {
       task,
       options: {

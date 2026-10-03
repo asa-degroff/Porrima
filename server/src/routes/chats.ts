@@ -90,7 +90,7 @@ router.get("/:id", async (req, res) => {
 
 // Create a new chat
 router.post("/", async (req, res) => {
-  const { id: clientId, modelId, type, contextWindow, projectId } = req.body;
+  const { id: clientId, modelId, contextWindow, projectId } = req.body;
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId;
   
@@ -105,8 +105,8 @@ router.post("/", async (req, res) => {
   
   const chat: Chat = {
     id: clientId || uuid(),
-    title: type === "agent" ? "New Agent Chat" : "New Chat",
-    type: type === "agent" ? "agent" : "quick",
+    title: "New Agent Chat",
+    type: "agent",
     modelId: effectiveModelId,
     systemPrompt,
     ...(contextWindow ? { contextWindow } : {}),
@@ -175,9 +175,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     }
   }
 
-  const tools = (chat.type === "agent" || chat.type === "system")
-    ? getAgentToolDefinitions(chat.type)
-    : [];
+  const tools = getAgentToolDefinitions(chat.type);
 
   res.json({ systemPrompt, tools, cached: cachedFlag });
 });

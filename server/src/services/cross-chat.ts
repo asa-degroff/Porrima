@@ -28,13 +28,9 @@ export type CrossChatTargetResolution =
   | { ok: true; target: ResolvedCrossChatTarget }
   | { ok: false; error: string };
 
-function isPostableType(type: Chat["type"]): boolean {
-  return type === "agent" || type === "system";
-}
-
 /**
- * Resolve `targetChat` to a postable chat: an exact chat id first, else a
- * unique case-insensitive title fragment. Quick chats are not valid targets.
+ * Resolve `targetChat` to a chat: an exact chat id first, else a
+ * unique case-insensitive title fragment.
  */
 export async function resolveCrossChatTarget(targetChat: string): Promise<CrossChatTargetResolution> {
   const trimmed = (targetChat ?? "").trim();
@@ -44,12 +40,6 @@ export async function resolveCrossChatTarget(targetChat: string): Promise<CrossC
 
   const direct = await getChat(trimmed);
   if (direct) {
-    if (!isPostableType(direct.type)) {
-      return {
-        ok: false,
-        error: `"${direct.title}" is a ${direct.type} chat — posts can target agent and system chats only.`,
-      };
-    }
     return { ok: true, target: { id: direct.id, title: direct.title, type: direct.type } };
   }
 
@@ -75,12 +65,6 @@ export async function resolveCrossChatTarget(targetChat: string): Promise<CrossC
   }
 
   const match = matches[0];
-  if (!isPostableType(match.type)) {
-    return {
-      ok: false,
-      error: `"${match.title}" is a ${match.type} chat — posts can target agent and system chats only.`,
-    };
-  }
   return { ok: true, target: { id: match.id, title: match.title, type: match.type } };
 }
 
@@ -187,9 +171,6 @@ export async function deliverCrossChatPost(input: {
   const target = await getChat(input.targetChatId);
   if (!target) {
     throw new Error(`Target chat ${input.targetChatId} no longer exists`);
-  }
-  if (!isPostableType(target.type)) {
-    throw new Error(`Target chat "${target.title}" is a ${target.type} chat — posts can target agent and system chats only.`);
   }
 
   if (input.originTaskId) {

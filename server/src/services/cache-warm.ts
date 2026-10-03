@@ -331,7 +331,7 @@ async function buildWarmTools(
   chat: Awaited<ReturnType<typeof getChat>>,
   contextWindow: number,
 ): Promise<ReturnType<typeof getAgentTools> | undefined> {
-  if (!chat || chat.type === "quick") return undefined;
+  if (!chat) return undefined;
   const project = chat.projectId ? await getProject(chat.projectId) : null;
   const tools = getAgentTools(
     chat.id,

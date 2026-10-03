@@ -53,7 +53,7 @@ The once-task is always the source of truth for "a message will arrive at `when`
 `schedule_chat_message(targetChat, message, subject?, when?, wake?)`
 
 - **Target resolution:** `targetChat` is a chat id if it parses as one, else a unique title fragment. 0 matches → loud error. Multiple matches → loud error listing candidates (id + title). Plus a new read-only `list_chats` tool (id, title, type, lastModified, preview) for *enumeration*. (Note: `search_conversation` already provides cross-chat *content* search — it cannot enumerate chats or their ids, which is what target resolution needs; the v3 "no way to discover chats at all" rationale was overstated.)
-- **Target type (v1 scope):** posts may target **agent and system chats only**. Quick chats are standalone-by-design; waking one is out of scope. (Security note: this tool lets any tool-capable source chat inject user-role instructions into a target with full tool access — source is unrestricted, provenance is recorded in the envelope; restricting the *target* type is the v1 boundary. Asa's call, recommendation folded.)
+- **Target type:** posts may target any chat (agent and system are the only remaining chat types). (Security note: this tool lets any tool-capable source chat inject user-role instructions into a target with full tool access — source is unrestricted, provenance is recorded in the envelope.)
 - **`wake: false` + future `when`** is defined: scheduled delivery, no turn (the fire-time run appends the row, no LLM).
 - **Cap:** shares the agent-task cap — one mental model; the cap is a resource bound either way. The naive pending count (`createdBy='agent' AND enabled=1 AND nextRunAt in the future`) does **not** bind `when=now` chains (now-tasks are archived at start, so they never appear in the count). The query is extended to: future-pending **OR** created in the last hour — a now-hop ping-pong that creates more than 10 tasks/hour hits the cap. Tradeoff noted: a legitimate 11+-chat fan-out in one burst hits the same wall (loud, user-resolvable).
 - **Content contract, in the tool description** (the behavioral half of anti-decontextualization): wake text is written conditionally — "if X is not done, do X; else verify and record why not." Duplicate firing is harmless by convention.
@@ -143,7 +143,7 @@ Add an optional `schedule`/`runAt` parameter (reusing the existing 2-minute vali
 10. **Failure re-arm:** a gracefully failed once-task re-arms (enabled, unarchived, `nextRunAt` = backoff); it retries and is not archived; after 5 consecutive failures it disables. A killed once-task (no failure write) never re-fires.
 11. **Cap window:** 10 agent tasks created in the last hour blocks an 11th — including a `when=now` chain where no task is future-pending.
 12. **Target existence at fire:** a post to a since-deleted target fails the run and does **not** create a chat.
-13. **Target resolution:** id hit / unique-fragment hit / 0-match loud error / multi-match loud error with candidates; quick-chat target rejected.
+13. **Target resolution:** id hit / unique-fragment hit / 0-match loud error / multi-match loud error with candidates.
 14. **Envelope ↔ metadata parity** (pinned).
 15. **Timing:** `when = now` wake fires on the next scheduler tick after the 2-minute idle grace (no kick).
 
@@ -163,6 +163,6 @@ Total ≈ 1010 LOC incl. tests. Rides on the existing 5-minute scheduler tick, t
 - Deep-link on the envelope card: yes.
 - Web push on delivery when notifications enabled: yes — folded per the review's recommendation; veto at review.
 - ~~Immediate scheduler kick for `when = now` wakes~~ — **RETRACTED** (21:4x, external review): a kick cannot run from inside the source turn (`isTurnGateBusy`), and the 2-minute idle grace applies after `releaseTurn` regardless. Wake latency is documented as next-tick + grace. That recommendation assumed the grace away; it is withdrawn.
-- **Target-type scope (new, Asa's call):** v1 targets agent + system chats only; quick chats excluded. Folded per the review's recommendation (security boundary for an instruction-injection primitive); veto at review.
+- **Target-type scope (historical):** v1 targeted agent + system chats only, excluding quick chats as an instruction-injection boundary. Quick chats were later removed from the product, so every remaining chat is postable.
 - **Concurrency model (revised 09-09 late — storage-level, replaces v4's length heuristic):** the lease excludes active turns only; stale snapshots clobber appends (`chat.ts:4420` load vs `5188` lease; `syncChatMessageRows` is array-authoritative, `chat-storage.ts:1656-1699`). Fix = `chats.revision` + durable `row_id` identity + `appendChatMessageRow` + rebase-on-save — one reconciliation point, single source of truth, no second store, no reader changes. Wakes append at fire time (post is last row by construction).
 - **Sequencing (new, 09-09 late):** P0b storage foundation first, tested independently with synthetic writers; no feature code is written against the old sync semantics. P0 (independent crash fix) and P1 follow, then P2.

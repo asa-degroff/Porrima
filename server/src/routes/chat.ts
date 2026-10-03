@@ -111,10 +111,6 @@ const artifactAutoRepairAttempts = new Map<string, number>();
 // provider's cold-cache auto-detection accurate again.
 const postCompactionPrefillPending = new Set<string>();
 
-function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
-  return type === "agent" || type === "system";
-}
-
 /**
  * Pre-compaction memory flush as a compaction hook. Runs BEFORE archive/index
  * generation so it continues the extraction session's cached prompt (index
@@ -126,7 +122,7 @@ function preCompactionFlushHook(
   errorLabel: string,
 ): (removed: ChatMessage[], signal?: AbortSignal) => Promise<void> {
   return async (removed: ChatMessage[], signal?: AbortSignal): Promise<void> => {
-    if (!isMemoryAugmentedChatType(chat.type) || removed.length === 0) return;
+    if (removed.length === 0) return;
     try {
       await preCompactionFlush(chat.modelId, chat.id, removed, { projectId: chat.projectId, signal });
     } catch (err) {
@@ -957,7 +953,6 @@ function toolsForEstimate(
   contextWindow: number,
   project?: Project | string,
 ): unknown {
-  if (chat.type === "quick") return undefined;
   return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, project, chat.type);
 }
 
@@ -1975,8 +1970,6 @@ async function handleChatStream(
     },
   };
 
-  const isAgent = chat.type === "agent" || chat.type === "system";
-
   const settings = await getSettings();
   const ttsSettings: TTSSettings = await getCurrentTTSSettings();
   const ttsEnabled = ttsSettings.enabled && ttsSettings.autoReadEnabled && isStreamingCapable(ttsSettings.backend);
@@ -2097,7 +2090,7 @@ async function handleChatStream(
     }
   }
 
-  console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
+  console.log(`[chat] type=${chat.type} tts=${ttsEnabled}`);
 
   try {
     // Discover model with timeout protection
@@ -2174,9 +2167,7 @@ async function handleChatStream(
     // Created per handleChatStream so steering shares the gate while a
     // follow-up (new stream) restarts the "since turn start" reference.
     const timeMarker = createTimeMarkerState(settings.timeMarkerIntervalMinutes);
-    const agentTools = isAgent
-      ? getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker)
-      : undefined;
+    const agentTools = getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker);
 
     // Build agent context
     const context: AgentContext = {
@@ -2189,39 +2180,36 @@ async function handleChatStream(
     // actually sending to the LLM, so the end-of-turn KV snapshot can digest
     // the true wire shape instead of the DB reconstruction.
     const liveWireContextRef: { current: AgentContext["messages"] } = { current: context.messages };
-    const passiveRecall =
-      isMemoryAugmentedChatType(chat.type)
-        ? new PassiveMemoryRecallController(chat.id, {
-            // Post-turn injection: when the agent stops without tool use,
-            // the search runs in the background and injects after the turn ends.
-            // The injection row is pushed to chat.messages and persisted so
-            // the next user turn sees it.
-            onReady: async (content: string, memoryIds: string[]) => {
-              const row: ChatMessage = {
-                role: "system",
-                content,
-                timestamp: Date.now(),
-                _isSystemMessage: true,
-                _isPassiveMemoryRecall: true,
-                _recalledMemoryIds: memoryIds,
-                _mergeIntoNextUserMessage: true,
-              };
-              // This fires seconds after the turn ended (embed → search →
-              // rerank on the CPU servers), long after the gate was released.
-              // The turn's captured `chat` object is stale by then — the user
-              // may have edited a message, and /edit rewrites the row table
-              // from the edit point down. Saving the captured object would
-              // silently revert that edit (syncChatMessageRows deletes and
-              // rewrites every row past the first divergence). The recall row
-              // is a pure tail append, so always base it on the current
-              // persisted state instead.
-              const current = await getChat(chat.id);
-              if (!current) return; // chat deleted while recall was in flight
-              current.messages.push(row);
-              await saveChat(current);
-            },
-          })
-        : null;
+    const passiveRecall = new PassiveMemoryRecallController(chat.id, {
+      // Post-turn injection: when the agent stops without tool use,
+      // the search runs in the background and injects after the turn ends.
+      // The injection row is pushed to chat.messages and persisted so
+      // the next user turn sees it.
+      onReady: async (content: string, memoryIds: string[]) => {
+        const row: ChatMessage = {
+          role: "system",
+          content,
+          timestamp: Date.now(),
+          _isSystemMessage: true,
+          _isPassiveMemoryRecall: true,
+          _recalledMemoryIds: memoryIds,
+          _mergeIntoNextUserMessage: true,
+        };
+        // This fires seconds after the turn ended (embed → search →
+        // rerank on the CPU servers), long after the gate was released.
+        // The turn's captured `chat` object is stale by then — the user
+        // may have edited a message, and /edit rewrites the row table
+        // from the edit point down. Saving the captured object would
+        // silently revert that edit (syncChatMessageRows deletes and
+        // rewrites every row past the first divergence). The recall row
+        // is a pure tail append, so always base it on the current
+        // persisted state instead.
+        const current = await getChat(chat.id);
+        if (!current) return; // chat deleted while recall was in flight
+        current.messages.push(row);
+        await saveChat(current);
+      },
+    });
 
     const persistActivePendingState = async (agentMessages: any[] = context.messages as any[]) => {
       await savePendingState(chat.id, {
@@ -2402,7 +2390,7 @@ async function handleChatStream(
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
         // Defer memory extraction for the completed turn
-        if (assistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
+        if (assistantMsg && !currentTurnIsHidden) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
@@ -2440,7 +2428,7 @@ async function handleChatStream(
 
         // Defer memory extraction until after the agent loop finishes
         // to avoid concurrent LLM calls that can interfere with the active tool loop
-        if (assistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
+        if (assistantMsg && !currentTurnIsHidden) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
@@ -3047,7 +3035,7 @@ async function handleChatStream(
             }
             console.log(`[chat] iteration ${iterations}: saved progress (${persistedTurnMsg?.toolCalls?.length || 0} tools, ${persistedTurnMsg?.content.length || 0}ch, est ${pressure.estimatedTokens} tokens)`);
             if (!turnAbortController.signal.aborted && !state.needsMidTurnCompaction) {
-              passiveRecall?.schedule({
+              passiveRecall.schedule({
                 iteration: iterations,
                 stopReason,
                 chatMessages: chat.messages,
@@ -3457,7 +3445,7 @@ async function handleChatStream(
         try {
           // Wait for any in-flight mid-turn pulse so its cursor is settled
           // and it isn't racing the extraction server during the flush.
-          if (isAgent) await awaitMidTurnPulse(state);
+          await awaitMidTurnPulse(state);
           const preCompactionEstimate = estimateContextTokens(chat.messages, systemPrompt, agentTools);
           // The flush runs as a pre-archive hook inside truncateChatHistory:
           // memories are extracted from removed messages (continuing the
@@ -3472,7 +3460,7 @@ async function handleChatStream(
             preCompactionEstimate,
             systemPrompt,
             agentTools,
-            isAgent ? preCompactionFlushHook(chat, "mid-turn pre-flush failed") : undefined,
+            preCompactionFlushHook(chat, "mid-turn pre-flush failed"),
             connectionAbortController.signal,
           );
           if (compaction?.truncated) {
@@ -3524,7 +3512,7 @@ async function handleChatStream(
         // enter as delta rows on the next build.
         // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
         // the frozen context state is set up properly for subsequent turns.
-        if (compaction?.truncated && isAgent) {
+        if (compaction?.truncated) {
           softResetMemoryContext(chat.id);
           const split = await buildSplitAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
@@ -3790,7 +3778,7 @@ async function handleChatStream(
               !resumeAbortController.signal.aborted &&
               !state.needsMidTurnCompaction
             ) {
-              passiveRecall?.schedule({
+              passiveRecall.schedule({
                 iteration: iterations,
                 stopReason: sr,
                 chatMessages: chat.messages,
@@ -3946,24 +3934,22 @@ async function handleChatStream(
               // stableOnly: no turn is left to carry the delta here, so skip
               // the Case 3 re-retrieval and let the next delivering build
               // (send/resume/edit) deliver it.
-              if (isMemoryAugmentedChatType(chat.type)) {
-                softResetMemoryContext(chat.id);
-                const split = await buildSplitAugmentedPrompt(
-                  chat.systemPrompt || "You are a helpful assistant.",
-                  chat.messages, chat.id, chat.projectId, chat.type, projectPath,
-                  { stableOnly: true }
-                );
-                systemPrompt = split.systemPrompt;
+              softResetMemoryContext(chat.id);
+              const split = await buildSplitAugmentedPrompt(
+                chat.systemPrompt || "You are a helpful assistant.",
+                chat.messages, chat.id, chat.projectId, chat.type, projectPath,
+                { stableOnly: true }
+              );
+              systemPrompt = split.systemPrompt;
 
-                // Reinjected skills after compaction — they were lost when
-                // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
-                if (chat.activeSkills?.length) {
-                  const skillsCache = new Map<string, Skill>();
-                  const allSkills = await discoverSkills(chat.projectId);
-                  for (const s of allSkills) skillsCache.set(s.name, s);
-                  systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
-                  console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
-                }
+              // Reinjected skills after compaction — they were lost when
+              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+              if (chat.activeSkills?.length) {
+                const skillsCache = new Map<string, Skill>();
+                const allSkills = await discoverSkills(chat.projectId);
+                for (const s of allSkills) skillsCache.set(s.name, s);
+                systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+                console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
               }
               setCachedAugmentedPrompt(chat.id, systemPrompt);
 
@@ -4066,7 +4052,7 @@ async function handleChatStream(
       res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
 
       // Defer memory extraction until after the follow-up loop finishes
-      if (currentAssistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
+      if (currentAssistantMsg && !currentTurnIsHidden) {
         deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: currentAssistantMsg.content });
       }
 
@@ -4101,9 +4087,7 @@ async function handleChatStream(
 
       // stableOnly: the follow-up path has no delta delivery point; leave any
       // owed delta to the next send/resume/edit build.
-      let followUpSystemPrompt = isMemoryAugmentedChatType(chat.type)
-        ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath, { stableOnly: true })).systemPrompt
-        : chat.systemPrompt || "You are a helpful assistant.";
+      let followUpSystemPrompt = (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath, { stableOnly: true })).systemPrompt;
 
       // Reinjected skills on follow-up turn — buildSplitAugmentedPrompt builds
       // from the base system prompt which doesn't include active skills.
@@ -4184,9 +4168,9 @@ async function handleChatStream(
       await snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity, liveWireContextRef.current);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
-      // Generate a brief recap for long assistant messages (agent/project/system chats only).
+      // Generate a brief recap for long assistant messages.
       // Skipped for a stopped turn — no point spending an LLM call on an abandoned response.
-      if (!connectionClosed && (chat.type === "agent" || chat.type === "system") && logicalAssistantContent.length > RECAP_THRESHOLD && !assistantMsg.recap) {
+      if (!connectionClosed && logicalAssistantContent.length > RECAP_THRESHOLD && !assistantMsg.recap) {
         try {
           const recap = await generateRecap(logicalAssistantContent);
           if (recap) {
@@ -4211,7 +4195,7 @@ async function handleChatStream(
       // so this naturally excludes tool-use iterations (already handled mid-turn).
       // Stopped turns are excluded too: the partial exchange was abandoned.
       if (!connectionClosed && state.pendingFinalAssistantMessage && !waitingForInput && !state.needsMidTurnCompaction) {
-        passiveRecall?.schedule({
+        passiveRecall.schedule({
           iteration: iterations,
           stopReason: "stop",
           chatMessages: chat.messages,
@@ -4318,7 +4302,7 @@ async function handleChatStream(
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference).
       // Skipped for a stopped turn: the user abandoned this exchange, and extraction would keep
       // running (and burn the CPU extraction servers) after the stop.
-      if (!connectionClosed && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
+      if (!connectionClosed && !currentTurnIsHidden && hasContent) {
         // Never block turn teardown on an in-flight mid-turn pulse: it can run
         // up to midTurnExtractionTimeoutMs (up to 15 min), and holding this
         // finally open is what let a stale turn's later cleanup stomp the next
@@ -4538,18 +4522,16 @@ router.post("/", async (req, res) => {
       // can leave an oversized post-compact prompt that fails on the next turn.
       // stableOnly: this build only estimates; it must not run (and waste) the
       // Case 3 delta retrieval or claim anything.
-      if (isMemoryAugmentedChatType(chat.type)) {
-        const split = await buildSplitAugmentedPrompt(
-          chat.systemPrompt || "You are a helpful assistant.",
-          chat.messages,
-          chat.id,
-          chat.projectId,
-          chat.type,
-          compactProjectPath,
-          { stableOnly: true }
-        );
-        compactSystemPrompt = split.systemPrompt;
-      }
+      const split = await buildSplitAugmentedPrompt(
+        chat.systemPrompt || "You are a helpful assistant.",
+        chat.messages,
+        chat.id,
+        chat.projectId,
+        chat.type,
+        compactProjectPath,
+        { stableOnly: true }
+      );
+      compactSystemPrompt = split.systemPrompt;
       if (chat.activeSkills?.length) {
         const skillsCache = new Map<string, Skill>();
         const allSkills = await discoverSkills(chat.projectId);
@@ -4567,9 +4549,7 @@ router.post("/", async (req, res) => {
         // call runs Case 3: frozen section retained, new memories as delta rows.
         // No need to rebuild here
         // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
-        if (isMemoryAugmentedChatType(chat.type)) {
-          softResetMemoryContext(chat.id);
-        }
+        softResetMemoryContext(chat.id);
         // Whether the follow-up runs in this request or on the next turn, its
         // prefill starts from the rebuilt context — arm the indicator.
         postCompactionPrefillPending.add(chat.id);
@@ -4881,33 +4861,31 @@ router.post("/", async (req, res) => {
             // Soft reset after compaction — frozen set retained, next build
             // is a Case 3 delta against compacted history.
             softResetMemoryContext(chat.id);
-            if (isMemoryAugmentedChatType(chat.type)) {
-              let resumeProjectPath: string | undefined;
-              if (chat.projectId) {
-                const project = await getProject(chat.projectId);
-                resumeProjectPath = project?.path;
-              }
-              const split = await buildSplitAugmentedPrompt(
-                chat.systemPrompt || "You are a helpful assistant.",
-                chat.messages,
-                chat.id,
-                chat.projectId,
-                chat.type,
-                resumeProjectPath
-              );
-              systemPrompt = split.systemPrompt;
-              // Deliver the post-reset delta on this resumed turn (see below).
-              resumeMemoriesDelta = split.memoriesMessage;
-              resumeMemoriesDeltaIds = split.newMemoryIds;
-              // Reinjected skills after compaction — they were lost when
-              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
-              if (chat.activeSkills?.length) {
-                const skillsCache = new Map<string, Skill>();
-                const allSkills = await discoverSkills(chat.projectId);
-                for (const s of allSkills) skillsCache.set(s.name, s);
-                systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
-                console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after resume pre-send compaction`);
-              }
+            let resumeProjectPath: string | undefined;
+            if (chat.projectId) {
+              const project = await getProject(chat.projectId);
+              resumeProjectPath = project?.path;
+            }
+            const split = await buildSplitAugmentedPrompt(
+              chat.systemPrompt || "You are a helpful assistant.",
+              chat.messages,
+              chat.id,
+              chat.projectId,
+              chat.type,
+              resumeProjectPath
+            );
+            systemPrompt = split.systemPrompt;
+            // Deliver the post-reset delta on this resumed turn (see below).
+            resumeMemoriesDelta = split.memoriesMessage;
+            resumeMemoriesDeltaIds = split.newMemoryIds;
+            // Reinjected skills after compaction — they were lost when
+            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+            if (chat.activeSkills?.length) {
+              const skillsCache = new Map<string, Skill>();
+              const allSkills = await discoverSkills(chat.projectId);
+              for (const s of allSkills) skillsCache.set(s.name, s);
+              systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+              console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after resume pre-send compaction`);
             }
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
@@ -5049,25 +5027,23 @@ router.post("/", async (req, res) => {
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     let memoriesDelta = "";
     let memoriesDeltaIds: string[] = [];
-    if (isMemoryAugmentedChatType(chat.type)) {
-      // Get project path for AGENTS.md loading
-      let projectPath: string | undefined;
-      if (chat.projectId) {
-        const project = await getProject(chat.projectId);
-        projectPath = project?.path;
-      }
-      const split = await buildSplitAugmentedPrompt(
-        systemPrompt,
-        chat.messages,
-        chat.id,
-        chat.projectId,
-        chat.type,
-        projectPath
-      );
-      systemPrompt = split.systemPrompt;
-      memoriesDelta = split.memoriesMessage;
-      memoriesDeltaIds = split.newMemoryIds;
+    // Get project path for AGENTS.md loading
+    let projectPath: string | undefined;
+    if (chat.projectId) {
+      const project = await getProject(chat.projectId);
+      projectPath = project?.path;
     }
+    const split = await buildSplitAugmentedPrompt(
+      systemPrompt,
+      chat.messages,
+      chat.id,
+      chat.projectId,
+      chat.type,
+      projectPath
+    );
+    systemPrompt = split.systemPrompt;
+    memoriesDelta = split.memoriesMessage;
+    memoriesDeltaIds = split.newMemoryIds;
 
     // Inject active skills into system prompt
     if (chat.activeSkills?.length) {
@@ -5134,38 +5110,36 @@ router.post("/", async (req, res) => {
             // the frozen context state is set up immediately, avoiding a redundant retrieval
             // on the next turn.
             softResetMemoryContext(chat.id);
-            if (isMemoryAugmentedChatType(chat.type)) {
-              let projectPath: string | undefined;
-              if (chat.projectId) {
-                const project = await getProject(chat.projectId);
-                projectPath = project?.path;
-              }
-              const split = await buildSplitAugmentedPrompt(
-                chat.systemPrompt || "You are a helpful assistant.",
-                chat.messages,
-                chat.id,
-                chat.projectId,
-                chat.type,
-                projectPath
-              );
-              systemPrompt = split.systemPrompt;
-              // Deliver the post-reset delta on this turn: the call at :5033 ran
-              // before compaction/flush, so this is the build that carries the
-              // freshly extracted memories. The pre-reset delta's ids were
-              // unclaimed by the soft reset and stay re-retrievable if this
-              // retrieval doesn't return them.
-              memoriesDelta = split.memoriesMessage;
-              memoriesDeltaIds = split.newMemoryIds;
+            let preCompactProjectPath: string | undefined;
+            if (chat.projectId) {
+              const project = await getProject(chat.projectId);
+              preCompactProjectPath = project?.path;
+            }
+            const split = await buildSplitAugmentedPrompt(
+              chat.systemPrompt || "You are a helpful assistant.",
+              chat.messages,
+              chat.id,
+              chat.projectId,
+              chat.type,
+              preCompactProjectPath
+            );
+            systemPrompt = split.systemPrompt;
+            // Deliver the post-reset delta on this turn: the call above ran
+            // before compaction/flush, so this is the build that carries the
+            // freshly extracted memories. The pre-reset delta's ids were
+            // unclaimed by the soft reset and stay re-retrievable if this
+            // retrieval doesn't return them.
+            memoriesDelta = split.memoriesMessage;
+            memoriesDeltaIds = split.newMemoryIds;
 
-              // Reinject skills after compaction — they were lost when
-              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
-              if (chat.activeSkills?.length) {
-                const skillsCache = new Map<string, Skill>();
-                const allSkills = await discoverSkills(chat.projectId);
-                for (const s of allSkills) skillsCache.set(s.name, s);
-                systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
-                console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after pre-send compaction`);
-              }
+            // Reinject skills after compaction — they were lost when
+            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+            if (chat.activeSkills?.length) {
+              const skillsCache = new Map<string, Skill>();
+              const allSkills = await discoverSkills(chat.projectId);
+              for (const s of allSkills) skillsCache.set(s.name, s);
+              systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+              console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after pre-send compaction`);
             }
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
@@ -5363,9 +5337,6 @@ router.post("/artifact-error", async (req, res) => {
 
   const chat = await getChat(report.chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
-  if (!(chat.type === "agent" || chat.type === "system")) {
-    return res.status(400).json({ error: "Artifact repair requires a tool-capable chat" });
-  }
 
   const current = await getVersionedObjectCurrentVersion(report.artifactId, report.objectKind);
   if (!current) return res.status(404).json({ error: "Artifact or visual not found" });
@@ -5459,24 +5430,22 @@ router.post("/artifact-error", async (req, res) => {
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let memoriesDelta = "";
   let memoriesDeltaIds: string[] = [];
-  if (isMemoryAugmentedChatType(chat.type)) {
-    let projectPath: string | undefined;
-    if (chat.projectId) {
-      const project = await getProject(chat.projectId);
-      projectPath = project?.path;
-    }
-    const split = await buildSplitAugmentedPrompt(
-      systemPrompt,
-      chat.messages,
-      chat.id,
-      chat.projectId,
-      chat.type,
-      projectPath
-    );
-    systemPrompt = split.systemPrompt;
-    memoriesDelta = split.memoriesMessage;
-    memoriesDeltaIds = split.newMemoryIds;
+  let repairProjectPath: string | undefined;
+  if (chat.projectId) {
+    const project = await getProject(chat.projectId);
+    repairProjectPath = project?.path;
   }
+  const split = await buildSplitAugmentedPrompt(
+    systemPrompt,
+    chat.messages,
+    chat.id,
+    chat.projectId,
+    chat.type,
+    repairProjectPath
+  );
+  systemPrompt = split.systemPrompt;
+  memoriesDelta = split.memoriesMessage;
+  memoriesDeltaIds = split.newMemoryIds;
 
   if (chat.activeSkills?.length) {
     const skillsCache = new Map<string, Skill>();
@@ -5818,19 +5787,17 @@ router.post("/edit", async (req, res) => {
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let editMemoriesDelta = "";
   let editMemoriesDeltaIds: string[] = [];
-  if (isMemoryAugmentedChatType(chat.type)) {
-    let editProjectPath: string | undefined;
-    if (chat.projectId) {
-      const project = await getProject(chat.projectId);
-      editProjectPath = project?.path;
-    }
-    const split = await buildSplitAugmentedPrompt(
-      systemPrompt, chat.messages, chat.id, chat.projectId, chat.type, editProjectPath
-    );
-    systemPrompt = split.systemPrompt;
-    editMemoriesDelta = split.memoriesMessage;
-    editMemoriesDeltaIds = split.newMemoryIds;
+  let editProjectPath: string | undefined;
+  if (chat.projectId) {
+    const project = await getProject(chat.projectId);
+    editProjectPath = project?.path;
   }
+  const split = await buildSplitAugmentedPrompt(
+    systemPrompt, chat.messages, chat.id, chat.projectId, chat.type, editProjectPath
+  );
+  systemPrompt = split.systemPrompt;
+  editMemoriesDelta = split.memoriesMessage;
+  editMemoriesDeltaIds = split.newMemoryIds;
 
   // Load settings for context window resolution
   const settings = await getSettings();
@@ -5898,33 +5865,31 @@ router.post("/edit", async (req, res) => {
           // Soft reset after compaction — frozen set retained, next build
           // is a Case 3 delta against compacted history.
           softResetMemoryContext(chat.id);
-          if (isMemoryAugmentedChatType(chat.type)) {
-            let editProjectPath: string | undefined;
-            if (chat.projectId) {
-              const project = await getProject(chat.projectId);
-              editProjectPath = project?.path;
-            }
-            const split = await buildSplitAugmentedPrompt(
-              chat.systemPrompt || "You are a helpful assistant.",
-              chat.messages,
-              chat.id,
-              chat.projectId,
-              chat.type,
-              editProjectPath
-            );
-            systemPrompt = split.systemPrompt;
-            editMemoriesDelta = split.memoriesMessage;
-            editMemoriesDeltaIds = split.newMemoryIds;
+          let editCompactProjectPath: string | undefined;
+          if (chat.projectId) {
+            const project = await getProject(chat.projectId);
+            editCompactProjectPath = project?.path;
+          }
+          const editSplit = await buildSplitAugmentedPrompt(
+            chat.systemPrompt || "You are a helpful assistant.",
+            chat.messages,
+            chat.id,
+            chat.projectId,
+            chat.type,
+            editCompactProjectPath
+          );
+          systemPrompt = editSplit.systemPrompt;
+          editMemoriesDelta = editSplit.memoriesMessage;
+          editMemoriesDeltaIds = editSplit.newMemoryIds;
 
-            // Reinject skills after compaction — they were lost when
-            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
-            if (chat.activeSkills?.length) {
-              const skillsCache = new Map<string, Skill>();
-              const allSkills = await discoverSkills(chat.projectId);
-              for (const s of allSkills) skillsCache.set(s.name, s);
-              systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
-              console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after edit pre-send compaction`);
-            }
+          // Reinject skills after compaction — they were lost when
+          // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+          if (chat.activeSkills?.length) {
+            const skillsCache = new Map<string, Skill>();
+            const allSkills = await discoverSkills(chat.projectId);
+            for (const s of allSkills) skillsCache.set(s.name, s);
+            systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+            console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after edit pre-send compaction`);
           }
           // Emit compaction event for UI indicator
           const estimatedTokens = await estimatePostCompactionTokens(

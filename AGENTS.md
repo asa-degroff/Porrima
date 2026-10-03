@@ -26,7 +26,7 @@
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
-Three chat types: **agent** (memory-augmented), **quick** (standalone), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. LLM system uses OpenAI-compatible (llama.cpp) backend for all inference.
+Two chat types: **agent** (memory-augmented) and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. LLM system uses OpenAI-compatible (llama.cpp) backend for all inference.
 
 ## Tool System
 
@@ -77,7 +77,7 @@ See [docs/integrations.md](docs/integrations.md) for full details.
 
 See [docs/ui-patterns.md](docs/ui-patterns.md) for full details.
 
-SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, blue for quick, emerald for projects.
+SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, emerald for projects.
 
 ## Project Structure
 

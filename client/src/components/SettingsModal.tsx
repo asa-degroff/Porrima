@@ -25,7 +25,7 @@ import { getPersona, updatePersona } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, SystemPromptPreset, Theme, ThemePreset, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, Theme, ThemePreset, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -97,7 +97,6 @@ const SECTIONS = [
   { id: 'ssh', label: 'Remote Hosts' },
   { id: 'persona', label: 'Persona' },
   { id: 'user-doc', label: 'About You' },
-  { id: 'presets', label: 'Quick chats' },
   { id: 'api-keys', label: 'API Keys' },
   { id: 'vision', label: 'Vision' },
   { id: 'skills', label: 'Skills' },
@@ -810,11 +809,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const customThemeValidationError = theme === "custom"
     ? getCustomThemeBackgroundError(customTheme.background)
     : null;
-  const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
-  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
-  const [editingPresetContent, setEditingPresetContent] = useState<string>("");
-  const [presetSaving, setPresetSaving] = useState(false);
-  const [presetMessage, setPresetMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const push = usePushNotifications();
   const [pushTestState, setPushTestState] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
@@ -2092,8 +2086,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   }, [runSshConnectionTest]);
 
   const handleSave = (): Settings => {
-    const defaultPreset = presets.find((p) => p.isDefault);
-    const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
+    const effectivePrompt = defaultSystemPrompt.trim();
     const savedExtractionCtxSize = clampIntegerDraft(
       extractionCtxSizeDraft,
       extractionCtxSize,
@@ -2177,7 +2170,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       activityShape,
       activityHue,
       activitySaturation,
-      systemPromptPresets: presets.length > 0 ? presets : undefined,
 
       preserveThinking,
       modelPreserveThinking: undefined,
@@ -2575,56 +2567,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     await saveAutomationPatch(other.id, { orderIndex: current.orderIndex });
     await refreshAutomations();
   };
-
-  const handleAddPreset = () => {
-    const newPreset: SystemPromptPreset = {
-      id: crypto.randomUUID(),
-      name: "",
-      content: "",
-      isDefault: presets.length === 0,
-    };
-    setPresets((prev) => [...prev, newPreset]);
-  };
-
-  const handleUpdatePreset = (id: string, updates: Partial<SystemPromptPreset>) => {
-    setPresets((prev) =>
-      prev.map((p) => {
-        if (p.id !== id) {
-          // If we're setting a new default, unset others
-          if (updates.isDefault) return { ...p, isDefault: false };
-          return p;
-        }
-        return { ...p, ...updates };
-      })
-    );
-  };
-
-  const handleDeletePreset = (id: string) => {
-    setPresets((prev) => {
-      const remaining = prev.filter((p) => p.id !== id);
-      // If deleted preset was the default, make first remaining one default
-      const deleted = prev.find((p) => p.id === id);
-      if (deleted?.isDefault && remaining.length > 0) {
-        remaining[0] = { ...remaining[0], isDefault: true };
-      }
-      return remaining;
-    });
-  };
-
-  const handleSavePreset = useCallback(async () => {
-    if (!editingPresetId) return;
-    setPresetSaving(true);
-    setPresetMessage(null);
-    try {
-      handleUpdatePreset(editingPresetId, { content: editingPresetContent });
-      setPresetMessage({ type: "ok", text: "Preset updated successfully" });
-      setEditingPresetId(null);
-      setEditingPresetContent("");
-    } catch (err: any) {
-      setPresetMessage({ type: "err", text: err.message || "Failed to save preset" });
-    }
-    setPresetSaving(false);
-  }, [editingPresetId, editingPresetContent, handleUpdatePreset]);
 
   const handleAddPasskey = useCallback(async () => {
     setPasskeyAdding(true);
@@ -5210,145 +5152,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 </button>
               )}
             </div>
-          </div>
-
-          {/* System Prompt Presets */}
-          <div id="presets" className="space-y-3 pt-2 border-t border-white/10">
-            <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium text-white/60">Quick chat presets</label>
-              <button
-                onClick={handleAddPreset}
-                className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all pressable"
-              >
-                + Add Preset
-              </button>
-            </div>
-            <p className="text-white/30 text-xs -mt-2">
-              System prompt presets for quick chats.
-            </p>
-
-            {presetMessage && (
-              <p className={`text-xs ${presetMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
-                {presetMessage.text}
-              </p>
-            )}
-
-            {presets.length === 0 ? (
-              <p className="text-white/30 text-xs italic">No presets configured. Add a preset to use mode-specific prompts.</p>
-            ) : (
-              <div className="space-y-3">
-                {presets.map((preset) => {
-                  const isEditingContent = editingPresetId === preset.id;
-                  return (
-                    <div
-                      key={preset.id}
-                      className={`rounded-lg border transition-all ${
-                        preset.isDefault
-                          ? "border-white/15"
-                          : "border-white/10 bg-white/[0.02]"
-                      }`}
-                      style={{
-                        backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted), 0.05)` : '',
-                      }}
-                    >
-                      {isEditingContent ? (
-                        <div className="p-3 space-y-2">
-                          <label className="block text-xs text-white/40">Content</label>
-                          <textarea
-                            value={editingPresetContent}
-                            onChange={(e) => setEditingPresetContent(e.target.value)}
-                            rows={6}
-                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all font-mono"
-                            placeholder="Mode-specific instructions (appended to base prompt)..."
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={handleSavePreset}
-                              disabled={presetSaving}
-                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
-                              style={{
-                                backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
-                                borderColor: `rgba(var(--theme-primary-border))`,
-                                color: `rgba(var(--theme-primary-text))`,
-                              }}
-                            >
-                              {presetSaving ? "Saving..." : "Save"}
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingPresetId(null);
-                                setEditingPresetContent("");
-                              }}
-                              disabled={presetSaving}
-                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              value={preset.name}
-                              onChange={(e) => handleUpdatePreset(preset.id, { name: e.target.value })}
-                              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
-                              placeholder="Preset name..."
-                            />
-                            <button
-                              onClick={() => handleUpdatePreset(preset.id, { isDefault: true })}
-                              className={`text-xs px-2 py-1 rounded transition-all shrink-0 ${
-                                preset.isDefault
-                                  ? "border"
-                                  : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
-                              } pressable`}
-                              style={{
-                                backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
-                                color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
-                                borderColor: preset.isDefault ? `rgba(var(--theme-primary-border))` : '',
-                              }}
-                              title={preset.isDefault ? "Default for new chats" : "Set as default"}
-                            >
-                              {preset.isDefault ? "Default" : "Set default"}
-                            </button>
-                            <button
-                              onClick={() => handleDeletePreset(preset.id)}
-                              className="text-white/20 hover:text-red-400/70 transition-colors p-0.5 shrink-0 pressable"
-                              title="Delete preset"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M18 6L6 18" />
-                                <path d="M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs text-white/50 truncate">
-                                {preset.content ? preset.content.split("\n")[0]?.substring(0, 60) || "No content" : "No content"}
-                              </p>
-                              <p className="text-[10px] text-white/30">
-                                {preset.content ? `${preset.content.length} characters` : ""}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setEditingPresetId(preset.id);
-                                setEditingPresetContent(preset.content);
-                              }}
-                              className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
-                            >
-                              Edit content
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
 
           {/* API Keys Section */}

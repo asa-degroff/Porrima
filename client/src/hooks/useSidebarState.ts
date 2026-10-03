@@ -5,7 +5,6 @@ import { readStoredValue, writeStoredValue } from "../lib/storage";
 interface SidebarState {
   projectsExpanded: boolean;
   agentExpanded: boolean;
-  quickExpanded: boolean;
   projectStates: Record<string, boolean>;
   selectedProjectId: string | null;
   projectWorkspaceHeight: number | null;
@@ -17,7 +16,6 @@ const LEGACY_LOCAL_STORAGE_KEY = "quje-sidebar-state";
 const DEFAULT_STATE: SidebarState = {
   projectsExpanded: true,
   agentExpanded: true,
-  quickExpanded: false,
   projectStates: {},
   selectedProjectId: null,
   projectWorkspaceHeight: null,
@@ -85,10 +83,6 @@ export function useSidebarState() {
     setState((prev) => ({ ...prev, agentExpanded: expanded }));
   }, []);
 
-  const setQuickExpanded = useCallback((expanded: boolean) => {
-    setState((prev) => ({ ...prev, quickExpanded: expanded }));
-  }, []);
-
   const setProjectExpanded = useCallback((projectId: string, expanded: boolean) => {
     setState((prev) => ({
       ...prev,
@@ -111,10 +105,8 @@ export function useSidebarState() {
   return {
     projectsExpanded: state.projectsExpanded,
     agentExpanded: state.agentExpanded,
-    quickExpanded: state.quickExpanded,
     setProjectsExpanded,
     setAgentExpanded,
-    setQuickExpanded,
     setProjectExpanded,
     getProjectExpanded,
     selectedProjectId: state.selectedProjectId,

@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
-import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
+import { readdirSync, readFileSync, existsSync, renameSync, unlinkSync } from "fs";
 import os from "os";
 import { join } from "path";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection, ThemePreset } from "../types.js";
@@ -22,9 +22,11 @@ const BASE_DIR = APP_DATA_DIR;
 const CHATS_DIR = join(BASE_DIR, "chats");
 const PROJECTS_DIR = join(BASE_DIR, "projects");
 const SETTINGS_PATH = join(BASE_DIR, "settings.json");
+const QUEUE_DIR = join(BASE_DIR, "queue");
 
 const DB_PATH = join(BASE_DIR, "app.db");
 const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
+const QUICK_CHAT_REMOVAL_MIGRATION = "remove-quick-chats";
 // Upper bound when scanning backwards to find a tool-loop search group's first
 // row during an append. The HTTP loop allows 500 iterations, so 600 covers the
 // largest fragment chain with headroom.
@@ -503,6 +505,12 @@ export function getDb(): Database.Database {
     migrateSettingsFromJson(db);
   }
 
+  // Quick chats were removed as a feature — drop any rows created while they
+  // existed. Runs after the JSON import so imported chats are covered too;
+  // the import maps missing types to "agent" (see migrateChatsFromJson), so
+  // only chats explicitly stored as quick are deleted.
+  removeQuickChats(db);
+
   backfillChatMessageRows(db);
   rebuildChatSearchFromRowsOnce(db);
   remergeChatSearchToolLoopRowsOnce(db);
@@ -537,7 +545,7 @@ export async function listChats(): Promise<ChatListItem[]> {
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
-    type: r.type as "agent" | "quick" | "system",
+    type: r.type as "agent" | "system",
     lastModified: r.lastModified,
     preview: r.preview || "",
     ...(r.projectId ? { projectId: r.projectId } : {}),
@@ -1750,7 +1758,7 @@ function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
   return {
     id: row.id,
     title: row.title,
-    type: (row.type as "agent" | "quick" | "system") || "quick",
+    type: row.type === "system" ? "system" : "agent",
     modelId: row.modelId,
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
@@ -2496,6 +2504,45 @@ function markStorageMigration(db: Database.Database, name: string): void {
   `).run(name, new Date().toISOString());
 }
 
+/**
+ * One-time cleanup for the removed "quick" chat type. Deletes each quick
+ * chat's messages, pending state, and context archives alongside the chat
+ * row (mirroring deleteChat's cascade; the FTS tables are cleaned by their
+ * delete triggers), then drops any queued-message spill files. Runs before
+ * the row-table backfill so no rows are built for deleted chats.
+ */
+function removeQuickChats(db: Database.Database): void {
+  if (hasStorageMigration(db, QUICK_CHAT_REMOVAL_MIGRATION)) return;
+
+  const ids = (db.prepare("SELECT id FROM chats WHERE type = 'quick'").all() as Array<{ id: string }>)
+    .map((r) => r.id);
+
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(", ");
+    const remove = db.transaction(() => {
+      db.prepare(`DELETE FROM chat_message_rows WHERE chat_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM chat_messages WHERE chat_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM pending_states WHERE chatId IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM context_archives WHERE chatId IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM chats WHERE id IN (${placeholders})`).run(...ids);
+    });
+    remove();
+
+    // Queues are process-local at this point (startup), but offline-queued
+    // messages persist to disk between runs.
+    for (const id of ids) {
+      try {
+        unlinkSync(join(QUEUE_DIR, `${id}.json`));
+      } catch {
+        // no spill file — nothing to clean
+      }
+    }
+  }
+
+  markStorageMigration(db, QUICK_CHAT_REMOVAL_MIGRATION);
+  console.log(`[chat-storage] Removed ${ids.length} quick chats (feature removed)`);
+}
+
 function backfillChatMessageRows(db: Database.Database): void {
   if (hasStorageMigration(db, MESSAGE_ROWS_MIGRATION)) return;
 
@@ -2672,7 +2719,7 @@ function migrateChatsFromJson(db: Database.Database): void {
           insert.run(
             chat.id,
             chat.title,
-            chat.type || "quick",
+            chat.type || "agent",
             chat.modelId,
             chat.systemPrompt || "",
             chat.contextWindow ?? null,
@@ -2778,7 +2825,6 @@ export interface UserUIState {
   sidebarState?: {
     projectsExpanded: boolean;
     agentExpanded: boolean;
-    quickExpanded: boolean;
     projectStates: Record<string, boolean>;
     selectedProjectId?: string | null;
     projectWorkspaceHeight?: number | null;

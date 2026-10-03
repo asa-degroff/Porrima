@@ -69,7 +69,6 @@ const GROUP_ORDER: BreakdownGroup[] = ["system", "memory", "tools", "conversatio
 const MESSAGE_FRAMING_TOKENS = 8;
 
 function toolSchemaTokens(chat: Chat, contextWindow: number): number {
-  if (chat.type === "quick") return 0;
   try {
     const tools = getAgentTools(chat.id, NOOP_EFFECTS, contextWindow, chat.projectId, chat.type);
     if (!tools.length) return 0;
@@ -164,14 +163,12 @@ function latestUsage(messages: ChatMessage[]): { input: number; output: number; 
 export function computeContextBreakdown(chat: Chat, contextWindow: number): ContextBreakdown {
   const cachedPrompt = getCachedAugmentedPrompt(chat.id);
   const section = getCachedPromptBreakdown(chat.id);
-  // Quick chats have no memory-augmented prompt to be "cold" — the base system
-  // prompt is read directly from the chat, so treat it as fully resolved.
-  // For other chat types the sections are only resolved when the breakdown
-  // capture ran: a resumed prompt re-cached after a restart, or the
-  // stable-prefix fallback, can leave the rendered-prompt cache warm while
-  // `section` is null (all memory sections read 0, and scaling would inflate
-  // the base-prompt row to absorb them) — so the cold-cache footnote must fire.
-  const promptCached = chat.type === "quick" || (cachedPrompt != null && section != null);
+  // Sections are only resolved when the breakdown capture ran: a resumed
+  // prompt re-cached after a restart, or the stable-prefix fallback, can leave
+  // the rendered-prompt cache warm while `section` is null (all memory
+  // sections read 0, and scaling would inflate the base-prompt row to absorb
+  // them) — so the cold-cache footnote must fire.
+  const promptCached = cachedPrompt != null && section != null;
 
   // ---- System prompt sections (from the captured stable-prefix breakdown) ----
   const basePrompt = section?.basePrompt ?? estimateTextTokens(chat.systemPrompt || "");

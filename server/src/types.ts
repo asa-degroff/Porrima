@@ -145,7 +145,7 @@ export interface ChatMessage {
   recap?: string;
 }
 
-export type ChatType = "agent" | "quick" | "system";
+export type ChatType = "agent" | "system";
 
 /**
  * State snapshot sent to a newly attaching client instead of replaying the
@@ -396,13 +396,6 @@ export interface ThemePreset {
 
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
-export interface SystemPromptPreset {
-  id: string;
-  name: string;
-  content: string;
-  isDefault: boolean;
-}
-
 export type WebSearchProvider = "brave" | "exa" | "tavily";
 export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
 
@@ -428,7 +421,6 @@ export interface Settings {
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;
-  systemPromptPresets?: SystemPromptPreset[];
   // Delayed memory extraction settings
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;

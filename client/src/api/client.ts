@@ -1307,11 +1307,11 @@ export async function searchNotebooks(query: string, author?: 'user' | 'agent', 
   return res.json();
 }
 
-export async function createChat(id: string, modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
+export async function createChat(id: string, modelId: string, projectId?: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, modelId, type, projectId }),
+    body: JSON.stringify({ id, modelId, projectId }),
   });
   if (!res.ok) throw new Error("Failed to create chat");
   return res.json();
@@ -1325,7 +1325,6 @@ export interface UserUIState {
   sidebarState?: {
     projectsExpanded: boolean;
     agentExpanded: boolean;
-    quickExpanded: boolean;
     projectStates: Record<string, boolean>;
     selectedProjectId?: string | null;
     projectWorkspaceHeight?: number | null;

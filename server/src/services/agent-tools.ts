@@ -530,8 +530,8 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const args = params as Record<string, any>;
 
       // Default destination is the calling chat (the closure's chatId) — the
-      // reminder fires where the context lives. Quick chats are
-      // standalone-by-design and take the legacy system chat instead.
+      // reminder fires where the context lives. If the calling chat can't be
+      // loaded, fall back to the legacy system chat.
       let destinationChatId: string;
       let destinationLabel: string;
       const explicit = typeof args.targetChat === "string" ? args.targetChat.trim() : "";
@@ -544,7 +544,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         destinationLabel = `${resolved.target.title} (${resolved.target.id})`;
       } else {
         const calling = await getChat(chatId);
-        if (calling && calling.type !== "quick") {
+        if (calling) {
           destinationChatId = calling.id;
           destinationLabel = `${calling.title} (${calling.id})`;
         } else {

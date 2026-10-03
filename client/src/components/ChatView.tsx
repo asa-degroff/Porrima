@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -7,9 +7,7 @@ import { MidTurnCompactionIndicator } from "./CompactionIndicator";
 import { CrossChatPostCard } from "./CrossChatPostCard";
 import { ReminderCard } from "./ReminderCard";
 import { MessageInput } from "./MessageInput";
-import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
-import { SystemPromptEditor } from "./SystemPromptEditor";
 import { OfflineIndicator } from "./OfflineIndicator";
 import { BlockIndicator } from "./BlockIndicator";
 import { SkillSelector } from "./SkillSelector";
@@ -337,9 +335,7 @@ interface Props {
   warning: StreamWarning | null;
   models: InferenceModel[];
   selectedModelId: string;
-  systemPrompt: string;
-  systemPromptPresets?: SystemPromptPreset[];
-  chatType?: string;
+  chatType?: ChatType;
   isSynthesizing?: boolean;
   ttsEnabled?: boolean;
   ttsAutoReadEnabled?: boolean;
@@ -352,8 +348,6 @@ interface Props {
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   onLoadOlderMessages?: () => Promise<boolean>;
   onAbort: () => void;
-  onModelChange: (modelId: string) => void;
-  onSystemPromptChange: (value: string) => void;
   onContextWindowChange: (value: number | null) => void;
   modelContextWindow: number;
   hasContextWindowOverride: boolean;
@@ -400,8 +394,6 @@ export function ChatView({
   warning,
   models,
   selectedModelId,
-  systemPrompt,
-  systemPromptPresets,
   chatType,
   isSynthesizing = false,
   ttsEnabled = false,
@@ -415,8 +407,6 @@ export function ChatView({
   onRetryMessage,
   onLoadOlderMessages,
   onAbort,
-  onModelChange,
-  onSystemPromptChange,
   onContextWindowChange,
   modelContextWindow,
   hasContextWindowOverride,
@@ -877,15 +867,8 @@ export function ChatView({
           >
             Prompt
           </button>
-          {/* Model switcher — only for quick chats. Agent/project/system chats use the configured default model to preserve KV cache warmth. */}
-          {chatType === "quick" ? (
-            <ModelSelector
-              models={models}
-              selectedId={selectedModelId}
-              onChange={onModelChange}
-              disabled={streaming}
-            />
-          ) : headerImageEnabled ? (
+          {/* Agent and system chats use the configured default model to preserve KV cache warmth. */}
+          {headerImageEnabled ? (
             <div
               className="hidden md:flex relative group"
               onMouseEnter={() => {
@@ -920,16 +903,6 @@ export function ChatView({
           )}
         </div>
       </div>
-
-      {/* System Prompt — only for quick chats (agent/system chats use persona + memory context, so a manually selected preset is superfluous). Also hidden after first message (preset changes would invalidate the entire KV cache). */}
-      <SystemPromptEditor
-        value={systemPrompt}
-        onChange={onSystemPromptChange}
-        disabled={streaming}
-        presets={systemPromptPresets}
-        isAgent={chatType === "agent"}
-        hidden={messages.length > 0 || chatType !== "quick"}
-      />
 
       <div className="flex-1 flex flex-row min-h-0 min-w-0 relative">
 

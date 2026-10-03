@@ -33,10 +33,9 @@ Five managed llama.cpp server instances are configurable from the settings menu.
 Sleep/wake cycle sets aside non-interactive time for synthesizing experiences, managing memory blocks, pulling at threads of curiosity, or running whatever else you configure. The `system` chat is the context where all autonomous operation takes place; you can also chime in there as the user. A `pause` button stops autonomous work to free resources on demand.
 
 ##### Chat scopes
-Three chat types:
+Two chat scopes:
 - **Projects** — chats that start with a working directory and the project's `AGENTS.md` in-context. Project working directories can live on a remote host so a single Porrima instance can work across multiple machines on your Tailnet.
 - **Global chats** — the default agent chats, with full agent capabilities.
-- **Quick chats** — non-agent chats for one-off questions or model testing, independent of the memory system and tools.
 
 A configurable project memory relevance multiplier (and global-project cross-score) lets you tune how strongly memories from other scopes surface.
 
@@ -277,7 +276,7 @@ The full reference is in [docs/api-reference.md](docs/api-reference.md). A repre
 | GET | `/api/llama-servers` | List managed llama.cpp units with process state and HTTP health |
 | POST | `/api/llama-servers/:id/:action` | Start / stop / restart an allowlisted unit |
 | PUT | `/api/llama-servers/:id/config` | Save service configuration (systemd drop-in override) |
-| GET/POST | `/api/chats` | List / create chats (`{ modelId, type: "agent"\|"quick", projectId? }`) |
+| GET/POST | `/api/chats` | List / create chats (`{ modelId, projectId? }`) |
 | POST | `/api/chat` | Send message (SSE stream) |
 | POST | `/api/chat/enqueue` | Queue a message for offline delivery |
 | GET/POST | `/api/memory` | List / create memories |

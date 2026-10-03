@@ -67,7 +67,7 @@ Managed systemd user units. Slot ids: `inference`, `extraction`, `reranker`, `em
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/chats` | List all chats |
-| POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`). The `system` chat is created on server startup — clients don't POST it |
+| POST | `/api/chats` | Create chat (`{ modelId, projectId? }`); always creates an agent chat. The `system` chat is created on server startup — clients don't POST it |
 | PATCH | `/api/chats/:id` | Update chat metadata |
 | DELETE | `/api/chats/:id` | Delete a chat |
 | GET | `/api/chats/:id` | Get a chat with messages. `?messageLimit=N` returns the most recent window plus `messageOffset`, `messageTotal`, `hasMoreMessages`; `N` capped at 1000 |

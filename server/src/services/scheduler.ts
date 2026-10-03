@@ -35,8 +35,7 @@ export async function findChatsNeedingDelayedExtraction(thresholdMs: number): Pr
   const rows = db.prepare(`
     SELECT id, lastModified, lastDelayedExtractionAt
     FROM chats
-    WHERE type IN ('agent', 'system')
-      AND lastModified < ?
+    WHERE lastModified < ?
       AND (
         lastDelayedExtractionAt IS NULL
         OR lastDelayedExtractionAt < lastModified

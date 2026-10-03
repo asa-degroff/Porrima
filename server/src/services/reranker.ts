@@ -19,8 +19,6 @@ const DEFAULT_RERANKER_MODEL = "qwen3-reranker";
 export const RERANK_INSTRUCTIONS: Record<string, string> = {
   agent:
     "Given a conversation between the user and the AI, judge whether this memory is relevant to the current task, question, or topic of discussion.",
-  quick:
-    "Given a conversation between the user and the AI, judge whether this memory contains information useful for responding.",
   system:
     "Given an autonomous system or automation chat, judge whether this memory is relevant to the current synthesis, wake, maintenance, or automation task.",
   "passive-memory":

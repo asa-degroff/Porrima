@@ -10,7 +10,7 @@ Sleep cycle: button is a "release" signal (stamps `sleepModeTriggeredAt`, 2h syn
 Wake cycle: autonomous exploration on inactivity (15-min check, 20-iter cap, 30-min timeout). Mutual exclusivity enforced.
 
 ## Chat System
-Three types: agent (memory-augmented), quick, and system (synthesis, wake cycles, automations). `chat.ts`: memory augmentation, LLM streaming, tools (pi-ai native, `ask_user` persists, 500-iteration guard in the HTTP route). SQLite + FTS5, multi-provider.
+Two types: agent (memory-augmented) and system (synthesis, wake cycles, automations). `chat.ts`: memory augmentation, LLM streaming, tools (pi-ai native, `ask_user` persists, 500-iteration guard in the HTTP route). SQLite + FTS5, multi-provider.
 Stranded tool recovery: detects `<function=` in thinking after stopReason="stop", triggers continuation.
 SSE via the reconnectable `LiveStream` registry (`live-streams.ts`). Buffer replay has been **retired entirely** — reconnection is snapshot-based, not replay-based, and ended streams are retained for 60s. Mid-turn compaction resumes via `runAgentLoop({ mode: "continue", context: activeContext })`, not a callback. Pending turn intents are registered at request entry so `/stop` can abort a turn that hasn't started streaming yet.
 Activity stamping: chat sends stamp `lastUserActivityAt` and `lastUserInteractionAt` before synthesis wait; assistant responses stamp `lastAgentCompletedAt` after `done` (non-system only). Non-chat foreground actions such as manual cache pre-warm stamp `lastUserInteractionAt`.

@@ -61,7 +61,7 @@ Desktop-only right-hand column (`PinnedPanel.tsx` + `PinnedItemContext.tsx`). "P
 ## Style
 
 - Tailwind v4 with glassmorphism (`backdrop-blur-xl bg-white/[0.08]`)
-- Agent-related UI uses purple accent colors; quick chats use blue; projects use emerald
+- Agent-related UI uses purple accent colors; projects use emerald
 
 ### Theming
 
@@ -96,7 +96,6 @@ No state-management library. Client state is split across:
 
 ## Other
 
-- Per-chat model selector showing models from llama.cpp server — **quick chats only**. Agent, project, and system chats show the configured default model read-only so their long-lived KV cache stays warm
-- System prompt presets: the editor (`SystemPromptEditor.tsx`) renders only for a **fresh quick chat** (quick type and zero messages), because editing the system prompt mid-conversation would invalidate the whole KV cache. The "Add preset" trigger label appears when no preset matches. The agent-only "None (persona only)" entry is currently unreachable — agent chats always pass `hidden` — and can be removed along with the now-dead `isAgent` prop
+- Agent, project, and system chats show the configured default model read-only so their long-lived KV cache stays warm
 - Markdown rendering with GFM support
 - Message edit preserves images from the original message

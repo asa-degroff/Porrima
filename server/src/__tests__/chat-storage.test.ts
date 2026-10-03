@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -191,6 +191,72 @@ describe("chat storage", () => {
       expect(rowCount).toBe(2);
       expect(reloaded?.messages.map((message) => message.content)).toEqual(["first", "second"]);
       storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes legacy quick chats and their dependent rows on open", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("agent-keep", [
+        { role: "user", content: "keep me", timestamp: 1 },
+      ]));
+
+      // Plant a quick chat plus dependent rows, simulating a database written
+      // before the quick chat type was removed.
+      const db = storage.getDb();
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO chats (id, title, type, modelId, systemPrompt, messages, createdAt, lastModified, revision)
+        VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, 0)
+      `).run(
+        "quick-gone", "Legacy Quick", "test-model", "You are helpful.",
+        JSON.stringify([{ role: "user", content: "scratch", timestamp: 1 }]), now, now,
+      );
+      db.prepare(`
+        INSERT INTO chat_message_rows (chat_id, sequence, row_id, role, timestamp, payload_json, search_content)
+        VALUES (?, 0, ?, 'user', 1, ?, 'scratch')
+      `).run("quick-gone", "quick-gone:0", JSON.stringify({ role: "user", content: "scratch", timestamp: 1 }));
+      db.prepare(`
+        INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
+        VALUES (?, 0, 'user', 'scratch', 1)
+      `).run("quick-gone");
+      db.prepare(`
+        INSERT INTO pending_states (chatId, agentMessages, systemPrompt, askToolCallId)
+        VALUES (?, '[]', '', '')
+      `).run("quick-gone");
+      db.prepare(`
+        INSERT INTO context_archives (id, chatId, sequenceNum, messages, indexEntry, messageCount, createdAt)
+        VALUES (?, ?, 0, '[]', 'entry', 0, ?)
+      `).run("archive-quick", "quick-gone", now);
+
+      // Simulate a pre-migration database: forget the cleanup already ran.
+      db.prepare("DELETE FROM storage_migrations WHERE name = ?").run("remove-quick-chats");
+      const queueDir = join(homeDir, ".porrima", "queue");
+      mkdirSync(queueDir, { recursive: true });
+      writeFileSync(join(queueDir, "quick-gone.json"), "[]", "utf-8");
+      storage.closeChatDb();
+
+      // Reopening runs the migration before any reads.
+      const reopened = await loadChatStorage(homeDir);
+      const rdb = reopened.getDb();
+      const chatIds = (rdb.prepare("SELECT id FROM chats ORDER BY id").all() as Array<{ id: string }>)
+        .map((r) => r.id);
+      const count = (sql: string) => (rdb.prepare(sql).get("quick-gone") as { value: number }).value;
+
+      expect(chatIds).toEqual(["agent-keep"]);
+      expect(count("SELECT COUNT(*) AS value FROM chat_message_rows WHERE chat_id = ?")).toBe(0);
+      expect(count("SELECT COUNT(*) AS value FROM chat_messages WHERE chat_id = ?")).toBe(0);
+      expect(count("SELECT COUNT(*) AS value FROM pending_states WHERE chatId = ?")).toBe(0);
+      expect(count("SELECT COUNT(*) AS value FROM context_archives WHERE chatId = ?")).toBe(0);
+      expect(existsSync(join(queueDir, "quick-gone.json"))).toBe(false);
+      expect(rdb.prepare("SELECT 1 FROM storage_migrations WHERE name = ?").get("remove-quick-chats")).toBeDefined();
+
+      const kept = await reopened.getChat("agent-keep");
+      expect(kept?.messages.map((message) => message.content)).toEqual(["keep me"]);
+      reopened.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

@@ -2,7 +2,7 @@
 
 ## Chat Types
 
-Three chat types: **agent** (memory-augmented), **quick** (standalone), and **system** (synthesis, wake cycles, and automations). The built-in system chat is a singleton (id `"system"`) created on server startup; synthesis and wake cycles append to it, and the user can view/interact with it through the sidebar like any other chat. Custom automations can create additional `system` chats such as `automation:<id>`. Existing chats without a `type` field default to "quick".
+Two chat types: **agent** (memory-augmented) and **system** (synthesis, wake cycles, and automations). The built-in system chat is a singleton (id `"system"`) created on server startup; synthesis and wake cycles append to it, and the user can view/interact with it through the sidebar like any other chat. Custom automations can create additional `system` chats such as `automation:<id>`. Existing chats without a `type` field default to "agent".
 
 The server is the integration hub. The chat route (`server/src/routes/chat.ts`) owns HTTP-specific behavior:
 1. Memory context augmentation (agent chats only)

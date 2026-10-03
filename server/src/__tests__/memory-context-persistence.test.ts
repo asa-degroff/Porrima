@@ -228,7 +228,6 @@ async function loadMemoryContext(rows: Map<string, EmulatedRow>) {
   vi.doMock("../services/reranker.js", () => ({
     RERANK_INSTRUCTIONS: {
       agent: "agent",
-      quick: "quick",
       system: "system",
       "passive-memory": "passive-memory",
     },

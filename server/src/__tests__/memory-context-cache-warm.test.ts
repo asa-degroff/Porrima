@@ -60,7 +60,6 @@ describe("memory context after cache warming", () => {
     vi.doMock("../services/reranker.js", () => ({
       RERANK_INSTRUCTIONS: {
         agent: "agent",
-        quick: "quick",
         system: "system",
         "passive-memory": "passive-memory",
       },

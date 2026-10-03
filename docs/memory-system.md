@@ -98,7 +98,6 @@ The coupling is surprising and worth knowing before editing Settings: `candidate
 
 2. **Cross-encoder reranking** (`reranker.ts`): Top candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 32102) using source-specific instructions:
    - **Agent**: "judge whether this memory is relevant to the user's current task, question, or topic of discussion"
-   - **Quick**: "judge whether this memory contains information useful for responding"
    - **Passive-memory**: instruction tuned for mid-turn context discovery during long agent runs
    - Graceful fallback to RRF-only scoring if reranker is unavailable (main retrieval only — passive recall bails entirely if reranker is down)
 

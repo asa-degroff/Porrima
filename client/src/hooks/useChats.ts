@@ -11,7 +11,7 @@ import {
   clearCachedChat,
   clearCachedChatList,
 } from "../lib/db";
-import type { Chat, ChatListItem, ChatType } from "../types";
+import type { Chat, ChatListItem } from "../types";
 
 /** How often to poll the server for chat list changes (ms). Keeps the sidebar
  *  in sync across devices and picks up titles/preview changes from background
@@ -103,17 +103,16 @@ export function useChats() {
   }, [refreshNow]);
 
   const createChat = useCallback(
-    (modelId: string, type: ChatType = "quick", projectId?: string) => {
+    (modelId: string, projectId?: string) => {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
-      const title = type === "agent" ? "New Agent Chat" : "New Chat";
-      const chatType = type === "agent" ? "agent" as const : "quick" as const;
+      const title = "New Agent Chat";
 
       // Optimistic update: insert immediately before server round-trip
       const newItem: ChatListItem = {
         id,
         title,
-        type: chatType,
+        type: "agent",
         lastModified: now,
         preview: "",
         ...(projectId ? { projectId } : {}),
@@ -126,7 +125,7 @@ export function useChats() {
       // state naturally. Calling refresh() here caused a race condition where
       // the debounced 300ms fetchChats() replaced the local state before the
       // server had indexed the new chat, briefly removing it from the sidebar.
-      const pendingCreate = apiCreateChat(id, modelId, type, projectId)
+      const pendingCreate = apiCreateChat(id, modelId, projectId)
         .then((created) => created)
         .catch(() => {
           // Roll back optimistic entry on failure
@@ -144,7 +143,7 @@ export function useChats() {
       const chat: Chat = {
         id,
         title,
-        type: chatType,
+        type: "agent",
         modelId,
         systemPrompt: "",
         messages: [],

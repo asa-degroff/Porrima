@@ -204,45 +204,6 @@ describe("in-chat reminder: tool destination", () => {
     }
   });
 
-  it("rejects a quick-chat target and falls back to system from a quick chat", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "porrima-reminder-"));
-    try {
-      const { chatStorage, automationStorage, byName } = await (async () => {
-        const { chatStorage } = await loadModules(homeDir);
-        await chatStorage.createChat(makeChat("quick-x", "Quick Notes", "quick"));
-        await chatStorage.createChat(makeChat("origin", "Origin Chat"));
-        const { getAgentTools } = await import("../services/agent-tools.js");
-        const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-        const tools = getAgentTools("quick-x", effects, 32768, undefined, "quick", null);
-        const automationStorage = await import("../services/automation-storage.js");
-        return { chatStorage, automationStorage, byName: new Map(tools.map((t: any) => [t.name, t])) };
-      })();
-
-      const tool = byName.get("schedule_reminder")!;
-
-      // Explicit quick target from any chat is rejected.
-      await expect(tool.execute("c1", {
-        message: "x",
-        title: "QuickTarget",
-        scheduledAt: future(),
-        targetChat: "quick-x",
-      })).rejects.toThrow(/quick chat/);
-
-      // Default from a quick chat falls back to the system chat, said so.
-      const fell = await tool.execute("c2", {
-        message: "x",
-        title: "QuickDefault",
-        scheduledAt: future(),
-      });
-      expect(JSON.stringify(fell)).toMatch(/system \(the current chat is not a reminder target\)/);
-      expect(automationStorage.listEnabledAutomationTasks().find((t) => t.title === "QuickDefault")?.chatId)
-        .toBe("system");
-      await chatStorage.closeChatDb();
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  });
-
   it("called from the system chat stays on the system chat", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-reminder-"));
     try {
@@ -309,16 +270,6 @@ describe("in-chat reminder: fire-time dispatch decision", () => {
     // The original task keeps its declared target — the run row records the
     // reroute, the task row never lies about where it was aimed.
     expect(task.chatId).toBe("build-chat");
-    expect(dispatch.options).toEqual({});
-  });
-
-  it("reroutes a quick-chat target the same way", async () => {
-    const { automationRunner } = await loadModules(mkdtempSync(join(tmpdir(), "porrima-reminder-")));
-    const dispatch = automationRunner.resolveInChatReminderDispatch(
-      makeTask({ chatId: "quick-x" }),
-      makeChat("quick-x", "Quick Notes", "quick"),
-    );
-    expect(dispatch.task.chatId).toBe("system");
     expect(dispatch.options).toEqual({});
   });
 });

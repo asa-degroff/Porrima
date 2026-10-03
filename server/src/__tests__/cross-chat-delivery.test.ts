@@ -44,14 +44,13 @@ function makeChat(id: string, title: string, type: Chat["type"] = "agent"): Chat
 }
 
 describe("cross-chat target resolution", () => {
-  it("resolves by id and by unique title fragment, rejecting 0/multi/quick", async () => {
+  it("resolves by id and by unique title fragment, rejecting 0/multi", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-crosschat-"));
     try {
       const { chatStorage, crossChat } = await loadModules(homeDir);
       await chatStorage.createChat(makeChat("build-chat", "Build Chat"));
       await chatStorage.createChat(makeChat("deploy-alpha", "Deploy Alpha"));
       await chatStorage.createChat(makeChat("deploy-beta", "Deploy Beta"));
-      await chatStorage.createChat(makeChat("quick-notes", "Quick Notes", "quick"));
       await chatStorage.createChat(makeChat("system", "System", "system"));
 
       const byId = await crossChat.resolveCrossChatTarget("build-chat");
@@ -73,9 +72,6 @@ describe("cross-chat target resolution", () => {
       expect(multi.ok ? "" : multi.error).toContain("deploy-alpha");
       expect(multi.ok ? "" : multi.error).toContain("deploy-beta");
 
-      const quick = await crossChat.resolveCrossChatTarget("quick-notes");
-      expect(quick.ok).toBe(false);
-      expect(quick.ok ? "" : quick.error).toMatch(/quick chat/);
       chatStorage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

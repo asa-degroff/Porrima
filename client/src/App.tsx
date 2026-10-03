@@ -42,7 +42,7 @@ import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
 import type { ReadAloudOptions, SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
-import type { Chat, ChatMessage, ChatType, CornerRadius } from "./types";
+import type { Chat, ChatMessage, CornerRadius } from "./types";
 import {
   applyCustomThemeCssVariables,
   clearCustomThemeCssVariables,
@@ -1254,9 +1254,9 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     return () => navigator.serviceWorker.removeEventListener("message", handler);
   }, []);
 
-  const handleNewChat = useCallback((type: ChatType = "quick", projectId?: string) => {
+  const handleNewChat = useCallback((projectId?: string) => {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
-    const chat = createChat(modelId, type, projectId);
+    const chat = createChat(modelId, projectId);
     setActiveChatId(chat.id);
     activeChatIdStateRef.current = chat.id;
     setActiveChat(chat);
@@ -1336,28 +1336,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   );
 
   const hasActiveChat = activeChat != null;
-
-  const handleModelChange = useCallback(
-    async (modelId: string) => {
-      if (!activeChatId || !hasActiveChat) return;
-      const updated = await apiUpdateChat(activeChatId, { modelId });
-      setActiveChat((prev) =>
-        prev
-          ? { ...prev, modelId, contextWindow: updated.contextWindow }
-          : prev
-      );
-    },
-    [activeChatId, hasActiveChat]
-  );
-
-  const handleSystemPromptChange = useCallback(
-    async (systemPrompt: string) => {
-      if (!activeChatId || !hasActiveChat) return;
-      await apiUpdateChat(activeChatId, { systemPrompt });
-      setActiveChat((prev) => (prev ? { ...prev, systemPrompt } : prev));
-    },
-    [activeChatId, hasActiveChat]
-  );
 
   const handleContextWindowChange = useCallback(
     async (value: number | null) => {
@@ -1582,7 +1560,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         activeView={activeView}
         onSelectChat={(id) => { selectChat(id); setActiveView('chats'); }}
         onSwitchView={handleSwitchView}
-        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setActiveView('chats'); }}
+        onNewChat={(projectId) => { handleNewChat(projectId); setActiveView('chats'); }}
         onNewProject={handleNewProject}
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
@@ -1678,8 +1656,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         warning={warning}
         models={models}
         selectedModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
-        systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
-        systemPromptPresets={settings.systemPromptPresets}
         chatType={activeChat?.type}
         isSynthesizing={isSynthesizing}
         ttsEnabled={ttsSettings.enabled}
@@ -1702,8 +1678,6 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         onEditMessage={handleEditMessage}
         onRetryMessage={handleRetryMessage}
         onAbort={abort}
-        onModelChange={handleModelChange}
-        onSystemPromptChange={handleSystemPromptChange}
         onContextWindowChange={handleContextWindowChange}
         modelContextWindow={modelContextWindow}
         hasContextWindowOverride={activeChat?.contextWindow != null}
