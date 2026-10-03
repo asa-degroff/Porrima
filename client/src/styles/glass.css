@@ -206,6 +206,32 @@ body::before {
 }
 
 /*
+ * iOS 26+ renders installed PWAs with web content under the status bar, and
+ * iOS 27 additionally paints a translucent blur band over the top of the page,
+ * extending down over content near the top. theme-color (unsupported since
+ * iOS 26) and apple-mobile-web-app-status-bar-style (deprecated) have no
+ * effect. A fixed solid element within 4px of the top edge makes the status
+ * bar adopt its background color and render solid, without the blur
+ * (tested behavior on iOS 27; requires >= 6px height and >= 80% width).
+ * The color matches the top stop of the theme gradient so the band blends
+ * into the background instead of reading as a seam.
+ */
+.ios-status-bar-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  height: max(env(safe-area-inset-top), 6px);
+  background: var(--theme-bg-top, var(--theme-bg-flat));
+  pointer-events: none;
+}
+
+[data-flat-bg] .ios-status-bar-strip {
+  background: var(--theme-bg-flat);
+}
+
+/*
  * Linen background effect — a neutral 50%-grey weave blended over the theme's
  * own background (data-bg-texture is set by App.tsx when backgroundEffect is
  * "linen"; it renders on body::before rather than as an overlay component).

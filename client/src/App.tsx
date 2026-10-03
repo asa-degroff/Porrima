@@ -1550,6 +1550,11 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
   return (
     <ActivityStyleProvider value={activityStyle}>
     <div className="flex h-full overflow-hidden relative isolate" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
+      {/* iOS 27 paints a translucent blur band over the top of installed PWAs
+          (theme-color / apple-mobile-web-app-status-bar-style are both ignored).
+          This fixed solid strip makes the status bar adopt its color and render
+          solid instead. See .ios-status-bar-strip in glass.css. */}
+      <div aria-hidden className="ios-status-bar-strip" />
       {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
