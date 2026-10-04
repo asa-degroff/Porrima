@@ -2,6 +2,9 @@
 
 **Status**: Design. Not implemented.
 **Date**: 2026-10-03
+**Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
+**Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
+**Related**: [pi-1.0-migration.md](pi-1.0-migration.md) — pi-agent-core 1.0 removed the node/harness surface that `runStreamingBash` uses; the forced bash rewrite and this plan share one process supervisor and one tool-output store (§2.3, §4.2, §4.6, §4.11).
 
 ## 1. Problem
 
@@ -53,8 +56,9 @@ Prime Agent: https://github.com/PrimeIntellect-ai/prime-agent/
   that arrives before its request starts is **parked** and delivered on start;
   a cell that will not stop produces a "wait or kill" choice
   (`busy_kernel_prompt`), never an automatic state loss.
-- **Snapshot/restore**: `dill` (recurse mode) if available, one name at a time;
-  `_`-prefixed names skipped; per-variable cap (16 MiB) and total cap
+- **Snapshot/restore**: `dill` (recurse mode) required for snapshot/restore — a
+  reported error when absent, never a pickle fallback (10-04 review) — one name
+  at a time; `_`-prefixed names skipped; per-variable cap (16 MiB) and total cap
   (256 MiB); oversized names can be `prune_oversized`; atomic tmp+rename with a
   JSON manifest; per-name failures reported. Snapshots are **debounced 1500 ms
   after executions settle** and flushed on dispose; restore runs right after
@@ -97,9 +101,18 @@ Albedo the kernel *is* the tool environment.
 | JSON-lines stdio protocol, fd 1/2 redirection, cell-tagged output | Live remote references |
 | Interrupt with parked interrupts, namespace preserved | Kernel version-skew swapping |
 | Background jobs + retained output + kill | Single-tool CodeMode (Porrima stays multi-tool) |
-| Snapshot/restore, debounce, caps, manifest | Orphan journal (process-group kill + startup sweep is enough) |
-| Streaming cell output as tool updates | Dedicated kernel venv (defer; system `python3` first) |
+| Snapshot/restore, debounce, caps, manifest | Orphan journal as a full subsystem — but a lightweight child journal is required once children are `setsid`'d (§4.7, 10-04 review) |
+| Streaming cell output as tool updates (spike-first, §4.6) | Dedicated kernel venv (defer; system `python3` first) |
 | MIME `display` → tool-result images | Remote kernels (phase 4, optional) |
+
+Separately from prior art, pi-agent-core 1.0 removed the `./node` and
+`./harness/*` surface — the bash process-supervision primitives. That forces a
+bash rewrite and creates a shared Node-side process supervisor plus a shared
+tool-output spill store, both specified in
+[pi-1.0-migration.md](pi-1.0-migration.md) (§4, §5). This plan consumes them
+instead of building its own. The P2.5 streaming seam is unaffected: the
+`execute(…, onUpdate)` signature and `tool_execution_update` event are
+unchanged in 1.0.
 
 ## 3. Goals / Non-goals
 
@@ -131,6 +144,9 @@ Albedo the kernel *is* the tool environment.
 
 - **One kernel per agent chat**, key = `chatId`, created lazily on the first
   `run_python` call. The kernel's cwd is the chat's workspace root at creation.
+  **Routing rule: chats on `LocalWorkspaceAdapter` get the kernel path; chats
+  on the SSH adapter stay per-call through P3** (G6) — a local kernel cannot
+  have a remote cwd, and §4.10 covers when that changes.
 - A project/location change disposes the kernel; the next call lazily creates a
   new one and the tool result carries a one-line notice.
 - **System chats** keep the one-shot path (see open questions): they run
@@ -142,6 +158,12 @@ Albedo the kernel *is* the tool environment.
   (running cell or live job) when a new chat needs one, that call runs
   one-shot with a one-line notice instead of failing — the same fallback as
   spawn failure (§6).
+- **A wedged same-chat kernel also degrades to one-shot** (10-04 review): if a
+  chat's own kernel is unresponsive (a cell that swallowed L1 and L2, a failed
+  restore, or a manager-side protocol failure), the next `run_python` in that
+  chat runs one-shot with a one-line notice instead of queueing behind the
+  wedge. The kernel is flagged; `python_jobs kill force` or disposal clears it
+  (§4.5).
 - Disposal: chat deletion, workspace change, TTL, LRU, graceful shutdown.
   Chat deletion cascades through `chat-deletion.ts` and covers all three
   artifacts: the live kernel handle, the output dir, and the state dir.
@@ -149,30 +171,43 @@ Albedo the kernel *is* the tool environment.
 ### 4.2 Process model
 
 - The server spawns `python3 -u <driver>` as a child in its **own process
-  group** (`detached: true` locally), so a group kill reaches the kernel and
-  every child it spawned.
+  group** (`detached: true` locally) through the shared Node-side process
+  supervisor (`process-supervisor.ts`, [pi-1.0-migration.md](pi-1.0-migration.md)
+  §4) — the same primitive the rewritten `bash` uses. A group kill reaches the
+  kernel and any child still in that group; the child-containment model that
+  decides this is settled in §4.7 (10-04 review).
+- **Owner watchdog** (10-04 review): the driver runs a watchdog thread outside
+  the asyncio loop (prime-agent's `PRIME_AGENT_KERNEL_OWNER_PID` pattern) that
+  exits the process when the server pid disappears. Without it, "the kernel
+  dies with the server" holds only for graceful shutdown — a server SIGKILL
+  leaves the kernel (and its children) running until the next startup sweep.
 - stdio: requests on the kernel's stdin, events on its stdout, stderr kept as a
   bounded diagnostics ring buffer (last ~64 KiB) surfaced in errors.
-- **No bridge, no socket, no daemon**: the kernel dies with the server. Snapshot
-  + restore covers restarts (G5). This is the single biggest simplification
-  versus Albedo.
+- **No bridge, no socket, no daemon**: the kernel is server-owned and does not
+  outlive a hard server crash by design. Snapshot + restore covers restarts
+  (G5). This is the single biggest simplification versus Albedo.
 - Driver file: `server/python/porrima_kernel.py`, resolved relative to the
   service module (`../../python/porrima_kernel.py`) so dev (`src/services`) and
   build (`dist/services`) both find it. No TS build step needed for Python.
-  The install/systemd package must ship `server/python/` — a missing driver
-  silently degrades every call to one-shot, so the version/update check
-  verifies the file's presence.
+  The install/systemd package must ship `server/python/`, and `npm run build`
+  currently copies only `pdf-extract.py` into `dist` — the build must copy or
+  ship the driver the same way (10-04 review). A missing driver silently
+  degrades every call to one-shot, so the version/update check verifies the
+  file's presence.
 
 ### 4.3 Protocol (v1)
 
-Newline-delimited JSON, UTF-8. One object per line, no other framing.
+Newline-delimited JSON, UTF-8. One object per line, no other framing. Every
+request carries a `"type"` field (omitted from the Fields column for brevity;
+10-04 review — prime-agent's `repl.md` includes it and §4.5 already writes
+`{type:"interrupt", id}`).
 
 Requests (server → kernel):
 
 | Request | Fields |
 |---|---|
 | `execute` | `{id, code, timeout_ms?, background?}` |
-| `interrupt` | `{id?}` — no reply; parked until the named cell starts |
+| `interrupt` | `{id?}` — no `done` reply; a parked interrupt emits `parked_interrupt` |
 | `snapshot` | `{id, path, manifest_path, max_bytes?, max_variable_bytes?, prune_oversized?}` |
 | `restore` | `{id, path}` |
 | `list_names` | `{id}` |
@@ -190,16 +225,37 @@ Events (kernel → server):
 - `{event:"done", id, status:"ok"|"error", duration_ms}` — exactly one per
   id'd request, after all its other events. Snapshot/restore/list add result
   fields.
+- `{event:"parked_interrupt", for_id}` — an interrupt arrived before its cell
+  started; it will be delivered when that cell starts. Lets the server report
+  "interrupt pending" instead of guessing.
 
 Rules borrowed from prime-agent's `repl.md`: a private dup of fd 1 is made
 before redirection; a per-write lock keeps frames whole; fd 0 is rebound to
 `/dev/null` after the reader takes it so `input()` sees EOF; a malformed line
 yields a protocol error event and the runtime keeps serving; stdin EOF is
-`shutdown`.
+`shutdown`. Two more rules added by the 10-04 review:
+
+- **Drain fence**: raw fd bytes are pumped asynchronously, so `done` waits on a
+  pump-drain token (prime-agent's `_Pump.drain()`) before it is sent. Without
+  it, a cell's `os.write(1, …)` / C-extension / subprocess output can arrive
+  after `done` — lost from the foreground result or misattributed as
+  background output.
+- **Host-side frame bounds and repair**: cap a protocol line (prime-agent uses
+  32 MiB). On overflow or invalid UTF-8, fail the active execution, kill the
+  kernel, and restart it with restore — never respawn-loop a kernel that
+  corrupts twice. Result and `error` frames are capped kernel-side (prime-agent:
+  1 Mi chars per `repr`/traceback entry with a trailing marker) so a giant
+  `repr` cannot ride the wire before `wrapResult` truncates it.
 
 ### 4.4 Execution semantics
 
-- Persistent `__main__` namespace, one asyncio event loop.
+- Persistent `__main__` namespace, one asyncio event loop. The namespace is a
+  synthetic module's `__dict__` installed as `sys.modules["__main__"]`
+  (prime-agent's trick), not the driver's own `__main__`. This makes `dill`
+  pickle cell-defined functions/classes **by value**; with the driver's real
+  `__main__`, they would serialize by qualified-name reference into the driver
+  module and restore would fail or bind them to the wrong globals (10-04
+  review, §4.8).
 - Cells compile with `PyCF_ALLOW_TOP_LEVEL_AWAIT`; the last expression is
   compiled as `eval` and its value bound to `_` and reported as `result`.
 - Cell source registered in `linecache` under `<porrima-cell-N>` so tracebacks
@@ -213,15 +269,55 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 
 ### 4.5 Interrupts
 
-- The server writes `{type:"interrupt", id}`; the driver's reader thread raises
-  `KeyboardInterrupt` in the running cell via SIGINT to the main thread, with
-  asyncio task identification (prime-agent's mechanism). An interrupt for a
-  queued cell is parked and delivered when it starts.
-- Stop button → interrupt (state preserved) rather than process kill. A cell
-  that does not stop within a grace window (default 5 s) reports
-  "still stopping" and the model may retry or kill; killing is explicit
-  (`python_jobs` kill or TTL eviction), never automatic, so state loss is
-  always the caller's choice.
+- Three levels, in order. State loss happens only at level 3:
+  - **L1 interrupt** — the server writes `{type:"interrupt", id}`; the driver
+    targets the loop's main thread (`signal.pthread_kill` on the main thread
+    plus a `call_soon_threadsafe` wake, not a bare process-directed `os.kill`),
+    which CPython delivers as `KeyboardInterrupt` in the running cell (cells
+    run on the event loop's main thread; task identification targets the right
+    frame — prime-agent's mechanism). The driver re-installs its SIGINT handler
+    before every request, since a cell can rebind it (10-04 review). Reliable
+    for pure-Python code, including `subprocess.wait()` loops; delayed until a
+    C call returns while a C extension holds the GIL; **swallowed by a cell
+    that overwrites the SIGINT handler or catches
+    `KeyboardInterrupt`/`BaseException`** — such cells escalate to L2.
+  - **L2 cell kill** — after the grace window (default 5 s), the driver cancels
+    the cell's asyncio task (`task.cancel()`) and kills the cell's tracked
+    subprocess child groups (§4.7). **The namespace is intact** — names bound
+    before the cancel remain. Scope matters (10-04 review): cancellation is
+    delivered at the next suspension point, so L2 kills await-suspended cells
+    and (via the child-group kill) unblocks `subprocess.wait()` loops, but it
+    **cannot stop a synchronously running cell that swallowed L1 and never
+    yields** — `task.cancel()` only sets a flag the blocked loop never gets to
+    deliver. Cancellation raises `CancelledError` (a `BaseException`), so
+    `except Exception` and `except KeyboardInterrupt` cannot swallow it; only
+    an explicit `except BaseException` at an await point can.
+  - **L3 kernel kill** — process-group kill plus journaled child groups
+    (§4.11). State loss; the last snapshot is the recovery point. Never
+    automatic.
+- **Wedge policy** (10-04 review). If L2 does not settle the cell within a
+  second grace window (default 5 s — the sync-swallowing case above, or a
+  background task hogging the loop), the tool call returns an error saying the
+  kernel is wedged and the namespace is preserved, and the chat's kernel is
+  flagged so the next `run_python` degrades to one-shot (§4.1) rather than
+  queueing behind the wedge. Recovery is explicit: `python_jobs kill` with
+  `force: true` (L3, state loss) or disposal. This mirrors prime-agent's
+  targeted-interrupt loop and "kernel busy" error, with Porrima's one-shot
+  fallback as the availability escape hatch.
+- Stop button → L1, then L2 on repeat — never L3 automatically. The tool's
+  `AbortSignal` maps to the same path: abort → L1; a second abort while the
+  call is still unwinding → L2 (10-04 review). A second Stop kills the cell
+  but preserves the namespace, and the tool description states this. Killing
+  is explicit (L2 for the cell; L3 only via `python_jobs kill` with
+  `force: true`, TTL eviction, or shutdown), so state loss is always the
+  caller's choice.
+- An interrupt for a queued cell is parked and delivered when it starts
+  (`parked_interrupt`, §4.3). Interrupt bookkeeping must also cover the
+  post-run `repr`/drain **finishing window** (a request stays
+  interrupt-targetable until its `done` is emitted, so a handler-raised KI
+  cannot split a frame) and the done-task **handoff window** (an interrupt
+  that lands after the task completed but before it is unregistered) —
+  prime-agent's `FinishRequestTest` pins exactly these (10-04 review).
 
 ### 4.6 Results, streaming, retention
 
@@ -231,27 +327,88 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   but vanish on replay (KV digest divergence — "Tool Result Wire Shape" in
   `docs/tool-system.md`); `cellId`/`duration`/`truncated` metadata therefore
   goes in `details` or an in-text footer, never as content items.
-- **Streaming** (P2): stdout chunks arrive as pi-ai `onUpdate`s, which the tool
-  wrapper already threads through (`agent-tools.ts:409`); today `run_python`
-  ignores `onUpdate`.
-- **Retention**: full output spills to
-  `~/.porrima/kernel-output/<chatId>/<cellId>.txt` (1 MiB cap), mirroring
-  `bash`'s spill pattern (`workspace.ts:198`); the truncated result footer
-  points at `read_file(path, offset=…)`. No new read tool needed.
-- Retained files: newest 64 per chat, 24 h TTL, deleted with the chat.
+- **Streaming** (P2.5, spike-first): the plumbing exists only halfway —
+  verified 10-03 and re-verified on pi-agent-core 1.0.2 (the `execute(…,
+  onUpdate)` signature and `tool_execution_update` event are unchanged;
+  [pi-1.0-migration.md](pi-1.0-migration.md) §2.5). The tool wrappers thread
+  `onUpdate` (`agent-tools.ts:409`),
+  and pi-agent-core's `executePreparedToolCall` calls
+  `tool.execute(id, args, signal, onUpdate)` and emits a `tool_execution_update`
+  AgentEvent per update — but no current tool's execute declares `onUpdate`
+  (bash's `onUpdate` at `workspace.ts:191` is pi-agent-core's `env.exec`
+  shell-output callback building the bounded view — a different callback),
+  and `chat.ts` has no `tool_execution_update` case: in-flight updates are
+  dropped server-side. So streaming is three seams: (a) `run_python`'s execute
+  accepts `onUpdate` and calls it on kernel stdout events, (b) `chat.ts` gains
+  the event case plus an SSE event — in **all four** event switch sites
+  (~2552, ~3105, ~3246, ~3659), not one (10-04 review), (c) the client renders
+  on the tool card.
+  Constraint: updates are **live-only, never persisted** — the final tool
+  result already carries the full output, and persisting partials would break
+  the wire/replay byte-stability above. Partials also never enter the
+  model's context (the model sees only the final result), so streaming is UX
+  for a human watching a cell run, not a model capability. First P2.5 item: a
+  30-minute end-to-end spike; streaming is separable from the functional P2
+  (jobs, spill, caps).
+- **Retention**: full output spills to the shared tool-output store
+  (`~/.porrima/tool-output/<chatId>/py-<cellId>.txt`, 1 MiB cap;
+  [pi-1.0-migration.md](pi-1.0-migration.md) §5) — the same store the bash
+  rewrite uses, because pi 1.0 removed the harness spill and the two paths
+  converge by necessity; the truncated result footer points at
+  `read_file(path, offset=…)`. No new read tool needed.
+- Retained files: newest 64 per chat, 24 h TTL, deleted with the chat — shared
+  retention rules for bash and python output, owned by `tool-output-store.ts`.
+  `cellId` is a short uuid per cell, not a per-kernel counter, so a kernel
+  restart cannot silently overwrite a retained file from an earlier generation
+  inside the 24 h window (and a `read_file` footer can never point at the
+  wrong cell).
 
 ### 4.7 Background jobs
 
 - `run_python(..., background: true)` returns immediately with a `jobId`; the
   cell runs as an asyncio task in the kernel. It **does not hold the turn-gate
   lease** — this is the point.
-- New tool `python_jobs(action: "list"|"status"|"tail"|"kill", jobId?, lines?)`
+- **Child containment, settled (10-04 review).** The earlier draft
+  contradicted itself: it `setsid`'d subprocess children into their own process
+  groups (so L2 can kill a cell's children selectively) while §4.11 claimed a
+  kernel-group kill reaches them — it does not once `setsid` runs. Resolution:
+  children are `setsid`'d and **journalled**.
+  - The driver patches `subprocess.Popen` at bootstrap: calls that do not set
+    `preexec_fn`/`start_new_session` get `setsid`, and the child's pid + pgid +
+    start-time are appended to a per-kernel journal
+    (`~/.porrima/kernels/<chatId>/children.jsonl`) tagged with the owning cell
+    (contextvar). This registry is what lets L2 and `python_jobs` kill reach a
+    cell's subprocess children.
+  - L3/disposal kill the kernel group **plus** every group in the journal; the
+    startup sweep does the same for dead kernels' journals. Without the
+    journal, `setsid` children survive the kernel's group kill — exactly why
+    prime-agent has one (§2.1), and why the earlier "group kill + startup
+    sweep is enough" was wrong for the `setsid` case.
+  - The Popen patch remains the riskiest novel mechanism (prime-agent
+    supervises explicit `bash()` spawns instead of patching `Popen`). Fallback
+    if it proves invasive: keep children in the kernel's process group (no
+    `setsid`, no journal); L2 then cancels the cell but cannot selectively kill
+    its children, and long-lived subprocesses belong in background cells.
+  - Journal-after-spawn leaves a tiny leak window on a hard crash; prime-agent
+    closes it with a spawn gate (the child blocks on a pipe until journaled).
+    Adopt the gate only if the window proves real in practice (§8.8).
+- **Workspace mutation lock** (10-04 review): today every `run_python` call
+  holds `withMutationLock('workspace:<label>')` for its duration
+  (`agent-tools.ts:871`). Foreground kernel cells keep taking it; background
+  jobs necessarily escape it (the turn has ended). Two chats in the same
+  project can then mutate the workspace concurrently with a foreground `bash`.
+  Accept this — the kernel is a workspace peer, like a long-running shell — and
+  say so in the tool description; holding the lock for a job's whole life would
+  reintroduce the turn-gate problem at the workspace level.
+- New tool `python_jobs(action: "list"|"status"|"tail"|"kill", jobId?, lines?, force?)`
   — list this chat's jobs (id, status, started, duration), tail output (capped
-  16 KiB), kill (cancel task; SIGINT to process group for `subprocess` children
-  the cell started).
+  16 KiB), kill (L2: cancel the task, then SIGTERM, 3 s, SIGKILL on the cell's
+  child groups). `force: true` escalates to L3 (kernel kill, state loss) and is
+  the only model-reachable L3 path (10-04 review; §4.5 previously and §4.7
+  disagreed about what `kill` means).
 - Completion is visible on the next turn's `python_jobs list`; an optional
-  wake (P2/P3) can post a message into the chat through the existing cross-chat
-  or queued-message path. No automatic turn start in P1.
+  wake (P3, open question #3) can post a message into the chat through the
+  existing `schedule_chat_message` path. No automatic turn start in P1/P2.
 - **No in-turn polling.** Every `python_jobs` call is an LLM iteration that
   holds the turn lease; a tail-polling loop is the background problem in
   miniature. The tool description says "end your turn; check on the next
@@ -263,32 +420,72 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   jobs are not killed by a pause; they run to completion, mirroring how the
   scheduler skips due automations without interrupting running ones.
   Foreground cells are unaffected (user-initiated, bounded by the turn).
-- Caps: 4 concurrent background jobs per kernel, 1 MiB output each, 64
-  retained; kernel restart kills jobs and says so.
+- Caps: 4 concurrent background jobs per kernel, **8 box-wide** (16 full-core
+  jobs would fight the CPU-only inference services for every core), 1 MiB
+  output each, 64 retained; kernel restart kills jobs and says so. Jobs are
+  tasks inside one kernel process, so `nice()` cannot separate them from
+  foreground work — the cap plus the tool description's thread-limit guidance
+  (`OMP_NUM_THREADS`) are the controls.
 - `bash` remains the tool for shell pipelines; inside cells, plain
   `subprocess` is allowed (Porrima is not Albedo's `run()`-only kernel).
 
 ### 4.8 Snapshot / restore
 
-- `dill` if installed, else `pickle`; per-name serialization so one bad value
-  does not fail the snapshot; `_`-prefixed names skipped; caps **16 MiB per
-  variable (matching prime-agent) / 64 MiB total**. Per-variable is the
-  usefulness threshold — an iterative data-analysis namespace routinely holds
-  values above 8 MiB serialized, and those long sessions are exactly the ones
-  snapshot survival is for; total is the real cost driver (serialization CPU
-  inside the kernel between cells, contention with the CPU-only inference
-  services on the same box, write churn across up to 4 live kernels), which
-  is why it stays below prime-agent's 256 MiB. Both caps are `snapshot`
-  request parameters (`max_variable_bytes`, `max_bytes`) and land in
-  implementation settings. Atomic tmp+rename; JSON manifest
-  (`savedNames`, `skipped`, `bytes`, `pythonVersion`, `timestamp`).
+- **Engine (10-04 review)**: `dill` (lazy import, `recurse` mode) if installed,
+  else `pickle`. Reality check: this box's `python3` is 3.14.4 with no `dill`,
+  so P3 on a stock system is pickle-only — and plain `pickle` cannot restore
+  cell-defined functions/classes at all (they exist only in the synthetic
+  `__main__` of a dead process, §4.4). `dill` is a documented prerequisite for
+  P3 (or the P4 venv moves earlier), and its 3.14 support must be verified.
+  Prime-agent never falls back to pickle: snapshot/restore report an error when
+  `dill` is missing; Porrima's pickle fallback is plain-data only and must say
+  so in the notice.
+- **Restore rebinding (10-04 review)**: per-name `dill.loads` is not enough.
+  Restored functions carry the snapshot's frozen globals; prime-agent revives
+  containers in place and rebinds `__main__` callables onto the **live**
+  namespace (`_revive_with_live_globals`), with cycle memoization and backfill
+  for globals the live namespace lacks. Skip this and a restored function
+  mutates a stale copy of module state instead of the live namespace. This is
+  the most intricate part of prior art's restore and the easiest to
+  underestimate.
+- Per-name serialization so one bad value does not fail the snapshot;
+  `_`-prefixed names skipped; caps **16 MiB per variable (matching
+  prime-agent) / 64 MiB total**. Per-variable is the usefulness threshold — an
+  iterative data-analysis namespace routinely holds values above 8 MiB
+  serialized, and those long sessions are exactly the ones snapshot survival
+  is for; total is the real cost driver (serialization CPU inside the kernel
+  between cells, contention with the CPU-only inference services on the same
+  box, write churn across up to 4 live kernels), which is why it stays below
+  prime-agent's 256 MiB. Both caps are `snapshot` request parameters
+  (`max_variable_bytes`, `max_bytes`) and land in implementation settings.
+  Atomic tmp+rename; JSON manifest (`savedNames`, `skipped`, `bytes`,
+  `pythonVersion`, `timestamp`).
 - Debounced **1.5 s after each execution settles**, plus a flush on disposal
   and graceful shutdown; `prune_oversized` available as a maintenance action.
-  Skip/prune notices are actionable: they name the variable, its serialized
+  **The flush runs only when the kernel is idle**: a snapshot queued behind a
+  running cell would never finish before a SIGKILL, so a busy kernel at
+  shutdown gets hard-crash semantics — the last-settled snapshot is the
+  recovery point (same as §6 "Kernel crash mid-cell").
+- **Commit shielding (10-04 review)**: install a parking SIGINT handler only
+  for the `os.replace` commit phase (payload then manifest), and consume a
+  parked interrupt rather than re-raising — the destructive snapshot
+  succeeded, and re-raising would make the server treat it as failed and
+  discard the only copy of pruned names. A KI during payload write leaves the
+  old pair fully intact. Reads enforce the same per-variable/total caps as
+  writes before allocating, so a corrupt manifest cannot force a huge
+  allocation.
+- **Failed-restore guard (10-04 review)**: a failed or partial restore marks
+  the kernel so the debounced flush never overwrites a fuller on-disk
+  payload; only a successful re-restore clears it.
+- Skip/prune notices are actionable: they name the variable, its serialized
   size, and the escape hatch — spill to a file (`to_parquet`/`np.save`) and
   keep the path, which survives snapshots as a plain string.
 - State at `~/.porrima/kernels/<chatId>/namespace.pkl` + `manifest.json`,
   directory mode 0700; deleted with the chat and expired after 14 idle days.
+- **Version mismatch at restore**: if the running `python3` major version
+  differs from the manifest's `pythonVersion`, skip restore entirely with a
+  one-line notice (cross-major dill objects are the drift risk); same-major
+  restores attempt per-name with failures in the notice.
 - Startup/creation flow: spawn → `restore` → `ready`; the first tool result
   carries a one-line notice when names were restored or dropped. On a hard
   crash (SIGKILL, power loss) the last debounced snapshot is what comes back —
@@ -314,19 +511,35 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 - An ssh drop kills the kernel (state lost unless snapshotted to the host's
   `~/.porrima/kernels/`); per-call execution remains the fallback, and the
   tool result says which mode ran.
+- **Remote spill goes inside the remote workspace** (the `.porrima-tool-output/`
+  pattern bash already uses there), not the remote host's `~/.porrima/kernel-output/`
+  — the model's `read_file` resolves against the remote workspace root, so a
+  server-side-style path would be unreachable from the spill footer.
 - Deferred because per-call SSH already works and the lifecycle is the hard
   part; nothing in P1–P3 depends on it.
 
 ### 4.11 Lifecycle, cleanup, orphans
 
 - Every kernel is spawned into its own process group; disposal sends SIGTERM to
-  the group, waits up to 3 s, then SIGKILL. All children inherit the group, so
-  ordinary subprocess trees die with the kernel.
+  the group **plus every child group in the kernel's journal** (§4.7), waits
+  up to 3 s, then SIGKILL. `setsid`'d children do not inherit the kernel group,
+  so the journal is what makes teardown complete (10-04 review). The
+  supervisor's child registry ([pi-1.0-migration.md](pi-1.0-migration.md) §4)
+  is what makes shutdown's `killAllSupervised()` cover kernels and bash alike.
 - A startup sweep kills leftover `porrima_kernel.py` processes recorded in
   `~/.porrima/kernels/*/pid` from a previous server run (pid + start-time
-  identity to avoid pid reuse), then removes stale pid files.
+  identity to avoid pid reuse), reaps the child groups from those kernels'
+  journals, then removes stale pid files (10-04 review). The driver's owner
+  watchdog (§4.2) is the in-band defense against a server SIGKILL; this sweep
+  is the next-start backstop. Supervisor pids feed the same sweep
+  ([pi-1.0-migration.md](pi-1.0-migration.md) §4).
 - The idle reaper runs on its own interval (same pattern as the scheduler's
   periodic ticks), never inside a request.
+- **RSS watchdog**: the same reaper checks kernel RSS; an **idle** kernel over
+  a threshold (default 2 GiB, settings-tunable) is snapshot-flushed and
+  disposed — state survives via the next call's restore notice. This is the
+  live-RAM bound snapshot caps cannot provide: caps bound serialization cost,
+  not namespace size.
 - Graceful shutdown in `index.ts` disposes all kernels alongside the existing
   SSH/TTS/browser teardown.
 
@@ -345,7 +558,16 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   It also pushes `background: true` for anything expected to run long
   (>~60 s): a foreground cell still holds the turn lease for its full
   duration, and the model opting into background is what fixes consequence 3.
-- New `PYTHON_JOBS_TOOL` (list/status/tail/kill).
+  It states that a second Stop escalates to cell kill with the namespace
+  preserved (§4.5 L2), and that long-lived subprocesses belong in background
+  cells.
+- New `PYTHON_JOBS_TOOL` (list/status/tail/kill/force), added to
+  `SEQUENTIAL_TOOL_NAMES` (it mutates jobs) and excluded from system chats
+  together with the stateless-mode decision (10-04 review).
+- `run_python`'s schema keeps the 300 s `timeout` max for foreground calls;
+  `background: true` allows up to 3600 s. TypeBox has no conditional max, so
+  execute validates the combination and the description states it (10-04
+  review).
 - System chats run one-shot; their result carries a one-line "stateless
   mode in this chat type" prefix (the same notice pattern as restore) so a
   headless automation model does not rely on persistence it will not get.
@@ -371,29 +593,37 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 
 | Phase | Scope | Rough size |
 |---|---|---|
-| P1 | Driver (`porrima_kernel.py`), manager/supervisor, persistent namespace, top-level await, interrupts (test matrix: C extension holding the GIL, `subprocess.wait`, tight `except`-swallowing loop, parked interrupt, double interrupt), lazy per-chat kernels, TTL/LRU, one-shot fallback, startup sweep, shutdown disposal, tool description, tests | ~600–800 LOC TS+Py |
-| P2 | Background jobs, `python_jobs`, output spill/paging, streaming `onUpdate`, job caps | ~300–400 LOC |
-| P3 | Snapshot/restore + notices + expiry, MIME `display` (matplotlib → tool-result images via existing image pipeline) | ~250–400 LOC |
-| P4 (optional) | Remote SSH kernels, kernel venv provisioning, job-completion wake | ~400–600 LOC |
+| P1 | Driver (`porrima_kernel.py`), manager/supervisor, persistent namespace, top-level await, interrupts L1/L2 (test matrix: C extension holding the GIL, `subprocess.wait`, tight `except`-swallowing loop, custom SIGINT handler, `except BaseException` swallow, parked interrupt, double interrupt, finishing/handoff windows), per-cell process-group patch + child journal, owner watchdog, wedge policy, lazy per-chat kernels, TTL/LRU, one-shot fallback, startup sweep, shutdown disposal, tool description, tests | ~1,200–1,800 LOC TS+Py (10-04 review: 600–800 excluded the interrupt state machine and tests) |
+| P2 | Background jobs, `python_jobs`, output spill/paging, job caps (per-kernel + box-wide) | ~300–400 LOC |
+| P2.5 | Streaming spike (spike-first, §4.6): `onUpdate` in execute → `tool_execution_update` case + SSE event in `chat.ts` → client tool-card render. Live-only, never persisted. Ship if clean, else drop | ~100–200 LOC |
+| P3 | Snapshot/restore + notices + expiry, revive-with-live-globals, read-side cap enforcement, commit shielding, failed-restore guard, MIME `display` (matplotlib → tool-result images via existing image pipeline) | ~400–600 LOC (10-04 review) |
+| P4 (optional) | Remote SSH kernels, kernel venv provisioning | ~400–600 LOC |
 
 Each phase is independently shippable. P1 alone fixes iteration, failure
 survival, and interrupt-without-state-loss; P2 fixes the turn-gate blocking
-problem.
+problem; P2.5 is optional polish — partials never reach the model, so it buys
+only the human-facing stream.
 
 ## 6. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Orphaned kernel/child processes | Process-group kill, startup sweep with pid+start-time identity, shutdown disposal |
+| Orphaned kernel/child processes | Process-group kill + child journal (§4.7), startup sweep with pid+start-time identity, owner watchdog, shutdown disposal |
 | Memory growth from live namespaces | Max kernels + idle TTL + LRU, snapshot caps, no eviction while busy |
 | Namespace leakage across chats | Per-chat keys and per-chat state directories |
 | Replay/token drift from result shape | Stable JSON fields, no timestamps in text, `python_jobs` sorted deterministically |
-| First-call latency (spawn + restore) | Lazy creation with `onUpdate` progress; ready timeout 30 s; failures fall back to one-shot for that call |
+| First-call latency (spawn + restore) | Lazy creation; ready timeout 30 s; failures fall back to one-shot for that call (spawn progress becomes visible in P2.5, when the streaming plumbing lands) |
 | Capacity exhaustion (all live kernels busy) | Degrade to one-shot with a notice (§4.1); LRU only ever evicts idle kernels |
 | In-turn polling of background jobs | Tool description steers to end the turn; second `tail` of the same incomplete job in one turn returns a notice (§4.7) |
-| Pickle state as an attack surface | Same trust domain, 0700/0600, documented; never auto-run restored code beyond pickle/definition replay (P1 has no definition replay at all) |
+| Pickle state as an attack surface | Same trust domain, 0700/0600, documented; restore never re-runs cell source (unpickling itself carries the same trust as user code), in every phase |
 | CPU/RAM contention with inference | Job caps, output caps, TTL; jobs are user-visible and killable |
 | Kernel crash mid-cell | Tool result reports the crash and the last snapshot; next call restarts fresh with a notice |
+| Stubborn foreground cell (swallowed interrupt, runaway child) | L2 cell kill (task cancel + child-group kill, namespace intact); sync non-yielding cells hit the wedge policy (bounded error, one-shot fallback); L3 never automatic; escape hatch is background mode (§4.5, §4.7) |
+| Live namespace RAM (4 kernels × GB-scale frames) | RSS watchdog on the idle reaper: idle-over-threshold → flush + dispose, state survives via restore (§4.11) |
+| `setsid` children outlive a killed kernel | Child journal (§4.7) reaped on disposal and by the startup sweep; optional journal-before-execute gate |
+| Server SIGKILL leaves the kernel running | Driver owner watchdog exits when the server pid disappears (§4.2); next-start sweep as backstop |
+| Sync cell swallows L1 and L2 (wedge) | Wedge policy: bounded second grace, tool error with namespace preserved, kernel flagged, next calls one-shot; explicit `python_jobs kill force` for L3 (§4.5) |
+| `dill` absent / 3.14 support gap | Documented prerequisite for P3; pickle fallback is plain-data only and reported; venv option moves earlier if needed (§4.8) |
 
 ## 7. Alternatives considered
 
@@ -415,9 +645,14 @@ problem.
    them with a tighter TTL? Current lean: exclude in P1.
 2. **Snapshot engine**: depend on `dill` (function/class pickling) or
    `pickle`-only (plain data), matching prime-agent's lazy import? Current
-   lean: lazy `dill`, fall back to `pickle`.
+   lean: lazy `dill`, fall back to `pickle` — but note the 10-04 finding: this
+   box has no `dill` and Python 3.14, and pickle-only cannot restore
+   cell-defined functions. If P3 must work on a stock system, `dill` becomes a
+   prerequisite or the venv moves up.
 3. **Job-completion wake**: none (poll), chat message via cross-chat, or push
-   notification? Current lean: none in P1/P2, cross-chat message in P3.
+   notification? Current lean: none in P1/P2, `schedule_chat_message` with
+   `wake: true` in P3 — the existing path, respects inactivity gates, no new
+   mechanism.
 4. **Output reading**: spill-to-file + `read_file` (bash pattern) or a
    dedicated `python_output` tool? Current lean: spill-to-file.
 5. **Tool naming**: keep `run_python` (yes — it is in prompts, skills, and
@@ -426,6 +661,44 @@ problem.
    per-variable / 64 MiB total (§4.8) — settle in implementation settings.
 7. **Cell journal/repair** (Albedo's `cells.run`): worth a P5 if interrupted
    calls prove common in practice; not now.
+8. **Child-journal spawn gate** (10-04 review): adopt prime-agent's
+   journal-before-execute gate (the child blocks on a pipe until its pid is
+   journalled) or accept the tiny leak window after a hard crash? Current
+   lean: accept in P1, add the gate only if the window shows up in practice.
+
+## 9. Second review revisions (10-04)
+
+Review inputs: a local prime-agent clone (`repl.md`, `repl.py`,
+`crates/pa-core/src/kernel/`), the installed
+`@earendil-works/pi-agent-core@0.85.1` (`executePreparedToolCall` passes
+`onUpdate` and emits `tool_execution_update`), and this box's Python (`python3`
+3.14.4, no `dill`). All 10-03 code claims re-verified; no drift found beyond
+the package rename (`pi-agent-core` → `@earendil-works/pi-agent-core`). The
+load-bearing corrections, all applied inline:
+
+1. Child containment settled: `setsid`'d children need a child journal, and
+   the kernel group alone does not reap them (§4.7, §4.11).
+2. Owner watchdog added: "dies with the server" is only true for graceful
+   shutdown without it (§4.2).
+3. Restore is more than `dill.loads`: synthetic `__main__`, by-value pickling,
+   revive-with-live-globals, read-side caps, commit shielding, failed-restore
+   guard (§4.4, §4.8).
+4. Interrupt precision: L2 cannot stop a sync non-yielding cell; finishing and
+   handoff windows added; wedge policy and the `python_jobs kill` L2/L3 split
+   defined (§4.5, §4.7).
+5. Drain fence and host-side frame bounds/repair added to the protocol rules
+   (§4.3).
+6. Porrima integration: workspace mutation lock semantics, `python_jobs`
+   registration/gating, build copy step, AbortSignal mapping, four `chat.ts`
+   event sites, timeout schema (§4.6, §4.7, §4.13).
+7. Size estimates raised for P1/P3; one new open question plus a revision to
+   #2 (§5, §8).
+8. Follow-up (10-04): pi-agent-core 1.0 removed the `./node` and `./harness/*`
+   surface. The forced bash rewrite and the shared process supervisor /
+   tool-output store are specified in
+   [pi-1.0-migration.md](pi-1.0-migration.md); this plan consumes them (§2.3,
+   §4.2, §4.6, §4.11). The P2.5 streaming seam was re-verified against 1.0.2
+   and is unchanged.
 
 ## References
 
