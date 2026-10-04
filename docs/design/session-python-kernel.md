@@ -542,8 +542,10 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   SIGKILLed first — prime-agent's `_reap_group`), so the in-kernel reaper and
   this sweep agree on what is still live. The driver's owner watchdog (§4.2)
   is the in-band defense against a server SIGKILL; this sweep is the
-  next-start backstop. Supervisor pids feed the same sweep
-  ([pi-1.0-migration.md](pi-1.0-migration.md) §4).
+  next-start backstop. Supervisor journal records feed the same sweep: the
+  supervisor persists a children journal on spawn precisely because an
+  in-memory registry cannot survive the SIGKILL this sweep exists for
+  ([pi-1.0-migration.md](pi-1.0-migration.md) §3.6).
 - The idle reaper runs on its own interval (same pattern as the scheduler's
   periodic ticks), never inside a request.
 - **RSS watchdog**: the same reaper checks kernel RSS; an **idle** kernel over
@@ -631,7 +633,7 @@ only the human-facing stream.
 | Kernel crash mid-cell | Tool result reports the crash and the last snapshot; next call restarts fresh with a notice |
 | Stubborn foreground cell (swallowed interrupt, runaway child) | L2 cell kill (task cancel + child-group kill, namespace intact); sync non-yielding cells hit the wedge policy (bounded error, one-shot fallback); L3 never automatic; escape hatch is background mode (§4.5, §4.7) |
 | Live namespace RAM (4 kernels × GB-scale frames) | RSS watchdog on the idle reaper: idle-over-threshold → flush + dispose, state survives via restore (§4.11) |
-| `setsid` children outlive a killed kernel | Child journal (§4.7) reaped on disposal and by the startup sweep; optional journal-before-execute gate |
+| `setsid` children outlive a killed kernel | Child journal (§4.7) reaped on disposal and by the startup sweep; journal-after-spawn window accepted with rationale in §8.8 |
 | Server SIGKILL leaves the kernel running | Driver owner watchdog exits when the server pid disappears (§4.2); next-start sweep as backstop |
 | Sync cell swallows L1 and L2 (wedge) | Wedge policy: bounded second grace, tool error with namespace preserved, kernel flagged, next calls one-shot; explicit `python_jobs kill force` for L3 (§4.5) |
 | `dill` absent / 3.14 support gap | Documented prerequisite for P3; pickle fallback is plain-data only and reported; venv option moves earlier if needed (§4.8) |

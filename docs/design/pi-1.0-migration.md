@@ -106,7 +106,7 @@ Porrima sites:
 
 | Site | What breaks |
 |---|---|
-| `chat.ts:2173,3088,3230,3631`; `chat-turn-runner.ts:382` | `AgentContext` built with `systemPrompt` field |
+| `chat.ts:2173,3088,3230,3631`; `chat-turn-runner.ts:382,975-977` | `AgentContext` built with `systemPrompt` field |
 | `agent.ts:425` | one-shot `Context` with `systemPrompt` |
 | `openai-compat-provider.ts:398-399` | reads `context.tools` |
 | `openai-compat-provider.ts:1155,1162-1169` | `transformMessagesForProvider(context.messages)` + `context.systemPrompt` |
@@ -155,8 +155,10 @@ One module owns what bash and the kernel share:
 1. **Spawn**: `detached: true` (own process group), stdio pipes, cwd/env,
    optional stdin payload.
 2. **Kill**: `killpg(SIGTERM)` → grace → `killpg(SIGKILL)`, idempotent.
-3. **Registry**: active children by key (`bash:<chatId>`, `kernel:<chatId>`),
-   `list()` for diagnostics, `killAll()` for graceful shutdown.
+3. **Registry + journal**: an in-memory index by key (`bash:<chatId>`,
+   `kernel:<chatId>`) for `list()` and `killAll()` on graceful shutdown, plus a
+   persisted append-only journal so a startup sweep can reap groups after a
+   server SIGKILL — an in-memory registry dies with the process (§3.6).
 4. **Exit semantics**: resolve on process exit plus a short stdio grace
    (§3.3), never on pipe EOF.
 5. **Diagnostics**: pid/startedAt/key for logs and the kernel plan's startup
@@ -190,6 +192,8 @@ export interface SupervisedProcess {
 export function spawnSupervised(opts: SpawnSupervisedOptions): SupervisedProcess;
 export function listSupervised(): Array<{ key: string; pid: number; startedAt: number }>;
 export async function killAllSupervised(): Promise<void>;
+/** Startup: reap active records from the previous server run, then truncate. */
+export async function sweepSupervisorJournal(): Promise<void>;
 ```
 
 ```ts
@@ -249,7 +253,8 @@ export function createOutputCapture(opts: {
 - **kernel manager** ([session-python-kernel.md](session-python-kernel.md)
   §4.2, §4.11): spawn the driver via `spawnSupervised`; stdout is a protocol
   line reader (not capture); stderr is the ring buffer; disposal uses `kill()`;
-  the registry powers graceful shutdown and the startup sweep.
+  the in-memory registry powers graceful shutdown, and the persisted journal
+  (§3.6) powers the startup sweep.
 - **Not shared**: the Python-side child journal for subprocesses spawned
   inside cells (kernel doc §4.7) stays in the driver — the Node supervisor
   cannot see those.
@@ -278,6 +283,35 @@ export function createOutputCapture(opts: {
   a few common commands.
 - **Add a `cmd & disown` parity test** to pin the exit-vs-EOF behavior
   (§3.3.2) and to decide whether the fence upgrade (§3.3.3) is needed.
+
+### 3.6 Crash recovery: the supervisor journal
+
+An in-memory registry cannot survive a server SIGKILL, so the supervisor also
+writes a persisted journal — the same guarantee the kernel's per-chat
+`children.jsonl` gives its `setsid`'d children, and the same shape as
+prime-agent's orphan journal:
+
+- **Path/format**: `~/.porrima/supervisor/children.jsonl`, one JSON record per
+  line, append + fsync on spawn: `{version, pid, pgid, startId, key, active,
+  recordedAt}`. `active: false` is appended on reap; last record per pid wins.
+- **Identity**: `startId` is `/proc/<pid>/stat` field 22 on Linux (the same
+  value the Python driver journals); when it cannot be read, the record is
+  written without it and reaped best-effort by group — prime-agent's fallback.
+- **Sweep**: `sweepSupervisorJournal()` runs once at startup before any new
+  spawn. It reads the last record per pid, verifies `pid + startId` when
+  present, kills active groups group-first (TERM → grace → KILL, the same
+  escalation as `kill()`), then truncates the file. The same startup routine
+  already sweeps kernel pid files and per-chat `children.jsonl`, so one sweep
+  covers both writers.
+- **Ordering/window**: journal-after-spawn leaves the same millisecond window
+  as the kernel's Popen patch (kernel plan §8.8) — a crash between spawn and
+  journal append can orphan one group, which the sweep cannot see. Accepted;
+  the alternative (a spawn gate) is shell-transport-specific and does not
+  generalize.
+- **Residual window**: orphans live from SIGKILL until the next server start.
+  That matches prime-agent's kernel-children behavior; its kernel additionally
+  has an owner watchdog, while bash does not. A bash-side parent watchdog is
+  possible (a polling subshell) but not worth a process per command today.
 
 ## 4. Design: shared tool-output spill store
 
@@ -348,19 +382,31 @@ convertToLlm: async (messages) => {
 
 ### 5.2 llama.cpp request construction
 
-`streamOpenAICompat(model, ctx: TranscriptContext, options)`:
-- `const prompt = getCurrentSystemPrompt(ctx.messages)` — replays later
-  system deltas into the current prompt.
+`streamOpenAICompat(model, ctx: TranscriptContext, options)` renders the
+leading prompt **once, explicitly** (10-04 review — the earlier draft would
+have double-rendered it and silently dropped the Gemma `/think` directive):
+
+- `const initial = getInitialSystemMessage(ctx.messages)`; if present, render
+  `getSystemMessageText(initial)` (flattens `TextContent[]` and `sections`),
+  apply the Gemma `/think` transform to that string, and push it as the first
+  `{role:"system"}` param.
+- **Do not use `getCurrentSystemPrompt` for the leading prompt**: it replays
+  *every* system message into the prompt ("later content is appended to the
+  base prompt"), which would fold Porrima's passive-recall system messages
+  into the system prompt instead of today's downgrade-to-user path — a
+  semantics and wire change.
+- Convert the remaining messages with the leading system message **skipped**;
+  later system messages keep the existing downgrade-to-user behavior in
+  `convertMessages` (`openai-compat-provider.ts:1159-1174`) — passive recall
+  relies on it, and empty tool-delta content is already skipped by the
+  `if (content)` check.
 - `const tools = getCurrentTools(ctx.messages)` — convert to the request body
-  as today.
-- Keep the existing system-message handling in `convertMessages`
-  (`openai-compat-provider.ts:1159-1174`): the leading system message renders
-  exactly like today's `context.systemPrompt` (including the Gemma `/think`
-  directive); later system messages keep the downgrade-to-user behavior
-  (passive recall relies on it).
-- Tools do not need to ride the leading system message's `toolsAdded`; the
-  request body uses `getCurrentTools`, and the transcript fields are
-  replay metadata.
+  as today. Tools do not need to ride the leading message's `toolsAdded`; the
+  request body uses `getCurrentTools`, and transcript tool fields are replay
+  metadata.
+- Delete the old `if (context.systemPrompt)` block: it is dead once
+  `TranscriptContext` has no `systemPrompt`, and leaving it would let a future
+  change silently drop the `/think` transform again.
 - KV-cache check: for a chat whose prompt/tools did not change mid-run, the
   rendered leading prompt and tool declarations must be byte-identical to the
   0.85.1 wire. Verify with the existing prompt digest tools
@@ -398,7 +444,7 @@ upgrade only has to deal with the provider/loop migration:
 
 | Track | Work | Package state |
 |---|---|---|
-| T0 | `process-supervisor.ts`, `output-capture.ts`, `tool-output-store.ts` | 0.85.1 (no pi APIs) |
+| T0 | `process-supervisor.ts` (+ crash-recovery journal, §3.6), `output-capture.ts`, `tool-output-store.ts` | 0.85.1 (no pi APIs) |
 | T1 | `runStreamingBash` rewrite on T0 (+ `onUpdate` seam; chat.ts/client streaming plumbing can follow) | 0.85.1 |
 | T2 | Provider/transcript migration (`finishTurn`, system message, `TranscriptContext`, llama.cpp request), then bump both packages to 1.0.2 | 1.0.2 |
 | T3 | Kernel P1 manager on the supervisor ([session-python-kernel.md](session-python-kernel.md)) | 1.0.2 |
@@ -417,7 +463,8 @@ Notes:
 
 - Bash: timeout, abort, daemonized grandchild, huge output spill +
   `read_file` paging, merged output ordering, exitCode mapping, no orphan
-  group after abort or server SIGKILL (supervisor registry + startup sweep).
+  group after abort or server SIGKILL (supervisor journal + startup sweep,
+  §3.6).
 - Provider: long-chat KV digest parity after the transcript migration; prompt
   debug before/after; mid-turn compaction headless test (`chat-turn-runner`).
 - Loop: `finishTurn` guard fires only for normal responses; error/aborted runs
