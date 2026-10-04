@@ -378,7 +378,10 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
     start-time are appended to a per-kernel journal
     (`~/.porrima/kernels/<chatId>/children.jsonl`) tagged with the owning cell
     (contextvar). This registry is what lets L2 and `python_jobs` kill reach a
-    cell's subprocess children.
+    cell's subprocess children. A record is only marked inactive after group
+    death is confirmed (`killpg(pid, 0)`, SIGKILLing survivors first —
+    prime-agent's `_reap_group`), so a stale active record can never hide a
+    live descendant (10-04 review, prime-agent bash study).
   - L3/disposal kill the kernel group **plus** every group in the journal; the
     startup sweep does the same for dead kernels' journals. Without the
     journal, `setsid` children survive the kernel's group kill — exactly why
@@ -389,9 +392,14 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
     if it proves invasive: keep children in the kernel's process group (no
     `setsid`, no journal); L2 then cancels the cell but cannot selectively kill
     its children, and long-lived subprocesses belong in background cells.
-  - Journal-after-spawn leaves a tiny leak window on a hard crash; prime-agent
-    closes it with a spawn gate (the child blocks on a pipe until journaled).
-    Adopt the gate only if the window proves real in practice (§8.8).
+  - Journal-after-spawn leaves a tiny leak window on a hard crash. prime-agent
+    closes it with a spawn gate, but that gate is shell-transport-specific —
+    its `bash()` wraps the command in a script that `read`s from a socketpair
+    before exec — and the kernel's Popen patch spawns arbitrary binaries with
+    no portable injection point (a `preexec_fn` SIGSTOP handshake is unsafe
+    with threads). Accepted for P1: the window is milliseconds and the startup
+    sweep covers everything journaled; the gate applies only to spawns the
+    driver owns. See §8.8.
 - **Workspace mutation lock** (10-04 review): today every `run_python` call
   holds `withMutationLock('workspace:<label>')` for its duration
   (`agent-tools.ts:871`). Foreground kernel cells keep taking it; background
@@ -529,9 +537,12 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 - A startup sweep kills leftover `porrima_kernel.py` processes recorded in
   `~/.porrima/kernels/*/pid` from a previous server run (pid + start-time
   identity to avoid pid reuse), reaps the child groups from those kernels'
-  journals, then removes stale pid files (10-04 review). The driver's owner
-  watchdog (§4.2) is the in-band defense against a server SIGKILL; this sweep
-  is the next-start backstop. Supervisor pids feed the same sweep
+  journals, then removes stale pid files (10-04 review). Journal records are
+  deactivated only on confirmed group death (killpg liveness, survivors
+  SIGKILLed first — prime-agent's `_reap_group`), so the in-kernel reaper and
+  this sweep agree on what is still live. The driver's owner watchdog (§4.2)
+  is the in-band defense against a server SIGKILL; this sweep is the
+  next-start backstop. Supervisor pids feed the same sweep
   ([pi-1.0-migration.md](pi-1.0-migration.md) §4).
 - The idle reaper runs on its own interval (same pattern as the scheduler's
   periodic ticks), never inside a request.
@@ -652,7 +663,13 @@ only the human-facing stream.
 3. **Job-completion wake**: none (poll), chat message via cross-chat, or push
    notification? Current lean: none in P1/P2, `schedule_chat_message` with
    `wake: true` in P3 — the existing path, respects inactivity gates, no new
-   mechanism.
+   mechanism. Prior art for the double-wake problem (10-04 review, prime-agent
+   bash study): the kernel sends a `bash.completed` host request only after
+   the creating cell's completion barrier, and a later read of the result
+   ships a fire-and-forget `bash.consumed` frame *inside the read, before the
+   cell's `done`*, so the host withdraws a queued notice before it can
+   dispatch. If the P3 wake lands, copy that shape — a `python_jobs`
+   tail/status read should cancel a queued wake for the same job.
 4. **Output reading**: spill-to-file + `read_file` (bash pattern) or a
    dedicated `python_output` tool? Current lean: spill-to-file.
 5. **Tool naming**: keep `run_python` (yes — it is in prompts, skills, and
@@ -661,10 +678,15 @@ only the human-facing stream.
    per-variable / 64 MiB total (§4.8) — settle in implementation settings.
 7. **Cell journal/repair** (Albedo's `cells.run`): worth a P5 if interrupted
    calls prove common in practice; not now.
-8. **Child-journal spawn gate** (10-04 review): adopt prime-agent's
-   journal-before-execute gate (the child blocks on a pipe until its pid is
-   journalled) or accept the tiny leak window after a hard crash? Current
-   lean: accept in P1, add the gate only if the window shows up in practice.
+8. **Child-journal spawn gate** (10-04 review, resolved after the prime-agent
+   bash study): prime-agent's journal-before-execute gate is
+   shell-transport-specific — its `bash()` wraps the command in a script that
+   blocks on a socketpair `read` before exec. The kernel's Popen patch spawns
+   arbitrary binaries, so there is no portable injection point; a
+   `preexec_fn` SIGSTOP handshake would close the window but is unsafe with
+   threads. **Resolved: accept the millisecond window in P1**
+   (journal-after-spawn + startup sweep), and gate only spawns the driver
+   owns. Revisit only if the window shows up in practice.
 
 ## 9. Second review revisions (10-04)
 
@@ -699,11 +721,19 @@ load-bearing corrections, all applied inline:
    [pi-1.0-migration.md](pi-1.0-migration.md); this plan consumes them (§2.3,
    §4.2, §4.6, §4.11). The P2.5 streaming seam was re-verified against 1.0.2
    and is unchanged.
+9. Prime-agent bash study (10-04): journal records deactivate only on
+   confirmed group death (§4.7, §4.11); the spawn-gate question resolved as an
+   accepted window because the gate is shell-transport-specific (§8.8); the
+   `bash.consumed` withdrawal recorded as prior art for job-completion wake
+   (§8.3). Supervisor-side parity items (confirmed kill, non-interactive env)
+   live in [pi-1.0-migration.md](pi-1.0-migration.md) §3.3/§3.5.
 
 ## References
 
 - prime-agent: <https://github.com/PrimeIntellect-ai/prime-agent> —
   `prime-agent-runtime/src/rlm/repl.md` (protocol), `repl.py`,
+  `prime-agent-runtime/src/rlm/bash.py` (bash supervision: spawn gate,
+  completion fence, orphan journal, confirmed group death),
   `crates/pa-core/src/kernel/` (manager, snapshot, orphan journal, bootstrap)
 - Albedo: <https://tangled.org/okami.mom/albedo> —
   `robot-docs/kernel.md`, `robot-docs/kernel-state.md`,

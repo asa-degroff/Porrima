@@ -213,20 +213,30 @@ export function createOutputCapture(opts: {
 
 1. **Detached spawn** on POSIX; timeout/abort kills the **group**
    (`process.kill(-pid, …)`), not just the leader. Upgrade over pi: TERM →
-   grace → KILL instead of pi's immediate SIGKILL.
+   grace → KILL instead of pi's immediate SIGKILL, and `kill()` resolves only
+   after group death is confirmed — a bounded `killpg(pid, 0)` poll (~2 s)
+   like prime-agent's `_await_group_death` — so no descendant can land a side
+   effect after the tool has returned.
 2. **Exit beats pipe EOF.** Resolve when the child exits *and* both stdio
    streams end; after exit, wait for stream silence of
    `EXIT_STDIO_GRACE_MS` (pi: 100 ms, re-armed on data) and then finalize,
    destroying the streams. This is what stops `server & disown` from hanging
    the tool (`workspace.ts:158-165`). Do not "fix" it to wait for EOF.
-3. **Capture/spill**: bounded tail window (`maxBytes`, `maxLines`,
+3. **Completion fence — documented upgrade path** (prime-agent `bash.py`): a
+   wrapper script writes a random fence token after the user command and the
+   exit status on a private fd, so the result resolves at semantic completion
+   instead of shell exit + silence, and post-fence output stays readable via
+   the handle. Porrima keeps exit + stdio grace for T1 because its bash result
+   is one-shot — there is no handle from which to read post-fence output — but
+   the fence is the fix if the `cmd &` parity test shows lost output.
+4. **Capture/spill**: bounded tail window (`maxBytes`, `maxLines`,
    `retain: "tail"`); spill starts at first truncation and includes the
    pre-truncation prefix; spill writes pause the pipes on backpressure (pi:
    8 MiB high-water) and finish before settle; `onUpdate` emits bounded view
    changes and late updates after settle are dropped.
-4. **Merged output**: bash merges stdout+stderr untagged, in arrival order
+5. **Merged output**: bash merges stdout+stderr untagged, in arrival order
    (today's behavior).
-5. **Windows**: pi used `taskkill /T /F`; Porrima is Linux/systemd-first.
+6. **Windows**: pi used `taskkill /T /F`; Porrima is Linux/systemd-first.
    Keep a single `process.platform === "win32"` branch or document
    Linux-only — a decision, not a blocker.
 
@@ -256,6 +266,18 @@ export function createOutputCapture(opts: {
   `128 + signal` (pi's mapping).
 - Keep the `withMutationLock('workspace:<label>')` wrapping in
   `agent-tools.ts` (unchanged).
+- **Add prime-agent's non-interactive environment hardening**
+  (`_child_env`, `bash.py:1051-1078`): `NO_COLOR=1`, `TERM=dumb`,
+  `GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`, `GIT_TERMINAL_PROMPTS=0`,
+  `GIT_ASKPASS=true`, `SSH_ASKPASS_REQUIRE=never`, `EDITOR=true`,
+  `VISUAL=true`, `PAGER=cat`, `GIT_PAGER=cat`,
+  `DEBIAN_FRONTEND=noninteractive`. pi's env is a bare `process.env` spread
+  (`getShellEnv`), so agent commands today can hang on an editor, credential
+  prompt, or pager until the timeout. Inline assignments in the command still
+  win. This is a deliberate output change (no ANSI colors) — check it against
+  a few common commands.
+- **Add a `cmd & disown` parity test** to pin the exit-vs-EOF behavior
+  (§3.3.2) and to decide whether the fence upgrade (§3.3.3) is needed.
 
 ## 4. Design: shared tool-output spill store
 
@@ -421,6 +443,9 @@ Notes:
   (1.0.0 harness removal; 0.87.0 `finishTurn`)
 - Release notes: <https://github.com/earendil-works/pi/releases>
 - `@earendil-works/pi-durable`: <https://www.npmjs.com/package/@earendil-works/pi-durable>
+- prime-agent bash prior art: `prime-agent-runtime/src/rlm/bash.py`
+  (spawn gate, completion fence, orphan journal, confirmed group death) —
+  <https://github.com/PrimeIntellect-ai/prime-agent>
 - Kernel plan: [session-python-kernel.md](session-python-kernel.md)
 - Porrima today: `server/src/services/workspace.ts` (`runStreamingBash`),
   `server/src/services/agent-loop-runner.ts`,
