@@ -11,6 +11,7 @@ import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow 
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { splitNextUserContext } from "../services/pending-user-context.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
+import { digestPiMessages, digestWireShape, getPrefixSnapshot, recordReplaySnapshot } from "../services/kv-prefix-diagnostics.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
@@ -525,28 +526,24 @@ function shouldGenerateInitialTitle(chat: Chat): boolean {
 // ---------------------------------------------------------------------------
 // KV cache prefix diagnostics
 // ---------------------------------------------------------------------------
-// At end of each completed turn we snapshot two digests of the finished
-// history: (1) the REPLAY digest — what chatMessagesToPiMessages rebuilds from
-// persisted rows, and (2) the LIVE WIRE digest — the role+content shape of the
-// message array the loop actually sent to the LLM (liveWireContextRef). On the
-// next turn we compare the new context's digests against the snapshot.
-// Replay-vs-replay drift catches compaction rewrites and retroactive edits;
-// replay-vs-live drift catches persistence that does not round-trip to the
-// wire shape (duplicated tool-loop rows, collapsed-row re-expansion) — the
-// failure mode behind issue #10 where prefix=match was logged while llama.cpp
-// re-prefilled the whole context. The wire digest covers role+content only:
-// usage/stopReason/timestamps legitimately differ between live pi messages and
-// replayed ones (dummyUsage) and never reach the prompt tokens.
+// Snapshots live in kv-prefix-diagnostics.ts. The provider records the ACTUAL
+// wire shape + tool surface of every real turn request (HTTP and headless), so
+// the baseline is the last thing llama.cpp saw, whichever transport sent it.
+// The HTTP route additionally records the REPLAY digest — what
+// chatMessagesToPiMessages rebuilds from persisted rows — at turn end.
+// On the next send we compare all three:
+//   - replay-vs-replay: catches compaction rewrites and retroactive edits;
+//   - replay-vs-wire: catches persistence that does not round-trip to the wire
+//     shape (duplicated tool-loop rows, collapsed-row re-expansion) — the
+//     failure mode behind issue #10 where prefix=match was logged while
+//     llama.cpp re-prefilled the whole context;
+//   - tool surface: tool schemas render into the system prompt but are not
+//     ChatMessages, so no message digest can see them. A tool-surface change
+//     (e.g. per-path ask_user filtering) busts the prefix at the tools block.
+// The wire digest covers role+content only: usage/stopReason/timestamps
+// legitimately differ between live pi messages and replayed ones (dummyUsage)
+// and never reach the prompt tokens.
 // ---------------------------------------------------------------------------
-
-interface SentPrefixSnapshot {
-  digest: string;
-  piMsgCount: number;
-  wireDigest: string | null;
-  wireMsgCount: number | null;
-}
-
-const lastSentPrefixSnapshot = new Map<string, SentPrefixSnapshot>();
 
 function replayIdentityForModel(modelId: string): ReplayModelIdentity {
   // All models run through the local llama.cpp provider.
@@ -559,27 +556,6 @@ function replayIdentityFromPiModel(model: Model<string>): ReplayModelIdentity {
     provider: String(model.provider),
     model: model.id,
   };
-}
-
-function digestPiMessages(piMessages: Message[]): string {
-  const hash = createHash("sha1");
-  for (const m of piMessages) {
-    hash.update(JSON.stringify(m));
-    hash.update("\0");
-  }
-  return hash.digest("hex").slice(0, 12);
-}
-
-/** Token-relevant shape digest: role + content only (no usage/timestamps). */
-function digestWireShape(messages: AgentContext["messages"]): string {
-  const hash = createHash("sha1");
-  for (const m of messages) {
-    hash.update(String(m.role));
-    hash.update("\0");
-    hash.update(JSON.stringify((m as { content?: unknown }).content ?? null));
-    hash.update("\0");
-  }
-  return hash.digest("hex").slice(0, 12);
 }
 
 function summarizeReplayShape(messages: ChatMessage[]): { lastLoop: string; fragments: number } {
@@ -604,16 +580,16 @@ function logKvCacheState(opts: {
   shape: { lastLoop: string; fragments: number };
 }): void {
   const digest = digestPiMessages(opts.contextPiMessages);
-  const prev = lastSentPrefixSnapshot.get(opts.chatId);
+  const prev = getPrefixSnapshot(opts.chatId);
   let prefixState: string;
-  if (!prev) {
+  if (!prev || !prev.replayDigest) {
     prefixState = "baseline";
-  } else if (prev.digest === digest && prev.piMsgCount === opts.contextPiMessages.length) {
+  } else if (prev.replayDigest === digest && prev.replayMsgCount === opts.contextPiMessages.length) {
     prefixState = "match";
   } else {
     prefixState =
-      `diverged(prev_msgs=${prev.piMsgCount},now_msgs=${opts.contextPiMessages.length},` +
-      `prev_digest=${prev.digest},now_digest=${digest})`;
+      `diverged(prev_msgs=${prev.replayMsgCount},now_msgs=${opts.contextPiMessages.length},` +
+      `prev_digest=${prev.replayDigest},now_digest=${digest})`;
     // Warn on divergence — this usually means the KV cache prefix won't match,
     // causing full re-evaluation of tokens after the divergence point. Common causes:
     // - Tool result truncation on replay (MAX_TOOL_RESULT_CHARS in agent.ts)
@@ -632,7 +608,7 @@ function logKvCacheState(opts: {
   // reconstruction produces now. When this diverges, the cached KV prefix was
   // built from a token sequence the replay cannot reproduce — the next request
   // re-prefills the entire context even though replay-vs-replay says "match".
-  if (prev && prev.wireDigest != null) {
+  if (prev?.wireDigest != null) {
     const replayShape = digestWireShape(opts.contextPiMessages);
     if (replayShape !== prev.wireDigest) {
       console.warn(
@@ -652,7 +628,8 @@ function logKvCacheState(opts: {
     `system_prompt=${opts.systemPromptChars}ch delta=${opts.deltaChars}ch new_msg=${opts.newMsgChars}ch ` +
     `type=${opts.deltaChars > 0 ? "delta" : "stable"} ` +
     `persisted=${opts.persistedRows} pi_msgs=${opts.contextPiMessages.length} ` +
-    `last_loop=${opts.shape.lastLoop} frags=${opts.shape.fragments} prefix=${prefixState}`
+    `last_loop=${opts.shape.lastLoop} frags=${opts.shape.fragments} prefix=${prefixState} ` +
+    `tools=${prev?.wireToolDigest ?? "-"}`
   );
 }
 
@@ -661,32 +638,25 @@ async function snapshotSentPrefix(
   chatMessages: ChatMessage[],
   modelId: string,
   fallbackIdentity?: ReplayModelIdentity,
-  wireMessages?: AgentContext["messages"],
 ): Promise<void> {
   const piMessages = await chatMessagesToHydratedPiMessages(chatMessages, modelId, fallbackIdentity);
-  let wireDigest: string | null = null;
-  let wireMsgCount: number | null = null;
-  if (wireMessages) {
-    wireDigest = digestWireShape(wireMessages);
-    wireMsgCount = wireMessages.length;
-    // Flag at the source: if the reconstruction already misses the wire shape
-    // here, the NEXT user send is guaranteed to re-prefill (issue #10).
+  recordReplaySnapshot(chatId, digestPiMessages(piMessages), piMessages.length);
+  // Flag at the source: compare the reconstruction against the wire shape the
+  // provider recorded for this chat's last real request (any transport — see
+  // kv-prefix-diagnostics.ts). If the reconstruction already misses it, the
+  // NEXT user send is guaranteed to re-prefill (issue #10).
+  const snapshot = getPrefixSnapshot(chatId);
+  if (snapshot?.wireDigest != null) {
     const replayShape = digestWireShape(piMessages);
-    if (replayShape !== wireDigest) {
+    if (replayShape !== snapshot.wireDigest) {
       console.warn(
         `[kv-cache] chat=${chatId} LIVE-VS-REPLAY DIVERGENCE at snapshot: replay of persisted rows != ` +
-        `the wire shape just sent — next user send will bust the KV cache. ` +
-        `wire_msgs=${wireMessages.length} replay_msgs=${piMessages.length} ` +
-        `wire=${wireDigest} replay=${replayShape}`
+        `the wire shape last sent — next user send will bust the KV cache. ` +
+        `wire_msgs=${snapshot.wireMsgCount} replay_msgs=${piMessages.length} ` +
+        `wire=${snapshot.wireDigest} replay=${replayShape}`
       );
     }
   }
-  lastSentPrefixSnapshot.set(chatId, {
-    digest: digestPiMessages(piMessages),
-    piMsgCount: piMessages.length,
-    wireDigest,
-    wireMsgCount,
-  });
 }
 
 /**
@@ -2181,11 +2151,6 @@ async function handleChatStream(
       messages: [...contextMessages],
       tools: agentTools,
     };
-    // Live wire snapshot ref: always points at the message array the most
-    // recently started loop (main / continuation / stranded / resume) is
-    // actually sending to the LLM, so the end-of-turn KV snapshot can digest
-    // the true wire shape instead of the DB reconstruction.
-    const liveWireContextRef: { current: AgentContext["messages"] } = { current: context.messages };
     const passiveRecall = new PassiveMemoryRecallController(chat.id, {
       // Post-turn injection: when the agent stops without tool use,
       // the search runs in the background and injects after the turn ends.
@@ -3101,7 +3066,6 @@ async function handleChatStream(
           ...context,
           messages: [...context.messages],
         };
-        liveWireContextRef.current = continueContext.messages;
 
         // Process the continuation events
         await runAgentLoop({
@@ -3245,7 +3209,6 @@ async function handleChatStream(
           ...context,
           messages: [...context.messages],
         };
-        liveWireContextRef.current = strandedContext.messages;
 
         await runAgentLoop({
           mode: "continue",
@@ -3648,7 +3611,6 @@ async function handleChatStream(
         messages: resumeMessages,
         tools: agentTools,
       };
-      liveWireContextRef.current = resumeContext.messages;
       const resumeAbortController = new AbortController();
       if (connectionAbortController.signal.aborted) {
         resumeAbortController.abort();
@@ -4178,11 +4140,11 @@ async function handleChatStream(
       // Capture what we just sent + got back so the next turn's kv-cache log
       // can detect prefix divergence. Recap/title mutations after this point
       // don't affect pi messages, so this snapshot stays accurate.
-      // The wire snapshot digests the loop's ACTUAL last wire serialization
-      // (liveWireContextRef), not the DB reconstruction — a replay-vs-live
-      // mismatch here is exactly what silently busts the llama.cpp KV prefix
-      // on the next user send (see issue #10).
-      await snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity, liveWireContextRef.current);
+      // The provider records the ACTUAL wire (any transport — see
+      // kv-prefix-diagnostics.ts); this records the replay digest. A
+      // replay-vs-wire mismatch here is exactly what silently busts the
+      // llama.cpp KV prefix on the next user send (see issue #10).
+      await snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
       // Generate a brief recap for long assistant messages.

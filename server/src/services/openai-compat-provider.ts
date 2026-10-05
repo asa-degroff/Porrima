@@ -26,6 +26,7 @@ import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
+import { recordWireSnapshot } from "./kv-prefix-diagnostics.js";
 import { getLlamaChatLastRequestDigest } from "./llama-cache-residency.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
@@ -1877,6 +1878,22 @@ export const streamOpenAICompat = (
       }
 
       const { body, cachePrompt } = await buildOpenAICompatChatBody(model, context, options);
+
+      // Record the actual wire shape + tool surface for cross-request KV-cache
+      // diagnostics. Only real turns set llamaPromptDebugChatId explicitly
+      // (chat.ts / chat-turn-runner.ts), so warm and auxiliary requests never
+      // overwrite a chat's turn snapshot.
+      const explicitDebugChatId = (options as any)?.llamaPromptDebugChatId;
+      if (typeof explicitDebugChatId === "string" && explicitDebugChatId.length > 0) {
+        const observed = recordWireSnapshot(explicitDebugChatId, context.messages, body.tools);
+        if (observed.toolsChanged) {
+          console.warn(
+            `[kv-cache] chat=${explicitDebugChatId} TOOL SURFACE CHANGED since the last request — ` +
+            `tool schemas render into the system prompt, so the cached prefix cannot be reused (full re-prefill). ` +
+            `prev=[${(observed.previousToolNames ?? []).join(", ")}] now=[${(observed.toolSurface?.names ?? []).join(", ")}]`,
+          );
+        }
+      }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
