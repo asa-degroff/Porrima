@@ -91,7 +91,7 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code in the active workspace and return stdout/stderr. In agent chats on a local workspace this runs in a persistent per-chat kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. On SSH projects and system chats each call is stateless. Uses the project root for project chats.",
+  description: "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root for project chats. Falls back to stateless on remote machines.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
