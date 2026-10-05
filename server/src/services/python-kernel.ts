@@ -1,10 +1,13 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, readdir, rm } from "fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "fs/promises";
 import { dirname, join } from "path";
 import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
 import { appDataPath } from "./paths.js";
+import { createOutputCapture, type OutputCapture } from "./output-capture.js";
+import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js";
+import { getStoredSystemPauseState } from "./system-pause.js";
 import {
   isGroupAlive,
   killProcessGroup,
@@ -39,10 +42,43 @@ const STDERR_RING_BYTES = 64 * 1024;
  *  per stdout frame. The final result carries the full output regardless. */
 const UPDATE_THROTTLE_MS = 100;
 
+// Background jobs (§4.7).
+const JOB_WINDOW_BYTES = 1024 * 1024;
+const JOB_MAX_LINES = 1_000_000;
+const JOB_MAX_PER_KERNEL = 4;
+const JOB_MAX_BOX = 8;
+const JOB_RETENTION = 64;
+const JOB_ACK_TIMEOUT_MS = 10_000;
+const JOB_TAIL_BYTES = 16 * 1024;
+
+// Snapshot / restore (§4.8).
+const SNAPSHOT_DEBOUNCE_MS = 1500;
+const SNAPSHOT_CONTROL_TIMEOUT_MS = 15_000;
+const RESTORE_CONTROL_TIMEOUT_MS = 15_000;
+const SNAPSHOT_MAX_BYTES_DEFAULT = 64 * 1024 * 1024;
+const SNAPSHOT_MAX_VARIABLE_BYTES_DEFAULT = 16 * 1024 * 1024;
+const KERNEL_STATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const DISPLAY_MAX_IMAGES = 4;
+
+function snapshotMaxBytes(): number {
+  return readPositiveIntEnv("PORRIMA_KERNEL_SNAPSHOT_MAX_BYTES", SNAPSHOT_MAX_BYTES_DEFAULT);
+}
+
+function snapshotMaxVariableBytes(): number {
+  return readPositiveIntEnv("PORRIMA_KERNEL_SNAPSHOT_MAX_VARIABLE_BYTES", SNAPSHOT_MAX_VARIABLE_BYTES_DEFAULT);
+}
+
 export type KernelFallbackReason = "capacity" | "spawn-failed" | "wedge" | "broken";
 
 export type KernelRunOutcome =
-  | { mode: "kernel"; content: string; isError: boolean }
+  | {
+      mode: "kernel";
+      content: string;
+      isError: boolean;
+      jobId?: string;
+      /** Images emitted via `emit({"image/png": ...})` (base64 payloads). */
+      images?: Array<{ data: string; mimeType: string }>;
+    }
   | { mode: "fallback"; reason: KernelFallbackReason };
 
 export interface KernelRunOptions {
@@ -51,6 +87,8 @@ export interface KernelRunOptions {
   code: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Run as a background job; resolves with the ack and a jobId. */
+  background?: boolean;
   /** Live view updates (stdout+stderr so far) for the streaming seam. */
   onUpdate?: (text: string) => void;
 }
@@ -79,7 +117,24 @@ interface PendingExecution {
   signal?: AbortSignal;
   onAbort?: () => void;
   onUpdate?: (text: string) => void;
+  /** Images from display events (base64 payloads), attached on success. */
+  images: Array<{ data: string; mimeType: string }>;
+  /** Background acks resolve with the started message, not cell output. */
+  background?: boolean;
+  notice?: string | null;
   resolve: (outcome: KernelRunOutcome) => void;
+}
+
+interface KernelJob {
+  id: string;
+  status: "running" | "done" | "error";
+  startedAt: number;
+  finishedAt: number | null;
+  timedOut: boolean;
+  capture: OutputCapture;
+  resultText: string | null;
+  error: KernelErrorEvent | null;
+  spillPath?: string;
 }
 
 interface KernelInstance {
@@ -87,6 +142,16 @@ interface KernelInstance {
   cwd: string;
   proc: SupervisedProcess;
   pending: Map<string, PendingExecution>;
+  jobs: Map<string, KernelJob>;
+  jobOrder: string[];
+  /** Control-request (snapshot/restore) resolvers keyed by request id. */
+  control: Map<string, (event: Record<string, any>) => void>;
+  pythonVersion: string;
+  firstNotice: string | null;
+  restoreIncomplete: boolean;
+  executions: number;
+  lastSnapshot: { executions: number; payloadMtimeMs: number; manifestMtimeMs: number } | null;
+  snapshotTimer: NodeJS.Timeout | null;
   busy: boolean;
   wedged: boolean;
   wedgedAt: number | null;
@@ -185,6 +250,218 @@ function formatError(error: KernelErrorEvent, output: string): string {
   return output ? `${head}\n${output}` : head;
 }
 
+// ---------------------------------------------------------------------------
+// Background jobs (§4.7): server-side state fed by tagged events. list/status/
+// tail answer without a kernel round-trip, so they work while a cell runs or
+// the kernel is wedged.
+// ---------------------------------------------------------------------------
+
+function createJob(instance: KernelInstance, jobId: string): KernelJob {
+  const capture = createOutputCapture({
+    limits: { maxBytes: JOB_WINDOW_BYTES, maxLines: JOB_MAX_LINES, retain: "tail" },
+    spill: {
+      path: createSpillPath(instance.chatId, "py", `job-${jobId.slice(0, 8)}`),
+      maxBytes: DEFAULT_SPILL_MAX_BYTES,
+    },
+  });
+  return {
+    id: jobId,
+    status: "running",
+    startedAt: Date.now(),
+    finishedAt: null,
+    timedOut: false,
+    capture,
+    resultText: null,
+    error: null,
+  };
+}
+
+function handleJobEvent(job: KernelJob, event: Record<string, any>): void {
+  switch (event.event) {
+    case "stdout":
+    case "stderr":
+      job.capture.push(typeof event.text === "string" ? event.text : "");
+      return;
+    case "result":
+      job.resultText = typeof event.text === "string" ? event.text : null;
+      return;
+    case "error":
+      job.error = {
+        ename: String(event.ename ?? "Error"),
+        evalue: String(event.evalue ?? ""),
+        traceback: Array.isArray(event.traceback) ? event.traceback.map(String) : [],
+      };
+      return;
+    default:
+      return;
+  }
+}
+
+async function finishJob(instance: KernelInstance, event: Record<string, any>): Promise<void> {
+  const jobId = typeof event.job_id === "string" ? event.job_id : null;
+  const job = jobId ? instance.jobs.get(jobId) : undefined;
+  if (!job || job.status !== "running") return;
+  job.status = event.status === "ok" ? "done" : "error";
+  job.timedOut = event.timed_out === true;
+  job.finishedAt = Date.now();
+  const result = await job.capture.finish().catch(() => null);
+  if (result?.spillPath) job.spillPath = result.spillPath;
+  pruneJobs(instance);
+}
+
+function pruneJobs(instance: KernelInstance): void {
+  while (instance.jobOrder.length > JOB_RETENTION) {
+    const oldest = instance.jobOrder[0];
+    const job = instance.jobs.get(oldest);
+    if (job?.status === "running") break;
+    instance.jobOrder.shift();
+    if (job) instance.jobs.delete(oldest);
+  }
+}
+
+function countRunningJobs(instance: KernelInstance): number {
+  let count = 0;
+  for (const job of instance.jobs.values()) if (job.status === "running") count++;
+  return count;
+}
+
+function countRunningJobsBox(): number {
+  let count = 0;
+  for (const instance of kernels.values()) count += countRunningJobs(instance);
+  return count;
+}
+
+export interface KernelJobInfo {
+  id: string;
+  status: "running" | "done" | "error";
+  durationMs: number;
+  timedOut: boolean;
+  spillPath?: string;
+}
+
+/** Server-side job view: works while a cell runs or the kernel is wedged. */
+export function listKernelJobs(chatId: string): KernelJobInfo[] {
+  const instance = kernels.get(chatId);
+  if (!instance) return [];
+  return [...instance.jobs.values()]
+    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id))
+    .map((job) => ({
+      id: job.id,
+      status: job.status,
+      durationMs: (job.finishedAt ?? Date.now()) - job.startedAt,
+      timedOut: job.timedOut,
+      spillPath: job.spillPath ?? job.capture.snapshot().spillPath,
+    }));
+}
+
+export function tailKernelJob(
+  chatId: string,
+  jobId: string,
+  lines = 50,
+): { found: boolean; status?: "running" | "done" | "error"; text?: string } {
+  const job = kernels.get(chatId)?.jobs.get(jobId);
+  if (!job) return { found: false };
+  const text = job.capture.snapshot().text;
+  const tail = text.split("\n").slice(-lines).join("\n");
+  return {
+    found: true,
+    status: job.status,
+    text: tail.length > JOB_TAIL_BYTES ? tail.slice(tail.length - JOB_TAIL_BYTES) : tail,
+  };
+}
+
+export function killKernelJob(
+  chatId: string,
+  jobId: string,
+  force = false,
+): { ok: boolean; reason?: string } {
+  const instance = kernels.get(chatId);
+  if (!instance) return { ok: false, reason: "no kernel" };
+  const job = instance.jobs.get(jobId);
+  if (!job) return { ok: false, reason: "unknown job" };
+  if (force) {
+    // L3: kernel kill, state loss — the only model-reachable path.
+    void disposeKernel(chatId, { force: true });
+    return { ok: true };
+  }
+  if (instance.wedged) return { ok: false, reason: "kernel wedged" };
+  sendRequest(instance, { type: "interrupt", id: jobId });
+  return { ok: true };
+}
+
+function sendControl(
+  instance: KernelInstance,
+  request: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Record<string, any> | null> {
+  const id = String(request.id);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      instance.control.delete(id);
+      resolve(null);
+    }, timeoutMs);
+    timer.unref?.();
+    instance.control.set(id, (event) => {
+      clearTimeout(timer);
+      resolve(event);
+    });
+    sendRequest(instance, request);
+  });
+}
+
+function snapshotPaths(instance: KernelInstance): { payloadPath: string; manifestPath: string } {
+  const dir = kernelStateDir(instance.chatId);
+  return { payloadPath: join(dir, "namespace.pkl"), manifestPath: join(dir, "manifest.json") };
+}
+
+function scheduleSnapshot(instance: KernelInstance): void {
+  if (instance.disposed || instance.restoreIncomplete) return;
+  if (instance.snapshotTimer) clearTimeout(instance.snapshotTimer);
+  instance.snapshotTimer = setTimeout(() => {
+    instance.snapshotTimer = null;
+    void runSnapshot(instance);
+  }, SNAPSHOT_DEBOUNCE_MS);
+  instance.snapshotTimer.unref?.();
+}
+
+async function runSnapshot(
+  instance: KernelInstance,
+  controlTimeoutMs = SNAPSHOT_CONTROL_TIMEOUT_MS,
+): Promise<void> {
+  // Idle means no foreground cell; background jobs never block the flush
+  // (asyncio tasks are not serializable and are never captured).
+  if (instance.disposed || instance.busy || instance.restoreIncomplete) return;
+  const { payloadPath, manifestPath } = snapshotPaths(instance);
+  // Capture-freshness memo: skip the re-dump while provably unchanged.
+  if (instance.lastSnapshot && instance.lastSnapshot.executions === instance.executions) {
+    const payloadStat = await stat(payloadPath).catch(() => null);
+    if (payloadStat && payloadStat.mtimeMs === instance.lastSnapshot.payloadMtimeMs) return;
+  }
+  const result = await sendControl(
+    instance,
+    {
+      type: "snapshot",
+      id: randomUUID(),
+      path: payloadPath,
+      manifest_path: manifestPath,
+      max_bytes: snapshotMaxBytes(),
+      max_variable_bytes: snapshotMaxVariableBytes(),
+    },
+    controlTimeoutMs,
+  );
+  if (result?.status === "ok") {
+    const payloadStat = await stat(payloadPath).catch(() => null);
+    const manifestStat = await stat(manifestPath).catch(() => null);
+    instance.lastSnapshot = {
+      executions: instance.executions,
+      payloadMtimeMs: payloadStat?.mtimeMs ?? 0,
+      manifestMtimeMs: manifestStat?.mtimeMs ?? 0,
+    };
+  } else if (result) {
+    console.warn(`[kernel] chat=${shortId(instance.chatId)} snapshot failed: ${result.reason ?? "unknown"}`);
+  }
+}
+
 function settlePending(
   instance: KernelInstance,
   pending: PendingExecution,
@@ -219,7 +496,18 @@ function settlePending(
     content = `Python execution failed\n${content}`;
     isError = true;
   }
-  pending.resolve({ mode: "kernel", content, isError });
+  instance.executions++;
+  scheduleSnapshot(instance);
+  const outcome: {
+    mode: "kernel";
+    content: string;
+    isError: boolean;
+    images?: Array<{ data: string; mimeType: string }>;
+  } = { mode: "kernel", content, isError };
+  if (!isError && pending.images.length > 0) {
+    outcome.images = pending.images;
+  }
+  pending.resolve(outcome);
 }
 
 function failPending(instance: KernelInstance, pending: PendingExecution, message: string): void {
@@ -269,6 +557,23 @@ function protocolFailure(instance: KernelInstance, reason: string): void {
 }
 
 function handleEvent(instance: KernelInstance, event: Record<string, any>): void {
+  if (event.event === "job_done") {
+    void finishJob(instance, event);
+    return;
+  }
+  if (event.event === "done" && typeof event.id === "string") {
+    const control = instance.control.get(event.id);
+    if (control) {
+      instance.control.delete(event.id);
+      control(event);
+      return;
+    }
+  }
+  const job = typeof event.id === "string" ? instance.jobs.get(event.id) : undefined;
+  if (job) {
+    handleJobEvent(job, event);
+    return;
+  }
   switch (event.event) {
     case "stdout":
     case "stderr": {
@@ -296,10 +601,45 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
       }
       return;
     }
+    case "display": {
+      const pending = typeof event.id === "string" ? instance.pending.get(event.id) : undefined;
+      if (!pending || !event.data || typeof event.data !== "object") return;
+      for (const [mimeType, payload] of Object.entries(event.data)) {
+        if (!mimeType.startsWith("image/") || typeof payload !== "string") continue;
+        if (pending.images.length >= DISPLAY_MAX_IMAGES) break;
+        pending.images.push({ mimeType, data: payload });
+      }
+      return;
+    }
     case "done": {
       const pending = typeof event.id === "string" ? instance.pending.get(event.id) : undefined;
       if (!pending) return;
       if (event.timed_out === true) pending.timedOut = true;
+      if (pending.background) {
+        // Ack for a background execute: register the job and return the id.
+        if (pending.settled) return;
+        pending.settled = true;
+        clearTimeout(pending.deadline);
+        instance.pending.delete(pending.id);
+        const jobId = typeof event.job_id === "string" ? event.job_id : null;
+        if (jobId && event.status === "ok") {
+          instance.jobs.set(jobId, createJob(instance, jobId));
+          instance.jobOrder.push(jobId);
+          pending.resolve({
+            mode: "kernel",
+            isError: false,
+            jobId,
+            content: `${pending.notice ? `${pending.notice}\n` : ""}Started background job ${jobId}. It runs without holding the turn; end your turn and check python_jobs on a later turn.`,
+          });
+        } else {
+          pending.resolve({
+            mode: "kernel",
+            isError: true,
+            content: "Background job was not acknowledged by the kernel.",
+          });
+        }
+        return;
+      }
       settlePending(instance, pending, event.status === "ok" ? "ok" : "error");
       return;
     }
@@ -307,7 +647,7 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
       console.log(`[kernel] chat=${shortId(instance.chatId)} interrupt parked for ${event.for_id}`);
       return;
     default:
-      // Unknown events are tolerated for forward compatibility (display, jobs).
+      // Unknown events are tolerated for forward compatibility (display, …).
       return;
   }
 }
@@ -329,6 +669,7 @@ function handleLine(instance: KernelInstance, line: string): void {
       protocolFailure(instance, `protocol mismatch (driver ${event.protocol}, expected ${PROTOCOL_VERSION})`);
       return;
     }
+    instance.pythonVersion = String(event.python ?? "");
     instance.readyResolve?.(true);
     instance.readyResolve = undefined;
     return;
@@ -389,6 +730,15 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
     cwd,
     proc,
     pending: new Map(),
+    jobs: new Map(),
+    jobOrder: [],
+    control: new Map(),
+    pythonVersion: "",
+    firstNotice: null,
+    restoreIncomplete: false,
+    executions: 0,
+    lastSnapshot: null,
+    snapshotTimer: null,
     busy: false,
     wedged: false,
     wedgedAt: null,
@@ -425,6 +775,41 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
     }
   });
 
+  // Restore a previous snapshot before the kernel serves any cell. A failed
+  // or partial restore marks the kernel so the debounced flush never
+  // overwrites a fuller on-disk payload.
+  const { payloadPath, manifestPath } = snapshotPaths(instance);
+  if (existsSync(payloadPath) && existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      const manifestMajor = String(manifest.pythonVersion ?? "").split(".")[0];
+      const runningMajor = instance.pythonVersion.split(".")[0];
+      if (manifestMajor && runningMajor && manifestMajor !== runningMajor) {
+        instance.firstNotice = `[kernel: snapshot skipped (python ${manifest.pythonVersion} -> ${instance.pythonVersion})]`;
+      } else {
+        const restored = await sendControl(
+          instance,
+          { type: "restore", id: randomUUID(), path: payloadPath },
+          RESTORE_CONTROL_TIMEOUT_MS,
+        );
+        if (restored?.status === "ok") {
+          const count = Array.isArray(restored.restored) ? restored.restored.length : 0;
+          const failed = Array.isArray(restored.failed) ? restored.failed.length : 0;
+          if (count > 0 || failed > 0) {
+            instance.firstNotice = `[kernel: restored ${count} name(s)${failed ? `; ${failed} failed` : ""}]`;
+          }
+          if (failed > 0) instance.restoreIncomplete = true;
+        } else {
+          instance.restoreIncomplete = true;
+          if (restored?.reason) instance.firstNotice = `[kernel: restore failed: ${restored.reason}]`;
+        }
+      }
+    } catch (error) {
+      instance.restoreIncomplete = true;
+      console.warn(`[kernel] restore failed for chat=${shortId(chatId)}:`, error);
+    }
+  }
+
   kernels.set(chatId, instance);
   startKernelReaper();
   return instance;
@@ -432,7 +817,7 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
 
 async function evictIdleKernels(needed: number): Promise<void> {
   const idle = [...kernels.values()]
-    .filter((instance) => !instance.busy)
+    .filter((instance) => !instance.busy && countRunningJobs(instance) === 0)
     .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
   while (kernels.size >= needed && idle.length > 0) {
     const victim = idle.shift()!;
@@ -441,65 +826,137 @@ async function evictIdleKernels(needed: number): Promise<void> {
   }
 }
 
+type KernelAcquisition =
+  | { instance: KernelInstance; recreated: boolean }
+  | { reason: KernelFallbackReason };
+
+async function acquireKernel(chatId: string, cwd: string): Promise<KernelAcquisition> {
+  const existing = kernels.get(chatId);
+  if (existing?.wedged) return { reason: "wedge" };
+  if (existing && existing.cwd === cwd) return { instance: existing, recreated: false };
+  if (existing) {
+    // Project/location change: a kernel's cwd is fixed at creation, and the
+    // snapshot belongs to the old workspace — remove it rather than restore
+    // stale paths into the new one.
+    await disposeKernel(chatId, { removeState: true }).catch(() => {});
+  }
+  await evictIdleKernels(maxKernels());
+  if (kernels.size >= maxKernels()) return { reason: "capacity" };
+  const instance = await spawnKernel(chatId, cwd);
+  if (!instance) return { reason: "spawn-failed" };
+  return { instance, recreated: Boolean(existing) };
+}
+
+function consumeNotice(instance: KernelInstance, recreated: boolean): string | null {
+  const notices: string[] = [];
+  if (recreated) notices.push("[kernel: workspace changed; started a fresh namespace]");
+  if (instance.firstNotice) {
+    notices.push(instance.firstNotice);
+    instance.firstNotice = null;
+  }
+  return notices.length ? notices.join("\n") : null;
+}
+
+function makePendingBase(
+  id: string,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  onUpdate: ((text: string) => void) | undefined,
+  notice: string | null,
+): PendingExecution {
+  return {
+    id,
+    timeoutSec: Math.max(1, Math.round(timeoutMs / 1000)),
+    startedAt: Date.now(),
+    stdout: [],
+    stderr: [],
+    resultText: null,
+    error: null,
+    timedOut: false,
+    aborted: false,
+    settled: false,
+    deadline: setTimeout(() => {}, 0),
+    lastUpdateAt: 0,
+    pendingUpdateText: null,
+    signal,
+    onUpdate,
+    images: [],
+    notice,
+    resolve: () => {},
+  };
+}
+
 export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRunOutcome> {
-  const { chatId, cwd, code, timeoutMs, signal } = opts;
+  const { chatId, cwd, code, timeoutMs, signal, background } = opts;
   if (brokenChats.has(chatId)) return { mode: "fallback", reason: "broken" };
 
-  let instance = kernels.get(chatId);
-  if (instance?.wedged) return { mode: "fallback", reason: "wedge" };
-  if (instance?.busy) return { mode: "fallback", reason: "capacity" };
+  if (background) {
+    const pause = await getStoredSystemPauseState().catch(() => null);
+    if (pause?.active) {
+      return { mode: "kernel", isError: true, content: "[system paused: background jobs cannot start]" };
+    }
+    const acquisition = await acquireKernel(chatId, cwd);
+    if ("reason" in acquisition) return { mode: "fallback", reason: acquisition.reason };
+    const instance = acquisition.instance;
+    const runningOnKernel = countRunningJobs(instance);
+    const runningBox = countRunningJobsBox();
+    if (runningOnKernel >= JOB_MAX_PER_KERNEL || runningBox >= JOB_MAX_BOX) {
+      return {
+        mode: "kernel",
+        isError: true,
+        content: `[job limit reached: ${runningOnKernel}/${JOB_MAX_PER_KERNEL} running in this chat, ${runningBox}/${JOB_MAX_BOX} box-wide]`,
+      };
+    }
+    const notice = consumeNotice(instance, acquisition.recreated);
+    const id = randomUUID();
+    return new Promise<KernelRunOutcome>((resolve) => {
+      const pending = makePendingBase(id, timeoutMs, signal, undefined, notice);
+      pending.background = true;
+      pending.resolve = resolve;
+      // The ack deadline is short: the driver acks before running the job.
+      pending.deadline = setTimeout(() => {
+        if (pending.settled) return;
+        pending.settled = true;
+        instance.pending.delete(id);
+        pending.resolve({
+          mode: "kernel",
+          isError: true,
+          content: "Background job was not acknowledged by the kernel.",
+        });
+      }, JOB_ACK_TIMEOUT_MS);
+      pending.deadline.unref?.();
+      instance.pending.set(id, pending);
+      sendRequest(instance, { type: "execute", id, code, timeout_ms: timeoutMs, background: true });
+    });
+  }
 
-  let notice: string | null = null;
-  if (instance && instance.cwd !== cwd) {
-    await disposeKernel(chatId).catch(() => {});
-    instance = undefined;
-    notice = "[kernel: workspace changed; started a fresh namespace]";
-  }
-  if (!instance) {
-    await evictIdleKernels(maxKernels());
-    if (kernels.size >= maxKernels()) return { mode: "fallback", reason: "capacity" };
-    instance = (await spawnKernel(chatId, cwd)) ?? undefined;
-    if (!instance) return { mode: "fallback", reason: "spawn-failed" };
-  }
+  const acquisition = await acquireKernel(chatId, cwd);
+  if ("reason" in acquisition) return { mode: "fallback", reason: acquisition.reason };
+  const instance = acquisition.instance;
+  if (instance.busy) return { mode: "fallback", reason: "capacity" };
+  const notice = consumeNotice(instance, acquisition.recreated);
 
   const id = randomUUID();
-  const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   return new Promise<KernelRunOutcome>((resolve) => {
-    const pending: PendingExecution = {
-      id,
-      timeoutSec,
-      startedAt: Date.now(),
-      stdout: [],
-      stderr: [],
-      resultText: null,
-      error: null,
-      timedOut: false,
-      aborted: false,
-      settled: false,
-      deadline: setTimeout(() => {}, 0),
-      lastUpdateAt: 0,
-      pendingUpdateText: null,
-      signal,
-      onUpdate: opts.onUpdate,
-      resolve: (outcome) => {
-        if (notice && outcome.mode === "kernel") {
-          resolve({ ...outcome, content: `${notice}\n${outcome.content}` });
-        } else {
-          resolve(outcome);
-        }
-      },
+    const pending = makePendingBase(id, timeoutMs, signal, opts.onUpdate, notice);
+    pending.resolve = (outcome) => {
+      if (notice && outcome.mode === "kernel") {
+        resolve({ ...outcome, content: `${notice}\n${outcome.content}` });
+      } else {
+        resolve(outcome);
+      }
     };
 
     const armDeadline = (ms: number) => {
       clearTimeout(pending.deadline);
-      pending.deadline = setTimeout(() => wedgePending(instance!, pending), ms);
+      pending.deadline = setTimeout(() => wedgePending(instance, pending), ms);
     };
     armDeadline(timeoutMs + wedgeGraceMs());
 
     pending.onAbort = () => {
       if (pending.settled) return;
       pending.aborted = true;
-      sendRequest(instance!, { type: "interrupt", id });
+      sendRequest(instance, { type: "interrupt", id });
       armDeadline(wedgeGraceMs());
     };
     if (signal) {
@@ -507,28 +964,56 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       if (signal.aborted) pending.onAbort();
     }
 
-    instance!.pending.set(id, pending);
-    instance!.busy = true;
-    sendRequest(instance!, { type: "execute", id, code, timeout_ms: timeoutMs });
+    instance.pending.set(id, pending);
+    instance.busy = true;
+    sendRequest(instance, { type: "execute", id, code, timeout_ms: timeoutMs });
   });
 }
 
-export async function disposeKernel(chatId: string): Promise<void> {
+export async function disposeKernel(
+  chatId: string,
+  opts?: { force?: boolean; removeState?: boolean },
+): Promise<void> {
   const instance = kernels.get(chatId);
-  if (!instance) return;
+  if (!instance) {
+    if (opts?.removeState) {
+      await rm(kernelStateDir(chatId), { recursive: true, force: true }).catch(() => {});
+    }
+    return;
+  }
   kernels.delete(chatId);
+  if (instance.snapshotTimer) {
+    clearTimeout(instance.snapshotTimer);
+    instance.snapshotTimer = null;
+  }
+  // Flush only when idle: a snapshot queued behind a running cell would never
+  // finish before SIGKILL, so a busy kernel gets hard-crash semantics.
+  if (!opts?.force && !instance.wedged && !instance.busy && !instance.restoreIncomplete) {
+    // Bounded: a sync job can block the loop, and disposal must not wait the
+    // full control timeout for a snapshot that cannot be served.
+    await runSnapshot(instance, 2000).catch(() => {});
+  }
   // Protocol shutdown goes out BEFORE marking disposed (sendRequest checks
   // that flag); the driver kills its own journaled child groups and exits.
-  try {
-    instance.proc.write(`${JSON.stringify({ type: "shutdown", id: randomUUID() })}\n`);
-  } catch {
-    // fall through to the kill
+  // `force` (L3) skips the protocol path entirely.
+  if (!opts?.force) {
+    try {
+      instance.proc.write(`${JSON.stringify({ type: "shutdown", id: randomUUID() })}\n`);
+    } catch {
+      // fall through to the kill
+    }
   }
   instance.disposed = true;
   for (const pending of [...instance.pending.values()]) {
     failPending(instance, pending, "Python kernel disposed.");
   }
-  if (!instance.wedged) {
+  for (const job of instance.jobs.values()) {
+    if (job.status !== "running") continue;
+    job.status = "error";
+    job.finishedAt = Date.now();
+    void job.capture.finish().catch(() => {});
+  }
+  if (!instance.wedged && !opts?.force) {
     // A wedged loop cannot process the shutdown request; skip straight to the
     // kill instead of waiting out the protocol timeout.
     try {
@@ -537,8 +1022,12 @@ export async function disposeKernel(chatId: string): Promise<void> {
       // fall through to the kill
     }
   }
-  await instance.proc.kill({ graceMs: KERNEL_KILL_GRACE_MS }).catch(() => {});
-  await rm(kernelStateDir(chatId), { recursive: true, force: true }).catch(() => {});
+  await instance.proc.kill({ graceMs: opts?.force ? 300 : KERNEL_KILL_GRACE_MS }).catch(() => {});
+  // Ordinary disposal (TTL, LRU, shutdown) keeps the snapshot for the next
+  // kernel to restore; only a workspace change or chat deletion removes it.
+  if (opts?.removeState) {
+    await rm(kernelStateDir(chatId), { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export async function disposeAllKernels(): Promise<void> {
@@ -562,7 +1051,8 @@ async function reapIdleKernels(): Promise<void> {
   const ttl = idleTtlMs();
   const now = Date.now();
   for (const instance of [...kernels.values()]) {
-    if (instance.busy) continue;
+    // Never evict a kernel with a running cell or live background job.
+    if (instance.busy || countRunningJobs(instance) > 0) continue;
     const anchor = instance.wedged ? instance.wedgedAt ?? instance.lastUsedAt : instance.lastUsedAt;
     if (now - anchor > ttl) {
       console.log(`[kernel] reaping idle kernel for chat=${shortId(instance.chatId)}`);
@@ -599,6 +1089,18 @@ export async function sweepKernelJournals(): Promise<number> {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
+    // Expire state dirs untouched for the retention window (deleted with the
+    // chat otherwise).
+    try {
+      const info = await stat(dir);
+      if (Date.now() - info.mtimeMs > KERNEL_STATE_TTL_MS) {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        continue;
+      }
+    } catch {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      continue;
+    }
     let text: string;
     try {
       text = await readFile(join(dir, "children.jsonl"), "utf8");

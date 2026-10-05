@@ -12,7 +12,13 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
-import { executeInKernel, type KernelFallbackReason } from "./python-kernel.js";
+import {
+  executeInKernel,
+  killKernelJob,
+  listKernelJobs,
+  tailKernelJob,
+  type KernelFallbackReason,
+} from "./python-kernel.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, InlineVisual, Project } from "../types.js";
 
@@ -85,10 +91,25 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code in the active workspace and return stdout/stderr. In agent chats on a local workspace this runs in a persistent per-chat kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. On SSH projects and system chats each call is stateless. Uses the project root for project chats.",
+  description: "Execute Python code in the active workspace and return stdout/stderr. In agent chats on a local workspace this runs in a persistent per-chat kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. On SSH projects and system chats each call is stateless. Uses the project root for project chats.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
-    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
+    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
+    background: Type.Optional(Type.Boolean({ description: "Run as a background job and return immediately with a job ID (default false). Background jobs require the persistent kernel; use python_jobs to inspect them later." })),
+  }),
+};
+
+const PYTHON_JOBS_TOOL: Tool = {
+  name: "python_jobs",
+  description: "Inspect and control background run_python jobs for this chat. Jobs run in the persistent kernel and do not hold the turn. list shows all jobs, status one job, tail its recent output, kill stops one. A kill escalates to a kernel kill only with force: true (loses the namespace). Check jobs on a later turn — do not poll in a loop.",
+  parameters: Type.Object({
+    action: Type.Enum(
+      { list: "list", status: "status", tail: "tail", kill: "kill" },
+      { description: "list all jobs, status one job, tail one job's output, or kill one" },
+    ),
+    jobId: Type.Optional(Type.String({ description: "Job ID (required for status/tail/kill)" })),
+    lines: Type.Optional(Type.Integer({ description: "Tail line count (default 50, max 200)", minimum: 1, maximum: 200 })),
+    force: Type.Optional(Type.Boolean({ description: "kill only: kill the kernel when the job cannot be interrupted (L3, loses the namespace)" })),
   }),
 };
 
@@ -98,6 +119,30 @@ const KERNEL_FALLBACK_NOTICES: Record<KernelFallbackReason, string> = {
   wedge: "[kernel: previous cell is wedged; ran stateless this call]",
   broken: "[kernel: disabled after a protocol failure; ran stateless this call]",
 };
+
+function formatDurationMs(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h${minutes % 60}m`;
+}
+
+// In-turn polling guard: a second tail of the same still-running job within
+// the window returns a notice instead of output. Heuristic — tool calls carry
+// no turn identity — but a genuine next-turn check is normally minutes later.
+const TAIL_REPEAT_WINDOW_MS = 30_000;
+const recentTails = new Map<string, { jobId: string; at: number }>();
+
+function wasTailedRecently(chatId: string, jobId: string): boolean {
+  const entry = recentTails.get(chatId);
+  return entry?.jobId === jobId && Date.now() - entry.at < TAIL_REPEAT_WINDOW_MS;
+}
+
+function markTailed(chatId: string, jobId: string): void {
+  recentTails.set(chatId, { jobId, at: Date.now() });
+}
 
 const READ_PDF_TOOL: Tool = {
   name: "read_pdf",
@@ -358,6 +403,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
   LIST_FILES_TOOL,
   BASH_TOOL,
   RUN_PYTHON_TOOL,
+  PYTHON_JOBS_TOOL,
   READ_PDF_TOOL,
   CREATE_ARTIFACT_TOOL,
   UPDATE_ARTIFACT_TOOL,
@@ -379,11 +425,12 @@ const AUTOMATION_TOOLS: Tool[] = [
 // per-chat skill tools (system chats don't activate skills).
 const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
   "ask_user",
+  "python_jobs",
   ...SKILL_TOOLS.map((tool) => tool.name),
 ]);
 const SEQUENTIAL_TOOL_NAMES = new Set([
   "save_memory", "create_memory_block", "update_memory_block", "create_notebook_entry",
-  "write_file", "edit_file", "bash", "run_python", "web_fetch",
+  "write_file", "edit_file", "bash", "run_python", "python_jobs", "web_fetch",
   "browser_navigate", "browser_snapshot", "browser_click", "browser_hover", "browser_type", "browser_screenshot",
   "create_artifact", "update_artifact", "ask_user",
   "schedule_reminder", "schedule_chat_message", "update_automation", "install_skill", "remove_skill",
@@ -887,35 +934,54 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const args = params as Record<string, any>;
       return withMutationLock(`workspace:${workspace.label}`, async () => {
         const useKernel = chatType !== "system" && workspace.kind === "local";
+        const background = args.background === true;
         if (useKernel) {
-          const timeoutSec = Math.min(300, Math.max(1, args.timeout || 30));
+          const maxSec = background ? 3600 : 300;
+          const timeoutSec = Math.min(maxSec, Math.max(1, args.timeout || 30));
           const outcome = await executeInKernel({
             chatId,
             cwd: workspace.label,
             code: String(args.code ?? ""),
             timeoutMs: timeoutSec * 1000,
             signal,
+            background,
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,
           });
           if (outcome.mode === "kernel") {
-            return wrapResult({ content: outcome.content, isError: outcome.isError }, "run_python");
+            const content = outcome.images?.length
+              ? [
+                  { type: "text" as const, text: outcome.content },
+                  ...outcome.images.map((image) => ({
+                    type: "image" as const,
+                    data: image.data,
+                    mimeType: image.mimeType,
+                  })),
+                ]
+              : outcome.content;
+            return wrapResult({ content, isError: outcome.isError }, "run_python");
           }
           const oneShot = await workspace.runPython(args, signal);
+          const notice = background
+            ? `${KERNEL_FALLBACK_NOTICES[outcome.reason]} (background unavailable; ran synchronously)`
+            : KERNEL_FALLBACK_NOTICES[outcome.reason];
           return wrapResult(
             {
-              content: `${KERNEL_FALLBACK_NOTICES[outcome.reason]}\n${oneShot.content}`,
+              content: `${notice}\n${oneShot.content}`,
               isError: oneShot.isError,
             },
             "run_python",
           );
         }
         const oneShot = await workspace.runPython(args, signal);
-        if (chatType === "system") {
+        const prefixes: string[] = [];
+        if (chatType === "system") prefixes.push("[stateless mode in this chat type]");
+        if (background) prefixes.push("[background unavailable in stateless mode; ran synchronously]");
+        if (prefixes.length > 0) {
           return wrapResult(
             {
-              content: `[stateless mode in this chat type]\n${oneShot.content}`,
+              content: `${prefixes.join(" ")}\n${oneShot.content}`,
               isError: oneShot.isError,
             },
             "run_python",
@@ -923,6 +989,61 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         }
         return wrapResult(oneShot, "run_python");
       });
+    },
+  });
+
+  tools.push({
+    ...PYTHON_JOBS_TOOL,
+    label: "python_jobs",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      const action = String(args.action || "list");
+      const result = (content: string, isError = false) => wrapResult({ content, isError }, "python_jobs");
+      if (action === "list") {
+        const jobs = listKernelJobs(chatId);
+        if (jobs.length === 0) return result("No background jobs for this chat.");
+        return result(
+          jobs
+            .map((job) => `${job.id}  ${job.status}  ${formatDurationMs(job.durationMs)}${job.timedOut ? "  (timed out)" : ""}`)
+            .join("\n"),
+        );
+      }
+      const jobId = typeof args.jobId === "string" ? args.jobId : "";
+      if (!jobId) return result(`python_jobs ${action} requires jobId`, true);
+      if (action === "status") {
+        const job = listKernelJobs(chatId).find((entry) => entry.id === jobId);
+        if (!job) return result(`Unknown job: ${jobId}`, true);
+        const spill = job.spillPath ? `\nFull output: ${job.spillPath}` : "";
+        return result(
+          `${job.id}  ${job.status}  ${formatDurationMs(job.durationMs)}${job.timedOut ? "  (timed out)" : ""}${spill}`,
+        );
+      }
+      if (action === "tail") {
+        const requested = typeof args.lines === "number" ? Math.min(200, Math.max(1, Math.floor(args.lines))) : 50;
+        const tail = tailKernelJob(chatId, jobId, requested);
+        if (!tail.found) return result(`Unknown job: ${jobId}`, true);
+        if (tail.status === "running" && wasTailedRecently(chatId, jobId)) {
+          return result(
+            `[${jobId} is still running; output already tailed recently. End your turn and check again later — do not poll.]`,
+          );
+        }
+        markTailed(chatId, jobId);
+        return result(`[${tail.status}] ${jobId}\n${tail.text?.trimEnd() || "(no output yet)"}`);
+      }
+      if (action === "kill") {
+        const force = args.force === true;
+        const killed = killKernelJob(chatId, jobId, force);
+        if (!killed.ok) {
+          const hint = killed.reason === "kernel wedged" ? " Use force: true to kill the kernel (loses the namespace)." : "";
+          return result(`Could not kill ${jobId}: ${killed.reason}.${hint}`, true);
+        }
+        return result(
+          force
+            ? `Killed the kernel for this chat; ${jobId} and the namespace are gone.`
+            : `Kill requested for ${jobId}; it ends at the next suspension point.`,
+        );
+      }
+      return result(`Unknown python_jobs action: ${action}`, true);
     },
   });
 

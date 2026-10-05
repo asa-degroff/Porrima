@@ -28,5 +28,5 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   markChatInactive(chatId);
   await closeBrowserSession(chatId).catch(() => {});
   await cleanupChat(chatId).catch(() => {});
-  await disposeKernel(chatId).catch(() => {});
+  await disposeKernel(chatId, { removeState: true }).catch(() => {});
 }

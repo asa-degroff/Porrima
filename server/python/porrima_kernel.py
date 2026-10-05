@@ -37,6 +37,7 @@ import linecache
 import os
 import select
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -55,6 +56,11 @@ _TRUNCATION_MARKER = "\n... [truncated]"
 _DEFAULT_L2_GRACE_MS = 5000
 _CHILD_TERM_GRACE_S = 0.5
 _CHILD_KILL_WAIT_S = 2.0
+_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_MAX_VARIABLE_BYTES = 16 * 1024 * 1024
+_SNAPSHOT_MAGIC = b"PORRIMA-KERNEL-SNAPSHOT-V1\n"
+# Never serialized/restored: runtime handles and IPython-style bookkeeping.
+_SNAPSHOT_ALWAYS_SKIP = {"In", "Out", "get_ipython", "exit", "quit", "open"}
 
 # ---------------------------------------------------------------------------
 # Process-global state
@@ -72,6 +78,10 @@ _pump_err: "_Pump"
 _current_cell: contextvars.ContextVar[str | None] = contextvars.ContextVar("_current_cell", default=None)
 
 _active: dict[str, Any] = {"task": None, "rid": None, "interrupted": False}
+# Background jobs: job_id -> {"task": inner Task | None, "interrupted": bool}.
+# Jobs run concurrently and never occupy _active, so their interrupt handling
+# is separate from the foreground cell machine.
+_jobs: dict[str, dict[str, Any]] = {}
 _cell_counter = 0
 
 _interrupt_lock = threading.Lock()
@@ -89,6 +99,11 @@ _children_lock = threading.Lock()
 
 _kernel_dir: str | None = None
 _owner_pid: int = 0
+# Last successful snapshot target, remembered so an EOF shutdown (server died
+# without a graceful dispose) can flush the namespace before exit. None until
+# a host-committed snapshot exists: an EOF before that must not write a payload
+# the host never considered durable.
+_last_snapshot_target: dict[str, Any] | None = None
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -138,6 +153,24 @@ def _send_raw(event: dict[str, Any]) -> None:
 
 def _protocol_error(message: str) -> None:
     _send({"event": "error", "id": None, "ename": "ProtocolError", "evalue": message, "traceback": []})
+
+
+def emit(data: dict[str, Any]) -> None:
+    """Ship one display event carrying a dict of MIME type -> JSON payload.
+
+    Thread-safe; tagged with the cell running at call time. A payload that is
+    not JSON-serializable or exceeds the frame cap raises in the calling cell
+    instead of tearing framing.
+    """
+    if not isinstance(data, dict) or not data or not all(isinstance(k, str) for k in data):
+        raise TypeError("emit() requires a non-empty dict keyed by MIME type strings")
+    try:
+        encoded = json.dumps(data, allow_nan=False)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"emit payload is not JSON-serializable: {err}") from err
+    if len(encoded) > _PAYLOAD_CAP:
+        raise ValueError(f"emit payload exceeds the {_PAYLOAD_CAP}-character frame cap")
+    _send({"event": "display", "id": _current_cell.get(), "data": data})
 
 
 def _cap_text(text: str) -> str:
@@ -368,6 +401,20 @@ def _consume_task_exception(task: asyncio.Task[Any]) -> None:
 
 def _sigint_handler(signum: int, frame: types.FrameType | None) -> None:
     global _handoff_interrupted
+    target = _sigint_target
+    if target is not None and target in _jobs:
+        # Job target: raise into the job's own step when the main thread is
+        # executing it, otherwise cancel its task (delivered at the next
+        # suspension). A foreground cell running concurrently is untouched.
+        job = _jobs[target]
+        job_task = job.get("task")
+        if job_task is not None and not job_task.done():
+            job["interrupted"] = True
+            running = asyncio.current_task(_loop) if _loop is not None else None
+            if running is job_task:
+                raise KeyboardInterrupt
+            job_task.cancel()
+        return
     task = _active["task"]
     if task is None or task.done() or _active["rid"] != _sigint_target:
         if _sigint_target is not None and _sigint_target == _active["rid"]:
@@ -391,22 +438,31 @@ def _sigint_handler(signum: int, frame: types.FrameType | None) -> None:
 def _request_interrupt(target: str | None) -> None:
     """Deliver an interrupt now, or park it for the request it targets."""
     global _sigint_target
+    deliver = False
     with _interrupt_lock:
-        rid = _active["rid"]
-        if rid is not None and (target is None or target == rid):
-            _sigint_target = rid
-        elif _finishing_rid is not None and (target is None or target == _finishing_rid):
-            _sigint_target = _finishing_rid
-        elif target is not None:
-            if target in _inflight:
-                _pending_interrupts["ids"].add(target)
-                _send({"event": "parked_interrupt", "for_id": target})
-            return
-        elif _inflight:
-            _pending_interrupts["any"] = True
-            return
-        else:
-            return
+        if target is not None and target in _jobs:
+            job_task = _jobs[target].get("task")
+            if job_task is not None and not job_task.done():
+                _sigint_target = target
+                deliver = True
+        if not deliver:
+            rid = _active["rid"]
+            if rid is not None and (target is None or target == rid):
+                _sigint_target = rid
+                deliver = True
+            elif _finishing_rid is not None and (target is None or target == _finishing_rid):
+                _sigint_target = _finishing_rid
+                deliver = True
+            elif target is not None:
+                if target in _inflight:
+                    _pending_interrupts["ids"].add(target)
+                    _send({"event": "parked_interrupt", "for_id": target})
+                return
+            elif _inflight:
+                _pending_interrupts["any"] = True
+                return
+            else:
+                return
     if hasattr(signal, "pthread_kill"):
         signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
         if _loop is not None:
@@ -418,8 +474,8 @@ def _request_interrupt(target: str | None) -> None:
                 _active["interrupted"] = True
                 current.cancel()
         _loop.call_soon_threadsafe(cancel_active)
-    # L2: if the cell has not settled after the grace window, cancel its task
-    # (delivered at the next suspension) and kill its tracked child groups
+    # L2: if the cell/job has not settled after the grace window, cancel its
+    # task (delivered at the next suspension) and kill its tracked child groups
     # (which also unblocks sync waits).
     if target is not None:
         _schedule_escalation(target)
@@ -428,17 +484,29 @@ def _request_interrupt(target: str | None) -> None:
 def _schedule_escalation(rid: str) -> None:
     def escalate() -> None:
         with _interrupt_lock:
+            job = _jobs.get(rid)
             active = _active["rid"] == rid and _active["task"] is not None and not _active["task"].done()
             finishing = _finishing_rid == rid
-        if not (active or finishing):
+        if job is None and not (active or finishing):
             return
         if _loop is not None:
-            def cancel_task() -> None:
-                current = _active["task"]
-                if _active["rid"] == rid and current is not None and not current.done():
-                    _active["interrupted"] = True
-                    current.cancel()
-            _loop.call_soon_threadsafe(cancel_task)
+            if job is not None:
+                def cancel_job() -> None:
+                    entry = _jobs.get(rid)
+                    if entry is None:
+                        return
+                    task = entry.get("task")
+                    if task is not None and not task.done():
+                        entry["interrupted"] = True
+                        task.cancel()
+                _loop.call_soon_threadsafe(cancel_job)
+            else:
+                def cancel_task() -> None:
+                    current = _active["task"]
+                    if _active["rid"] == rid and current is not None and not current.done():
+                        _active["interrupted"] = True
+                        current.cancel()
+                _loop.call_soon_threadsafe(cancel_task)
         _kill_cell_children(rid)
 
     timer = threading.Timer(_L2_GRACE_MS / 1000.0, escalate)
@@ -572,6 +640,100 @@ async def _run_guarded(task: asyncio.Task[Any], rid: str) -> tuple[str, Any, dic
             _finishing_rid = rid
             _active["task"] = None
             _active["rid"] = None
+
+
+async def _run_job_guarded(
+    task: asyncio.Task[Any], job_id: str
+) -> tuple[str, Any, dict[str, Any] | None, bool]:
+    """Job twin of _run_guarded: jobs never occupy _active, so this only
+    awaits and classifies; interrupt bookkeeping lives in _jobs."""
+    try:
+        value = await task
+        return "ok", value, None, False
+    except asyncio.CancelledError as exc:
+        if _jobs.get(job_id, {}).get("interrupted"):
+            return "error", None, _interrupt_event(job_id, exc), True
+        return "error", None, _error_event(job_id, exc), False
+    except BaseException as exc:  # noqa: BLE001
+        interrupted = bool(_jobs.get(job_id, {}).get("interrupted")) and isinstance(exc, KeyboardInterrupt)
+        return "error", None, _error_event(job_id, exc), interrupted
+
+
+def _start_job(job_id: str, req: dict[str, Any], ns: dict[str, Any]) -> None:
+    """Schedule a job whose ack already went out on the reader thread.
+
+    The outer task is deliberately NOT registered as the interrupt target: an
+    interrupt arriving before the inner cell task exists must park (the job id
+    is already in _inflight) and be consumed by _run_job, or a SIGINT in that
+    window would kill the outer task without ever emitting job_done."""
+    assert _loop is not None
+    _loop.create_task(_run_job(job_id, req, ns))
+
+
+async def _run_job(job_id: str, req: dict[str, Any], ns: dict[str, Any]) -> None:
+    global _cell_counter
+    started = time.monotonic()
+    _cell_counter += 1
+    filename = f"<porrima-cell-{_cell_counter}>"
+    cell_token = _current_cell.set(job_id)
+    timeout_handle: threading.Timer | None = None
+    status = "ok"
+    try:
+        timeout_ms = req.get("timeout_ms")
+        if isinstance(timeout_ms, int) and not isinstance(timeout_ms, bool) and timeout_ms > 0:
+            def on_timeout() -> None:
+                _timed_out.add(job_id)
+                _request_interrupt(job_id)
+            timeout_handle = threading.Timer(timeout_ms / 1000.0, on_timeout)
+            timeout_handle.daemon = True
+            timeout_handle.start()
+
+        codes, has_trailing = _compile_cell(req["code"], filename)
+        assert _loop is not None
+        inner = _loop.create_task(_run_codes(codes, ns))
+        with _interrupt_lock:
+            entry = _jobs.get(job_id)
+            if entry is not None:
+                entry["task"] = inner
+            if _consume_pending_interrupt(job_id):
+                # Kill parked before the job started: cancel before its first step.
+                if entry is not None:
+                    entry["interrupted"] = True
+                inner.cancel()
+        status, value, error, interrupted_by_task = await _run_job_guarded(inner, job_id)
+        result_text: str | None = None
+        if status == "ok" and has_trailing and value is not None:
+            try:
+                ns["_"] = value
+                result_text = repr(value)
+            except BaseException as exc:  # noqa: BLE001
+                status, error = "error", _error_event(job_id, exc)
+        if result_text is not None:
+            result_text = _cap_text(result_text)
+        _drain_output()
+        if result_text is not None:
+            _send({"event": "result", "id": job_id, "text": result_text})
+        if error is not None:
+            _send(error)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        done: dict[str, Any] = {
+            "event": "job_done", "job_id": job_id, "status": status, "duration_ms": duration_ms,
+        }
+        if job_id in _timed_out:
+            _timed_out.discard(job_id)
+            done["timed_out"] = True
+        _send(done)
+        if interrupted_by_task and status == "error":
+            # Same rule as foreground cells: a job that died to the interrupt
+            # never ran its cleanup, so reap the child groups it left behind.
+            _kill_cell_children(job_id)
+    finally:
+        if timeout_handle is not None:
+            timeout_handle.cancel()
+        _finish_request(job_id)
+        with _interrupt_lock:
+            _jobs.pop(job_id, None)
+        _current_cell.reset(cell_token)
 
 
 async def _handle_execute(req: dict[str, Any], ns: dict[str, Any]) -> None:
@@ -850,10 +1012,332 @@ def _start_owner_watchdog() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot / restore
+# ---------------------------------------------------------------------------
+
+
+class _SizeLimitExceeded(Exception):
+    pass
+
+
+class _CappedWriter(io.BytesIO):
+    """BytesIO that raises once the per-variable cap is crossed mid-dump."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self._limit = limit
+        self._size = 0
+
+    def write(self, data: Any) -> int:
+        view = memoryview(data)
+        self._size += len(view)
+        if self._size > self._limit:
+            raise _SizeLimitExceeded()
+        return super().write(view)
+
+
+def _dumps_capped(value: Any, limit: int) -> bytes:
+    buf = _CappedWriter(limit)
+    try:
+        import dill  # type: ignore
+
+        dill.settings["recurse"] = True
+        dill.dump(value, buf, recurse=True)
+    except ImportError:
+        import pickle
+
+        pickle.dump(value, buf)
+    return buf.getvalue()
+
+
+def _loads(blob: bytes) -> Any:
+    try:
+        import dill  # type: ignore
+
+        return dill.loads(blob)
+    except ImportError:
+        import pickle
+
+        return pickle.loads(blob)
+
+
+def _revive_with_live_globals(
+    value: Any, live_ns: dict[str, Any], seen: dict[int, Any] | None = None
+) -> Any:
+    """Rebind restored `__main__` callables onto the live namespace.
+
+    Restored functions carry the snapshot's frozen globals; without this a
+    function would mutate a stale copy of module state. Containers are revived
+    in place with cycle memoization; functions get live globals plus a backfill
+    of globals the live namespace lacks. Closures/defaults keep their restored
+    values (documented limitation; dill-recurse already captures what they use).
+    """
+    if seen is None:
+        seen = {}
+    identity = id(value)
+    if identity in seen:
+        return seen[identity]
+    if isinstance(value, types.FunctionType):
+        for key, item in value.__globals__.items():
+            if key not in live_ns and not key.startswith("_") and key not in _SNAPSHOT_ALWAYS_SKIP:
+                live_ns[key] = item
+        revived = types.FunctionType(value.__code__, live_ns, value.__name__, value.__defaults__, value.__closure__)
+        revived.__dict__.update(value.__dict__)
+        revived.__module__ = "__main__"
+        seen[identity] = revived
+        return revived
+    if isinstance(value, list):
+        seen[identity] = value
+        for index, item in enumerate(value):
+            value[index] = _revive_with_live_globals(item, live_ns, seen)
+        return value
+    if isinstance(value, dict):
+        seen[identity] = value
+        for key in list(value.keys()):
+            value[key] = _revive_with_live_globals(value[key], live_ns, seen)
+        return value
+    if isinstance(value, set):
+        seen[identity] = value
+        items = list(value)
+        value.clear()
+        for item in items:
+            value.add(_revive_with_live_globals(item, live_ns, seen))
+        return value
+    return value
+
+
+def _snapshot_state(
+    ns: dict[str, Any],
+    path: str,
+    manifest_path: str,
+    max_bytes: int,
+    max_variable_bytes: int,
+    prune_oversized: bool,
+    committed: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    try:
+        if os.path.realpath(path) == os.path.realpath(manifest_path):
+            return {"error": "path and manifest_path must differ"}
+    except OSError:
+        pass
+    saved: list[str] = []
+    skipped: list[dict[str, str]] = []
+    oversized: set[str] = set()
+    total = 0
+    payload_tmp = f"{path}.tmp-{uuid.uuid4().hex}"
+    manifest_tmp = f"{manifest_path}.tmp-{uuid.uuid4().hex}"
+    try:
+        with open(payload_tmp, "wb") as fh:
+            fh.write(_SNAPSHOT_MAGIC)
+            for name in sorted(ns):
+                if name.startswith("_") or name in _SNAPSHOT_ALWAYS_SKIP:
+                    continue
+                try:
+                    blob = _dumps_capped(ns[name], max_variable_bytes)
+                except _SizeLimitExceeded:
+                    oversized.add(name)
+                    skipped.append({"name": name, "reason": f"serialized size exceeds {max_variable_bytes} bytes"})
+                    continue
+                except BaseException as exc:  # noqa: BLE001
+                    skipped.append({"name": name, "reason": f"{type(exc).__name__}: {_safe_str(exc)}"})
+                    continue
+                encoded_name = name.encode("utf-8")
+                overhead = 4 + len(encoded_name) + 8
+                if total + overhead + len(blob) > max_bytes:
+                    skipped.append({"name": name, "reason": f"total cap {max_bytes} bytes reached"})
+                    continue
+                fh.write(struct.pack("<I", len(encoded_name)))
+                fh.write(encoded_name)
+                fh.write(struct.pack("<Q", len(blob)))
+                fh.write(blob)
+                total += overhead + len(blob)
+                saved.append(name)
+        pruned = sorted(name for name in oversized if name in ns) if prune_oversized else []
+        manifest = {
+            "version": 1,
+            "savedNames": saved,
+            "skipped": skipped,
+            "pruned": pruned,
+            "bytes": total,
+            "pythonVersion": sys.version.split()[0],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(manifest_tmp, "w") as fh:
+            json.dump(manifest, fh)
+        # Commit: park SIGINT for the destructive replaces and consume it. The
+        # snapshot succeeded, so re-raising would make the host treat it as
+        # failed and discard the only copy of pruned names.
+        parked: list[int] = []
+        previous = signal.signal(signal.SIGINT, lambda signum, frame: parked.append(signum))
+        try:
+            os.replace(payload_tmp, path)
+            try:
+                os.replace(manifest_tmp, manifest_path)
+            except OSError as err:
+                return {"error": f"manifest write failed: {err}"}
+        finally:
+            signal.signal(signal.SIGINT, previous)
+        for name in pruned:
+            ns.pop(name, None)
+        result = {"saved": saved, "skipped": skipped, "pruned": pruned, "bytes": total}
+        if committed is not None:
+            committed.append(result)
+        return result
+    except BaseException as exc:  # noqa: BLE001
+        if not isinstance(exc, Exception):
+            raise
+        return {"error": f"snapshot failed: {exc}"}
+    finally:
+        for temporary in (payload_tmp, manifest_tmp):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def _read_snapshot_records(path: str, max_bytes: int, max_variable_bytes: int) -> list[tuple[str, bytes]]:
+    """Read per-name records with the same caps enforced before allocating."""
+    records: list[tuple[str, bytes]] = []
+    total = 0
+    with open(path, "rb") as fh:
+        if fh.read(len(_SNAPSHOT_MAGIC)) != _SNAPSHOT_MAGIC:
+            raise ValueError("unrecognized snapshot format")
+        while True:
+            header = fh.read(4)
+            if not header:
+                break
+            if len(header) < 4:
+                raise ValueError("truncated record header")
+            name_len = struct.unpack("<I", header)[0]
+            if name_len > max_bytes:
+                raise ValueError("record name exceeds the total cap")
+            name = fh.read(name_len).decode("utf-8")
+            length_bytes = fh.read(8)
+            if len(length_bytes) < 8:
+                raise ValueError("truncated record length")
+            blob_len = struct.unpack("<Q", length_bytes)[0]
+            if blob_len > max_variable_bytes:
+                raise ValueError("record exceeds the per-variable cap")
+            total += name_len + blob_len
+            if total > max_bytes:
+                raise ValueError("records exceed the total cap")
+            blob = fh.read(blob_len)
+            if len(blob) < blob_len:
+                raise ValueError("truncated record blob")
+            records.append((name, blob))
+    return records
+
+
+def _restore_state(ns: dict[str, Any], path: str) -> dict[str, Any]:
+    if not os.path.exists(path):
+        return {"restored": [], "failed": [], "reason": "snapshot not found"}
+    try:
+        records = _read_snapshot_records(path, _MAX_TOTAL_BYTES, _MAX_VARIABLE_BYTES)
+    except (OSError, ValueError) as err:
+        return {"error": f"snapshot read failed: {err}"}
+    staged: dict[str, Any] = {}
+    failed: list[dict[str, str]] = []
+    for name, blob in records:
+        if name.startswith("_") or name in _SNAPSHOT_ALWAYS_SKIP:
+            continue
+        try:
+            staged[name] = _loads(blob)
+        except BaseException as exc:  # noqa: BLE001
+            failed.append({"name": name, "reason": f"{type(exc).__name__}: {_safe_str(exc)}"})
+    restored: list[str] = []
+    for name, value in staged.items():
+        try:
+            ns[name] = _revive_with_live_globals(value, ns)
+            restored.append(name)
+        except BaseException as exc:  # noqa: BLE001
+            failed.append({"name": name, "reason": f"{type(exc).__name__}: {_safe_str(exc)}"})
+    return {"restored": sorted(restored), "failed": failed}
+
+
+def _flush_final_snapshot(ns: dict[str, Any]) -> None:
+    """EOF-only best-effort flush to the last host-committed target."""
+    target = _last_snapshot_target
+    if target is None:
+        return
+    try:
+        _snapshot_state(
+            ns,
+            target["path"],
+            target["manifest_path"],
+            target["max_bytes"],
+            target["max_variable_bytes"],
+            False,
+            None,
+        )
+    except BaseException:  # noqa: BLE001 - never block or crash the shutdown path
+        pass
+
+
+def _positive_int(value: Any, fallback: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback
+
+
+async def _handle_snapshot(req: dict[str, Any], ns: dict[str, Any]) -> None:
+    global _last_snapshot_target
+    rid = req["id"]
+    started = time.monotonic()
+    max_bytes = _positive_int(req.get("max_bytes"), _MAX_TOTAL_BYTES)
+    max_variable_bytes = _positive_int(req.get("max_variable_bytes"), _MAX_VARIABLE_BYTES)
+    committed: list[dict[str, Any]] = []
+    try:
+        outcome = _snapshot_state(
+            ns, req["path"], req["manifest_path"], max_bytes, max_variable_bytes,
+            req.get("prune_oversized") is True, committed,
+        )
+    finally:
+        _finish_request(rid)
+    duration = int((time.monotonic() - started) * 1000)
+    if committed:
+        _last_snapshot_target = {
+            "path": req["path"],
+            "manifest_path": req["manifest_path"],
+            "max_bytes": max_bytes,
+            "max_variable_bytes": max_variable_bytes,
+        }
+        _send({"event": "done", "id": rid, "status": "ok", "duration_ms": duration, **committed[0]})
+    else:
+        _send({
+            "event": "done", "id": rid, "status": "error", "duration_ms": duration,
+            "reason": outcome.get("error", "snapshot failed"),
+        })
+
+
+async def _handle_restore(req: dict[str, Any], ns: dict[str, Any]) -> None:
+    rid = req["id"]
+    started = time.monotonic()
+    try:
+        outcome = _restore_state(ns, req["path"])
+    finally:
+        _finish_request(rid)
+    duration = int((time.monotonic() - started) * 1000)
+    if "error" in outcome:
+        _send({"event": "done", "id": rid, "status": "error", "duration_ms": duration, "reason": outcome["error"]})
+    else:
+        _send({"event": "done", "id": rid, "status": "ok", "duration_ms": duration, **outcome})
+
+
+async def _handle_list_names(req: dict[str, Any], ns: dict[str, Any]) -> None:
+    rid = req["id"]
+    names = sorted(n for n in ns if not n.startswith("_") and n not in _SNAPSHOT_ALWAYS_SKIP)
+    _finish_request(rid)
+    _send({"event": "done", "id": rid, "status": "ok", "duration_ms": 0, "names": names})
+
+
+# ---------------------------------------------------------------------------
 # Reader thread and serve loop
 # ---------------------------------------------------------------------------
 
-_REQUIRED_STRING_FIELDS = {"execute": ("id", "code")}
+_REQUIRED_STRING_FIELDS = {
+    "execute": ("id", "code"),
+    "snapshot": ("id", "path", "manifest_path"),
+    "restore": ("id", "path"),
+    "list_names": ("id",),
+}
 
 
 def _handle_request_line(raw: bytes, queue: asyncio.Queue[dict[str, Any]]) -> None:
@@ -875,7 +1359,32 @@ def _handle_request_line(raw: bytes, queue: asyncio.Queue[dict[str, Any]]) -> No
         _loop.call_soon_threadsafe(queue.put_nowait, req)
         return
     if rtype != "execute":
-        _protocol_error(f"unknown request type: {rtype!r}")
+        required = _REQUIRED_STRING_FIELDS.get(rtype)
+        if required is None:
+            _protocol_error(f"unknown request type: {rtype!r}")
+            return
+        missing = [f for f in required if not isinstance(req.get(f), str)]
+        if missing:
+            _protocol_error(f"{rtype} request needs string fields: {', '.join(missing)}")
+            return
+        if rtype == "snapshot":
+            for field in ("max_bytes", "max_variable_bytes"):
+                value = req.get(field)
+                if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+                    _protocol_error(f"snapshot {field} must be a positive integer")
+                    return
+            if "prune_oversized" in req and not isinstance(req["prune_oversized"], bool):
+                _protocol_error("snapshot prune_oversized must be a boolean")
+                return
+        if rtype in ("snapshot", "restore"):
+            with _interrupt_lock:
+                duplicate = req["id"] in _inflight
+                if not duplicate:
+                    _inflight.add(req["id"])
+            if duplicate:
+                _protocol_error(f"duplicate in-flight request id: {req['id']!r}")
+                return
+        _loop.call_soon_threadsafe(queue.put_nowait, req)
         return
     missing = [f for f in _REQUIRED_STRING_FIELDS["execute"] if not isinstance(req.get(f), str)]
     if missing:
@@ -884,6 +1393,22 @@ def _handle_request_line(raw: bytes, queue: asyncio.Queue[dict[str, Any]]) -> No
     timeout_ms = req.get("timeout_ms")
     if timeout_ms is not None and (not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool)):
         _protocol_error("execute timeout_ms must be an integer")
+        return
+    background = req.get("background")
+    if background is not None and not isinstance(background, bool):
+        _protocol_error("execute background must be a boolean")
+        return
+    if background is True:
+        # Ack on the reader thread so the job id reaches the host even while
+        # the loop is busy running a synchronous job or cell. The job itself
+        # starts when the loop reaches this queued request.
+        job_id = uuid.uuid4().hex
+        with _interrupt_lock:
+            _inflight.add(job_id)
+            _jobs[job_id] = {"task": None, "interrupted": False}
+        _send({"event": "done", "id": req["id"], "status": "ok", "duration_ms": 0, "job_id": job_id})
+        req["job_id"] = job_id
+        _loop.call_soon_threadsafe(queue.put_nowait, req)
         return
     with _interrupt_lock:
         duplicate = req["id"] in _inflight
@@ -916,13 +1441,27 @@ async def _serve(queue: asyncio.Queue[dict[str, Any]], ns: dict[str, Any]) -> No
         req = await queue.get()
         rtype = req.get("type")
         if rtype == "shutdown":
+            if req.get("eof") and _last_snapshot_target is not None:
+                # The server died without a graceful dispose; flush the
+                # namespace to the last committed target before exit.
+                _flush_final_snapshot(ns)
             _kill_all_children()
             rid = req.get("id")
             if isinstance(rid, str):
                 _send({"event": "done", "id": rid, "status": "ok", "duration_ms": 0})
             return
         if rtype == "execute":
-            await _handle_execute(req, ns)
+            job_id = req.get("job_id")
+            if isinstance(job_id, str):
+                _start_job(job_id, req, ns)
+            else:
+                await _handle_execute(req, ns)
+        elif rtype == "snapshot":
+            await _handle_snapshot(req, ns)
+        elif rtype == "restore":
+            await _handle_restore(req, ns)
+        elif rtype == "list_names":
+            await _handle_list_names(req, ns)
         else:
             _protocol_error(f"unknown request type: {rtype!r}")
 
@@ -930,6 +1469,7 @@ async def _serve(queue: asyncio.Queue[dict[str, Any]], ns: dict[str, Any]) -> No
 def _make_namespace() -> dict[str, Any]:
     user_module = types.ModuleType("__main__")
     user_module.__dict__["__builtins__"] = builtins
+    user_module.__dict__["emit"] = emit
     sys.modules["__main__"] = user_module
     return user_module.__dict__
 

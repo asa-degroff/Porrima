@@ -1,15 +1,32 @@
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   disposeAllKernels,
+  disposeKernel,
   executeInKernel,
   isKernelWedge,
+  killKernelJob,
+  listKernelJobs,
   sweepKernelJournals,
+  tailKernelJob,
+  type KernelJobInfo,
   type KernelRunOutcome,
 } from "./python-kernel.js";
 import { listSupervised } from "./process-supervisor.js";
+
+// The manager consults the global system-pause setting before starting a
+// background job; mock it so tests never read or write the real settings DB.
+vi.mock("./system-pause.js", () => ({
+  getStoredSystemPauseState: async () => ({
+    active: false,
+    pending: false,
+    startedAt: null,
+    until: null,
+    indefinite: false,
+  }),
+}));
 
 const roots: string[] = [];
 let root: string;
@@ -35,7 +52,7 @@ afterEach(async () => {
 function run(
   chatId: string,
   code: string,
-  opts: { timeoutMs?: number; signal?: AbortSignal; onUpdate?: (text: string) => void } = {},
+  opts: { timeoutMs?: number; signal?: AbortSignal; onUpdate?: (text: string) => void; background?: boolean } = {},
 ): Promise<KernelRunOutcome> {
   return executeInKernel({
     chatId,
@@ -44,13 +61,30 @@ function run(
     timeoutMs: opts.timeoutMs ?? 30_000,
     signal: opts.signal,
     onUpdate: opts.onUpdate,
+    background: opts.background,
   });
+}
+
+async function waitForJob(
+  chatId: string,
+  pred: (jobs: KernelJobInfo[]) => boolean,
+  timeoutMs = 8000,
+): Promise<KernelJobInfo[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const jobs = listKernelJobs(chatId);
+    if (pred(jobs)) return jobs;
+    await delay(50);
+  }
+  throw new Error(`job did not settle: ${JSON.stringify(listKernelJobs(chatId))}`);
 }
 
 interface KernelOutcome {
   mode: "kernel";
   content: string;
   isError: boolean;
+  jobId?: string;
+  images?: Array<{ data: string; mimeType: string }>;
 }
 
 /** Narrow to the kernel outcome (throws on fallback). */
@@ -216,5 +250,110 @@ describe("python kernel manager", () => {
     expect(views[0]).toContain("one");
     // The final result (not the throttled live view) carries the full output.
     expect(outcome.content).toContain("two");
+  });
+
+  describe("background jobs", () => {
+    it("acks immediately and completes asynchronously", async () => {
+      const started = Date.now();
+      const ack = kernel(
+        await run("job-a", "import time\ntime.sleep(0.4)\nprint('job output')\n11", { background: true }),
+      );
+      expect(ack.jobId).toBeTruthy();
+      expect(Date.now() - started).toBeLessThan(300);
+
+      await waitForJob("job-a", (jobs) => jobs[0]?.status === "done");
+      const tail = tailKernelJob("job-a", ack.jobId!, 10);
+      expect(tail.found).toBe(true);
+      expect(tail.text).toContain("job output");
+    });
+
+    it("times out a background job", async () => {
+      const ack = kernel(await run("job-b", "import time\ntime.sleep(30)", { background: true, timeoutMs: 400 }));
+      expect(ack.jobId).toBeTruthy();
+      const jobs = await waitForJob("job-b", (entries) => entries[0]?.status !== "running");
+      expect(jobs[0].status).toBe("error");
+      expect(jobs[0].timedOut).toBe(true);
+    });
+
+    it("kills a background job without losing the kernel", async () => {
+      const ack = kernel(await run("job-c", "import time\ntime.sleep(30)", { background: true }));
+      expect(killKernelJob("job-c", ack.jobId!).ok).toBe(true);
+      await waitForJob("job-c", (entries) => entries[0]?.status !== "running");
+      const after = kernel(await run("job-c", "print('alive')"));
+      expect(after.isError).toBe(false);
+      expect(after.content).toContain("alive");
+    });
+
+    it("force-kills the kernel as a last resort", async () => {
+      const ack = kernel(await run("job-d", "import time\ntime.sleep(30)", { background: true }));
+      expect(killKernelJob("job-d", ack.jobId!, true).ok).toBe(true);
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && listKernelJobs("job-d").length > 0) await delay(50);
+      expect(listKernelJobs("job-d")).toHaveLength(0);
+      // A fresh kernel is created lazily for the next call.
+      const after = kernel(await run("job-d", "print('fresh')"));
+      expect(after.content).toContain("fresh");
+    });
+
+    it("enforces the per-kernel job cap", async () => {
+      for (let i = 0; i < 4; i++) {
+        const ack = kernel(await run("job-cap", "import time\ntime.sleep(20)", { background: true }));
+        expect(ack.jobId).toBeTruthy();
+      }
+      const fifth = kernel(await run("job-cap", "print('x')", { background: true }));
+      expect(fifth.isError).toBe(true);
+      expect(fifth.content).toContain("job limit");
+    });
+
+    it("enforces the box-wide job cap", async () => {
+      for (let i = 0; i < 4; i++) {
+        kernel(await run("job-box-a", "import time\ntime.sleep(20)", { background: true }));
+        kernel(await run("job-box-b", "import time\ntime.sleep(20)", { background: true }));
+      }
+      const ninth = kernel(await run("job-box-c", "print('x')", { background: true }));
+      expect(ninth.isError).toBe(true);
+      expect(ninth.content).toContain("job limit");
+    });
+  });
+
+  describe("snapshot / restore", () => {
+    it("snapshots on disposal and restores on the next kernel", async () => {
+      await run("p3-a", "x = 42\ndata = {'k': [1, 2, 3]}");
+      await delay(1800); // debounce
+      await disposeKernel("p3-a"); // flush, keep state for restore
+
+      const outcome = kernel(await run("p3-a", "print(x)\nprint(data['k'])"));
+      expect(outcome.content).toContain("restored");
+      expect(outcome.content).toContain("42");
+      expect(outcome.content).toContain("[1, 2, 3]");
+    });
+
+    it("does not overwrite a snapshot after a failed restore", async () => {
+      await run("p3-b", "x = 1");
+      await delay(1800);
+      const payload = join(root, "p3-b", "namespace.pkl");
+      await writeFile(payload, "garbage");
+
+      // Crash the kernel so no graceful flush rewrites the payload.
+      const entry = listSupervised().find((item) => item.key === "kernel:p3-b");
+      expect(entry).toBeTruthy();
+      process.kill(entry!.pid, "SIGKILL");
+      await delay(300);
+
+      const outcome = kernel(await run("p3-b", "y = 2"));
+      expect(outcome.content).toContain("restore failed");
+      await delay(1800);
+      expect(await readFile(payload, "utf8")).toBe("garbage");
+    });
+
+    it("attaches images from emit() display events", async () => {
+      const png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      const outcome = kernel(await run("p3-c", `emit({"image/png": "${png}"})`));
+      expect(outcome.isError).toBe(false);
+      expect(outcome.images).toHaveLength(1);
+      expect(outcome.images![0].mimeType).toBe("image/png");
+      expect(outcome.images![0].data).toBe(png);
+    });
   });
 });

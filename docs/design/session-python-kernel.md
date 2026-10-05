@@ -1,6 +1,6 @@
 # Session Python Kernel — Persistent REPL for `run_python`
 
-**Status**: P1 and P2.5 implemented (T3 + streaming, 2026-10-04/05): driver, manager, persistent namespace, top-level await, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + startup sweep, live tool-output streaming. P2–P4 are design.
+**Status**: P1–P3 implemented (T3, P2.5, T4; 2026-10-04/05): persistent kernel, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + sweep, live tool-output streaming, background jobs + `python_jobs`, snapshot/restore (debounced, EOF flush, freshness memo), MIME display → tool-result images. P4 (remote SSH kernels, kernel venv) is design.
 **Date**: 2026-10-03
 **Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
@@ -705,9 +705,9 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 | Phase | Scope | Rough size |
 |---|---|---|
 | P1 | Driver (`porrima_kernel.py`), manager/supervisor, persistent namespace, top-level await, interrupts L1/L2 (test matrix: C extension holding the GIL, `subprocess.wait`, tight `except`-swallowing loop, custom SIGINT handler, `except BaseException` swallow, parked interrupt, double interrupt, finishing/handoff windows), per-cell process-group patch + child journal, owner watchdog, wedge policy, lazy per-chat kernels, TTL/LRU, one-shot fallback, startup sweep, shutdown disposal (protocol `shutdown` first), tool description, tests | ~1,200–1,800 LOC TS+Py (10-04 review: 600–800 excluded the interrupt state machine and tests) |
-| P2 | Background jobs, `python_jobs`, output spill/paging, job caps (per-kernel + box-wide) | ~300–400 LOC |
+| P2 | Background jobs + `python_jobs` (shipped 2026-10-05): reader-thread acks so a busy loop cannot delay a job id, server-side registry/tail/kill from tagged events, job output spill via the shared capture, per-kernel 4 + box-wide 8 caps | done |
 | P2.5 | Streaming (shipped 2026-10-05): `onUpdate` in execute → `tool_execution_update` case + `tool_partial` SSE in all four `chat.ts` loops → client tool-card render. Live-only, never persisted | done (~200 LOC) |
-| P3 | Snapshot/restore + notices + expiry, revive-with-live-globals, read-side cap enforcement, commit shielding, failed-restore guard, EOF final flush, capture-freshness memo, request validation, MIME `display` (matplotlib → tool-result images via existing image pipeline) | ~400–600 LOC (10-04 review; third-review additions are small) |
+| P3 | Snapshot/restore + notices + expiry (shipped 2026-10-05): per-name records with read/write caps, commit shielding, failed-restore guard, EOF final flush, capture-freshness memo, revive-with-live-globals, `emit()` MIME display → tool-result images | done |
 | P4 (optional) | Remote SSH kernels, kernel venv provisioning | ~400–600 LOC |
 
 Each phase is independently shippable. P1 alone fixes iteration, failure
