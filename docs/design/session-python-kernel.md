@@ -154,8 +154,6 @@ unchanged in 1.0.
   have a remote cwd, and §4.10 covers when that changes.
 - A project/location change disposes the kernel; the next call lazily creates a
   new one and the tool result carries a one-line notice.
-- **System chats** keep the one-shot path (see open questions): they run
-  headless and frequently, and persistent kernels there are mostly waste.
 - **Idle TTL** 30 min (env/settings override), **max live kernels** 4, LRU
   eviction of idle kernels (never evict a kernel with a running cell or live
   background job).
@@ -637,7 +635,7 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 - `requirements`-style package installs remain the model's job through `bash`
   (same as today).
 
-### 4.10 Remote SSH (phase 4, optional)
+### 4.10 Remote SSH (phase 4)
 
 - Same driver and protocol over the existing SSH ControlMaster; the driver is
   staged once to `~/.porrima/kernel/porrima_kernel.py` on the host via the
@@ -718,14 +716,14 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   cells.
 - New `PYTHON_JOBS_TOOL` (list/status/tail/kill/force), added to
   `SEQUENTIAL_TOOL_NAMES` (it mutates jobs) and excluded from system chats
-  together with the stateless-mode decision (10-04 review).
+  (not yet implemented)
 - `run_python`'s schema keeps the 300 s `timeout` max for foreground calls;
   `background: true` allows up to 3600 s. TypeBox has no conditional max, so
   execute validates the combination and the description states it (10-04
   review).
-- System chats run one-shot; their result carries a one-line "stateless
-  mode in this chat type" prefix (the same notice pattern as restore) so a
-  headless automation model does not rely on persistence it will not get.
+- System chats currently run one-shot; their result carries a one-line "stateless
+  mode in this chat type" prefix (the same notice pattern as restore).
+  Pending further work on the system chat type. 
   The one-shot path keeps the adapter's internal options
   (`WorkspacePythonOptions` carries `maxBuffer`/`trusted`; `argv` is a
   per-call argument, not an option — 10-04 third review); internal callers
@@ -841,10 +839,10 @@ only the human-facing stream.
 Review inputs: a local prime-agent clone (`repl.md`, `repl.py`,
 `crates/pa-core/src/kernel/`), the installed
 `@earendil-works/pi-agent-core@0.85.1` (`executePreparedToolCall` passes
-`onUpdate` and emits `tool_execution_update`), and this box's Python (`python3`
-3.14.4, no `dill`). All 10-03 code claims re-verified; no drift found beyond
-the package rename (`pi-agent-core` → `@earendil-works/pi-agent-core`). The
-load-bearing corrections, all applied inline:
+`onUpdate` and emits `tool_execution_update`). 
+All 10-03 code claims re-verified; no drift found beyond the package rename 
+(`pi-agent-core` → `@earendil-works/pi-agent-core`). The load-bearing 
+corrections, all applied inline:
 
 1. Child containment settled: `setsid`'d children need a child journal, and
    the kernel group alone does not reap them (§4.7, §4.11).
