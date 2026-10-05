@@ -213,7 +213,7 @@ async function runPromptAutomation(
   const { getAgentTools } = await import("./agent-tools.js");
   const { estimateContextTokens, truncateBeforeSend } = await import("./compaction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
-  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext, commitMemoryDelta } = await import("./memory-context.js");
+  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, commitMemoryDelta } = await import("./memory-context.js");
   const { resolveCurrentMessageIndex } = await import("./current-message.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -289,7 +289,11 @@ async function runPromptAutomation(
       await saveChat(chat);
     }
 
-    resetMemoryContext(task.chatId);
+    // No hard memory-context reset: automation runs are follow-up messages in
+    // a persistent chat. The build hydrates the chat's durable frozen section
+    // (retained byte-exact) and delivers new memories as a delta, so the
+    // cached prefix survives. Resetting here re-rolled the section and forced
+    // a full re-prefill on the next request.
     const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,

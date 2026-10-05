@@ -44,7 +44,7 @@ produced incidents**:
 - **Frozen-prefix staleness.** After a headless mid-turn compaction, the
   runner reuses the same `systemPrompt` variable for the rest of the turn —
   the frozen memory prefix still describes the pre-compaction world. The HTTP
-  route rebuilds it (`resetMemoryContext` + `buildSplitAugmentedPrompt` +
+  route rebuilds it (`softResetMemoryContext` + `buildSplitAugmentedPrompt` +
   skill re-injection) on every compaction.
 
 The pattern: the two runners agree on *shape* (flag → cycle →
@@ -454,8 +454,8 @@ Each is a named change with a verification gate. None are silent.
 | D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | off by default; system-chat decides — **NOT LANDED** |
 
 D7's value is deliberately bounded: each synthesis or wake run rebuilds before
-its phases (`resetMemoryContext` — a hard reset, then a retrieval-skipped
-rebuild) at system-chat.ts:1050, 1398,
+its phases (a retrieval-skipped rebuild that retains the chat's existing frozen
+section) at system-chat.ts:1050, 1398,
 so frozen-prefix staleness only bites *within* a single long run that
 compacts mid-turn. "Off by default" stays correct; the hook exists for the day
 a long single phase shows it matters.

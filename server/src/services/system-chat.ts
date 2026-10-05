@@ -1039,13 +1039,13 @@ export async function runSystemSynthesis(options?: {
     await saveChat(chat);
 
     // Compose the synthesis prompt through the normal memory augmentation path.
-    // Phase instructions live in user-role tail messages; resetting here lets
-    // each scheduled run start with a clean context state instead of reusing
-    // a stale frozen set from a previous cycle. Memory retrieval is skipped —
-    // synthesis doesn't need a conversational search query, and passive recall
-    // during the run will supply relevant memories based on the agent's output.
-    const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
-    resetMemoryContext(SYSTEM_CHAT_ID);
+    // Phase instructions live in user-role tail messages. Like any follow-up
+    // message in a persistent chat, this run keeps the system chat's existing
+    // memory context (frozen section retained byte-exact) so the cached prefix
+    // survives between cycles. Memory retrieval is skipped — synthesis doesn't
+    // need a conversational search query, and passive recall during the run
+    // will supply relevant memories based on the agent's output.
+    const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
     const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,
@@ -1370,7 +1370,7 @@ export async function runWakeCycle(options?: {
     // Append wake cycle trigger
     const stamp = formatAgentClock(new Date());
     const triggerContent = `# Wake Cycle — ${stamp}\n\n${wakePromptFromSteps(options?.promptSteps)}`;
-    const { buildSplitAugmentedPrompt, resetMemoryContext, buildTimeAnchor } = await import("./memory-context.js");
+    const { buildSplitAugmentedPrompt, buildTimeAnchor } = await import("./memory-context.js");
     const triggerMsg: ChatMessage = {
       role: "user",
       content: triggerContent,
@@ -1385,12 +1385,12 @@ export async function runWakeCycle(options?: {
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    // Build prompt through the normal memory augmentation path. Reset per wake
-    // cycle so retrieval follows the current trigger and recent system context.
-    // Skip memory retrieval — the wake trigger is not a conversational query,
-    // and passive recall during the run will supply relevant memories based
-    // on the agent's own output.
-    resetMemoryContext(SYSTEM_CHAT_ID);
+    // Build prompt through the normal memory augmentation path. Like any
+    // follow-up message in a persistent chat, the wake cycle keeps the system
+    // chat's existing memory context (frozen section retained byte-exact) so
+    // the cached prefix survives between cycles. Skip memory retrieval — the
+    // wake trigger is not a conversational query, and passive recall during
+    // the run will supply relevant memories based on the agent's own output.
     const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,

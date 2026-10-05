@@ -516,15 +516,29 @@ describe("memory context persistence (service)", () => {
     expect(mocks.searchMemories).not.toHaveBeenCalled(); // still Case 2 — no re-roll
   });
 
-  it("skipMemoryRetrieval does not hydrate (no row read, no section in prompt)", async () => {
+  it("skipMemoryRetrieval retains the hydrated frozen section byte-exact (no re-roll)", async () => {
     const rows = new Map<string, EmulatedRow>();
     seedRow(rows);
     const { mod, mocks } = await loadMemoryContext(rows);
 
     const result = await build(mod, firstTurnMsgs, { skipMemoryRetrieval: true });
-    expect(mocks.getMemoryContextState).not.toHaveBeenCalled();
-    expect(result.systemPrompt).not.toContain(SECTION);
+    expect(mocks.getMemoryContextState).toHaveBeenCalledWith("chat-1");
+    expect(result.systemPrompt.endsWith(SECTION)).toBe(true);
     expect(mocks.searchMemories).not.toHaveBeenCalled();
+    expect(mocks.upsertMemoryContextState).not.toHaveBeenCalled(); // retained, never written
+    expect(rows.get("chat-1")!.dirty).toBe(false);
+  });
+
+  it("skipMemoryRetrieval establishes nothing when no row exists", async () => {
+    const rows = new Map<string, EmulatedRow>();
+    const { mod, mocks } = await loadMemoryContext(rows);
+
+    const result = await build(mod, firstTurnMsgs, { skipMemoryRetrieval: true });
+    expect(result.systemPrompt).not.toContain(SECTION);
+    expect(result.systemPrompt).not.toContain("Frozen topic memory.");
+    expect(mocks.searchMemories).not.toHaveBeenCalled();
+    expect(mocks.upsertMemoryContextState).not.toHaveBeenCalled();
+    expect(rows.has("chat-1")).toBe(false);
   });
 
   it("hydrate failure warns and falls back to Case 1 (never worse than pre-fix)", async () => {

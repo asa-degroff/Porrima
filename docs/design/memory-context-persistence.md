@@ -237,13 +237,13 @@ last retrieval for this chat" — a property of (chat, corpus), not of process
 lifetime. Worst case after restore is one extra Case 3 delta at the tail —
 prefix-safe.
 
-**Reset — `resetMemoryContext` (L161).** Also `DELETE` the row. Compaction,
-cache-warm, system-chat zeitgeist rewrites, chat deletion, and automation
-starts all funnel through this function (chat.ts ×6, cache-warm.ts:294,
-system-chat.ts ×2, chat-deletion.ts:24, automation-runner.ts:214) — one place
-to keep the durable state honest. The automation-runner reset is by design:
-its trigger message is synthetic, so the next *real* turn's re-roll is owed,
-exactly like compaction (and identical to today's in-memory semantics).
+**Reset — `resetMemoryContext` (L161).** Also `DELETE` the row. Only chat
+deletion (chat-deletion.ts) and cache-warm preparation (cache-warm.ts:294)
+funnel through this function — one place to keep the durable state honest.
+**Revised (10-05):** compaction switched to `softResetMemoryContext` (Fix B,
+§10.4), and the system-chat ×2 / automation-runner resets were removed —
+synthesis, wake, cross-chat, and automation runs are follow-up messages in a
+persistent chat and retain the frozen section (see §10.4 revision note).
 
 **Non-write sites (deliberate, v1.1):**
 
@@ -275,11 +275,11 @@ stays valid.)
 | Case 1 retrieval fails | No state established → no row → next turn retries. Unchanged (L1040). |
 | Fresh chat, restart before first turn | No row → Case 1. Correct. |
 | Frozen memory deleted/superseded while frozen | **No validation on hydrate.** Current Case 2 semantics already tolerate stale frozen content until compaction; changing that would be a separate behavior change with its own prefix cost. Log a warning when `frozen_ids` don't resolve against the corpus (observability only). |
-| `skipMemoryRetrieval` (automation starts) | No state touched, no row written. Unchanged (L1011). |
+| `skipMemoryRetrieval` (automation/system runs) | Hydrates the row when the Map is empty and retains the frozen section byte-exact in the prompt. Never establishes or writes state. |
 | Chat deletion | `resetMemoryContext` already called (chat-deletion.ts:24) → row deleted. |
 | Concurrent writers | N/A — single porrima process under systemd. If that ever changes, this table needs a write lock; noted, not solved. |
-| System chat | Same table, `SYSTEM_CHAT_ID`. Zeitgeist rewrites reset → re-roll owed (stablePrefix changes anyway). |
-| Automation run in a chat that has a row | `resetMemoryContext` deletes the row by design; next real turn re-rolls (owed — synthetic trigger, same as today's in-memory semantics). |
+| System chat | Same table, `SYSTEM_CHAT_ID`. Synthesis/wake runs are follow-up messages: they retain the frozen section and never reset. |
+| Automation run in a chat that has a row | No reset; the run hydrates the frozen section and delivers new memories as a delta, so the target's cached prefix survives. |
 | Snapshot restore (agent-snapshots.ts:270) | `resetAllMemoryContextCaches` clears the Map only; rows time-travel with the memory DB file and are consistent with the restored corpus. No row wipe. |
 | Restart after a passive-recall injection | `markMemoryDeltaInjected` persists `delta_ids` (write point 5) → no double injection on the next Case 3. |
 | Global corpus change after restart, before any turn | `invalidateAllMemoriesCaches` bulk-updates rows (write point 4) → later hydration restores `dirty=true` → Case 3 delta, prefix-safe. |
@@ -519,12 +519,20 @@ that run inside or immediately after a compaction flow where the conversation
 history is rewritten but the chat continues. Keep hard `resetMemoryContext`
 (row delete + full re-roll) for:
 
-- **Chat deletion** (chat-deletion.ts:24) — nothing left to preserve.
-- **Zeitgeist rewrites** (system-chat.ts ×2) — `stablePrefix` changes anyway;
-  re-roll is subsumed by the owed rewrite cost.
-- **Automation starts** (automation-runner.ts:214) — synthetic trigger message;
-  next real turn's roll uses a real conversational query and is owed (doc §4.2).
-- Project workspace change path (if reachable) — stablePrefix rebuild owed.
+- **Chat deletion** (chat-deletion.ts) — nothing left to preserve.
+- **Cache-warm preparation** (cache-warm.ts) — the warm owns the rebuilt
+  prefix; Phase 2 (§4.4) proposes dropping this too.
+
+**Revised (10-05):** the original list kept hard resets for "zeitgeist
+rewrites" (a mislabel — those were the system-chat automation entry points,
+system-chat.ts ×2) and for automation starts. Both are wrong under follow-up
+semantics: every automation run, cross-chat wake, synthesis cycle, and wake
+cycle is a message in a persistent chat whose cached prefix must survive.
+Resetting deleted the row; the late-freeze guard then locked an empty section
+and rewrote the head of a warm prefix — reproduced live as a ~154k-token full
+re-prefill. The `skipMemoryRetrieval` build now hydrates and retains the
+frozen section byte-exact instead. Workspace changes only clear derived
+caches (`invalidateAllCaches`), never the frozen state.
 
 Effect: post-compaction turns become Case 3 delta builds against compacted
 history. Section string survives compaction byte-exact → prefix holds from

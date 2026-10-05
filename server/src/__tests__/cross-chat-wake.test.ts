@@ -9,6 +9,7 @@ const captured: {
   splitPromptArgs?: any[];
   toolArgs?: any[];
   commitMemoryDelta?: any;
+  resetMemoryContext?: any;
 } = {};
 
 // Configurable build result so the delta-delivery test can exercise a
@@ -75,7 +76,9 @@ async function loadModules(homeDir: string) {
   }));
   vi.doMock("../services/memory-context.js", () => {
     const commitMemoryDelta = vi.fn();
+    const resetMemoryContext = vi.fn();
     captured.commitMemoryDelta = commitMemoryDelta;
+    captured.resetMemoryContext = resetMemoryContext;
     return {
       buildSplitAugmentedPrompt: vi.fn(async (...args: any[]) => {
         captured.splitPromptArgs = args;
@@ -83,7 +86,7 @@ async function loadModules(homeDir: string) {
       }),
       commitMemoryDelta,
       invalidateAllStablePrefixCaches: vi.fn(),
-      resetMemoryContext: vi.fn(),
+      resetMemoryContext,
       buildTimeAnchor: vi.fn(() => "\n\n[time: test]"),
     };
   });
@@ -144,6 +147,7 @@ afterEach(async () => {
   captured.splitPromptArgs = undefined;
   captured.toolArgs = undefined;
   captured.commitMemoryDelta = undefined;
+  captured.resetMemoryContext = undefined;
   deltaConfig.memoriesMessage = "";
   deltaConfig.newMemoryIds = [];
 });
@@ -201,6 +205,10 @@ describe("cross-chat wake turns", () => {
       expect(captured.splitPromptArgs?.[6]).toBeUndefined();
       expect(captured.toolArgs?.[4]).toBe("agent");
       expect(captured.headless?.passiveMemoryRecall?.chatType).toBe("agent");
+
+      // Follow-up semantics: the run keeps the target's memory context intact —
+      // no hard reset (the build hydrates and retains the frozen section).
+      expect(captured.resetMemoryContext).not.toHaveBeenCalled();
 
       // No title refresh, no model rewrite, no trigger row.
       expect(target?.title).toBe("Target Chat");

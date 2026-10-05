@@ -88,7 +88,7 @@ After the primitive returns, the HTTP route does:
 9. Reinject skills + setCachedAugmentedPrompt()
 ```
 
-A **hard** `resetMemoryContext()` (which clears the frozen set entirely and forces a Case 1 freeze) is no longer used after compaction. It survives only where a re-roll is genuinely owed: chat deletion, automation start, zeitgeist rewrite, and cache-warm preparation. Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 frozen-set sequence was observed in one night — which broke the prefix at the section boundary and orphaned the KV pool each time.
+A **hard** `resetMemoryContext()` (which clears the frozen set entirely and forces a Case 1 freeze) is no longer used after compaction. It survives only for chat deletion and cache-warm preparation; automation and system-chat runs retain the frozen set as follow-up messages in a persistent chat. Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 frozen-set sequence was observed in one night — which broke the prefix at the section boundary and orphaned the KV pool each time.
 
 > ### Delta delivery across paths
 >

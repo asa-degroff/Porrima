@@ -129,7 +129,7 @@ To maximize KV cache hit rates with llama.cpp's longest-common-prefix caching, m
 - `invalidateMemoriesCache(chatId)` — marks dirty after extraction, so the next turn takes the delta path. Falls through to a durable write if the in-memory Map has no entry yet, so a post-restart invalidation before first hydration is not lost
 - `invalidateAllMemoriesCaches()` — marks every cached chat dirty *and* issues a bulk `UPDATE` so a corpus-wide change after a restart still lands on chats that have never been hydrated
 - `softResetMemoryContext(chatId)` — **the post-compaction path.** Keeps `frozenIds` and the frozen section byte-exact, clears `deltaIds`, and sets `dirty` so the next build is a Case 3 delta. Re-rolling the frozen set at compaction was pure nondeterminism (a 5 → 4 → 0 → 3 sequence was observed in one night) that broke the prefix at the section boundary and manufactured a pool orphan each time
-- `resetMemoryContext(chatId)` — hard reset (in-memory Map *and* the durable row), used only where a re-roll is genuinely owed: chat deletion, zeitgeist rewrites, automation starts, and workspace changes
+- `resetMemoryContext(chatId)` — hard reset (in-memory Map *and* the durable row), reserved for chat deletion and cache-warm preparation. Automation and system-chat runs are follow-up messages in a persistent chat: they retain the frozen set (synthesis/wake build with `skipMemoryRetrieval`, which hydrates and keeps the section byte-exact) instead of resetting it
 
 **Error handling:**
 - If delta retrieval throws, `dirty` deliberately stays `true` so the next turn retries with a different query string. The frozen section is preserved in the meantime, so a failure is prefix-safe either way

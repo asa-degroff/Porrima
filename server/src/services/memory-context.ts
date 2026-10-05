@@ -250,11 +250,13 @@ export function invalidateAllMemoriesCaches(): void {
 }
 
 /**
- * Full reset of memory context for a chat — used after compaction.
- * Forces a complete re-retrieval with all memories going into the system prompt.
- * The durable row is deleted with the Map entry — the next turn re-rolls from
- * scratch and re-persists (the re-roll is owed: the whole prefix is being
- * rebuilt anyway).
+ * Hard reset of memory context for a chat — deletes the Map entry and the
+ * durable row; the next build re-rolls from scratch. Reserved for cases where
+ * the prefix is being rebuilt anyway and no cached history depends on the old
+ * section: chat deletion (nothing to preserve) and cache-warm preparation
+ * (the warm owns the rebuilt prefix). Automations and system-chat runs must
+ * NOT use this — they are follow-up messages in a persistent chat and their
+ * cache behavior depends on keeping the existing frozen section byte-exact.
  */
 export function resetMemoryContext(chatId: string): void {
   contextState.delete(chatId);
@@ -275,9 +277,9 @@ export function resetMemoryContext(chatId: string): void {
  * build runs Case 3: new memories — including anything preCompactionFlush
  * just extracted — arrive as delta rows against the compacted history.
  *
- * Hard `resetMemoryContext` stays for chat deletion (nothing to preserve),
- * zeitgeist rewrites (stablePrefix changes anyway), automation starts
- * (synthetic trigger — next real turn's roll is owed), and workspace changes.
+ * Hard `resetMemoryContext` is reserved for chat deletion and cache-warm
+ * preparation. Automation and system-chat runs are follow-up messages in a
+ * persistent chat: they retain the frozen set and cached prefix instead.
  */
 export function softResetMemoryContext(chatId: string): void {
   // Never resurrect state from nothing: only soften what already exists.
@@ -1177,25 +1179,30 @@ async function buildSplitAugmentedPromptInner(
     zeitgeistHint = getZeitgeistArchiveInstruction();
   } catch { /* zeitgeist not available */ }
 
-  // When skipMemoryRetrieval is set (automation starts), there's no meaningful
-  // user query to search against — the trigger message is synthetic and any
-  // prior user messages in the chat are from a different conversational context.
-  // Passive recall during the agent run will supply relevant memories based
-  // on the agent's own output trajectory.
+  // Automations and system-chat runs are follow-up messages in a persistent
+  // chat: there's no meaningful user query to search against (the trigger is
+  // synthetic), but the chat's existing memory context must survive. Retain
+  // the hydrated frozen section byte-exact; never establish state here — a
+  // first-run freeze would re-roll against a non-conversational query. Passive
+  // recall during the run supplies anything newer.
   if (options?.skipMemoryRetrieval) {
-    log(`[memory-context] chat=${chatId} skipping retrieval (automation start)`);
-    // Don't establish any state — the next real user turn should do a full
-    // retrieval with an actual conversational query.
-    return { systemPrompt: stablePrefix, memoriesMessage: "", newMemoryIds: [], combined: stablePrefix };
+    if (chatId && !contextState.has(chatId)) {
+      hydrateContextState(chatId);
+    }
+    const retainedSection = chatId ? contextState.get(chatId)?.frozenMemoriesSection ?? "" : "";
+    const systemPrompt = `${stablePrefix}${retainedSection}`;
+    log(
+      `[memory-context] chat=${chatId} skipping retrieval (automation/system run), ` +
+      `section ${retainedSection.length} ch retained`
+    );
+    return { systemPrompt, memoriesMessage: "", newMemoryIds: [], combined: systemPrompt };
   }
 
   // Hydrate from the durable row when this process has no in-memory state for
   // the chat (fresh process after a porrima restart, or a reset that never got
   // a follow-up turn). Process death must be indistinguishable from nothing —
   // the frozen section the server's KV was built against must come back
-  // byte-exact, not re-rolled. Deliberately NOT done in the skipMemoryRetrieval
-  // path above: that prompt contains no frozen section, so hydrated state
-  // would wrongly suppress passive-recall injections.
+  // byte-exact, not re-rolled.
   if (chatId && !contextState.has(chatId)) {
     hydrateContextState(chatId);
   }
