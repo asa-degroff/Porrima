@@ -856,10 +856,18 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...BASH_TOOL,
     label: "bash",
-    execute: async (_id, params, signal) => {
+    execute: async (_id, params, signal, onUpdate) => {
       const workspace = await workspacePromise;
       return withMutationLock(`workspace:${workspace.label}`, async () =>
-        wrapResult(await workspace.bash(params as Record<string, any>, signal), "bash"));
+        wrapResult(
+          await workspace.bash(params as Record<string, any>, signal, {
+            chatId,
+            onUpdate: onUpdate
+              ? (view) => onUpdate({ content: [{ type: "text", text: view.text }], details: {} })
+              : undefined,
+          }),
+          "bash",
+        ));
     },
   });
 

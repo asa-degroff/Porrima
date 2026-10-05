@@ -255,10 +255,12 @@ export function createOutputCapture(opts: {
    `retain: "tail"`); spill starts at first truncation and includes the
    pre-truncation prefix; spill writes pause the pipes on backpressure (pi:
    8 MiB high-water) and finish before settle; `onUpdate` emits bounded view
-   changes and late updates after settle are dropped. Consider **head+tail**
-   instead of tail-only — prime-agent keeps the first 512 KiB plus a rolling
-   tail because usage errors print at the *start* of output; a deliberate
-   divergence from pi parity, decided at T1 (10-04 review).
+   changes and late updates after settle are dropped. **T1 decision:
+   tail-only.** Head+tail was considered — prime-agent keeps a head because
+   usage errors print at the *start* of output — but usage errors are short
+   and never truncate, while long-output cases (build/test logs) put their
+   errors at the end. The full stream is one `read_file` away via the spill,
+   and tail-only keeps the footer wording and window semantics byte-stable.
 5. **Merged output**: bash merges stdout+stderr untagged, in arrival order
    (today's behavior).
 6. **Windows**: pi used `taskkill /T /F`; Porrima is Linux/systemd-first.

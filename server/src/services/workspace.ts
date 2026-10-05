@@ -1,15 +1,20 @@
 import { execFile } from "child_process";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { applyShellOutputUpdate, BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-core";
-import type { ShellOutputView } from "@earendil-works/pi-agent-core";
+import { randomUUID } from "crypto";
 import { access, mkdir, readFile, readdir, writeFile, stat, unlink } from "fs/promises";
 import { constants } from "fs";
 import { dirname, join, resolve } from "path";
-import { homedir } from "os";
+import { constants as osConstants, homedir } from "os";
 import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
+import { createOutputCapture, type CaptureSnapshot } from "./output-capture.js";
+import { spawnSupervised } from "./process-supervisor.js";
+import {
+  DEFAULT_SPILL_MAX_BYTES,
+  createSpillPath,
+  formatSpillFooter,
+} from "./tool-output-store.js";
 
 const HOME = homedir();
 const SSH_MUX_DIR = appDataPath("ssh-mux");
@@ -77,13 +82,20 @@ export interface WorkspacePythonOptions {
   maxBuffer?: number;
 }
 
+export interface WorkspaceBashOptions {
+  /** Chat key for the shared spill store; omit to skip spilling. */
+  chatId?: string;
+  /** Incremental bounded view updates for live tool rendering. */
+  onUpdate?: (view: CaptureSnapshot) => void;
+}
+
 export interface WorkspaceAdapter {
   readonly label: string;
   readFile(args: Record<string, any>, opts?: WorkspaceReadFileOptions, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   listFiles(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
-  bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
+  bash(args: Record<string, any>, signal?: AbortSignal, opts?: WorkspaceBashOptions): Promise<{ content: string; isError: boolean }>;
   runPython(args: Record<string, any>, signal?: AbortSignal, opts?: WorkspacePythonOptions): Promise<{ content: string; isError: boolean }>;
   readAgentsMd(): Promise<string | null>;
   validateRoot(): Promise<WorkspaceValidationResult>;
@@ -151,18 +163,45 @@ function formatReadContent(content: string, args: Record<string, any>, opts: Wor
 // `timeout: 86400` from pinning a turn for a day; 600s covers builds/tests.
 const BASH_TIMEOUT_MAX_SEC = 600;
 
+// SIGTERM grace before the group is SIGKILLed on timeout/abort. Short because
+// the caller is already at its deadline; long enough for a trap-based cleanup.
+const BASH_KILL_GRACE_MS = 500;
+
+/**
+ * Non-interactive environment hardening (prime-agent's list). Agent commands
+ * have no usable stdin, so an editor, credential prompt, or pager can only
+ * hang until the timeout. Inline assignments in the command still win.
+ */
+const BASH_ENV_HARDENING: NodeJS.ProcessEnv = {
+  NO_COLOR: "1",
+  TERM: "dumb",
+  CLICOLOR: "0",
+  FORCE_COLOR: "0",
+  GIT_EDITOR: "true",
+  GIT_SEQUENCE_EDITOR: "true",
+  GIT_TERMINAL_PROMPTS: "0",
+  GIT_ASKPASS: "true",
+  SSH_ASKPASS_REQUIRE: "never",
+  EDITOR: "true",
+  VISUAL: "true",
+  PAGER: "cat",
+  GIT_PAGER: "cat",
+  DEBIAN_FRONTEND: "noninteractive",
+};
+
 /**
  * Execute a bash command and capture its output.
  *
- * Process lifecycle (spawn, abort, timeout kill, completion detection) AND
- * bounded output capture (rolling tail window, spill file, truncation
- * metadata) are delegated to pi-agent-core's NodeExecutionEnv, which spawns
- * the shell detached (own process group), resolves on process exit with a
- * short post-exit stdio grace instead of waiting for pipe EOF, and kills the
- * whole process group on timeout/abort. A command that daemonizes a
- * grandchild (e.g. `cd dir && server & disown`) therefore can no longer hang
- * the tool forever. Output text arrives via onUpdate as incremental bounded
- * view changes; stdout and stderr are merged untagged by upstream.
+ * Process lifecycle and capture run on the shared supervisor + capture stack
+ * (docs/design/pi-1.0-migration.md §3): the shell spawns detached in its own
+ * process group, timeout/abort kill the whole group (TERM, grace, KILL), and
+ * `exited` resolves on process exit plus a short stdio grace instead of pipe
+ * EOF — so a daemonized grandchild (`cd dir && server & disown`) cannot hang
+ * the tool. stdout and stderr are merged untagged in arrival order.
+ *
+ * Once output crosses the in-memory window the full stream spills to the
+ * shared tool-output store and the result footer points at `read_file`.
+ * `opts.onUpdate` receives incremental bounded views for live rendering.
  *
  * `cwd` is the working directory; `timeoutSec` must already be clamped.
  */
@@ -171,50 +210,87 @@ async function runStreamingBash(
   cwd: string,
   timeoutSec: number,
   signal?: AbortSignal,
+  opts: WorkspaceBashOptions = {},
 ): Promise<{ content: string; isError: boolean }> {
   if (signal?.aborted) {
     return { content: "Command aborted", isError: true };
   }
 
-  // Passing an explicit shellPath skips upstream's per-call bash discovery and
-  // keeps the `-c` argv transport the previous local spawn used.
-  const env = new NodeExecutionEnv({ cwd, shellPath: "/bin/bash" });
-  const context = signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT;
+  const spillPath = opts.chatId
+    ? createSpillPath(opts.chatId, "bash", randomUUID().slice(0, 8))
+    : undefined;
 
-  let view: ShellOutputView | undefined;
-  const result = await env.exec(command, {
-    timeout: timeoutSec,
-    capture: {
-      limits: { maxBytes: BASH_OUTPUT_WINDOW_BYTES, maxLines: BASH_OUTPUT_MAX_LINES, retain: "tail" },
-      spill: true,
-    },
-    onUpdate: (update) => {
-      view = applyShellOutputUpdate(view, update);
-    },
-  }, context);
+  const proc = spawnSupervised({
+    command: "/bin/bash",
+    args: ["-c", command],
+    cwd,
+    env: { ...process.env, ...BASH_ENV_HARDENING },
+    key: `bash:${opts.chatId ?? "internal"}`,
+    killGraceMs: BASH_KILL_GRACE_MS,
+  });
+  // `-c` commands get no stdin: reads must see EOF instead of hanging.
+  proc.endStdin();
 
-  const tail = view?.text ?? "";
-  let content = tail;
-  if (result.ok && result.value.spillPath) {
-    const footer =
-      `\n\n[Output exceeded ${BASH_OUTPUT_WINDOW_BYTES / 1024}KB. The full output (${(result.value.truncation.totalBytes / 1024).toFixed(0)}KB) was saved to: ${result.value.spillPath}\n` +
-      `Use read_file(path="${result.value.spillPath}", offset=N) to read more. The tail is shown above.]`;
-    content = tail + footer;
+  const capture = createOutputCapture({
+    limits: {
+      maxBytes: BASH_OUTPUT_WINDOW_BYTES,
+      maxLines: BASH_OUTPUT_MAX_LINES,
+      retain: "tail",
+    },
+    spill: spillPath ? { path: spillPath, maxBytes: DEFAULT_SPILL_MAX_BYTES } : undefined,
+    onUpdate: opts.onUpdate,
+    onBackpressure: (paused) => {
+      for (const stream of [proc.stdout, proc.stderr]) {
+        if (!stream) continue;
+        if (paused) stream.pause();
+        else stream.resume();
+      }
+    },
+  });
+  proc.stdout?.on("data", (chunk: Buffer) => capture.push(chunk));
+  proc.stderr?.on("data", (chunk: Buffer) => capture.push(chunk));
+
+  let timedOut = false;
+  let aborted = false;
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    void proc.kill();
+  }, timeoutSec * 1000);
+  const onAbort = () => {
+    aborted = true;
+    void proc.kill();
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort(); // aborted between the check above and attach
+
+  const exit = await proc.exited;
+  clearTimeout(timeoutTimer);
+  signal?.removeEventListener("abort", onAbort);
+  const captured = await capture.finish();
+
+  let content = captured.text;
+  if (captured.spillPath) {
+    content += formatSpillFooter({
+      path: captured.spillPath,
+      totalBytes: captured.truncation.totalBytes,
+      windowBytes: BASH_OUTPUT_WINDOW_BYTES,
+      capped: captured.capped,
+      capBytes: DEFAULT_SPILL_MAX_BYTES,
+    });
   }
 
-  if (!result.ok) {
-    if (result.error.code === "timeout") {
-      return { content: `Command timed out after ${timeoutSec}s\n${content || "(no output)"}`, isError: true };
-    }
-    if (result.error.code === "aborted" || signal?.aborted) {
-      return { content: `Command aborted\n${content || "(no output)"}`.trimEnd(), isError: true };
-    }
-    // spawn_error / shell_unavailable / callback_error — nothing ran or
-    // nothing was captured; surface the message itself.
-    return { content: result.error.message || "Command failed to start", isError: true };
+  if (exit.error) {
+    return { content: exit.error.message || "Command failed to start", isError: true };
   }
-
-  if (result.value.exitCode !== 0) {
+  if (timedOut) {
+    return { content: `Command timed out after ${timeoutSec}s\n${content || "(no output)"}`, isError: true };
+  }
+  if (aborted || signal?.aborted) {
+    return { content: `Command aborted\n${content || "(no output)"}`.trimEnd(), isError: true };
+  }
+  // A process killed by a signal has no exit code; map it to 128 + signal.
+  const exitCode = exit.code ?? (exit.signal ? 128 + (osConstants.signals[exit.signal] ?? 0) : 1);
+  if (exitCode !== 0) {
     return { content: content || "(no output)", isError: true };
   }
   return { content: content || "(no output)", isError: false };
@@ -289,12 +365,12 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     }
   }
 
-  async bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
+  async bash(args: Record<string, any>, signal?: AbortSignal, opts: WorkspaceBashOptions = {}): Promise<{ content: string; isError: boolean }> {
     const requested = typeof args.timeout === "number" && Number.isFinite(args.timeout) && args.timeout > 0
       ? args.timeout
       : 30;
     const timeout = Math.min(BASH_TIMEOUT_MAX_SEC, Math.max(1, Math.floor(requested)));
-    return runStreamingBash(args.command, this.root, timeout, signal);
+    return runStreamingBash(args.command, this.root, timeout, signal, opts);
   }
 
   async runPython(args: Record<string, any>, signal?: AbortSignal, opts: WorkspacePythonOptions = {}): Promise<{ content: string; isError: boolean }> {
@@ -872,7 +948,7 @@ else:
     return result.isError ? { content: `Error listing remote files: ${result.content}`, isError: true } : result;
   }
 
-  async bash(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
+  async bash(args: Record<string, any>, signal?: AbortSignal, _opts?: WorkspaceBashOptions): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.allowBash) {
       return { content: "Bash is disabled for this SSH connection", isError: true };
     }

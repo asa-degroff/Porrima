@@ -5,8 +5,10 @@ import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-e
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
 import { isSystemPauseActive } from "./system-pause.js";
+import { sweepExpired } from "./tool-output-store.js";
 
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const TOOL_OUTPUT_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 let delayedExtractionCheckRunning = false;
 const delayedExtractionsInProgress = new Set<string>();
@@ -235,5 +237,16 @@ export function startScheduler(): void {
   // arrives to trigger the steal-on-acquire path.
   setInterval(reapStaleTurnLease, 60_000);
 
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min)");
+  // Sweep expired tool-output spill files (24 h TTL, newest-64 per chat) on
+  // startup and hourly. The store is shared by bash capture and, later,
+  // kernel cell output.
+  const sweepToolOutput = () => {
+    void sweepExpired().catch((error) => {
+      console.warn("[scheduler] tool-output sweep failed:", error);
+    });
+  };
+  sweepToolOutput();
+  setInterval(sweepToolOutput, TOOL_OUTPUT_SWEEP_INTERVAL_MS);
+
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min, tool-output sweep every 1h)");
 }

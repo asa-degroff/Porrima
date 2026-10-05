@@ -4,6 +4,7 @@ import { endLiveStream, liveStreams } from "./live-streams.js";
 import { cancelImmediateExtractionQueue, markChatInactive } from "./memory-extraction.js";
 import * as messageQueue from "./message-queue.js";
 import { resetMemoryContext } from "./memory-context.js";
+import { cleanupChat } from "./tool-output-store.js";
 
 /**
  * Clear process-local work that can continue after the chat row is deleted.
@@ -25,4 +26,5 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   resetMemoryContext(chatId);
   markChatInactive(chatId);
   await closeBrowserSession(chatId).catch(() => {});
+  await cleanupChat(chatId).catch(() => {});
 }
