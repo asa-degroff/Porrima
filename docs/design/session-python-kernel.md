@@ -5,6 +5,7 @@
 **Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
 **Reviewed**: 10-04 — third review against the pi 1.0.2 tarballs + upstream changelog, the Porrima codebase, and a fresh prime-agent read (teardown order, snapshot scheduling, protocol hardening); revisions marked inline and summarized in §10.
+**Reviewed**: 10-04 — fourth review: live verification of the T3 build in production (sequential-call state sharing, failure survival, L1 interrupt on a subprocess-blocked cell via the timeout path); two live findings added to §4.5 (external-SIGINT scoping, L1 child-orphan semantics; the child-orphan rule was implemented 10-05).
 **Related**: [pi-1.0-migration.md](pi-1.0-migration.md) — pi-agent-core 1.0 removed the node/harness surface that `runStreamingBash` uses; the forced bash rewrite and this plan share one process supervisor and one tool-output store (§2.3, §4.2, §4.6, §4.11).
 
 ## 1. Problem
@@ -305,7 +306,13 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
     which CPython delivers as `KeyboardInterrupt` in the running cell (cells
     run on the event loop's main thread; task identification targets the right
     frame — prime-agent's mechanism). The driver re-installs its SIGINT handler
-    before every request, since a cell can rebind it (10-04 review). Reliable
+    before every request, since a cell can rebind it (10-04 review). The
+    handler is scoped: it acts only when the target matches the active cell,
+    which is set exclusively by the protocol-frame path (`_request_interrupt`)
+    — so a bare host-level `kill -INT` on the kernel's pid is **ignored by
+    design** (stray signals cannot inject an interrupt, verified live 10-04);
+    the supervisor's TERM→KILL kill path is unaffected (different signals).
+    Reliable
     for pure-Python code, including `subprocess.wait()` loops; delayed until a
     C call returns while a C extension holds the GIL; **swallowed by a cell
     that overwrites the SIGINT handler or catches
@@ -321,6 +328,30 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
     deliver. Cancellation raises `CancelledError` (a `BaseException`), so
     `except Exception` and `except KeyboardInterrupt` cannot swallow it; only
     an explicit `except BaseException` at an await point can.
+  - **L1 child reaping** (10-04 live review; implemented 10-05; live-verified
+    10-05 — a cell interrupted at 8 s with a `sleep 30` child: the journal
+    close record landed ~0.3 s after the interrupt, not after the child's 30
+    s). L1 usually settles the cell (the `KeyboardInterrupt` breaks a
+    synchronous `subprocess.wait()`), and the L2 escalation scheduled by the
+    same interrupt then finds the cell already settled and is a no-op — so
+    the original driver left the cell's tracked children running (verified
+    live: a `sleep 30` child completed its full duration after the cell was
+    interrupted). Implemented rule: when the cell **dies to the interrupt**
+    (an interrupt-driven `KeyboardInterrupt`/cancel propagates, so its
+    cleanup never ran), the driver reaps its child groups right after `done`
+    (TERM → 0.5 s grace → KILL, journal marked inactive on confirmed death);
+    when the cell **handles** the interrupt and completes, its children are
+    left alone (the cooperative case), and the L2 escalation still reaps them
+    if the cell runs past the grace window. (L2 double-reaping is idempotent:
+    `_kill_cell_children` pops the cell's entries under the lock, so the
+    post-`done` reap after an L2 escalation is a no-op.) Children remain
+    introspectable in the namespace — `proc.poll()` reports **liveness**
+    (None vs non-None) — but note: a driver-reaped child reads as exit code
+    **0** from `poll()`, because CPython's `_try_wait` synthesizes
+    returncode 0 when `waitpid` hits ECHILD (the child was already reaped by
+    the driver's reap thread), so a TERM-killed child is indistinguishable
+    from an rc-0 exit via `poll()` alone; the journal close record is the
+    authoritative death signal (10-05 live review).
   - **L3 kernel kill** — process-group kill plus journaled child groups
     (§4.11). State loss; the last snapshot is the recovery point. Never
     automatic.

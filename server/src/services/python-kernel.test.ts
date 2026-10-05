@@ -148,6 +148,52 @@ describe("python kernel manager", () => {
     expect(() => process.kill(childPid, 0)).toThrow();
   });
 
+  it("reaps child groups when a cell dies to an interrupt", async () => {
+    const outcome = kernel(
+      await run(
+        "chat-j",
+        "import subprocess, time\np = subprocess.Popen(['sleep','30'])\nprint('child', p.pid)\ntime.sleep(30)",
+        { timeoutMs: 500 },
+      ),
+    );
+    expect(outcome.isError).toBe(true);
+    const childPid = Number(/child (\d+)/.exec(outcome.content)![1]);
+    // Give the reap thread its TERM grace.
+    await delay(900);
+    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+
+  it("leaves child groups when the cell handles the interrupt", async () => {
+    const outcome = kernel(
+      await run(
+        "chat-k",
+        "import subprocess, time\np = subprocess.Popen(['sleep','30'])\nprint('child', p.pid)\ntry:\n    time.sleep(30)\nexcept KeyboardInterrupt:\n    pass\nprint('handled')",
+        { timeoutMs: 500 },
+      ),
+    );
+    const childPid = Number(/child (\d+)/.exec(outcome.content)![1]);
+    expect(outcome.content).toContain("handled");
+    // Past the L2 grace: a settled cell must not trigger the escalation.
+    await delay(400);
+    expect(() => process.kill(childPid, 0)).not.toThrow();
+    try {
+      process.kill(childPid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  });
+
+  it("ignores external SIGINT; only protocol interrupts cancel cells", async () => {
+    const pending = run("chat-l", "import time\ntime.sleep(0.6)\nprint('done')");
+    await delay(250);
+    const entry = listSupervised().find((item) => item.key === "kernel:chat-l");
+    expect(entry).toBeTruthy();
+    process.kill(entry!.pid, "SIGINT");
+    const outcome = kernel(await pending);
+    expect(outcome.isError).toBe(false);
+    expect(outcome.content).toContain("done");
+  });
+
   it("streams bounded view updates", async () => {
     const views: string[] = [];
     const outcome = kernel(

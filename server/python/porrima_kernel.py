@@ -544,7 +544,9 @@ async def _run_codes(codes: list[types.CodeType], ns: dict[str, Any]) -> Any:
     return value
 
 
-async def _run_guarded(task: asyncio.Task[Any], rid: str) -> tuple[str, Any, dict[str, Any] | None]:
+async def _run_guarded(task: asyncio.Task[Any], rid: str) -> tuple[str, Any, dict[str, Any] | None, bool]:
+    """Await a request task; returns (status, value, error event or None,
+    interrupted_by_task)."""
     with _interrupt_lock:
         _active["interrupted"] = False
         _active["rid"] = rid
@@ -554,13 +556,16 @@ async def _run_guarded(task: asyncio.Task[Any], rid: str) -> tuple[str, Any, dic
             task.cancel()
     try:
         value = await task
-        return "ok", value, None
+        return "ok", value, None, False
     except asyncio.CancelledError as exc:
         if _active["interrupted"]:
-            return "error", None, _interrupt_event(rid, exc)
-        return "error", None, _error_event(rid, exc)
+            return "error", None, _interrupt_event(rid, exc), True
+        return "error", None, _error_event(rid, exc), False
     except BaseException as exc:  # noqa: BLE001 - every cell failure becomes an error event
-        return "error", None, _error_event(rid, exc)
+        # Only an interrupt-driven KeyboardInterrupt counts: a user-raised one
+        # (with no pending interrupt) must not trigger child reaping.
+        interrupted = bool(_active["interrupted"]) and isinstance(exc, KeyboardInterrupt)
+        return "error", None, _error_event(rid, exc), interrupted
     finally:
         with _interrupt_lock:
             global _finishing_rid
@@ -594,7 +599,7 @@ async def _handle_execute(req: dict[str, Any], ns: dict[str, Any]) -> None:
         codes, has_trailing = _compile_cell(req["code"], filename)
         assert _loop is not None
         task = _loop.create_task(_run_codes(codes, ns))
-        status, value, error = await _run_guarded(task, cell_id)
+        status, value, error, interrupted_by_task = await _run_guarded(task, cell_id)
         result_text: str | None = None
         try:
             if _consume_handoff_interrupt() and status == "ok":
@@ -622,6 +627,13 @@ async def _handle_execute(req: dict[str, Any], ns: dict[str, Any]) -> None:
             _timed_out.discard(cell_id)
             done["timed_out"] = True
         _send(done)
+        if interrupted_by_task and status == "error":
+            # The cell died to the interrupt, so its cleanup never ran: reap
+            # the child groups it left behind. A cell that handled the
+            # interrupt and completed keeps its children (cooperative case),
+            # and the L2 escalation still reaps them if it runs past the
+            # grace window.
+            _kill_cell_children(cell_id)
     finally:
         if timeout_handle is not None:
             timeout_handle.cancel()
