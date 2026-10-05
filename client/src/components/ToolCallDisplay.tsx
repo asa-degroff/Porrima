@@ -48,6 +48,9 @@ interface Props {
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   liveStatus?: ToolStatus;
+  /** Live-only in-flight output for a running tool (bash, run_python). The
+   *  final tool result replaces it once it arrives; never persisted. */
+  partialText?: string;
   /** This is a live preview: the model is still streaming the call's
    *  arguments. The body shows the growing argument content instead of
    *  waiting for execution. */
@@ -56,7 +59,7 @@ interface Props {
   previewRaw?: string;
 }
 
-export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, previewRaw }: Props) {
+export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText, isPreview, previewRaw }: Props) {
   const [expanded, setExpanded] = useState(false);
   // Lightbox for tool-returned images (screenshots, generated art…).
   // Self-owned so every ToolCallDisplay usage site gets the viewer without
@@ -156,6 +159,15 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, isPreview, p
             {preview.label}
           </div>
           <AutoFollowPre text={preview.text} />
+        </div>
+      )}
+
+      {/* Live output for a running tool (bash, run_python). Live-only: the
+          final tool result replaces it as soon as it arrives. */}
+      {!isPreview && status === "running" && partialText && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="text-[10px] text-white/30 mb-1.5 font-medium">Output</div>
+          <AutoFollowPre text={partialText} />
         </div>
       )}
 

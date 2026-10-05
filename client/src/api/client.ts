@@ -260,6 +260,9 @@ export interface StreamCallbacks {
   onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
+  /** Live-only in-flight output for a running tool (bash, run_python).
+   *  Never persisted; the final tool result carries the full output. */
+  onToolPartial?: (info: { toolCallId: string; name: string; text: string }) => void;
   /** A tool call began composing: the model is streaming its arguments.
    *  `index` is the call's position in the assistant message; `id` arrives
    *  with the first chunk from the provider (llama.cpp includes it). */
@@ -666,6 +669,9 @@ function processSSEEvent(
       break;
     case "tool_status":
       callbacks.onToolStatus?.(data);
+      break;
+    case "tool_partial":
+      callbacks.onToolPartial?.(data);
       break;
     case "tool_call_start":
       callbacks.onToolCallStart?.(data);

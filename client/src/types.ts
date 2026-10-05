@@ -94,6 +94,10 @@ export interface MessageSegment {
   visual?: InlineVisual;
   /** Client-only: live tool status during streaming (not persisted) */
   liveStatus?: { name: string; status: "running" | "done" | "error"; result?: string };
+  /** Client-only: latest in-flight output for a running tool (bash,
+   *  run_python). Live-only — the final tool result replaces it and nothing
+   *  here is persisted or replayed. */
+  partialText?: string;
   /** Client-only: this is a live preview of a tool call whose arguments are
    *  still streaming. Replaced in place by the authoritative segment at
    *  execution start; never persisted. */

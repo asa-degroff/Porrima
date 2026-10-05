@@ -1,6 +1,6 @@
 # Session Python Kernel — Persistent REPL for `run_python`
 
-**Status**: P1 implemented (T3, 2026-10-04): driver, manager, persistent namespace, top-level await, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + startup sweep. P2–P4 are design.
+**Status**: P1 and P2.5 implemented (T3 + streaming, 2026-10-04/05): driver, manager, persistent namespace, top-level await, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + startup sweep, live tool-output streaming. P2–P4 are design.
 **Date**: 2026-10-03
 **Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
@@ -387,29 +387,22 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   but vanish on replay (KV digest divergence — "Tool Result Wire Shape" in
   `docs/tool-system.md`); `cellId`/`duration`/`truncated` metadata therefore
   goes in `details` or an in-text footer, never as content items.
-- **Streaming** (P2.5, spike-first): the plumbing exists only halfway —
-  verified 10-03 and re-verified on pi-agent-core 1.0.2 (the `execute(…,
-  onUpdate)` signature and `tool_execution_update` event are unchanged;
-  [pi-1.0-migration.md](pi-1.0-migration.md) §2.5). The tool wrappers thread
-  `onUpdate` (`agent-tools.ts:409`),
-  and pi-agent-core's `executePreparedToolCall` calls
-  `tool.execute(id, args, signal, onUpdate)` and emits a `tool_execution_update`
-  AgentEvent per update — but no current tool's execute declares `onUpdate`
-  (bash's `onUpdate` at `workspace.ts:191` is pi-agent-core's `env.exec`
-  shell-output callback building the bounded view — a different callback),
-  and `chat.ts` has no `tool_execution_update` case: in-flight updates are
-  dropped server-side. So streaming is three seams: (a) `run_python`'s execute
-  accepts `onUpdate` and calls it on kernel stdout events, (b) `chat.ts` gains
-  the event case plus an SSE event — in **all four** event switch sites
-  (~2552, ~3105, ~3246, ~3659), not one (10-04 review), (c) the client renders
-  on the tool card.
+- **Streaming** (P2.5, shipped 2026-10-05): live in-flight output renders on
+  the tool card while `bash` or `run_python` runs. The path is: the tool's
+  execute calls `onUpdate` (bash through the capture's throttled views,
+  `run_python` through the kernel manager's 100 ms-throttled stdout/stderr
+  view); pi-agent-core emits `tool_execution_update`; `chat.ts` forwards it
+  as a `tool_partial` SSE event from **all four** event loops (main,
+  continuation, stranded recovery, mid-turn resume); the client attaches the
+  latest view to the matching `tool_call` segment and `ToolCallDisplay`
+  renders it with an auto-following tail.
   Constraint: updates are **live-only, never persisted** — the final tool
-  result already carries the full output, and persisting partials would break
-  the wire/replay byte-stability above. Partials also never enter the
-  model's context (the model sees only the final result), so streaming is UX
-  for a human watching a cell run, not a model capability. First P2.5 item: a
-  30-minute end-to-end spike; streaming is separable from the functional P2
-  (jobs, spill, caps).
+  result carries the full output, and persisting partials would break the
+  wire/replay byte-stability above. Partials never enter the model's context,
+  so streaming is UX for a human watching a tool run, not a model capability;
+  a reconnect or replay shows the final result only. The update throttle is
+  load-bearing: pi-agent-core queues one promise per update until the tool
+  settles, so a fast-printing cell must not emit one per stdout frame.
 - **Retention**: full output spills to the shared tool-output store
   (`~/.porrima/tool-output/<chatId>/py-<cellId>.txt`;
   [pi-1.0-migration.md](pi-1.0-migration.md) §4) — the same store the bash
@@ -713,7 +706,7 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 |---|---|---|
 | P1 | Driver (`porrima_kernel.py`), manager/supervisor, persistent namespace, top-level await, interrupts L1/L2 (test matrix: C extension holding the GIL, `subprocess.wait`, tight `except`-swallowing loop, custom SIGINT handler, `except BaseException` swallow, parked interrupt, double interrupt, finishing/handoff windows), per-cell process-group patch + child journal, owner watchdog, wedge policy, lazy per-chat kernels, TTL/LRU, one-shot fallback, startup sweep, shutdown disposal (protocol `shutdown` first), tool description, tests | ~1,200–1,800 LOC TS+Py (10-04 review: 600–800 excluded the interrupt state machine and tests) |
 | P2 | Background jobs, `python_jobs`, output spill/paging, job caps (per-kernel + box-wide) | ~300–400 LOC |
-| P2.5 | Streaming spike (spike-first, §4.6): `onUpdate` in execute → `tool_execution_update` case + SSE event in `chat.ts` → client tool-card render. Live-only, never persisted. Ship if clean, else drop | ~100–200 LOC |
+| P2.5 | Streaming (shipped 2026-10-05): `onUpdate` in execute → `tool_execution_update` case + `tool_partial` SSE in all four `chat.ts` loops → client tool-card render. Live-only, never persisted | done (~200 LOC) |
 | P3 | Snapshot/restore + notices + expiry, revive-with-live-globals, read-side cap enforcement, commit shielding, failed-restore guard, EOF final flush, capture-freshness memo, request validation, MIME `display` (matplotlib → tool-result images via existing image pipeline) | ~400–600 LOC (10-04 review; third-review additions are small) |
 | P4 (optional) | Remote SSH kernels, kernel venv provisioning | ~400–600 LOC |
 

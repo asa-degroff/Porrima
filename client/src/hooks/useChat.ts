@@ -831,6 +831,22 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setActiveTools([...bg.tools]);
         }
       },
+      onToolPartial: (info) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        // Live-only: attach the latest view to the matching tool_call segment.
+        // The final tool result replaces it; nothing is persisted or replayed.
+        for (const seg of bg.segments) {
+          if (seg.type === "tool_call" && seg.toolCall?.id === info.toolCallId) {
+            seg.partialText = info.text;
+            break;
+          }
+        }
+        if (activeChatIdRef.current === streamChatId && rafRef.current === null) {
+          streamingContentRef.current = bg.content;
+          rafRef.current = requestAnimationFrame(flushStreamingContent);
+        }
+      },
       onToolCallStart: (info) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;

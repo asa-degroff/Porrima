@@ -1199,6 +1199,7 @@ function SegmentRenderer({
           toolCall={segment.toolCall}
           toolResult={matchingResult?.toolResult}
           liveStatus={segment.liveStatus}
+          partialText={segment.partialText}
           isPreview={segment._preview || undefined}
           previewRaw={segment.previewRaw}
         />

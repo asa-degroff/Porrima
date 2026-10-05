@@ -34,6 +34,10 @@ const SHUTDOWN_WAIT_MS = 3000;
 const REAPER_INTERVAL_MS = 60_000;
 const KERNEL_KILL_GRACE_MS = 1000;
 const STDERR_RING_BYTES = 64 * 1024;
+/** Live view updates are throttled: pi-agent-core queues one promise per
+ *  update until the tool settles, so a fast-printing cell must not emit one
+ *  per stdout frame. The final result carries the full output regardless. */
+const UPDATE_THROTTLE_MS = 100;
 
 export type KernelFallbackReason = "capacity" | "spawn-failed" | "wedge" | "broken";
 
@@ -69,6 +73,9 @@ interface PendingExecution {
   aborted: boolean;
   settled: boolean;
   deadline: NodeJS.Timeout;
+  lastUpdateAt: number;
+  pendingUpdateText: string | null;
+  updateTimer?: NodeJS.Timeout;
   signal?: AbortSignal;
   onAbort?: () => void;
   onUpdate?: (text: string) => void;
@@ -147,6 +154,31 @@ function outputView(instance: KernelInstance, pending: PendingExecution): string
   return parts.join("\n");
 }
 
+function schedulePendingUpdate(pending: PendingExecution): void {
+  if (!pending.onUpdate) return;
+  const elapsed = Date.now() - pending.lastUpdateAt;
+  if (elapsed >= UPDATE_THROTTLE_MS) {
+    pending.lastUpdateAt = Date.now();
+    pending.onUpdate(pending.pendingUpdateText ?? "");
+    return;
+  }
+  if (pending.updateTimer) return;
+  pending.updateTimer = setTimeout(() => {
+    pending.updateTimer = undefined;
+    if (pending.settled) return;
+    pending.lastUpdateAt = Date.now();
+    if (pending.pendingUpdateText !== null) pending.onUpdate?.(pending.pendingUpdateText);
+  }, UPDATE_THROTTLE_MS - elapsed);
+  pending.updateTimer.unref?.();
+}
+
+function clearPendingUpdate(pending: PendingExecution): void {
+  if (pending.updateTimer) {
+    clearTimeout(pending.updateTimer);
+    pending.updateTimer = undefined;
+  }
+}
+
 function formatError(error: KernelErrorEvent, output: string): string {
   const traceback = (error.traceback ?? []).join("").trimEnd();
   const head = traceback || `${error.ename}: ${error.evalue}`;
@@ -160,6 +192,7 @@ function settlePending(
 ): void {
   if (pending.settled) return;
   pending.settled = true;
+  clearPendingUpdate(pending);
   clearTimeout(pending.deadline);
   pending.signal?.removeEventListener("abort", pending.onAbort!);
   instance.pending.delete(pending.id);
@@ -192,6 +225,7 @@ function settlePending(
 function failPending(instance: KernelInstance, pending: PendingExecution, message: string): void {
   if (pending.settled) return;
   pending.settled = true;
+  clearPendingUpdate(pending);
   clearTimeout(pending.deadline);
   pending.signal?.removeEventListener("abort", pending.onAbort!);
   instance.pending.delete(pending.id);
@@ -207,6 +241,7 @@ function failPending(instance: KernelInstance, pending: PendingExecution, messag
 function wedgePending(instance: KernelInstance, pending: PendingExecution): void {
   if (pending.settled) return;
   pending.settled = true;
+  clearPendingUpdate(pending);
   clearTimeout(pending.deadline);
   pending.signal?.removeEventListener("abort", pending.onAbort!);
   instance.pending.delete(pending.id);
@@ -241,7 +276,8 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
       if (!pending) return;
       const text = typeof event.text === "string" ? event.text : "";
       (event.event === "stdout" ? pending.stdout : pending.stderr).push(text);
-      pending.onUpdate?.(outputView(instance, pending));
+      pending.pendingUpdateText = outputView(instance, pending);
+      schedulePendingUpdate(pending);
       return;
     }
     case "result": {
@@ -441,6 +477,8 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       aborted: false,
       settled: false,
       deadline: setTimeout(() => {}, 0),
+      lastUpdateAt: 0,
+      pendingUpdateText: null,
       signal,
       onUpdate: opts.onUpdate,
       resolve: (outcome) => {

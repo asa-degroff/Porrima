@@ -194,6 +194,18 @@ describe("python kernel manager", () => {
     expect(outcome.content).toContain("done");
   });
 
+  it("throttles live view updates for a fast-printing cell", async () => {
+    const views: string[] = [];
+    const outcome = kernel(
+      await run("chat-m", "for i in range(500):\n    print(i)", { onUpdate: (text) => views.push(text) }),
+    );
+    expect(outcome.isError).toBe(false);
+    // 500 prints must not produce 500 update callbacks; the final result
+    // carries the full output regardless.
+    expect(views.length).toBeGreaterThan(0);
+    expect(views.length).toBeLessThan(50);
+  });
+
   it("streams bounded view updates", async () => {
     const views: string[] = [];
     const outcome = kernel(
@@ -201,6 +213,8 @@ describe("python kernel manager", () => {
     );
     expect(outcome.isError).toBe(false);
     expect(views.length).toBeGreaterThan(0);
-    expect(views[views.length - 1]).toContain("two");
+    expect(views[0]).toContain("one");
+    // The final result (not the throttled live view) carries the full output.
+    expect(outcome.content).toContain("two");
   });
 });

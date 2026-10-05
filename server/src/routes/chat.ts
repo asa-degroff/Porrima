@@ -861,6 +861,33 @@ function imageExtensionForMimeType(mimeType: string | undefined): string {
 }
 
 /**
+ * Text from a streaming tool update (`tool_execution_update.partialResult`),
+ * joined across text items. Live-only: never persisted, never enters the
+ * model's context — the final tool result carries the full output.
+ */
+function partialToolText(partialResult: any): string {
+  const content = partialResult?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item: any) => item?.type === "text" && typeof item.text === "string")
+    .map((item: any) => item.text)
+    .join("");
+}
+
+/** Forward one in-flight tool update to the client (live-only SSE event). */
+function forwardToolPartial(
+  res: Response,
+  event: { toolCallId: string; toolName: string; partialResult: any },
+): void {
+  const text = partialToolText(event.partialResult);
+  if (!text) return;
+  res.write(
+    `event: tool_partial\ndata: ${JSON.stringify({ toolCallId: event.toolCallId, name: event.toolName, text })}\n\n`,
+  );
+}
+
+/**
  * Build the persisted ChatToolResult from a tool_execution_end event.
  *
  * The ONE constructor for results entering state.allToolResults — every loop
@@ -2616,6 +2643,11 @@ async function handleChatStream(
           break;
         }
 
+        case "tool_execution_update": {
+          forwardToolPartial(res, event);
+          break;
+        }
+
         case "tool_execution_end": {
           console.log(`[chat] tool_execution_end: ${event.toolName} (toolCallId: ${event.toolCallId}, isError: ${event.isError})`);
 
@@ -3127,6 +3159,8 @@ async function handleChatStream(
               res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
             }
+          } else if (event.type === "tool_execution_update") {
+            forwardToolPartial(res, event);
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
               const toolResult = await buildPersistedToolResult(event);
@@ -3268,6 +3302,8 @@ async function handleChatStream(
               res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
             }
+          } else if (event.type === "tool_execution_update") {
+            forwardToolPartial(res, event);
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
               const toolResult = await buildPersistedToolResult(event);
@@ -3675,6 +3711,8 @@ async function handleChatStream(
               res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
             }
+          } else if (event.type === "tool_execution_update") {
+            forwardToolPartial(res, event);
           } else if (event.type === "tool_execution_end") {
             if (event.toolName !== "ask_user") {
               const toolResult = await buildPersistedToolResult(event);
