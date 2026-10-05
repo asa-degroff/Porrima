@@ -5,8 +5,13 @@
 **Scope**: `@earendil-works/pi-agent-core` 0.85.1 → 1.0.2 and
 `@earendil-works/pi-ai` 0.85.1 → 1.0.2.
 **Related**: [session-python-kernel.md](session-python-kernel.md) — the kernel
-plan consumes the process supervisor (§4) and spill store (§5) defined here.
+plan consumes the process supervisor (§3) and spill store (§4) defined here.
 This doc is the upstream migration; the kernel doc is the downstream feature.
+**Reviewed**: 10-04 — verified against the 1.0.2 tarballs and the upstream
+changelog (harness removal, `finishTurn`, `TranscriptContext`, the `onUpdate`
+seam, version coupling) and the Porrima codebase; line-reference drift fixed
+(§2.2, §2.3, §5.2) and prime-agent manager-study hardening folded in
+(§3.3, §3.5). Summarized in §9.
 
 ## 1. Why this is one migration
 
@@ -85,8 +90,8 @@ Porrima sites:
 - `chat-turn-runner.ts:663-…` (`shouldStopForMidTurnCompaction`) and `:760`
   (config).
 - The HTTP chat route does **not** use the hook: it detects
-  `stopReason === "length"` in its event handler (`chat.ts:2932,2937`) and
-  exits via `stopAgentLoop()` (`chat.ts:3171` and similar).
+  `stopReason === "length"` in its event handler (`chat.ts:2895`, re-checked at
+  `:2907`) and exits via `stopAgentLoop()` (`chat.ts:3171` and similar).
 
 ### 2.3 pi-ai 1.0 — `Context` → `TranscriptContext`
 
@@ -98,9 +103,9 @@ no longer has `systemPrompt`; the loop calls
 injects tool-state changes from `context.tools` as system messages itself.
 
 Migration helpers shipped in pi-ai 1.0: `createInitialSystemMessage`,
-`normalizeContext`, `getCurrentSystemPrompt`, `getCurrentTools`,
-`getSystemMessageText`, `collapseSystemMessages`, `withoutInitialSystemMessage`,
-`resolveTranscript`.
+`getInitialSystemMessage` (used in §5.2), `normalizeContext`,
+`getCurrentSystemPrompt`, `getCurrentTools`, `getSystemMessageText`,
+`collapseSystemMessages`, `withoutInitialSystemMessage`, `resolveTranscript`.
 
 Porrima sites:
 
@@ -111,7 +116,7 @@ Porrima sites:
 | `openai-compat-provider.ts:398-399` | reads `context.tools` |
 | `openai-compat-provider.ts:1155,1162-1169` | `transformMessagesForProvider(context.messages)` + `context.systemPrompt` |
 | `llm-provider.ts:33-50` | `streamSimple(model, context: Context, …)` |
-| `llm-stream.ts:58` | `StreamFn` context type |
+| `llm-stream.ts:3,44-47` | `StreamFn` context type |
 
 Invariant: whatever turns Porrima's stored system prompt into the leading
 system message must run identically on the live wire, replay
@@ -237,12 +242,24 @@ export function createOutputCapture(opts: {
    `retain: "tail"`); spill starts at first truncation and includes the
    pre-truncation prefix; spill writes pause the pipes on backpressure (pi:
    8 MiB high-water) and finish before settle; `onUpdate` emits bounded view
-   changes and late updates after settle are dropped.
+   changes and late updates after settle are dropped. Consider **head+tail**
+   instead of tail-only — prime-agent keeps the first 512 KiB plus a rolling
+   tail because usage errors print at the *start* of output; a deliberate
+   divergence from pi parity, decided at T1 (10-04 review).
 5. **Merged output**: bash merges stdout+stderr untagged, in arrival order
    (today's behavior).
 6. **Windows**: pi used `taskkill /T /F`; Porrima is Linux/systemd-first.
    Keep a single `process.platform === "win32"` branch or document
    Linux-only — a decision, not a blocker.
+7. **Oversized-stream poisoning** (10-04 review, prime-agent
+   `startup.rs:313-341`): when a stream exceeds its frame/window bound, the
+   reader keeps draining and discarding while the failure is raised — a child
+   blocked writing into a full pipe must not deadlock the kill/repair path.
+   Applies to the kernel's protocol reader and to any bounded capture.
+8. **Per-child teardown isolation** (10-04 review): every supervised child's
+   kill is individually bounded; one wedged child never blocks the others or
+   `killAllSupervised()` (prime-agent's per-kernel failure isolation,
+   `live_kernels.rs`).
 
 ### 3.4 Consumers
 
@@ -273,14 +290,15 @@ export function createOutputCapture(opts: {
   `agent-tools.ts` (unchanged).
 - **Add prime-agent's non-interactive environment hardening**
   (`_child_env`, `bash.py:1051-1078`): `NO_COLOR=1`, `TERM=dumb`,
-  `GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`, `GIT_TERMINAL_PROMPTS=0`,
-  `GIT_ASKPASS=true`, `SSH_ASKPASS_REQUIRE=never`, `EDITOR=true`,
-  `VISUAL=true`, `PAGER=cat`, `GIT_PAGER=cat`,
-  `DEBIAN_FRONTEND=noninteractive`. pi's env is a bare `process.env` spread
-  (`getShellEnv`), so agent commands today can hang on an editor, credential
-  prompt, or pager until the timeout. Inline assignments in the command still
-  win. This is a deliberate output change (no ANSI colors) — check it against
-  a few common commands.
+  `CLICOLOR=0`, `FORCE_COLOR=0`, `GIT_EDITOR=true`,
+  `GIT_SEQUENCE_EDITOR=true`, `GIT_TERMINAL_PROMPTS=0`, `GIT_ASKPASS=true`,
+  `SSH_ASKPASS_REQUIRE=never`, `EDITOR=true`, `VISUAL=true`, `PAGER=cat`,
+  `GIT_PAGER=cat`, `DEBIAN_FRONTEND=noninteractive` — prime-agent's full
+  14-variable list. pi's env is a bare `process.env` spread (`getShellEnv`),
+  so agent commands today can hang on an editor, credential prompt, or pager
+  until the timeout. Inline assignments in the command still win. This is a
+  deliberate output change (no ANSI colors) — check it against a few common
+  commands.
 - **Add a `cmd & disown` parity test** to pin the exit-vs-EOF behavior
   (§3.3.2) and to decide whether the fence upgrade (§3.3.3) is needed.
 
@@ -331,7 +349,7 @@ because `read_file` resolves against the remote workspace root (kernel doc
 ```ts
 // server/src/services/tool-output-store.ts
 export function createSpillPath(chatId: string, tool: "bash" | "py", id: string): string;
-export function formatSpillFooter(info: { path: string; totalBytes: number; windowBytes: number }): string;
+export function formatSpillFooter(info: { path: string; totalBytes: number; windowBytes: number; capped?: boolean }): string;
 export async function pruneChat(chatId: string): Promise<void>;   // newest 64
 export async function cleanupChat(chatId: string): Promise<void>; // chat deletion
 export async function sweepExpired(): Promise<void>;              // 24 h TTL, scheduler tick
@@ -345,6 +363,12 @@ This replaces two behaviors: pi's bash spill goes to
 
 Newest 64 per chat, 24 h TTL, removed on chat deletion (`chat-deletion.ts`
 cascade), swept on the scheduler's periodic tick. Same rules for both tools.
+
+Each spill also stops at a per-file byte cap (`SPILL_MAX_BYTES`, default
+64 MiB, settings-tunable) and appends a truncation marker to the file; the
+footer says the spill was capped. This bounds a runaway writer — e.g. a 300 s
+print loop — that file-count and TTL retention do not. Both writers (bash
+capture, kernel cell output) honor the same cap.
 
 ### 4.4 Replay stability
 
@@ -383,8 +407,7 @@ convertToLlm: async (messages) => {
 ### 5.2 llama.cpp request construction
 
 `streamOpenAICompat(model, ctx: TranscriptContext, options)` renders the
-leading prompt **once, explicitly** (10-04 review — the earlier draft would
-have double-rendered it and silently dropped the Gemma `/think` directive):
+leading prompt **once, explicitly**:
 
 - `const initial = getInitialSystemMessage(ctx.messages)`; if present, render
   `getSystemMessageText(initial)` (flattens `TextContent[]` and `sections`),
@@ -397,7 +420,7 @@ have double-rendered it and silently dropped the Gemma `/think` directive):
   semantics and wire change.
 - Convert the remaining messages with the leading system message **skipped**;
   later system messages keep the existing downgrade-to-user behavior in
-  `convertMessages` (`openai-compat-provider.ts:1159-1174`) — passive recall
+  `convertMessages` (`openai-compat-provider.ts:1173-1183`) — passive recall
   relies on it, and empty tool-delta content is already skipped by the
   `if (content)` check.
 - `const tools = getCurrentTools(ctx.messages)` — convert to the request body
@@ -469,8 +492,11 @@ Notes:
   debug before/after; mid-turn compaction headless test (`chat-turn-runner`).
 - Loop: `finishTurn` guard fires only for normal responses; error/aborted runs
   end normally.
-- Store: 64-file/24 h retention, chat deletion removes the directory, remote
-  spill stays workspace-local.
+- Store: 64-file/24 h retention, per-file byte cap enforced, chat deletion
+  removes the directory, remote spill stays workspace-local.
+- Supervisor: oversized streams drain while failing (§3.3.7);
+  `killAllSupervised()` is bounded per child — a deliberately hung child does
+  not delay the rest (§3.3.8).
 - Kernel: the kernel plan's P1 test matrix runs against `spawnSupervised`.
 
 ## 8. Risks
@@ -483,6 +509,28 @@ Notes:
 | Spill path in result text breaks replay | Deterministic short ids; no timestamps; shared footer formatter |
 | pi moves again in 1.x | Keep the supervisor and a transcript shim as the only pi-facing seams; the rest of Porrima imports types only |
 | Mixing pi-ai 1.0 with agent-core 0.85 | Bump both together; agent-core 1.0.2 requires pi-ai ^1.0.2 |
+
+## 9. Review revisions (10-04)
+
+Verified against the 1.0.2 tarballs and the upstream changelog: the
+harness-removal text, the `finishTurn` migration (guard form included),
+`AgentContext` reduced to `{messages, tools?}`, the unchanged
+`AgentTool.execute(…, signal?, onUpdate?)` / `tool_execution_update` seam,
+`dist/` containing only agent/agent-loop/proxy/stream-fn/types, and the
+agent-core 1.0.2 ↔ pi-ai 1.0.2 dependency coupling all hold. Every Porrima
+line claim re-verified against the codebase; none materially wrong. Revisions
+applied inline:
+
+1. Line-reference drift fixed: `chat.ts:2895`/`:2907` for the `"length"`
+   detection (§2.2), `llm-stream.ts:3,44-47` for `StreamFn` (§2.3),
+   `openai-compat-provider.ts:1173-1183` for the downgrade-to-user loop (§5.2).
+2. `getInitialSystemMessage` added to the helper list — §5.2 uses it (§2.3).
+3. Non-interactive env list completed to prime-agent's full 14 variables
+   (added `CLICOLOR=0`, `FORCE_COLOR=0`; §3.5).
+4. Supervisor hardening folded in from the prime-agent manager study:
+   oversized-stream poisoning and per-child teardown isolation (§3.3.7-8),
+   head+tail capture recorded as a considered divergence from pi parity
+   (§3.3.4).
 
 ## References
 
