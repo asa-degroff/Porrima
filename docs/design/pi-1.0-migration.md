@@ -1,6 +1,6 @@
 # pi 1.0 Migration — Harness Removal, Shared Process Supervisor, Tool-Output Store
 
-**Status**: T0 + T1 LANDED (415d47d, a40895f — 10-04; 34 new tests, 858-suite green); T2–T4 pending.
+**Status**: T0–T3 LANDED (T3 kernel P1 — 10-04; 876-suite green). T2 live-verified 10-04 22:27 restart: the first post-restart request evaluated only ~295 tokens against the pre-restart 0.85.1-era KV cache (~130k-token context) — wire byte-identity confirmed by the cache itself; per-turn deltas (0.9–2.7k tokens) confirm turn-prefix stability. Warm-hit confirmation pending first post-warm turn (prompt-debug `warm=missing` until then). T4 pending.
 **Date**: 2026-10-04
 **Scope**: `@earendil-works/pi-agent-core` 0.85.1 → 1.0.2 and
 `@earendil-works/pi-ai` 0.85.1 → 1.0.2.

@@ -12,6 +12,7 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
+import { executeInKernel, type KernelFallbackReason } from "./python-kernel.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, InlineVisual, Project } from "../types.js";
 
@@ -84,11 +85,18 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code in the active workspace and return stdout/stderr. Uses the project root for project chats and the configured remote host for SSH projects.",
+  description: "Execute Python code in the active workspace and return stdout/stderr. In agent chats on a local workspace this runs in a persistent per-chat kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. On SSH projects and system chats each call is stateless. Uses the project root for project chats.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
   }),
+};
+
+const KERNEL_FALLBACK_NOTICES: Record<KernelFallbackReason, string> = {
+  capacity: "[kernel: at capacity; ran stateless this call]",
+  "spawn-failed": "[kernel: unavailable; ran stateless this call]",
+  wedge: "[kernel: previous cell is wedged; ran stateless this call]",
+  broken: "[kernel: disabled after a protocol failure; ran stateless this call]",
 };
 
 const READ_PDF_TOOL: Tool = {
@@ -874,10 +882,47 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...RUN_PYTHON_TOOL,
     label: "run_python",
-    execute: async (_id, params, signal) => {
+    execute: async (_id, params, signal, onUpdate) => {
       const workspace = await workspacePromise;
-      return withMutationLock(`workspace:${workspace.label}`, async () =>
-        wrapResult(await workspace.runPython(params as Record<string, any>, signal), "run_python"));
+      const args = params as Record<string, any>;
+      return withMutationLock(`workspace:${workspace.label}`, async () => {
+        const useKernel = chatType !== "system" && workspace.kind === "local";
+        if (useKernel) {
+          const timeoutSec = Math.min(300, Math.max(1, args.timeout || 30));
+          const outcome = await executeInKernel({
+            chatId,
+            cwd: workspace.label,
+            code: String(args.code ?? ""),
+            timeoutMs: timeoutSec * 1000,
+            signal,
+            onUpdate: onUpdate
+              ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
+              : undefined,
+          });
+          if (outcome.mode === "kernel") {
+            return wrapResult({ content: outcome.content, isError: outcome.isError }, "run_python");
+          }
+          const oneShot = await workspace.runPython(args, signal);
+          return wrapResult(
+            {
+              content: `${KERNEL_FALLBACK_NOTICES[outcome.reason]}\n${oneShot.content}`,
+              isError: oneShot.isError,
+            },
+            "run_python",
+          );
+        }
+        const oneShot = await workspace.runPython(args, signal);
+        if (chatType === "system") {
+          return wrapResult(
+            {
+              content: `[stateless mode in this chat type]\n${oneShot.content}`,
+              isError: oneShot.isError,
+            },
+            "run_python",
+          );
+        }
+        return wrapResult(oneShot, "run_python");
+      });
     },
   });
 

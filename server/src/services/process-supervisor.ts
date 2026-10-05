@@ -394,6 +394,17 @@ export function isGroupAlive(pid: number): boolean {
   }
 }
 
+/** TERM → grace → KILL on a process group, confirming death. Shared by the
+ *  supervisor's own teardown and the kernel child-journal sweep. */
+export async function killProcessGroup(pid: number, opts?: { graceMs?: number }): Promise<boolean> {
+  if (pid <= 0) return true;
+  if (process.platform === "win32") {
+    await taskkillTree(pid);
+    return true;
+  }
+  return killGroupAndConfirm(pid, opts?.graceMs ?? DEFAULT_KILL_GRACE_MS);
+}
+
 export function readProcessStartId(pid: number): string | undefined {
   if (process.platform !== "linux" || pid <= 0) return undefined;
   try {

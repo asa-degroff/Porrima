@@ -5,6 +5,7 @@ import { cancelImmediateExtractionQueue, markChatInactive } from "./memory-extra
 import * as messageQueue from "./message-queue.js";
 import { resetMemoryContext } from "./memory-context.js";
 import { cleanupChat } from "./tool-output-store.js";
+import { disposeKernel } from "./python-kernel.js";
 
 /**
  * Clear process-local work that can continue after the chat row is deleted.
@@ -27,4 +28,5 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   markChatInactive(chatId);
   await closeBrowserSession(chatId).catch(() => {});
   await cleanupChat(chatId).catch(() => {});
+  await disposeKernel(chatId).catch(() => {});
 }

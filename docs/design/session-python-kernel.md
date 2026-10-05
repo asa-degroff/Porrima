@@ -1,6 +1,6 @@
 # Session Python Kernel — Persistent REPL for `run_python`
 
-**Status**: Design. Not implemented.
+**Status**: P1 implemented (T3, 2026-10-04): driver, manager, persistent namespace, top-level await, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + startup sweep. P2–P4 are design.
 **Date**: 2026-10-03
 **Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
@@ -609,18 +609,16 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   its own protocol-shutdown and signal deadlines; one wedged kernel never
   blocks the others or `killAllSupervised()` — prime-agent's per-kernel
   failure isolation (`live_kernels.rs`).
-- A startup sweep kills leftover `porrima_kernel.py` processes recorded in
-  `~/.porrima/kernels/*/pid` from a previous server run (pid + start-time
-  identity to avoid pid reuse), reaps the child groups from those kernels'
-  journals, then removes stale pid files (10-04 review). Journal records are
-  deactivated only on confirmed group death (killpg liveness, survivors
-  SIGKILLed first — prime-agent's `_reap_group`), so the in-kernel reaper and
-  this sweep agree on what is still live. The driver's owner watchdog (§4.2)
-  is the in-band defense against a server SIGKILL; this sweep is the
-  next-start backstop. Supervisor journal records feed the same sweep: the
-  supervisor persists a children journal on spawn precisely because an
-  in-memory registry cannot survive the SIGKILL this sweep exists for
-  ([pi-1.0-migration.md](pi-1.0-migration.md) §3.6).
+- Startup sweep: the kernel process itself is covered by the supervisor's
+  persisted journal, swept before anything can spawn
+  ([pi-1.0-migration.md](pi-1.0-migration.md) §3.6); `sweepKernelJournals()`
+  then reads each `~/.porrima/kernels/<chatId>/children.jsonl`, kills active
+  child groups (start-id verified, group-first), and removes the stale state
+  directories. Journal records are deactivated only on confirmed group death
+  (killpg liveness, survivors SIGKILLed first — prime-agent's `_reap_group`),
+  so the in-kernel reaper and this sweep agree on what is still live. The
+  driver's owner watchdog (§4.2) is the in-band defense against a server
+  SIGKILL; the sweep is the next-start backstop.
 - The idle reaper runs on its own interval (same pattern as the scheduler's
   periodic ticks), never inside a request.
 - **RSS watchdog**: the same reaper checks kernel RSS; an **idle** kernel over

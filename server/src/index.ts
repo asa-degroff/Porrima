@@ -80,6 +80,15 @@ const gracefulShutdown = async () => {
   } catch {
     // Non-fatal
   }
+  // Dispose Python kernels: protocol shutdown first (bounded), then the
+  // supervisor kill below is the backstop.
+  try {
+    const { disposeAllKernels } = await import("./services/python-kernel.js");
+    await disposeAllKernels();
+    console.log("[shutdown] Python kernels disposed");
+  } catch {
+    // Non-fatal
+  }
   // Stop supervised child process groups (bash, python kernels). Each kill is
   // individually bounded, so a wedged child cannot hold the shutdown.
   try {
@@ -242,6 +251,20 @@ try {
 } catch (error) {
   // Non-fatal — the sweep retries on the next start.
   console.warn("[supervisor] startup sweep failed:", error);
+}
+
+// Reap child groups journaled by a previous kernel run, then start the idle
+// reaper. Kernel processes themselves are covered by the supervisor sweep.
+try {
+  const { sweepKernelJournals, startKernelReaper } = await import("./services/python-kernel.js");
+  const reaped = await sweepKernelJournals();
+  if (reaped > 0) {
+    console.log(`[kernel] reaped ${reaped} orphaned child group(s) from a previous run`);
+  }
+  startKernelReaper();
+} catch (error) {
+  // Non-fatal — kernels fall back to one-shot.
+  console.warn("[kernel] startup sweep failed:", error);
 }
 
 // TTS worker is lazily initialized on first TTS request via getWorker().

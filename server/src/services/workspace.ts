@@ -91,6 +91,7 @@ export interface WorkspaceBashOptions {
 
 export interface WorkspaceAdapter {
   readonly label: string;
+  readonly kind: "local" | "ssh";
   readFile(args: Record<string, any>, opts?: WorkspaceReadFileOptions, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
@@ -298,6 +299,7 @@ async function runStreamingBash(
 
 export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
+  readonly kind = "local" as const;
 
   constructor(private readonly root: string = HOME) {
     this.label = root;
@@ -559,6 +561,7 @@ function sshDirectArgs(connection: SshConnection, remoteCommand: string): string
 
 export class SshWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
+  readonly kind = "ssh" as const;
   private readonly _controlSocket: string;
 
   constructor(private readonly connection: SshConnection, private readonly root: string) {
