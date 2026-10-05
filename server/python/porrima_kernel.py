@@ -60,7 +60,10 @@ _MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_VARIABLE_BYTES = 16 * 1024 * 1024
 _SNAPSHOT_MAGIC = b"PORRIMA-KERNEL-SNAPSHOT-V1\n"
 # Never serialized/restored: runtime handles and IPython-style bookkeeping.
-_SNAPSHOT_ALWAYS_SKIP = {"In", "Out", "get_ipython", "exit", "quit", "open"}
+# `emit` is re-injected into the namespace at every kernel start, and its
+# `__globals__` is the driver module dict — snapshotting it would drag driver
+# internals into the user namespace on restore.
+_SNAPSHOT_ALWAYS_SKIP = {"In", "Out", "get_ipython", "exit", "quit", "open", "emit"}
 
 # ---------------------------------------------------------------------------
 # Process-global state
@@ -1078,6 +1081,14 @@ def _revive_with_live_globals(
     if identity in seen:
         return seen[identity]
     if isinstance(value, types.FunctionType):
+        if value.__globals__ is globals():
+            # A driver-module function (e.g. a user stashed a reference to
+            # `emit` inside a container): rebinding it to the user namespace
+            # would break its driver globals, and backfilling its globals
+            # would leak driver internals into the user namespace. Prefer the
+            # live same-named driver function when it exists.
+            live = globals().get(value.__name__)
+            return live if isinstance(live, types.FunctionType) else value
         for key, item in value.__globals__.items():
             if key not in live_ns and not key.startswith("_") and key not in _SNAPSHOT_ALWAYS_SKIP:
                 live_ns[key] = item
@@ -1228,6 +1239,15 @@ def _read_snapshot_records(path: str, max_bytes: int, max_variable_bytes: int) -
     return records
 
 
+def _dill_available() -> bool:
+    try:
+        import dill  # type: ignore  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def _restore_state(ns: dict[str, Any], path: str) -> dict[str, Any]:
     if not os.path.exists(path):
         return {"restored": [], "failed": [], "reason": "snapshot not found"}
@@ -1251,7 +1271,11 @@ def _restore_state(ns: dict[str, Any], path: str) -> dict[str, Any]:
             restored.append(name)
         except BaseException as exc:  # noqa: BLE001
             failed.append({"name": name, "reason": f"{type(exc).__name__}: {_safe_str(exc)}"})
-    return {"restored": sorted(restored), "failed": failed}
+    return {
+        "restored": sorted(restored),
+        "failed": failed,
+        "engine": "dill" if _dill_available() else "pickle",
+    }
 
 
 def _flush_final_snapshot(ns: dict[str, Any]) -> None:

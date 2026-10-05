@@ -6,6 +6,7 @@
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
 **Reviewed**: 10-04 — third review against the pi 1.0.2 tarballs + upstream changelog, the Porrima codebase, and a fresh prime-agent read (teardown order, snapshot scheduling, protocol hardening); revisions marked inline and summarized in §10.
 **Reviewed**: 10-04 — fourth review: live verification of the T3 build in production (sequential-call state sharing, failure survival, L1 interrupt on a subprocess-blocked cell via the timeout path); two live findings added to §4.5 (external-SIGINT scoping, L1 child-orphan semantics; the child-orphan rule was implemented 10-05).
+**Reviewed**: 10-05 — fifth review: T4 (P2/P3) + P2.5 verified against code and tests (22/22) and a live tour (background job ack/list/tail/kill, force-kill L3, restore-after-L3 with notice, emit() display → tool-result image). Two live findings, both fixed 10-05: the startup sweep removed all state directories, so snapshots did not survive a server restart (§4.11); and reviving `emit` backfilled the driver's own module globals into the user namespace (§4.8).
 **Related**: [pi-1.0-migration.md](pi-1.0-migration.md) — pi-agent-core 1.0 removed the node/harness surface that `runStreamingBash` uses; the forced bash rewrite and this plan share one process supervisor and one tool-output store (§2.3, §4.2, §4.6, §4.11).
 
 ## 1. Problem
@@ -520,7 +521,23 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   for globals the live namespace lacks. Skip this and a restored function
   mutates a stale copy of module state instead of the live namespace. This is
   the most intricate part of prior art's restore and the easiest to
-  underestimate.
+  underestimate. **Backfill leak (10-05 fifth review, observed live; fixed
+  10-05):** the injected `emit` function's `__globals__` is the driver's own
+  module dict, so an unguarded revive backfilled the driver's internal names
+  (`main`, `PROTOCOL_VERSION`, `Any`, `datetime`, `timezone`, and every
+  driver import) into the user namespace — a manifest from a restored kernel
+  showed them re-saved (functions/constants by reference) plus 20 module
+  names skipped as "cannot pickle 'module' object", and the driver's `main`
+  sat one user call from re-running the bootstrap. Fixed both ways: `emit`
+  joins `_SNAPSHOT_ALWAYS_SKIP` (it is re-injected at every kernel start),
+  and the walker leaves driver-module functions alone
+  (`value.__globals__ is globals()`) — resolving the live same-named driver
+  function when one exists — so backfill never sees driver globals. Related
+  plain-data limitation, same box (no dill): user-defined functions pickled
+  by reference fail at restore (`__main__.name` not yet resolvable in a fresh
+  kernel), so they land in `failed[]`; the restore `done` carries the engine
+  and the notice appends "(pickle fallback: plain data only)" when names
+  fail under pickle.
 - Per-name serialization so one bad value does not fail the snapshot;
   `_`-prefixed names skipped; caps **16 MiB per variable (matching
   prime-agent) / 64 MiB total**. Per-variable is the usefulness threshold — an
@@ -637,8 +654,18 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   persisted journal, swept before anything can spawn
   ([pi-1.0-migration.md](pi-1.0-migration.md) §3.6); `sweepKernelJournals()`
   then reads each `~/.porrima/kernels/<chatId>/children.jsonl`, kills active
-  child groups (start-id verified, group-first), and removes the stale state
-  directories. Journal records are deactivated only on confirmed group death
+  child groups (start-id verified, group-first), and truncates the journal.
+  **Sweep semantics (10-05 fifth review, observed live; fixed 10-05):** as
+  first shipped in T4, `sweepKernelJournals` removed **every** state directory
+  unconditionally at startup, so snapshots did not survive a server restart —
+  state written by the 01:06 dispose flush for chat 2417b5fc (and its
+  `children.jsonl`) was gone after the 02:20 deploy restart, and the 02:46
+  respawn restored nothing. Corrected to the P3 contract: only directories
+  older than 14 days are expired and removed; young directories keep their
+  snapshots, the sweep only reaps their orphan child groups, and a missing
+  journal means "nothing to reap", not "remove". The journal is truncated
+  after reaping so it does not grow across runs. Journal records are
+  deactivated only on confirmed group death
   (killpg liveness, survivors SIGKILLed first — prime-agent's `_reap_group`),
   so the in-kernel reaper and this sweep agree on what is still live. The
   driver's owner watchdog (§4.2) is the in-band defense against a server

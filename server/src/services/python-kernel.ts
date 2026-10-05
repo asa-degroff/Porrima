@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, readdir, rm, stat } from "fs/promises";
+import { mkdir, readFile, readdir, rm, stat, truncate } from "fs/promises";
 import { dirname, join } from "path";
 import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
@@ -795,8 +795,10 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
         if (restored?.status === "ok") {
           const count = Array.isArray(restored.restored) ? restored.restored.length : 0;
           const failed = Array.isArray(restored.failed) ? restored.failed.length : 0;
+          const fallbackNote =
+            failed > 0 && restored.engine === "pickle" ? " (pickle fallback: plain data only)" : "";
           if (count > 0 || failed > 0) {
-            instance.firstNotice = `[kernel: restored ${count} name(s)${failed ? `; ${failed} failed` : ""}]`;
+            instance.firstNotice = `[kernel: restored ${count} name(s)${failed ? `; ${failed} failed${fallbackNote}` : ""}]`;
           }
           if (failed > 0) instance.restoreIncomplete = true;
         } else {
@@ -1077,6 +1079,16 @@ interface ChildJournalRecord {
  * supervisor journal (swept earlier at startup); this covers its setsid'd
  * children. Runs before any kernel can spawn.
  */
+/**
+ * Reap subprocess groups journaled by a previous server run, then remove
+ * expired state directories. The kernel process itself is covered by the
+ * supervisor journal (swept earlier at startup); this covers its setsid'd
+ * children. Runs before any kernel can spawn.
+ *
+ * Young directories are KEPT: they hold the snapshots the next kernel
+ * restores from. A missing journal means "nothing to reap", not "remove" —
+ * only directories past the 14-day TTL are deleted here.
+ */
 export async function sweepKernelJournals(): Promise<number> {
   const root = kernelRoot();
   let entries;
@@ -1089,8 +1101,6 @@ export async function sweepKernelJournals(): Promise<number> {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
-    // Expire state dirs untouched for the retention window (deleted with the
-    // chat otherwise).
     try {
       const info = await stat(dir);
       if (Date.now() - info.mtimeMs > KERNEL_STATE_TTL_MS) {
@@ -1101,11 +1111,12 @@ export async function sweepKernelJournals(): Promise<number> {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
       continue;
     }
+    const journalPath = join(dir, "children.jsonl");
     let text: string;
     try {
-      text = await readFile(join(dir, "children.jsonl"), "utf8");
+      text = await readFile(journalPath, "utf8");
     } catch {
-      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      // No journal: nothing to reap; keep the snapshot.
       continue;
     }
     const last = new Map<number, ChildJournalRecord>();
@@ -1128,7 +1139,10 @@ export async function sweepKernelJournals(): Promise<number> {
       console.log(`[kernel] reaping orphaned child group ${pgid} (chat=${shortId(entry.name)})`);
       if (await killProcessGroup(pgid, { graceMs: 500 })) reaped++;
     }
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    // The previous kernel is dead (the supervisor sweep ran first); clear its
+    // journal so it does not grow across runs, and keep the directory for the
+    // snapshot restore.
+    await truncate(journalPath, 0).catch(() => {});
   }
   return reaped;
 }

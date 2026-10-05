@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -354,6 +355,51 @@ describe("python kernel manager", () => {
       expect(outcome.images).toHaveLength(1);
       expect(outcome.images![0].mimeType).toBe("image/png");
       expect(outcome.images![0].data).toBe(png);
+    });
+
+    it("keeps young state directories and their snapshots at startup", async () => {
+      await run("p3-keep", "x = 7");
+      await delay(1800); // debounce writes namespace.pkl + manifest.json
+      const dir = join(root, "p3-keep");
+      expect(existsSync(join(dir, "namespace.pkl"))).toBe(true);
+
+      await sweepKernelJournals();
+      expect(existsSync(join(dir, "namespace.pkl"))).toBe(true);
+      expect(existsSync(join(dir, "manifest.json"))).toBe(true);
+
+      await disposeKernel("p3-keep");
+      const outcome = kernel(await run("p3-keep", "print(x)"));
+      expect(outcome.content).toContain("restored");
+      expect(outcome.content).toContain("7");
+    });
+
+    it("expires old state directories at startup", async () => {
+      const dir = join(root, "p3-old");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "namespace.pkl"), "old");
+      const old = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+      await utimes(dir, old, old);
+      await sweepKernelJournals();
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    it("does not backfill driver internals and skips emit in snapshots", async () => {
+      await run("p3-guard", "x = 5");
+      await delay(1800);
+      const manifest = JSON.parse(await readFile(join(root, "p3-guard", "manifest.json"), "utf8"));
+      expect(manifest.savedNames).toContain("x");
+      expect(manifest.savedNames).not.toContain("emit");
+
+      await disposeKernel("p3-guard");
+      const outcome = kernel(
+        await run(
+          "p3-guard",
+          "print('main' in globals(), 'PROTOCOL_VERSION' in globals())\nemit({'text/plain': 'ok'})",
+        ),
+      );
+      expect(outcome.content).toContain("restored");
+      expect(outcome.content).toContain("False False");
+      expect(outcome.isError).toBe(false);
     });
   });
 });
