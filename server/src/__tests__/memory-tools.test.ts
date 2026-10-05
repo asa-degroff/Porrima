@@ -6,14 +6,12 @@ import { formatAgentDate } from "../services/time-format.js";
 
 async function loadMemoryTools(homeDir: string) {
   mkdirSync(join(homeDir, ".porrima"), { recursive: true });
+  // Isolate via the data-dir env override instead of mocking `os`. Per-test os
+  // mocks make Vitest 5's module registry serve stale instances captured under
+  // earlier temp dirs, which leaked the previous test's SQLite rows into the
+  // next one (supersession count assertions flaked at 3 instead of 1).
+  process.env.PORRIMA_DATA_DIR = join(homeDir, ".porrima");
   vi.resetModules();
-  vi.doMock("os", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("os")>();
-    return {
-      ...actual,
-      homedir: () => homeDir,
-    };
-  });
 
   const [memoryTools, notebookStorage, memoryStorage, chatStorage] = await Promise.all([
     import("../services/memory-tools.js"),
@@ -44,14 +42,9 @@ const testVectors: Record<string, number[]> = {};
 
 async function loadMemoryToolsWithEmbedMock(homeDir: string) {
   mkdirSync(join(homeDir, ".porrima"), { recursive: true });
+  // See loadMemoryTools: env-based data-dir isolation, not an os mock.
+  process.env.PORRIMA_DATA_DIR = join(homeDir, ".porrima");
   vi.resetModules();
-  vi.doMock("os", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("os")>();
-    return {
-      ...actual,
-      homedir: () => homeDir,
-    };
-  });
   vi.doMock("../services/embeddings.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../services/embeddings.js")>();
     return {
@@ -98,10 +91,14 @@ async function addFixtureMemory(
   });
 }
 
+const ORIGINAL_DATA_DIR = process.env.PORRIMA_DATA_DIR;
+
 afterEach(() => {
-  vi.doUnmock("os");
   vi.doUnmock("../services/embeddings.js");
   vi.resetModules();
+  // Restore the ambient data dir for any test that does not isolate via env.
+  if (ORIGINAL_DATA_DIR === undefined) delete process.env.PORRIMA_DATA_DIR;
+  else process.env.PORRIMA_DATA_DIR = ORIGINAL_DATA_DIR;
   for (const key of Object.keys(testVectors)) delete testVectors[key];
 });
 
