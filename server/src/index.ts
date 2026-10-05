@@ -80,6 +80,15 @@ const gracefulShutdown = async () => {
   } catch {
     // Non-fatal
   }
+  // Stop supervised child process groups (bash, python kernels). Each kill is
+  // individually bounded, so a wedged child cannot hold the shutdown.
+  try {
+    const { killAllSupervised } = await import("./services/process-supervisor.js");
+    await killAllSupervised();
+    console.log("[shutdown] Supervised processes stopped");
+  } catch {
+    // Non-fatal
+  }
   process.exit(0);
 };
 process.on("SIGTERM", gracefulShutdown);
@@ -219,6 +228,20 @@ try {
   clearAllLlamaCacheResidency();
 } catch {
   // Non-fatal — residency tracking will work fine without startup cleanup
+}
+
+// Reap process groups journaled by a previous server run (SIGKILL or crash),
+// before anything can spawn new supervised processes. An in-memory registry
+// cannot survive the crash this journal exists for.
+try {
+  const { sweepSupervisorJournal } = await import("./services/process-supervisor.js");
+  const reaped = await sweepSupervisorJournal();
+  if (reaped > 0) {
+    console.log(`[supervisor] reaped ${reaped} orphaned process group(s) from a previous run`);
+  }
+} catch (error) {
+  // Non-fatal — the sweep retries on the next start.
+  console.warn("[supervisor] startup sweep failed:", error);
 }
 
 // TTS worker is lazily initialized on first TTS request via getWorker().
