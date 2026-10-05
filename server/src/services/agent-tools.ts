@@ -417,12 +417,17 @@ const AUTOMATION_TOOLS: Tool[] = [
   SCHEDULE_CHAT_MESSAGE_TOOL,
   LIST_CHATS_TOOL,
 ];
-// System/headless chats (synthesis, wake, automation runs) keep the automation
+// System chats (synthesis, wake, automation runs) keep the automation
 // management tools — scheduling and reminder chaining are deliberate and are
 // bounded by the pending-reminder cap, the 2-minute minimum lead time, and
 // per-run iteration/time budgets. What stays out are the tools that require a
-// live user: ask_user (would stall the headless loop forever) and the
-// per-chat skill tools (system chats don't activate skills).
+// live user: ask_user and the per-chat skill tools (system chats don't
+// activate skills). This gate is keyed to chatType only, so HTTP and headless
+// builds of the same chat type produce identical schemas — tool definitions
+// render into the system prompt, and any per-path difference busts the KV
+// prefix. Agent-chat automation runs keep ask_user in the schema and swap its
+// executor instead (headless-tools.ts); never re-filter ask_user out of a
+// headless tool array.
 const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
   "ask_user",
   "python_jobs",

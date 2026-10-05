@@ -1,4 +1,6 @@
 import type { ToolSideEffects } from "./agent-tools.js";
+import { withHeadlessAskUser } from "./headless-tools.js";
+import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
 import type { AutomationRun, AutomationTask, Chat, ChatMessage, CrossChatPostPayload, ReminderMetadata } from "../types.js";
 import { acquireAutomationLock, releaseAutomationLock } from "./automation-lock.js";
 import {
@@ -303,7 +305,18 @@ async function runPromptAutomation(
       undefined,
       options.enableMemoryRetrieval ? undefined : { skipMemoryRetrieval: true },
     );
-    const systemPrompt = splitPrompt.systemPrompt;
+    let systemPrompt = splitPrompt.systemPrompt;
+    if (chat.activeSkills?.length) {
+      // Skill instructions append to the system prompt on every interactive
+      // path; headless runs must do the same or a chat with active skills
+      // diverges at the prompt tail on automation ↔ user transitions (same
+      // cache-busting class as the tool-surface filters).
+      const skillsCache = new Map<string, Skill>();
+      for (const skill of await discoverSkills(chat.projectId)) {
+        skillsCache.set(skill.name, skill);
+      }
+      systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+    }
 
     const artifacts: any[] = [];
     const visuals: any[] = [];
@@ -314,8 +327,13 @@ async function runPromptAutomation(
     });
     const { getSettings } = await import("./chat-storage.js");
     const { timeMarkerIntervalMinutes } = await getSettings();
-    const tools = getAgentTools(task.chatId, effects, contextWindow, undefined, chatType, createTimeMarkerState(timeMarkerIntervalMinutes))
-      .filter((tool) => tool.name !== "ask_user");
+    // Keep the tool surface byte-identical to interactive turns: tool schemas
+    // render into the system prompt, so filtering ask_user out here shifted the
+    // tools block and forced a full re-prefill on every automation ↔ user
+    // transition. The schema stays; only the executor is headless-safe.
+    const tools = withHeadlessAskUser(
+      getAgentTools(task.chatId, effects, contextWindow, undefined, chatType, createTimeMarkerState(timeMarkerIntervalMinutes))
+    );
 
     const compactionResult = await truncateBeforeSend(
       chat,

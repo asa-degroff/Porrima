@@ -4,7 +4,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 ## Registry (`server/src/services/agent-tools.ts`)
 
-- `getAgentTools(chatId, effects, contextWindow, project, chatType, timeMarker?)` returns the runtime registry with context-aware result limits and chat-type gating. System/headless chats omit `ask_user` and the per-chat skill tools. Automation management tools (`schedule_reminder`, `list_automations`, `update_automation`) remain available — reminder chaining from within fired automation runs is deliberate, bounded by the pending-reminder cap (10), the 2-minute minimum lead time, three-tier update permissions, and per-run iteration/time budgets.
+- `getAgentTools(chatId, effects, contextWindow, project, chatType, timeMarker?)` returns the runtime registry with context-aware result limits and chat-type gating. System chats omit `ask_user` and the per-chat skill tools. Headless **agent** runs (automations, cross-chat wakes) keep the interactive tool surface byte-identical — `ask_user` stays in the schema with a headless-safe executor (`headless-tools.ts`) — because tool schemas render into the system prompt and any per-path difference busts the chat's KV prefix. Automation management tools (`schedule_reminder`, `list_automations`, `update_automation`) remain available — reminder chaining from within fired automation runs is deliberate, bounded by the pending-reminder cap (10), the 2-minute minimum lead time, three-tier update permissions, and per-run iteration/time budgets.
 - The registry is the concatenation of six groups: `MEMORY_TOOLS` (`memory-tools.ts`), `WEB_TOOLS` (`web-tools.ts`), `BROWSER_TOOLS` (`browser-tools.ts`), `AUTOMATION_TOOLS`, `FILESYSTEM_TOOLS`, and `SKILL_TOOLS` (`skills.ts`). 32 tools total.
 
 ### Tool inventory
@@ -40,7 +40,7 @@ Attached and launched sessions also differ: attached sessions use `defaultViewpo
 
 ### Chat-type gating
 
-`toolIsAvailable(name, chatType)` excludes a fixed set for `system` chats: `ask_user` plus every `SKILL_TOOLS` entry. `ask_user` is excluded because it would stall a headless loop forever, and system chats do not activate skills. Everything else — including all automation management tools — stays available in system chats.
+`toolIsAvailable(name, chatType)` excludes a fixed set for `system` chats: `ask_user` plus every `SKILL_TOOLS` entry. `ask_user` is excluded because it would stall a headless loop forever, and system chats do not activate skills. Everything else — including all automation management tools — stays available in system chats. This gate is keyed to `chatType` only, so HTTP and headless builds of the same chat type produce identical schemas. Headless callers must never re-filter the array (`automation-runner.ts` used to drop `ask_user` here): tool schemas render into the system prompt, so a per-path schema difference shifts the tools block and forces a full KV re-prefill. Agent-chat automation runs keep `ask_user` and swap only its executor via `withHeadlessAskUser`.
 
 ### Sequential vs parallel execution
 

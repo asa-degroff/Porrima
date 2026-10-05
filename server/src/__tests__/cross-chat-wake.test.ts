@@ -10,6 +10,7 @@ const captured: {
   toolArgs?: any[];
   commitMemoryDelta?: any;
   resetMemoryContext?: any;
+  skillAugmentArgs?: any[];
 } = {};
 
 // Configurable build result so the delta-delivery test can exercise a
@@ -64,8 +65,25 @@ async function loadModules(homeDir: string) {
   vi.doMock("../services/agent-tools.js", () => ({
     getAgentTools: vi.fn((...args: any[]) => {
       captured.toolArgs = args;
-      return [];
+      return [
+        {
+          name: "ask_user",
+          description: "Ask the user a question.",
+          parameters: { type: "object", properties: { question: { type: "string" } } },
+          execute: vi.fn(),
+        },
+      ];
     }),
+  }));
+  vi.doMock("../services/skills.js", () => ({
+    buildSkillAugmentedPrompt: vi.fn((...args: any[]) => {
+      captured.skillAugmentArgs = args;
+      const [base, names] = args as [string, string[]];
+      return names.length > 0 ? `${base}\n\n[Active Skills]\n${names.join(", ")}` : base;
+    }),
+    discoverSkills: vi.fn(async () => [
+      { name: "demo", folderPath: "/skills/demo", instructions: "Do demo things." },
+    ]),
   }));
   vi.doMock("../services/compaction.js", () => ({
     estimateContextTokens: vi.fn(() => 42),
@@ -135,6 +153,7 @@ afterEach(async () => {
     "../services/compaction.js",
     "../services/turn-compaction.js",
     "../services/memory-context.js",
+    "../services/skills.js",
     "../services/synthesis-stream.js",
     "../services/system-chat.js",
     "os",
@@ -148,6 +167,7 @@ afterEach(async () => {
   captured.toolArgs = undefined;
   captured.commitMemoryDelta = undefined;
   captured.resetMemoryContext = undefined;
+  captured.skillAugmentArgs = undefined;
   deltaConfig.memoriesMessage = "";
   deltaConfig.newMemoryIds = [];
 });
@@ -206,6 +226,15 @@ describe("cross-chat wake turns", () => {
       expect(captured.toolArgs?.[4]).toBe("agent");
       expect(captured.headless?.passiveMemoryRecall?.chatType).toBe("agent");
 
+      // Headless parity: ask_user stays in the tool schema (schemas render into
+      // the system prompt; filtering it busted the KV prefix on 10-05) and only
+      // its executor is swapped for a headless-safe one.
+      const headlessTools = (captured.headless?.tools ?? []) as any[];
+      const askUser = headlessTools.find((tool) => tool.name === "ask_user");
+      expect(askUser).toBeDefined();
+      expect(askUser.description).toBe("Ask the user a question.");
+      expect(askUser.parameters).toEqual({ type: "object", properties: { question: { type: "string" } } });
+
       // Follow-up semantics: the run keeps the target's memory context intact —
       // no hard reset (the build hydrates and retains the frozen section).
       expect(captured.resetMemoryContext).not.toHaveBeenCalled();
@@ -214,6 +243,41 @@ describe("cross-chat wake turns", () => {
       expect(target?.title).toBe("Target Chat");
       expect(target?.modelId).toBe("target-model");
       expect(target?.messages).toHaveLength(2);
+      chatStorage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the target chat's active skills to the headless prompt", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-wake-skills-"));
+    try {
+      const { chatStorage, automationStorage, runner } = await loadModules(homeDir);
+      await chatStorage.createChat(makeChat("origin", "Origin Chat", "origin-model"));
+      const target = makeChat("target", "Target Chat", "target-model");
+      target.activeSkills = ["demo"];
+      await chatStorage.createChat(target);
+
+      const task = await automationStorage.createCrossChatTask({
+        targetChatId: "target",
+        targetChatTitle: "Target Chat",
+        fromChatId: "origin",
+        fromChatTitle: "Origin Chat",
+        subject: "Report",
+        body: "Build is green.",
+        runAt: new Date().toISOString(),
+        wake: true,
+      });
+
+      const result = await runner.runAutomationTask(task.id, "scheduler");
+      expect(result.success).toBe(true);
+
+      // Interactive turns append skill instructions to the system prompt; the
+      // headless run must produce the same bytes or the KV prefix diverges at
+      // the prompt tail for chats with active skills.
+      expect(captured.skillAugmentArgs?.[1]).toEqual(["demo"]);
+      expect(captured.headless?.systemPrompt).toContain("[Active Skills]");
+      expect(captured.headless?.systemPrompt).toContain("demo");
       chatStorage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

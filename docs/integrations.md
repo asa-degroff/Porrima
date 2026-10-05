@@ -38,6 +38,7 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 - Optional spec fields are preserved: `license`, `compatibility`, `metadata`, and `allowed-tools`
 - Optional `scripts/`, `references/`, and `assets/` directories are discovered and exposed for progressive disclosure
 - Activated per chat, project-scoped vs. global filtering
+- Active skills append an `[Active Skills]` section to the system prompt on every transport — HTTP turns, cache-warm, and headless automation/wake runs (`automation-runner.ts` mirrors the HTTP augmentation). The prompt must stay byte-identical across transports or the cached KV prefix diverges at the prompt tail
 - Installation from direct `SKILL.md` URLs or GitHub skill-directory URLs
 - UI: `SkillSelector` (caret-anchored popover opened by typing `/` in the composer — `MessageInput.tsx` tracks the cursor and reports the caret rect), `SkillsBrowser` (Settings → Skills: install, delete, expandable details). Active skills show as chips in the chat header and are cached per `projectId`
 
