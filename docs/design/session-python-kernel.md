@@ -7,6 +7,7 @@
 **Reviewed**: 10-04 — third review against the pi 1.0.2 tarballs + upstream changelog, the Porrima codebase, and a fresh prime-agent read (teardown order, snapshot scheduling, protocol hardening); revisions marked inline and summarized in §10.
 **Reviewed**: 10-04 — fourth review: live verification of the T3 build in production (sequential-call state sharing, failure survival, L1 interrupt on a subprocess-blocked cell via the timeout path); two live findings added to §4.5 (external-SIGINT scoping, L1 child-orphan semantics; the child-orphan rule was implemented 10-05).
 **Reviewed**: 10-05 — fifth review: T4 (P2/P3) + P2.5 verified against code and tests (22/22) and a live tour (background job ack/list/tail/kill, force-kill L3, restore-after-L3 with notice, emit() display → tool-result image). Two live findings, both fixed 10-05: the startup sweep removed all state directories, so snapshots did not survive a server restart (§4.11); and reviving `emit` backfilled the driver's own module globals into the user namespace (§4.8).
+**Reviewed**: 10-05 — sixth review: dill 0.4.1 installed + verified end-to-end on this box (by-value function restore across an L3 kill and a server restart; §4.8), and finding C fixed — a foreground cell is rejected while a background job runs, instead of timing out into a false wedge (§4.7).
 **Related**: [pi-1.0-migration.md](pi-1.0-migration.md) — pi-agent-core 1.0 removed the node/harness surface that `runStreamingBash` uses; the forced bash rewrite and this plan share one process supervisor and one tool-output store (§2.3, §4.2, §4.6, §4.11).
 
 ## 1. Problem
@@ -494,6 +495,19 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   jobs are not killed by a pause; they run to completion, mirroring how the
   scheduler skips due automations without interrupting running ones.
   Foreground cells are unaffected (user-initiated, bounded by the turn).
+- **Foreground cells are rejected while a job runs (10-05 fifth review,
+  finding C; fixed).** A synchronous job blocks the driver's event loop, so a
+  foreground cell sent during a running job sits queued behind it, blows the
+  host deadline (timeout + wedge grace), and the wedge policy then kills a
+  healthy kernel — and the job with it. `executeInKernel` therefore rejects the
+  send immediately with an actionable error (the running job ids, plus the
+  `python_jobs` escape routes) instead of letting it time out silently.
+  Background sends are unaffected — they are exactly the mechanism that runs
+  behind a blocked loop — and the send is accepted again as soon as the last
+  job settles. Rejection rather than deferral is deliberate for an
+  agent-driven system: a foreground tool call that silently waits behind a
+  job that may run for hours hangs the agent's turn; a fast, actionable error
+  lets it adapt (inspect, kill, or resubmit as a background job).
 - Caps: 4 concurrent background jobs per kernel, **8 box-wide** (16 full-core
   jobs would fight the CPU-only inference services for every core), 1 MiB
   output each, 64 retained; kernel restart kills jobs and says so. Jobs are
@@ -505,15 +519,19 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 
 ### 4.8 Snapshot / restore
 
-- **Engine (10-04 review)**: `dill` (lazy import, `recurse` mode) if installed,
-  else `pickle`. Reality check: this box's `python3` is 3.14.4 with no `dill`,
-  so P3 on a stock system is pickle-only — and plain `pickle` cannot restore
-  cell-defined functions/classes at all (they exist only in the synthetic
-  `__main__` of a dead process, §4.4). `dill` is a documented prerequisite for
-  P3 (or the P4 venv moves earlier), and its 3.14 support must be verified.
-  Prime-agent never falls back to pickle: snapshot/restore report an error when
-  `dill` is missing; Porrima's pickle fallback is plain-data only and must say
-  so in the notice.
+- **Engine (10-04 review; 10-05 update)**: `dill` (lazy import, `recurse` mode)
+  if installed, else `pickle`. This box's `python3` is 3.14.4, and **dill 0.4.1
+  is installed (10-05, `pip install --user`)** — its 3.14 support is verified:
+  closure round-trip in-process and live in-kernel (a by-value-restored factory
+  builds fresh working closures after an L3 kill and across a server restart).
+  A stock system without `dill` is pickle-only — and plain `pickle` cannot
+  restore cell-defined functions/classes at all (they exist only in the
+  synthetic `__main__` of a dead process, §4.4). The snapshot format is a
+  **dill superset of pickle** (verified: a dill-written blob is unreadable by
+  plain `pickle`), so uninstalling `dill` degrades restores per-name
+  (graceful `failed[]`), not crashes. Prime-agent never falls back to pickle:
+  snapshot/restore report an error when `dill` is missing; Porrima's pickle
+  fallback is plain-data only and must say so in the notice.
 - **Restore rebinding (10-04 review)**: per-name `dill.loads` is not enough.
   Restored functions carry the snapshot's frozen globals; prime-agent revives
   containers in place and rebinds `__main__` callables onto the **live**

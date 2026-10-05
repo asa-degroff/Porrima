@@ -936,6 +936,25 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
   if ("reason" in acquisition) return { mode: "fallback", reason: acquisition.reason };
   const instance = acquisition.instance;
   if (instance.busy) return { mode: "fallback", reason: "capacity" };
+  // A synchronous background job blocks the driver's event loop: a foreground
+  // cell sent now would sit queued past its deadline, and the wedge policy
+  // would then kill a healthy kernel — and the job with it. Reject fast
+  // instead of letting the send time out silently (10-05 fifth review,
+  // finding C). Background sends are unaffected — they are the mechanism that
+  // runs behind a blocked loop.
+  const runningJobIds = [...instance.jobs.values()]
+    .filter((job) => job.status === "running")
+    .map((job) => job.id);
+  if (runningJobIds.length > 0) {
+    return {
+      mode: "kernel",
+      isError: true,
+      content:
+        `[foreground execution rejected: ${runningJobIds.length} background job(s) still running in this kernel (${runningJobIds.join(", ")}). ` +
+        "A synchronous job blocks the kernel's event loop, so this cell would queue past its deadline and the wedge policy would kill a healthy kernel — and the job with it. " +
+        "Inspect or kill the job with python_jobs, or send this work as a background job.",
+    };
+  }
   const notice = consumeNotice(instance, acquisition.recreated);
 
   const id = randomUUID();

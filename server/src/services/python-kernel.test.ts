@@ -315,6 +315,25 @@ describe("python kernel manager", () => {
       expect(ninth.isError).toBe(true);
       expect(ninth.content).toContain("job limit");
     });
+
+    it("rejects a foreground cell while a job runs, then allows it after", async () => {
+      kernel(await run("job-fg-a", "import time\ntime.sleep(2)", { background: true }));
+      const jobId = listKernelJobs("job-fg-a")[0]?.id;
+      expect(jobId).toBeDefined();
+      const rejected = kernel(await run("job-fg-a", "print('never queued')"));
+      expect(rejected.isError).toBe(true);
+      expect(rejected.content).toContain("foreground execution rejected");
+      expect(rejected.content).toContain(jobId!);
+      expect(rejected.content).toContain("python_jobs");
+      const settled = await waitForJob(
+        "job-fg-a",
+        (jobs) => jobs.every((job) => job.status !== "running"),
+      );
+      expect(settled[0]?.status).toBe("done");
+      const after = kernel(await run("job-fg-a", "print('after')"));
+      expect(after.isError).toBe(false);
+      expect(after.content).toContain("after");
+    });
   });
 
   describe("snapshot / restore", () => {
