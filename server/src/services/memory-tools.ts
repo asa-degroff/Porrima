@@ -441,9 +441,12 @@ export async function executeMemoryTool(
   chatId: string,
   opts: { maxResultChars?: number } = {},
 ): Promise<ToolResult> {
+  // pi-ai 1.0 types tool-call arguments as JsonObject (JsonValue values); each
+  // branch validates its fields at runtime, so widen once for the dispatcher.
+  const args = toolCall.arguments as Record<string, any>;
   switch (toolCall.name) {
     case "save_memory": {
-      const { text, category, importance, durability, supersedeMemoryId } = toolCall.arguments;
+      const { text, category, importance, durability, supersedeMemoryId } = args;
       if (!text) return { content: "Missing text", isError: true };
 
       // Validate the supersession target before spending an embedding call.
@@ -509,7 +512,7 @@ export async function executeMemoryTool(
     }
 
     case "search_memory": {
-      const { query, from, to, sort_by } = toolCall.arguments;
+      const { query, from, to, sort_by } = args;
       if (!query) return { content: "Missing query", isError: true };
 
       let queryEmbedding: number[];
@@ -566,7 +569,7 @@ export async function executeMemoryTool(
     }
 
     case "search_conversation": {
-      const { query, memory_id, chat_id, limit: maxResults } = toolCall.arguments;
+      const { query, memory_id, chat_id, limit: maxResults } = args;
       if (!query) return { content: "Missing query", isError: true };
 
       const target = await resolveTargetChat(memory_id, chat_id);
@@ -638,7 +641,7 @@ export async function executeMemoryTool(
     }
 
     case "read_archived_context": {
-      const { archive_id, include_thinking, offset, limit } = toolCall.arguments;
+      const { archive_id, include_thinking, offset, limit } = args;
       if (!archive_id) return { content: "Missing archive_id", isError: true };
 
       const archive = getArchive(archive_id) ?? (
@@ -660,7 +663,7 @@ export async function executeMemoryTool(
     }
 
     case "create_memory_block": {
-      const { name, description, content, scope, project_id, supersedes_block_id } = toolCall.arguments;
+      const { name, description, content, scope, project_id, supersedes_block_id } = args;
       if (!name || !description || !content) {
         return { content: "Missing required fields: name, description, content", isError: true };
       }
@@ -741,7 +744,7 @@ export async function executeMemoryTool(
     }
 
     case "update_memory_block": {
-      const { block_id, content: newContent, description: newDesc, scope: newScope, project_id, name: newName } = toolCall.arguments;
+      const { block_id, content: newContent, description: newDesc, scope: newScope, project_id, name: newName } = args;
       if (!block_id) return { content: "Missing block_id", isError: true };
       if (newName !== undefined && !String(newName).trim()) {
         return { content: "Block name cannot be empty", isError: true };
@@ -795,7 +798,7 @@ export async function executeMemoryTool(
     }
 
     case "read_memory_block": {
-      const { block_id, include_history } = toolCall.arguments;
+      const { block_id, include_history } = args;
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const block = getMemoryBlock(block_id);
@@ -830,7 +833,7 @@ export async function executeMemoryTool(
     }
 
     case "list_memory_blocks": {
-      const { scope, project_id, query, recent_days, limit: maxResults } = toolCall.arguments;
+      const { scope, project_id, query, recent_days, limit: maxResults } = args;
       
       // Default: exclude archived (handled by backend), cap at 15
       const effectiveLimit = maxResults ?? 15;
@@ -879,7 +882,7 @@ export async function executeMemoryTool(
     }
 
     case "create_notebook_entry": {
-      const { content, date } = toolCall.arguments;
+      const { content, date } = args;
       if (!content || typeof content !== "string" || content.trim().length === 0) {
         return { content: "Missing or empty content", isError: true };
       }

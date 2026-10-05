@@ -1,6 +1,6 @@
 # pi 1.0 Migration — Harness Removal, Shared Process Supervisor, Tool-Output Store
 
-**Status**: Design. Not implemented.
+**Status**: T0 + T1 LANDED (415d47d, a40895f — 10-04; 34 new tests, 858-suite green); T2–T4 pending.
 **Date**: 2026-10-04
 **Scope**: `@earendil-works/pi-agent-core` 0.85.1 → 1.0.2 and
 `@earendil-works/pi-ai` 0.85.1 → 1.0.2.
@@ -415,6 +415,10 @@ convertToLlm: async (messages) => {
   its config through `createAgentLoopConfig` (`chat.ts:2301`,
   `chat-turn-runner.ts:756`), which is why the wrap belongs there and not in
   individual routes.
+- `systemPrompt` accepts a string or a getter. The HTTP route passes
+  `() => systemPrompt` because compaction and skill activation rebuild the
+  prompt mid-turn; the getter is re-evaluated per request, matching the old
+  per-context `systemPrompt` field on resume.
 - **Cache-warm is a separate rendering path** (`cache-warm.ts:584-588` chat
   warm, `:683-687` new-agent baseline): it builds `{systemPrompt, messages,
   tools}` and calls `buildOpenAICompatChatBody()` directly, so it never runs

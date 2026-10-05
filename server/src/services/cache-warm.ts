@@ -23,6 +23,7 @@ import {
 } from "./llama-router-client.js";
 import {
   buildOpenAICompatChatBody,
+  buildTranscriptContext,
   digestPromptPayload,
 } from "./openai-compat-provider.js";
 import {
@@ -580,12 +581,8 @@ export async function warmChatCache(
     piModel.reasoning = modelSupportsReasoning(model);
     const piMessages = await buildReplayMessages(allMessages, chat.modelId, model);
     const tools = await buildWarmTools(chat, effectiveContextWindow);
-    const context = {
-      systemPrompt,
-      messages: piMessages,
-      tools,
-    };
-    const { body } = await buildOpenAICompatChatBody(piModel as any, context as any);
+    const context = buildTranscriptContext(systemPrompt, piMessages, tools);
+    const { body } = await buildOpenAICompatChatBody(piModel as any, context);
     const stats = await warmOpenAICompatBody({
       targetId: chatId,
       targetKind: "chat",
@@ -679,12 +676,8 @@ export async function warmNewAgentChatBaselineCache(
       undefined,
       "agent",
     );
-    const context = {
-      systemPrompt: stablePrefix,
-      messages: [],
-      tools: tools.length > 0 ? tools : undefined,
-    };
-    const { body } = await buildOpenAICompatChatBody(piModel as any, context as any);
+    const context = buildTranscriptContext(stablePrefix, [], tools.length > 0 ? tools : undefined);
+    const { body } = await buildOpenAICompatChatBody(piModel as any, context);
     const stats = await warmOpenAICompatBody({
       targetId: NEW_AGENT_CHAT_BASELINE_CACHE_ID,
       targetKind: "new-agent-chat",

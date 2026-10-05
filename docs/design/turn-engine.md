@@ -1,6 +1,7 @@
 # Turn Engine — Unifying the Context-Pressure Path
 
 **Status**: Design. **§3 ("Current state") is a historical snapshot as of Aug 23 and is not the current file layout.** Deltas D1–D3 shipped; **D4–D7 have not landed** — see the table below.
+**pi 1.0 note**: `shouldStopAfterTurn` references below describe the pre-1.0 hook; it is implemented today via pi-agent-core's `finishTurn` (see [pi-1.0-migration.md](pi-1.0-migration.md) §5.3).
 **Author**: quje
 **Date**: 2026-08-23
 

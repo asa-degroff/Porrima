@@ -1,11 +1,18 @@
 import {
   createAssistantMessageEventStream,
+  createInitialSystemMessage,
+  getCurrentTools,
+  getInitialSystemMessage,
+  getSystemMessageText,
+  normalizeContext,
   parseStreamingJson,
+  withoutInitialSystemMessage,
 } from "@earendil-works/pi-ai";
 import type {
   Model,
   Api,
-  Context,
+  Message,
+  TranscriptContext,
   SimpleStreamOptions,
   StreamOptions,
   AssistantMessage,
@@ -374,9 +381,25 @@ function containsImagePromptPart(value: unknown): boolean {
   return false;
 }
 
+/**
+ * Build a normalized transcript from Porrima's separate prompt/messages/tools
+ * shape. This is the shared construction used by direct callers (cache-warm,
+ * one-shot utilities); the agent loop produces the same transcript through
+ * `createAgentLoopConfig`'s convertToLlm wrapper. Keeping one helper keeps
+ * warm bodies byte-identical to live bodies.
+ */
+export function buildTranscriptContext(
+  systemPrompt: string | undefined,
+  messages: Message[],
+  tools?: Tool[],
+): TranscriptContext {
+  const initial = createInitialSystemMessage(systemPrompt, tools);
+  return normalizeContext({ messages: initial ? [initial, ...messages] : messages });
+}
+
 export async function buildOpenAICompatChatBody(
   model: Model<Api>,
-  context: Context,
+  context: TranscriptContext,
   options?: SimpleStreamOptions,
 ): Promise<{ body: any; cachePrompt: boolean }> {
   const messages = await convertMessages(model, context);
@@ -395,8 +418,9 @@ export async function buildOpenAICompatChatBody(
     body.temperature = options.temperature;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    body.tools = convertTools(context.tools);
+  const tools = getCurrentTools(context.messages);
+  if (tools.length > 0) {
+    body.tools = convertTools(tools);
   }
 
   const llamaSlotLease = getLlamaSlotLease(options);
@@ -1151,23 +1175,30 @@ function startLlamaPrefillMonitor(input: {
 // Message conversion (OpenAI format)
 // ---------------------------------------------------------------------------
 
-async function convertMessages(model: Model<Api>, context: Context): Promise<any[]> {
-  const transformed = transformMessagesForProvider(context.messages, model);
+async function convertMessages(model: Model<Api>, context: TranscriptContext): Promise<any[]> {
+  // Render the leading system message once, explicitly: pi-agent-core 1.0
+  // carries the prompt (and tool declarations) as transcript system messages.
+  // `getCurrentSystemPrompt` is deliberately NOT used here — it folds later
+  // system messages (passive recall) into the prompt, which must keep taking
+  // the downgrade-to-user path below.
+  const initial = getInitialSystemMessage(context.messages);
+  const transformed = transformMessagesForProvider(withoutInitialSystemMessage(context.messages), model);
   const params: any[] = [];
   // Vision image pixel budget: user's preset (settings.imageCapPreset) clamped by
   // the ops ceiling and the engine hard cap. Resolved once per request; a settings
   // read failure falls back to the safe "standard" default inside the resolver.
   const imagePixelBudget = resolveImagePixelBudget(await getSettings().catch(() => undefined));
 
-  if (context.systemPrompt) {
-    // Gemma 4 models need /think directive prepended to reliably enable thinking
-    // output when tools are present. The chat_template_kwargs enable_thinking
-    // flag alone is insufficient with complex system prompts.
-    const needsThinkDirective = model.reasoning && model.id.toLowerCase().includes("gemma");
-    const systemContent = needsThinkDirective
-      ? `/think\n${context.systemPrompt}`
-      : context.systemPrompt;
-    params.push({ role: "system", content: sanitizeProviderText(systemContent) });
+  if (initial) {
+    const promptText = getSystemMessageText(initial);
+    if (promptText) {
+      // Gemma 4 models need /think directive prepended to reliably enable thinking
+      // output when tools are present. The chat_template_kwargs enable_thinking
+      // flag alone is insufficient with complex system prompts.
+      const needsThinkDirective = model.reasoning && model.id.toLowerCase().includes("gemma");
+      const systemContent = needsThinkDirective ? `/think\n${promptText}` : promptText;
+      params.push({ role: "system", content: sanitizeProviderText(systemContent) });
+    }
   }
 
   for (let i = 0; i < transformed.length; i++) {
@@ -1803,7 +1834,7 @@ export async function ensureModelLoaded(
 
 export const streamOpenAICompat = (
   model: Model<Api>,
-  context: Context,
+  context: TranscriptContext,
   options?: StreamOptions
 ) => {
   const stream = createAssistantMessageEventStream();

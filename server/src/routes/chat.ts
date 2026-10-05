@@ -2169,9 +2169,10 @@ async function handleChatStream(
     const timeMarker = createTimeMarkerState(settings.timeMarkerIntervalMinutes);
     const agentTools = getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker);
 
-    // Build agent context
+    // Build agent context. The system prompt travels through
+    // createAgentLoopConfig's convertToLlm wrapper (pi-agent-core 1.0 carries
+    // it as the transcript's leading system message).
     const context: AgentContext = {
-      systemPrompt,
       messages: [...contextMessages],
       tools: agentTools,
     };
@@ -2300,6 +2301,7 @@ async function handleChatStream(
     // Build config
     const config = createAgentLoopConfig({
       model: piModel,
+      systemPrompt: () => systemPrompt,
       transformContext: passiveRecall
         ? async (messages) => {
             const injection = passiveRecall.peekReady(iterations);
@@ -3629,7 +3631,6 @@ async function handleChatStream(
       // the resume call prefills mostly cold. Arm the prefill indicator for it.
       if (compaction?.truncated) forcePrefillIndicatorForNextCall = true;
       const resumeContext: AgentContext = {
-        systemPrompt,
         messages: resumeMessages,
         tools: agentTools,
       };

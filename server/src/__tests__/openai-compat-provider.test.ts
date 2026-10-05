@@ -479,7 +479,7 @@ describe("buildOpenAICompatChatBody", () => {
   }
 
   it("strips media markers from replayed tool-call arguments and results", async () => {
-    const { buildOpenAICompatChatBody } = await loadProviderWithTempHome();
+    const { buildOpenAICompatChatBody, buildTranscriptContext } = await loadProviderWithTempHome();
     const model = {
       id: "test-model",
       api: "openai-completions",
@@ -488,9 +488,7 @@ describe("buildOpenAICompatChatBody", () => {
       input: ["text"],
       reasoning: false,
     };
-    const context = {
-      systemPrompt: "You are helpful.",
-      messages: [
+    const context = buildTranscriptContext("You are helpful.", [
         {
           role: "assistant",
           provider: "openai-completions",
@@ -518,10 +516,9 @@ describe("buildOpenAICompatChatBody", () => {
           isError: false,
           timestamp: Date.now(),
         },
-      ],
-    };
+      ] as any);
 
-    const { body } = await buildOpenAICompatChatBody(model as any, context as any);
+    const { body } = await buildOpenAICompatChatBody(model as any, context);
 
     const assistantMsg = body.messages.find((m: any) => m.role === "assistant");
     const argsJson = assistantMsg.tool_calls[0].function.arguments;
@@ -796,5 +793,97 @@ describe("normalizeImageForLlamaCpp", () => {
     const result = await normalizeImageForLlamaCpp(garbage, "image/jpeg");
 
     expect(result).toEqual({ data: garbage, mimeType: "image/jpeg" });
+  });
+});
+
+describe("transcript parity (pi 1.0)", () => {
+  // The highest-value T2 check: cache-warm builds a transcript directly while
+  // the agent loop builds it through convertToLlm + tool-state deltas. Both
+  // must render byte-identical request bodies or every warm prefill is wasted.
+  let tempHomeDir: string | null = null;
+
+  afterEach(() => {
+    vi.doUnmock("os");
+    vi.resetModules();
+    if (tempHomeDir) {
+      rmSync(tempHomeDir, { recursive: true, force: true });
+      tempHomeDir = null;
+    }
+  });
+
+  async function loadProviderWithTempHome() {
+    tempHomeDir = mkdtempSync(join(tmpdir(), "porrima-oai-compat-"));
+    mkdirSync(join(tempHomeDir, ".porrima"), { recursive: true });
+    vi.doMock("os", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("os")>();
+      return {
+        ...actual,
+        homedir: () => tempHomeDir!,
+      };
+    });
+    return import("../services/openai-compat-provider.js");
+  }
+
+  const model = {
+    id: "test-model",
+    api: "openai-completions",
+    provider: "openai-completions",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    input: ["text"],
+    reasoning: false,
+  };
+
+  const tools = [
+    {
+      name: "read_file",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    },
+  ];
+
+  it("renders identical bodies for the cache-warm shape and the loop shape", async () => {
+    const { buildOpenAICompatChatBody, buildTranscriptContext } = await loadProviderWithTempHome();
+    const { createInitialSystemMessage, normalizeContext } = await import("@earendil-works/pi-ai");
+    const messages: any[] = [{ role: "user", content: "hi", timestamp: 1 }];
+
+    const warm = buildTranscriptContext("You are helpful.", messages, tools as any);
+    const loop = normalizeContext({
+      messages: [
+        createInitialSystemMessage("You are helpful.", undefined)!,
+        { role: "system", content: "", toolsAdded: tools, timestamp: 2 },
+        ...messages,
+      ] as any,
+    });
+
+    const warmBody = await buildOpenAICompatChatBody(model as any, warm);
+    const loopBody = await buildOpenAICompatChatBody(model as any, loop);
+    expect(JSON.stringify(warmBody.body)).toBe(JSON.stringify(loopBody.body));
+  });
+
+  it("applies the Gemma /think directive to the leading prompt", async () => {
+    const { buildOpenAICompatChatBody, buildTranscriptContext } = await loadProviderWithTempHome();
+    const context = buildTranscriptContext("You are helpful.", [
+      { role: "user", content: "hi", timestamp: 1 } as any,
+    ]);
+    const gemma = { ...model, id: "gemma-4-27b", reasoning: true };
+    const { body } = await buildOpenAICompatChatBody(gemma as any, context);
+    expect(body.messages[0]).toMatchObject({ role: "system" });
+    expect(body.messages[0].content.startsWith("/think\n")).toBe(true);
+  });
+
+  it("downgrades later system messages to user", async () => {
+    const { buildOpenAICompatChatBody } = await loadProviderWithTempHome();
+    const { createInitialSystemMessage, normalizeContext } = await import("@earendil-works/pi-ai");
+    const context = normalizeContext({
+      messages: [
+        createInitialSystemMessage("You are helpful.", undefined)!,
+        { role: "system", content: "recalled memory", timestamp: 2 },
+        { role: "user", content: "hi", timestamp: 3 },
+      ] as any,
+    });
+    const { body } = await buildOpenAICompatChatBody(model as any, context);
+    expect(body.messages[0]).toMatchObject({ role: "system", content: "You are helpful." });
+    expect(body.messages[1]).toMatchObject({ role: "user", content: "recalled memory" });
+    expect(body.messages[2]).toMatchObject({ role: "user", content: "hi" });
   });
 });

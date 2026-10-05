@@ -2,7 +2,7 @@ import type {
   AgentContext,
   AgentMessage,
   AgentTool,
-  ShouldStopAfterTurnContext,
+  AgentTurnContext,
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
@@ -380,7 +380,6 @@ export async function runHeadlessChatTurn(
   const buildContextMessages = async (): Promise<AgentMessage[]> =>
     chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
   const context: AgentContext = {
-    systemPrompt,
     messages: await buildContextMessages(),
     tools,
   };
@@ -663,7 +662,7 @@ export async function runHeadlessChatTurn(
   const shouldStopForMidTurnCompaction = async ({
     message,
     toolResults,
-  }: ShouldStopAfterTurnContext): Promise<boolean> => {
+  }: AgentTurnContext): Promise<boolean> => {
     if (!options.contextWindow || controller.signal.aborted) return false;
     try {
       const cw = options.contextWindow;
@@ -756,6 +755,7 @@ export async function runHeadlessChatTurn(
   const config = createAgentLoopConfig({
     model,
     keepAlive,
+    systemPrompt,
     transformContext: passiveRecall ? applyPassiveMemoryRecall : undefined,
     shouldStopAfterTurn: options.contextWindow ? shouldStopForMidTurnCompaction : undefined,
     getFollowUpMessages: async () => {
@@ -973,7 +973,6 @@ export async function runHeadlessChatTurn(
 
         midTurnCompactionOccurred = true;
         activeContext = {
-          systemPrompt,
           messages: await buildContextMessages(),
           tools,
         };

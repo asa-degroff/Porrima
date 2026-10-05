@@ -40,6 +40,11 @@ llamaModels.setProvider(llamacppProvider);
  * Stream a completion from the llama.cpp provider. Options pass through to
  * the provider unchanged (llama.cpp-specific extensions like llamaSlotLease
  * and onModelProgress ride along via the Models option spread).
+ *
+ * `context` may be a raw `{systemPrompt, messages, tools}` shape (one-shot
+ * utility calls) or a normalized transcript (the agent loop). `Models`
+ * normalizes the former before dispatch, and `normalizeContext` is idempotent
+ * for the latter.
  */
 export function streamLlamaCpp(
   model: Model<string>,
