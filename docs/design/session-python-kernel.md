@@ -188,8 +188,8 @@ unchanged in 1.0.
   `kill(pid,0)` loop only where neither exists (prime-agent `repl.py:1516-1561`;
   Windows needs a process-handle wait because `os.kill(pid,0)` *terminates*
   there — out of scope, Porrima is Linux-first). On owner death the thread
-  kills live handles and hard-exits (`os._exit(1)`): a sync cell monopolizes
-  the loop, so a queued graceful shutdown would never run.
+  kills the journaled child groups and hard-exits (`os._exit(1)`): a sync cell
+  monopolizes the loop, so a queued graceful shutdown would never run.
 - stdio: requests on the kernel's stdin, events on its stdout, stderr kept as a
   bounded diagnostics ring buffer (last ~64 KiB) surfaced in errors.
 - **No bridge, no socket, no daemon**: the kernel is server-owned and does not
@@ -292,8 +292,9 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 - A failed cell keeps the namespace (no rollback). `timeout_ms` defaults to the
   tool's timeout (30 s), max 3600 s for background jobs; a foreground timeout
   interrupts the cell, then reports `status:"error"` with the namespace intact.
-- One execution at a time per kernel; duplicate `id`s are rejected (the server
-  never reuses ids).
+- One foreground execution at a time per kernel; background jobs run
+  concurrently and are tracked separately (§4.7). Duplicate `id`s are rejected
+  (the server never reuses ids).
 
 ### 4.5 Interrupts
 

@@ -113,6 +113,7 @@ Porrima sites:
 |---|---|
 | `chat.ts:2173,3088,3230,3631`; `chat-turn-runner.ts:382,975-977` | `AgentContext` built with `systemPrompt` field |
 | `agent.ts:425` | one-shot `Context` with `systemPrompt` |
+| `cache-warm.ts:584-588,683-687` | builds `{systemPrompt, messages, tools}` and calls `buildOpenAICompatChatBody()` directly — a rendering path that bypasses the loop entirely (warm bodies must match live bytes) |
 | `openai-compat-provider.ts:398-399` | reads `context.tools` |
 | `openai-compat-provider.ts:1155,1162-1169` | `transformMessagesForProvider(context.messages)` + `context.systemPrompt` |
 | `llm-provider.ts:33-50` | `streamSimple(model, context: Context, …)` |
@@ -138,7 +139,12 @@ diverges (the same failure mode as "Tool Result Wire Shape" in
 - New low-level `runAgentLoop`/`runAgentLoopContinue` emit-sink variants;
   Porrima's local `runAgentLoop` wrapper (`agent-loop-runner.ts`) is
   unaffected.
-- Node ≥ 22.19.0 (since 0.75.0); this box runs v24.18.1.
+- Node ≥ 22.19.0 (since 0.75.0). The server runtime is `/usr/bin/node`
+  v22.22.2 (the systemd unit's `ExecStart`); dev shells see nvm's v24.18.1.
+  Both satisfy the engine.
+- TypeBox: Porrima has no independent pin — `Type` is imported through pi-ai's
+  re-export, so pi-ai 1.0.2's `typebox@1.3.27` moves with the upgrade and
+  cannot conflict.
 
 ### 2.5 What survives (kernel P2.5 seam unaffected)
 
@@ -183,13 +189,20 @@ export interface SpawnSupervisedOptions {
   env?: NodeJS.ProcessEnv;
   /** Registry key and diagnostics label, e.g. "bash:<chatId>". */
   key: string;
-  /** Written to stdin and closed (bash stdin transport; future kernel use). */
-  stdin?: string | Buffer;
+  /** Convenience: written to stdin and closed before return. */
+  stdinPayload?: string | Buffer;
   killGraceMs?: number;
 }
 export interface SupervisedProcess {
   key: string;
   pid: number;
+  /** Always piped: bash capture consumes these; the kernel reads protocol lines. */
+  stdout: Readable | null;
+  stderr: Readable | null;
+  /** Live stdin channel (kernel request channel); false on backpressure. */
+  write(data: string | Buffer): boolean;
+  /** Close stdin (kernel disposal; stdinPayload already does this). */
+  endStdin(): void;
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   /** SIGTERM → grace → SIGKILL on the process group. */
   kill(): Promise<void>;
@@ -372,10 +385,11 @@ capture, kernel cell output) honor the same cap.
 
 ### 4.4 Replay stability
 
-The footer is result text, so spill paths must be deterministic per
-command/cell (short id, no timestamps) and the footer format must stay
-byte-stable. A `read_file(path, offset=…)` pointer that differs between wire
-and replay is the KV-digest failure the tool-system doc warns about.
+The footer is result text, so a spill path must be a short per-call uuid (no
+timestamps, not derived from command content — two identical commands in one
+chat must not collide) and the footer format must stay byte-stable. A
+`read_file(path, offset=…)` pointer that differs between wire and replay is
+the KV-digest failure the tool-system doc warns about.
 
 ## 5. Provider/transcript migration plan
 
@@ -395,10 +409,18 @@ convertToLlm: async (messages) => {
 - Tools stay automatic: the 1.0 loop diffs `context.tools` against the
   transcript and appends a system delta when they change, so `context.tools`
   keeps working.
-- The same wrapper serves live, replay, and headless — all three build their
-  config through `createAgentLoopConfig` (`chat.ts:2301`,
+- The same wrapper serves live, replay, and headless — every loop path builds
+  its config through `createAgentLoopConfig` (`chat.ts:2301`,
   `chat-turn-runner.ts:756`), which is why the wrap belongs there and not in
   individual routes.
+- **Cache-warm is a separate rendering path** (`cache-warm.ts:584-588` chat
+  warm, `:683-687` new-agent baseline): it builds `{systemPrompt, messages,
+  tools}` and calls `buildOpenAICompatChatBody()` directly, so it never runs
+  the wrapper. Migrate it through the same shared helper — e.g.
+  `buildTranscriptContext(systemPrompt, messages, tools)` calling
+  `createInitialSystemMessage(systemPrompt, tools)` (tools must ride the
+  leading message; there is no loop to inject a delta) — so warm and live
+  bodies stay byte-identical. A one-byte divergence wastes every warm prefill.
 - Keep the system prompt out of persisted message rows (today it is a context
   field, not a row); only the request-time transcript gains it.
 - `AgentContext` construction sites drop the `systemPrompt` field; callers
@@ -469,7 +491,7 @@ upgrade only has to deal with the provider/loop migration:
 |---|---|---|
 | T0 | `process-supervisor.ts` (+ crash-recovery journal, §3.6), `output-capture.ts`, `tool-output-store.ts` | 0.85.1 (no pi APIs) |
 | T1 | `runStreamingBash` rewrite on T0 (+ `onUpdate` seam; chat.ts/client streaming plumbing can follow) | 0.85.1 |
-| T2 | Provider/transcript migration (`finishTurn`, system message, `TranscriptContext`, llama.cpp request), then bump both packages to 1.0.2 | 1.0.2 |
+| T2 | Provider/transcript migration (`finishTurn`, system message, `TranscriptContext`, llama.cpp request, cache-warm bodies), then bump both packages to 1.0.2 | 1.0.2 |
 | T3 | Kernel P1 manager on the supervisor ([session-python-kernel.md](session-python-kernel.md)) | 1.0.2 |
 | T4 | Kernel P2/P3 (jobs, spill, snapshot) — P2's spill is already delivered by T0 | 1.0.2 |
 
@@ -488,8 +510,20 @@ Notes:
   `read_file` paging, merged output ordering, exitCode mapping, no orphan
   group after abort or server SIGKILL (supervisor journal + startup sweep,
   §3.6).
+- **Warm/live body parity — the highest-value check**: digest the exact body
+  `buildOpenAICompatChatBody` produces for a warm run and the next live run of
+  the same chat; byte-identical, for both cache-warm sites (chat warm and
+  new-agent baseline).
 - Provider: long-chat KV digest parity after the transcript migration; prompt
   debug before/after; mid-turn compaction headless test (`chat-turn-runner`).
+- Tool-delta markers: a long chat with a stable toolset emits no tool-state
+  system messages; after skill activation (which changes the next turn's
+  toolset) verify the emitted delta renders correctly and that its persistence
+  in replay is intended.
+- Memory deltas: persisted `_mergeIntoNextUserMessage` rows still merge into
+  the following user message on replay (they never reach the provider as
+  system messages); live mid-turn passive-recall injections still take the
+  downgrade-to-user path byte-identically.
 - Loop: `finishTurn` guard fires only for normal responses; error/aborted runs
   end normally.
 - Store: 64-file/24 h retention, per-file byte cap enforced, chat deletion
