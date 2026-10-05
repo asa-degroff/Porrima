@@ -1,5 +1,6 @@
 import type {
   AgentContext,
+  AgentEvent,
   AgentMessage,
   AgentTool,
   AgentTurnContext,
@@ -17,7 +18,7 @@ import {
   estimateContextPressure,
   midTurnPressureDecision,
 } from "./context-pressure.js";
-import type { SynthesisEmitter } from "./synthesis-stream.js";
+import { partialToolText, type SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
@@ -350,6 +351,40 @@ export function splitAssistantMessageIntoCanonicalToolLoopRows(
   delete finalRow._toolLoopFragment;
 
   return [fragment, finalRow];
+}
+
+/**
+ * Forward live-only preview events from the pi-agent-core loop to the emitter:
+ * text/thinking deltas, tool-call argument generation previews, and in-flight
+ * tool output (`tool_execution_update` — bash's streaming view, a Python
+ * kernel cell's stdout so far). Extracted so the headless event→SSE mapping is
+ * unit-testable and stays in lockstep with the HTTP route's
+ * forwardAssistantDelta/forwardToolPartial (same frames, shared builders).
+ *
+ * Previews are live-only: never persisted, never replayed, never part of the
+ * model context — final text/tool results carry the authoritative output.
+ */
+export function forwardHeadlessStreamEvent(emitter: SynthesisEmitter, event: AgentEvent): void {
+  if (event.type === "message_update") {
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta") {
+      emitter.emitTextDelta(update.delta);
+    } else if (update.type === "thinking_delta") {
+      emitter.emitThinkingDelta(update.delta);
+    } else if (update.type === "toolcall_start") {
+      const block = ((event.message as AssistantMessage).content?.[update.contentIndex] ?? {}) as {
+        name?: string;
+        id?: string;
+      };
+      emitter.emitToolCallStart(update.contentIndex, block.name ?? "", block.id || undefined);
+    } else if (update.type === "toolcall_delta") {
+      emitter.emitToolCallDelta(update.contentIndex, update.delta);
+    }
+    return;
+  }
+  if (event.type === "tool_execution_update") {
+    emitter.emitToolPartial(event.toolCallId, event.toolName, partialToolText(event.partialResult));
+  }
 }
 
 export async function runHeadlessChatTurn(
@@ -811,14 +846,12 @@ export async function runHeadlessChatTurn(
         streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id }),
         logPrefix,
         onEvent: async (event) => {
-          if (event.type === "message_update") {
-            const update = event.assistantMessageEvent;
-            if (update.type === "text_delta") {
-              emitter.emitTextDelta(update.delta);
-            } else if (update.type === "thinking_delta") {
-              emitter.emitThinkingDelta(update.delta);
-            }
-          } else if (event.type === "tool_execution_start") {
+          // Live-only previews: text/thinking deltas, tool-call argument
+          // generation, and in-flight tool output. Same frames as the HTTP
+          // route, via the shared mapping.
+          forwardHeadlessStreamEvent(emitter, event);
+
+          if (event.type === "tool_execution_start") {
             const toolCall: ToolCall = {
               type: "toolCall",
               id: event.toolCallId,

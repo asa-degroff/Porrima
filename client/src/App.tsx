@@ -473,6 +473,15 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     }, 1000);
     return () => clearTimeout(timer);
   }, [lastActiveChatId, updateSettings]);
+
+  // Server-reported live stream for the active chat (headless synthesis, wake,
+  // and automation runs included). Refreshed by the sidebar's chat-list poll;
+  // lets useChat discover and attach to turns this client never started.
+  const activeChatServerStream = useMemo(
+    () => (activeChatId ? chats.some((c) => c.id === activeChatId && c.activeStream === true) : false),
+    [chats, activeChatId],
+  );
+
   const {
     messages,
     messageOffset,
@@ -513,7 +522,10 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     modelFallback,
     hasCompactionSummary,
     reconnecting,
-  } = useChat(activeChatId, { onQueueCountDelta: adjustChatQueueCount });
+  } = useChat(activeChatId, {
+    onQueueCountDelta: adjustChatQueueCount,
+    serverStreamActive: activeChatServerStream,
+  });
 
   // Any chat streaming — includes background chats so the sidebar indicator stays correct when viewing a different chat
   const anyStreaming = streaming || getStreamingChatIds().length > 0;

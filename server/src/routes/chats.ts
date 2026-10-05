@@ -4,6 +4,7 @@ import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessage
 import { getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
+import { isLiveStreamActive } from "../services/live-streams.js";
 import { listVisibleQueueCounts } from "../services/message-queue.js";
 import { computeContextBreakdown } from "../services/context-breakdown.js";
 import { discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -22,7 +23,16 @@ router.get("/", async (_req, res) => {
   res.json(
     chats.map((chat) => {
       const queueCount = queueCounts.get(chat.id);
-      return queueCount ? { ...chat, queueCount } : chat;
+      // Server-initiated headless turns (synthesis, wake, automations) have no
+      // client that started them. The list carries the liveness flag so the
+      // sidebar can decide to attach via /chat/reconnect without probing
+      // /chat/status on every chat switch.
+      const activeStream = isLiveStreamActive(chat.id);
+      return {
+        ...chat,
+        ...(queueCount ? { queueCount } : {}),
+        ...(activeStream ? { activeStream: true } : {}),
+      };
     })
   );
 });

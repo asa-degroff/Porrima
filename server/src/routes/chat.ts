@@ -88,7 +88,9 @@ import {
   installLiveStream,
   stampStreamPresence,
   buildAttachFrames,
+  isLiveStreamActive,
 } from "../services/live-streams.js";
+import { partialToolText, toolCallDeltaFrame, toolCallStartFrame, toolPartialFrame } from "../services/synthesis-stream.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
@@ -860,21 +862,6 @@ function imageExtensionForMimeType(mimeType: string | undefined): string {
   }
 }
 
-/**
- * Text from a streaming tool update (`tool_execution_update.partialResult`),
- * joined across text items. Live-only: never persisted, never enters the
- * model's context — the final tool result carries the full output.
- */
-function partialToolText(partialResult: any): string {
-  const content = partialResult?.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((item: any) => item?.type === "text" && typeof item.text === "string")
-    .map((item: any) => item.text)
-    .join("");
-}
-
 /** Forward one in-flight tool update to the client (live-only SSE event). */
 function forwardToolPartial(
   res: Response,
@@ -882,9 +869,7 @@ function forwardToolPartial(
 ): void {
   const text = partialToolText(event.partialResult);
   if (!text) return;
-  res.write(
-    `event: tool_partial\ndata: ${JSON.stringify({ toolCallId: event.toolCallId, name: event.toolName, text })}\n\n`,
-  );
+  res.write(toolPartialFrame(event.toolCallId, event.toolName, text));
 }
 
 /**
@@ -1753,18 +1738,11 @@ async function handleChatStream(
         name?: string;
         id?: string;
       };
-      res.write(`event: tool_call_start\ndata: ${JSON.stringify({
-        index: ame.contentIndex,
-        name: block.name ?? "",
-        id: block.id || undefined,
-      })}\n\n`);
+      res.write(toolCallStartFrame(ame.contentIndex, block.name ?? "", block.id || undefined));
       return true;
     }
     if (ame.type === "toolcall_delta") {
-      res.write(`event: tool_call_delta\ndata: ${JSON.stringify({
-        index: ame.contentIndex,
-        delta: ame.delta,
-      })}\n\n`);
+      res.write(toolCallDeltaFrame(ame.contentIndex, ame.delta));
       return true;
     }
     return false;
@@ -5618,7 +5596,7 @@ router.post("/stop", async (req, res) => {
 router.get("/status/:chatId", async (req, res) => {
   const { chatId } = req.params;
   const stream = liveStreams.get(chatId);
-  const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
+  const active = isLiveStreamActive(chatId);
 
   const includeWindow = req.query.includeWindow !== undefined && req.query.includeWindow !== "0";
   let window: Awaited<ReturnType<typeof getChatWithWindow>> = null;

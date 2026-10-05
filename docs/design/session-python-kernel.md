@@ -393,9 +393,14 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   `run_python` through the kernel manager's 100 ms-throttled stdout/stderr
   view); pi-agent-core emits `tool_execution_update`; `chat.ts` forwards it
   as a `tool_partial` SSE event from **all four** event loops (main,
-  continuation, stranded recovery, mid-turn resume); the client attaches the
-  latest view to the matching `tool_call` segment and `ToolCallDisplay`
-  renders it with an auto-following tail.
+  continuation, stranded recovery, mid-turn resume), and the headless runner
+  (`chat-turn-runner.ts`) forwards the same frame for synthesis/wake/automation
+  turns (headless parity added 2026-10-05) — preview frames
+  (`tool_call_start`/`tool_call_delta`/`tool_partial`, text/thinking deltas)
+  are built by shared helpers in `synthesis-stream.ts` so the transports
+  cannot drift; the client attaches the latest view to the matching
+  `tool_call` segment and `ToolCallDisplay` renders it with an auto-following
+  tail.
   Constraint: updates are **live-only, never persisted** — the final tool
   result carries the full output, and persisting partials would break the
   wire/replay byte-stability above. Partials never enter the model's context,
@@ -749,7 +754,7 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 |---|---|---|
 | P1 | Driver (`porrima_kernel.py`), manager/supervisor, persistent namespace, top-level await, interrupts L1/L2 (test matrix: C extension holding the GIL, `subprocess.wait`, tight `except`-swallowing loop, custom SIGINT handler, `except BaseException` swallow, parked interrupt, double interrupt, finishing/handoff windows), per-cell process-group patch + child journal, owner watchdog, wedge policy, lazy per-chat kernels, TTL/LRU, one-shot fallback, startup sweep, shutdown disposal (protocol `shutdown` first), tool description, tests | ~1,200–1,800 LOC TS+Py (10-04 review: 600–800 excluded the interrupt state machine and tests) |
 | P2 | Background jobs + `python_jobs` (shipped 2026-10-05): reader-thread acks so a busy loop cannot delay a job id, server-side registry/tail/kill from tagged events, job output spill via the shared capture, per-kernel 4 + box-wide 8 caps | done |
-| P2.5 | Streaming (shipped 2026-10-05): `onUpdate` in execute → `tool_execution_update` case + `tool_partial` SSE in all four `chat.ts` loops → client tool-card render. Live-only, never persisted | done (~200 LOC) |
+| P2.5 | Streaming (shipped 2026-10-05; headless parity added): `onUpdate` in execute → `tool_execution_update` case + `tool_partial` SSE in all four `chat.ts` loops and the headless runner, plus `tool_call_start`/`tool_call_delta` previews → client tool-card render. Live-only, never persisted | done (~250 LOC) |
 | P3 | Snapshot/restore + notices + expiry (shipped 2026-10-05): per-name records with read/write caps, commit shielding, failed-restore guard, EOF final flush, capture-freshness memo, revive-with-live-globals, `emit()` MIME display → tool-result images | done |
 | P4 (optional) | Remote SSH kernels, kernel venv provisioning | ~400–600 LOC |
 

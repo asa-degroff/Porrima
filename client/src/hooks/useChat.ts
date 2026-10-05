@@ -313,6 +313,13 @@ export interface UseChatOptions {
   /** Optimistic sidebar queue-count nudge for queue events this client
    *  witnesses: +1 on enqueue success, -1 on drain (follow_up_start). */
   onQueueCountDelta?: (chatId: string, delta: number) => void;
+  /**
+   * Server-reported live stream for the chat currently being viewed, sourced
+   * from the sidebar's `activeStream` chat-list flag. Lets server-initiated
+   * headless runs (synthesis, wake, automations) be discovered and attached
+   * without probing /chat/status on every chat switch.
+   */
+  serverStreamActive?: boolean;
 }
 
 export function useChat(chatId: string | null, options?: UseChatOptions) {
@@ -320,6 +327,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   useEffect(() => {
     onQueueCountDeltaRef.current = options?.onQueueCountDelta;
   });
+  // Server-reported liveness for the active chat. The ref keeps the
+  // visibility-change handler current without re-registering it on every
+  // chat-list poll.
+  const serverStreamActive = options?.serverStreamActive === true;
+  const serverStreamActiveRef = useRef(serverStreamActive);
+  serverStreamActiveRef.current = serverStreamActive;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageOffset, setMessageOffset] = useState(0);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -1953,13 +1966,15 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   const initialStreamProbeDoneRef = useRef(false);
 
   // Reconnect to a server-side in-flight stream. Runs on chat switch when the
-  // chat was recently streaming, and once per session for the first opened
-  // chat regardless of markers — the page-refresh-mid-turn case.
+  // chat was recently streaming or the server reports an active stream for it
+  // (headless synthesis/wake/automation runs this client never started), and
+  // once per session for the first opened chat regardless of markers — the
+  // page-refresh-mid-turn case.
   useEffect(() => {
     if (!chatId) return;
     if (bgStreams.has(chatId)) return;
     const isInitialProbe = !initialStreamProbeDoneRef.current;
-    if (!isInitialProbe && !isRecentlyStreaming(chatId)) return;
+    if (!isInitialProbe && !serverStreamActive && !isRecentlyStreaming(chatId)) return;
     initialStreamProbeDoneRef.current = true;
 
     let cancelled = false;
@@ -1972,7 +1987,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     return () => {
       cancelled = true;
     };
-  }, [chatId, tryReconnect, isRecentlyStreaming]);
+  }, [chatId, tryReconnect, isRecentlyStreaming, serverStreamActive]);
 
   // When the tab returns from the background, the browser may have killed the
   // SSE connection during backgrounding (common with fetch-based streams).
@@ -1985,8 +2000,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       const activeChatId = activeChatIdRef.current;
       if (!activeChatId) return;
 
-      // Only attempt reconnection if the chat was recently streaming.
-      if (!isRecentlyStreaming(activeChatId)) return;
+      // Only attempt reconnection if the chat was recently streaming or the
+      // server reports a live headless stream for it.
+      if (!isRecentlyStreaming(activeChatId) && !serverStreamActiveRef.current) return;
 
       (async () => {
         if (document.visibilityState !== "visible") return;

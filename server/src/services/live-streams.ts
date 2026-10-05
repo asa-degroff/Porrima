@@ -342,6 +342,16 @@ export function getLiveStream(chatId: string): LiveStream | undefined {
 }
 
 /**
+ * True when the chat has a live turn — not ended and not aborted. Covers both
+ * HTTP-driven turns and server-initiated headless runs (synthesis, wake,
+ * automations), so discovery paths (chat list, /status) agree on liveness.
+ */
+export function isLiveStreamActive(chatId: string): boolean {
+  const stream = liveStreams.get(chatId);
+  return !!stream && !stream.ended && !stream.abort.signal.aborted;
+}
+
+/**
  * Build the SSE frames an attaching client (e.g. /reconnect) should receive
  * before going live: the owner's resync snapshot. Every stream owner
  * installs a builder (chat turns, turn-gate waiters, headless synthesis);

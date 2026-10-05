@@ -364,6 +364,12 @@ export interface ChatListItem {
   projectId?: string;
   /** Visible queued-message count (server-side message queue). Present only when > 0. */
   queueCount?: number;
+  /**
+   * Server-reported live turn, covering both HTTP-driven turns and headless
+   * runs this client never started (synthesis, wake, automations). Present
+   * only while a stream is active. Drives reconnect discovery on chat switch.
+   */
+  activeStream?: boolean;
 }
 
 export interface ChatMessageWindow {

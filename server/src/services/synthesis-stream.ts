@@ -50,6 +50,46 @@ export interface SynthesisStreamState {
   finalUsage?: MessageUsage;
 }
 
+// ---------------------------------------------------------------------------
+// Live-only preview frames
+//
+// Shared by the HTTP chat route (chat.ts) and the headless runner
+// (chat-turn-runner.ts) so in-flight preview frames cannot drift between the
+// transports. All of these are live-only: never persisted, never replayed,
+// never entered into the model context — the final tool result carries the
+// authoritative output.
+// ---------------------------------------------------------------------------
+
+/**
+ * Text from a streaming tool update (`tool_execution_update.partialResult`),
+ * joined across text items. Mirrors the HTTP route's extraction so both
+ * transports render the same view.
+ */
+export function partialToolText(partialResult: any): string {
+  const content = partialResult?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item: any) => item?.type === "text" && typeof item.text === "string")
+    .map((item: any) => item.text)
+    .join("");
+}
+
+/** SSE frame for one in-flight tool update. */
+export function toolPartialFrame(toolCallId: string, name: string, text: string): string {
+  return `event: tool_partial\ndata: ${JSON.stringify({ toolCallId, name, text })}\n\n`;
+}
+
+/** SSE frame for the start of a streamed tool-call argument block. */
+export function toolCallStartFrame(index: number, name: string, id?: string): string {
+  return `event: tool_call_start\ndata: ${JSON.stringify({ index, name, id })}\n\n`;
+}
+
+/** SSE frame for one streamed tool-call argument delta. */
+export function toolCallDeltaFrame(index: number, delta: string): string {
+  return `event: tool_call_delta\ndata: ${JSON.stringify({ index, delta })}\n\n`;
+}
+
 export class SynthesisEmitter {
   readonly stream: LiveStream;
   readonly state: SynthesisStreamState;
@@ -106,6 +146,27 @@ export class SynthesisEmitter {
     if (!delta) return;
     this.state.thinkingText += delta;
     this.writeEvent("thinking_delta", { delta });
+  }
+
+  /** Streamed tool-call argument block start (live preview only). */
+  emitToolCallStart(index: number, name: string, id?: string): void {
+    this.write(toolCallStartFrame(index, name, id || undefined));
+  }
+
+  /** Streamed tool-call argument delta (live preview only). */
+  emitToolCallDelta(index: number, delta: string): void {
+    if (!delta) return;
+    this.write(toolCallDeltaFrame(index, delta));
+  }
+
+  /**
+   * Forward one in-flight tool output update — e.g. bash's streaming view or
+   * a Python kernel cell's stdout so far (live preview only; the final tool
+   * result carries the full output).
+   */
+  emitToolPartial(toolCallId: string, name: string, text: string): void {
+    if (!text) return;
+    this.write(toolPartialFrame(toolCallId, name, text));
   }
 
   /**
