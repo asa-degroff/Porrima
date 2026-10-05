@@ -95,47 +95,6 @@ interface CompactionInfo {
 const drafts = new Map<string, Draft>();
 const MESSAGE_PAGE_SIZE = 200;
 
-// ---------------------------------------------------------------------------
-// Recently-streaming markers
-//
-// Marks chats that had a stream started from this client recently, so chat
-// switches and tab visibility changes can cheaply decide whether to probe
-// /chat/status for an in-flight server stream. The marker set is backed by
-// sessionStorage: a page refresh mid-turn wipes all in-memory state, and the
-// refresh case is precisely when the server-side stream is still live — so
-// the markers must survive the reload or reconnect-on-refresh never fires.
-// ---------------------------------------------------------------------------
-
-const RECENTLY_STREAMING_KEY = "porrima.recentlyStreaming";
-const RECENTLY_STREAMING_TTL_MS = 5 * 60_000;
-
-function loadRecentlyStreaming(): Map<string, number> {
-  try {
-    const raw = sessionStorage.getItem(RECENTLY_STREAMING_KEY);
-    if (!raw) return new Map();
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const now = Date.now();
-    const map = new Map<string, number>();
-    for (const [id, expiresAt] of Object.entries(parsed)) {
-      if (typeof expiresAt === "number" && expiresAt > now) map.set(id, expiresAt);
-    }
-    return map;
-  } catch {
-    return new Map();
-  }
-}
-
-function saveRecentlyStreaming(map: Map<string, number>): void {
-  try {
-    sessionStorage.setItem(RECENTLY_STREAMING_KEY, JSON.stringify(Object.fromEntries(map)));
-  } catch {
-    // Storage unavailable (private mode/quota) — markers stay memory-only.
-  }
-}
-
-/** Module-level singleton so all hook instances share marker state. */
-const recentlyStreamingExpiries = loadRecentlyStreaming();
-
 /** Check if a chat has an active or completed background stream */
 export function hasBackgroundStream(chatId: string): boolean {
   return bgStreams.has(chatId);
@@ -315,9 +274,11 @@ export interface UseChatOptions {
   onQueueCountDelta?: (chatId: string, delta: number) => void;
   /**
    * Server-reported live stream for the chat currently being viewed, sourced
-   * from the sidebar's `activeStream` chat-list flag. Lets server-initiated
-   * headless runs (synthesis, wake, automations) be discovered and attached
-   * without probing /chat/status on every chat switch.
+   * from the sidebar's `activeStream` chat-list flag (30s poll). Chat switches
+   * probe /chat/status directly, so this flag covers the gap between probes:
+   * it re-triggers the attach effect when a headless turn first appears in
+   * the list — including while the tab is hidden, where the focused 3s poll
+   * is paused.
    */
   serverStreamActive?: boolean;
 }
@@ -327,12 +288,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   useEffect(() => {
     onQueueCountDeltaRef.current = options?.onQueueCountDelta;
   });
-  // Server-reported liveness for the active chat. The ref keeps the
-  // visibility-change handler current without re-registering it on every
-  // chat-list poll.
+  // Server-reported liveness for the active chat, from the sidebar's
+  // chat-list poll. Probing now happens on every chat switch, so this flag
+  // covers the gap between probes: it re-triggers the attach effect when a
+  // headless turn first appears in the list — including while the tab is
+  // hidden, where the focused poll is paused.
   const serverStreamActive = options?.serverStreamActive === true;
-  const serverStreamActiveRef = useRef(serverStreamActive);
-  serverStreamActiveRef.current = serverStreamActive;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageOffset, setMessageOffset] = useState(0);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -1934,48 +1895,15 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   }, [prepareStream, makeStreamCallbacks, setActiveChatData]);
   tryReconnectRef.current = tryReconnect;
 
-  // ---------- Stale-content detection ----------
-  // Track which chats have recently been streaming so we can skip the
-  // getChatStatus round-trip for non-streaming switches. Backed by
-  // sessionStorage — see the module-level comment for why.
-  const recentlyStreamingRef = useRef<Map<string, number>>(recentlyStreamingExpiries);
-
-  const isRecentlyStreaming = useCallback((id: string): boolean => {
-    const expiresAt = recentlyStreamingRef.current.get(id);
-    if (expiresAt == null) return false;
-    if (expiresAt <= Date.now()) {
-      recentlyStreamingRef.current.delete(id);
-      saveRecentlyStreaming(recentlyStreamingRef.current);
-      return false;
-    }
-    return true;
-  }, []);
-
-  // Mark a chat as recently streaming when the user sends a message,
-  // and auto-expire the marker after a few minutes.
-  const markRecentlyStreaming = useCallback((id: string) => {
-    recentlyStreamingRef.current.set(id, Date.now() + RECENTLY_STREAMING_TTL_MS);
-    saveRecentlyStreaming(recentlyStreamingRef.current);
-  }, []);
-
-  // One-shot probe flag: the first chat opened in a session gets a status
-  // check even without a marker. This covers refresh-mid-turn (markers help,
-  // but only for streams this client started) and streams this client never
-  // initiated at all (headless automation/synthesis turns viewed in the
-  // system chat). Exactly one extra GET per session, on page load.
-  const initialStreamProbeDoneRef = useRef(false);
-
-  // Reconnect to a server-side in-flight stream. Runs on chat switch when the
-  // chat was recently streaming or the server reports an active stream for it
-  // (headless synthesis/wake/automation runs this client never started), and
-  // once per session for the first opened chat regardless of markers — the
-  // page-refresh-mid-turn case.
+  // Reconnect to a server-side in-flight stream. Probes on EVERY chat switch
+  // — an inactive /status probe is a map lookup + tiny JSON on the server
+  // (no DB read unless a stream is live), so probing is cheaper than waiting
+  // for the 30s chat-list poll to learn that a turn is live. Also re-runs
+  // when the server reports a live stream for the chat already being viewed
+  // (flag lands from the list poll, potentially while the tab is hidden).
   useEffect(() => {
     if (!chatId) return;
     if (bgStreams.has(chatId)) return;
-    const isInitialProbe = !initialStreamProbeDoneRef.current;
-    if (!isInitialProbe && !serverStreamActive && !isRecentlyStreaming(chatId)) return;
-    initialStreamProbeDoneRef.current = true;
 
     let cancelled = false;
     (async () => {
@@ -1987,22 +1915,48 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     return () => {
       cancelled = true;
     };
-  }, [chatId, tryReconnect, isRecentlyStreaming, serverStreamActive]);
+  }, [chatId, tryReconnect, serverStreamActive]);
+
+  // Focused liveness poll for the viewed chat. The switch probe above fires
+  // when the chat changes (or the server flag flips), so a headless turn
+  // (synthesis, wake, automation) that starts while the user is ALREADY
+  // viewing the chat would otherwise stay invisible until the 30s list poll.
+  // Poll /status every 3s while the tab is visible and this client does not
+  // own the chat's stream — inactive probes are free — and attach through
+  // the same path as the switch probe (which re-checks chatId + bgStreams).
+  useEffect(() => {
+    if (!chatId) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (activeChatIdRef.current !== chatId) return;
+      if (bgStreams.has(chatId)) return;
+      getChatStatus(chatId)
+        .then((status) => {
+          if (!status.active) return;
+          if (document.visibilityState !== "visible") return;
+          if (activeChatIdRef.current !== chatId) return;
+          if (bgStreams.has(chatId)) return;
+          return tryReconnect(chatId);
+        })
+        .catch(() => {
+          // Probe failed (network blip) — the next tick retries.
+        });
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [chatId, tryReconnect]);
 
   // When the tab returns from the background, the browser may have killed the
   // SSE connection during backgrounding (common with fetch-based streams).
-  // Detect this and reconnect automatically instead of requiring a page refresh.
-  // Only attempts reconnection if the chat was recently streaming.
+  // Detect this and reconnect automatically instead of requiring a page
+  // refresh. Probes the active chat unconditionally — an inactive /status
+  // probe is a map lookup on the server — so a headless turn that started
+  // while hidden is picked up even before the 30s list flag has landed.
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
 
       const activeChatId = activeChatIdRef.current;
       if (!activeChatId) return;
-
-      // Only attempt reconnection if the chat was recently streaming or the
-      // server reports a live headless stream for it.
-      if (!isRecentlyStreaming(activeChatId) && !serverStreamActiveRef.current) return;
 
       (async () => {
         if (document.visibilityState !== "visible") return;
@@ -2021,13 +1975,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [tryReconnect, isRecentlyStreaming]);
+  }, [tryReconnect]);
 
   const send = useCallback(
     (text: string, images?: ImageAttachment[]) => {
       if (!chatId) return;
       const targetChatId = chatId;
-      markRecentlyStreaming(targetChatId);
       setTurnQueueInfo(null);
 
       const userMsg: ChatMessage = {
@@ -2152,7 +2105,6 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
-      markRecentlyStreaming(targetChatId);
       const currentOffset = messageOffsetRef.current;
       const rowIdLocalIndex = messageRowId == null
         ? -1
@@ -2412,6 +2364,5 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     titleUpdate,
     modelFallback,
     hasCompactionSummary,
-    markRecentlyStreaming,
   };
 }

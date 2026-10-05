@@ -25,8 +25,9 @@ router.get("/", async (_req, res) => {
       const queueCount = queueCounts.get(chat.id);
       // Server-initiated headless turns (synthesis, wake, automations) have no
       // client that started them. The list carries the liveness flag so the
-      // sidebar can decide to attach via /chat/reconnect without probing
-      // /chat/status on every chat switch.
+      // client can discover them between /chat/status probes (chat switches
+      // probe directly; the flag covers the viewed chat while the tab is
+      // hidden) and so the sidebar can show liveness for chats not viewed.
       const activeStream = isLiveStreamActive(chat.id);
       return {
         ...chat,
