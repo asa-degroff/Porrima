@@ -416,6 +416,14 @@ function formatArgs(toolName: string, args: Record<string, any>): string {
       return args.command?.slice(0, 100) || "";
     case "run_python":
       return args.code?.split("\n")[0]?.slice(0, 50) || "";
+    case "python_jobs":
+      return [
+        args.action,
+        typeof args.jobId === "string" ? args.jobId.slice(0, 8) : null,
+        args.force ? "force" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "";
     case "list_files":
       return args.pattern || args.path || "";
     case "save_memory":
@@ -442,6 +450,7 @@ function getToolIcon(name: string): ToolIconName {
     list_files: "list_files",
     bash: "bash",
     run_python: "run_python",
+    python_jobs: "python_jobs",
     create_artifact: "create_artifact",
     update_artifact: "update_artifact",
     save_memory: "save_memory",
