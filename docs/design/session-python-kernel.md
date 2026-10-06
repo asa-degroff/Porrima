@@ -291,8 +291,11 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   show the offending line; tracebacks formatted plain with runtime frames
   stripped.
 - A failed cell keeps the namespace (no rollback). `timeout_ms` defaults to the
-  tool's timeout (30 s), max 3600 s for background jobs; a foreground timeout
-  interrupts the cell, then reports `status:"error"` with the namespace intact.
+  tool's timeout (30 s foreground, 3600 s background — the background path
+  exists for work longer than the foreground default, so it defaults to its
+  own ceiling rather than silently dying at 30 s), max 300 s foreground /
+  3600 s background; a foreground timeout interrupts the cell, then reports
+  `status:"error"` with the namespace intact.
 - One foreground execution at a time per kernel; background jobs run
   concurrently and are tracked separately (§4.7). Duplicate `id`s are rejected
   (the server never reuses ids).

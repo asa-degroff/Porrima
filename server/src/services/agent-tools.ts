@@ -94,7 +94,7 @@ const RUN_PYTHON_TOOL: Tool = {
   description: "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root for project chats. Falls back to stateless on remote machines.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
-    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
+    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30 foreground / 3600 background; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
     background: Type.Optional(Type.Boolean({ description: "Run as a background job and return immediately with a job ID (default false). Background jobs require the persistent kernel; use python_jobs to inspect them later." })),
   }),
 };
@@ -942,7 +942,11 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         const background = args.background === true;
         if (useKernel) {
           const maxSec = background ? 3600 : 300;
-          const timeoutSec = Math.min(maxSec, Math.max(1, args.timeout || 30));
+          // Background defaults to its own ceiling: the path exists for work
+          // longer than the foreground default, and a lazy background: true
+          // should not silently die at 30 s. Foreground keeps 30 s as the
+          // fast-fail signal (it holds the global turn-gate lease).
+          const timeoutSec = Math.min(maxSec, Math.max(1, args.timeout || (background ? 3600 : 30)));
           const outcome = await executeInKernel({
             chatId,
             cwd: workspace.label,
