@@ -86,12 +86,12 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
   ),
   python_jobs: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <g transform="translate(-0.8 2) scale(0.98)" fill="currentColor" stroke="none">
+      <g transform="translate(0.5 0.8) scale(0.95)" fill="currentColor" stroke="none">
         <path d="M5.79 1.574h3.866c.14 0 .252.11.252.246v5.186a.25.25 0 01-.252.246H6.344c-.975 0-1.766.77-1.766 1.72v1.162a.25.25 0 01-.253.243H1.867a.25.25 0 01-.253-.246V6.177a.25.25 0 01.252-.246H7.98c.418 0 .757-.33.757-.737a.747.747 0 00-.757-.738H5.537V1.82a.25.25 0 01.253-.246z" />
         <path d="m11.422 4.166V1.82c0-.95-.79-1.72-1.766-1.72H5.79c-.976 0-1.767.77-1.767 1.72v2.636H1.867C.89 4.456.1 5.226.1 6.176v3.955c0 .95.79 1.72 1.766 1.72h2.46c.085 0 .17-.006.252-.017v2.346c0 .95.79 1.72 1.766 1.72h3.866c.976 0 1.767-.77 1.767-1.72v-2.636h2.156c.976 0 1.767-.77 1.767-1.72V5.868c0-.95-.79-1.72-1.767-1.72h-2.458c-.086 0-.17.005-.253.017z" />
       </g>
-      <circle cx="18.8" cy="17.6" r="5.2" />
-      <path d="M18.8 15.2v2.4l1.9 1.2" />
+      <circle cx="18.5" cy="18.5" r="4.4" />
+      <path d="M18.5 16.2v2.3l1.8 1.2" />
     </svg>
   ),
   create_artifact: (props) => (
