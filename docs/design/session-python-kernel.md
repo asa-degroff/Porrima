@@ -8,6 +8,7 @@
 **Reviewed**: 10-04 — fourth review: live verification of the T3 build in production (sequential-call state sharing, failure survival, L1 interrupt on a subprocess-blocked cell via the timeout path); two live findings added to §4.5 (external-SIGINT scoping, L1 child-orphan semantics; the child-orphan rule was implemented 10-05).
 **Reviewed**: 10-05 — fifth review: T4 (P2/P3) + P2.5 verified against code and tests (22/22) and a live tour (background job ack/list/tail/kill, force-kill L3, restore-after-L3 with notice, emit() display → tool-result image). Two live findings, both fixed 10-05: the startup sweep removed all state directories, so snapshots did not survive a server restart (§4.11); and reviving `emit` backfilled the driver's own module globals into the user namespace (§4.8).
 **Reviewed**: 10-05 — sixth review: dill 0.4.1 installed + verified end-to-end on this box (by-value function restore across an L3 kill and a server restart; §4.8), and finding C fixed — a foreground cell is rejected while a background job runs, instead of timing out into a false wedge (§4.7).
+**Reviewed**: 10-05 — seventh review: storage-model audit (§4.15 added) — the kernel's four storage surfaces verified against code (`kernelRoot`, `snapshotPaths`, `sweepKernelJournals`, `KernelInstance.jobs` in `python-kernel.ts`; `_append_journal` in `porrima_kernel.py`) and classified by failure mode; the SQLite alternative for the journal considered and rejected (§7).
 **Related**: [pi-1.0-migration.md](pi-1.0-migration.md) — pi-agent-core 1.0 removed the node/harness surface that `runStreamingBash` uses; the forced bash rewrite and this plan share one process supervisor and one tool-output store (§2.3, §4.2, §4.6, §4.11).
 
 ## 1. Problem
@@ -751,6 +752,57 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 - Counters (kernels live, cells run, snapshots, restarts) can land in
   `model-stats`-style storage later if useful; not P1.
 
+### 4.15 Storage model
+
+Per-kernel on-disk state lives under `appDataPath("kernels")/<chatId>/`
+(`~/.porrima/kernels/<chatId>`; `PORRIMA_KERNEL_ROOT` override):
+
+| Surface | Format | Role |
+|---|---|---|
+| `children.jsonl` | JSONL — driver appends, one `O_APPEND` write + `fsync` per line, 0600 | Process ledger for the L2/orphan kill ladder (§4.5, §4.11) |
+| `namespace.pkl` + `manifest.json` | Binary dill/pickle payload + one small JSON manifest (read-replace, mtime-checked) | The durable namespace state (§4.8) |
+| Job output | In-memory ring (`OutputCapture`) + the app-wide spill store | Observation (§4.6) |
+| Job registry | In-memory only, per server lifetime | Job status for `python_jobs` (§4.7) |
+
+The JSONL is exactly one file, and it is not data storage — it is a crash
+ledger. The real data (the namespace) is already binary + manifest, not
+JSONL. Each format follows its own failure mode:
+
+- **`children.jsonl`** — failure mode: SIGKILL mid-append. Requirements: a
+  torn write can corrupt only the last line; that torn line must be
+  detectable and ignorable; no lock protocol with out-of-band readers. One
+  `O_APPEND` write + `fsync` covers the first; the sweep's per-line parse
+  tolerates a torn tail (caught and ignored in §4.11); there is no locking to
+  negotiate. And the format stays human-readable — this file is the forensics
+  surface (10-04: read by hand to extract a kernel leader PID for interrupt
+  targeting).
+- **`namespace.pkl` / `manifest.json`** — failure mode: partial restore.
+  Atomicity comes from write ordering (payload, then manifest) by one process,
+  plus the capture-freshness memo — not from a database. SQLite's transactions
+  would not improve it; the payload is binary dill, and the manifest is a
+  single small document with nothing to index.
+- **Job output** — failure mode: size. Ring + spill, the same pattern as every
+  other tool (§4.6).
+
+This is not an exception to the app's storage model; it is the app's existing
+two-class pattern, of which the kernel is the pure instance:
+
+| Class | Where | Examples |
+|---|---|---|
+| Durable queryable state | SQLite | chats, memories, blocks, settings, automations |
+| Ephemeral per-process artifacts | Flat files | server logs, tool-output spills, images, TTS audio, kernel state |
+
+The rest of the app's move to SQLite served a query problem — FTS5, vectors,
+joins, paged windows — none of which exist here. The journal's only consumer
+is the sweep's single full sequential scan at startup; a full scan is the
+entire access pattern, and JSONL is the cheapest possible full-scan format.
+
+If a query ever appeared (e.g. "every subprocess ever spawned by cell X
+across this chat's history"), the fix is a queryable record in the app's
+SQLite — one row per spawn, written by the manager when it observes the
+protocol event — with the journal staying the crash ledger. Not a conversion
+of the journal itself.
+
 ## 5. Phased plan
 
 | Phase | Scope | Rough size |
@@ -801,6 +853,15 @@ only the human-facing stream.
   turn-gate blocking alone justifies the change.
 - **Persistent bash shell**: a different feature with similar lifecycle costs;
   not requested.
+- **SQLite for the child journal or snapshot** — considered 10-05, raised as
+  "the kernel uses JSONL; the rest of the app uses SQLite". Rejected: the
+  journal's only consumer is the sweep's full sequential scan, and its failure
+  mode is SIGKILL mid-append, which JSONL + torn-tail tolerance handles
+  exactly; the namespace payload is binary dill, unqueryable by construction.
+  SQLite would add a schema-migration surface and cross-language WAL
+  negotiation for zero query benefit, and cost the file's human-readability —
+  the property that made the 10-04 interrupt debugging possible. Full
+  rationale in §4.15.
 
 ## 8. Open questions
 
