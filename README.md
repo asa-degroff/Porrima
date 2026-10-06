@@ -2,12 +2,12 @@
 
 ![Porrima brand image](/assets/porrima-brand-image.avif)
 
-A self-hosted, memory-native AI agent framework and cross-platform GUI application. 
+A self-hosted, memory-native AI agent framework and cross-platform GUI application. Persistent agent for private computing. 
 
 ## Features
 
 ##### First-class GUI
-The client is a PWA built for desktop, tablet, and mobile. Access remotely with Cloudflare Tunnels. Secured with Webauthn passkeys.
+The client is a PWA built for desktop, tablet, and mobile. 
 
 Color themes, animations, and style options to make it your own.
 
@@ -15,12 +15,12 @@ Chat list, full-text chat search, and project-scoped chats shown in the sidebar.
 
 Supports push notifications with per-device settings, notifying when your agent has a new message for you.
 
-Message display with streaming output with thinking blocks, tool calls, uploaded images, and generated HTML/JS artifacts.
+Information-rich with streaming output with thinking blocks, tool calls, uploaded images, and HTML/JS artifacts.
 
-Detailed observability: memory blocks, the full memory database, model stats (decode/prefill/cache hitrate), extraction and reranker run history, context size, and the constructed system prompt.
+Observability: memory blocks, the full memory database, model stats (decode/prefill/cache hitrate), extraction and reranker run history, context size, and the constructed system prompt.
 
 ##### Multithreaded cognition
-Porrima remembers and recalls its experiences both consciously and subconsciously. It runs two language models and a reranker model during operation, designed to fully utilize both the GPU and CPU on a typical high-end consumer desktop. It has self-managed memory blocks, as well as ambient associative memory with the capacity to recall memory content both in response to user messages, using memory tools, and spontaneously while it runs, with non-blocking live context injection between tool calls. 
+Porrima remembers and recalls its experiences both at runtime with both 'system 1' and 'system 2' memory. It runs two language models in parallel during operation, one for the main agent execution, and one for writing down and managing memories. It has self-managed memory blocks, as well as ambient associative memory with the capacity to recall memory content both in response to user messages, using memory tools, and spontaneously while it runs, with non-blocking live context injection between tool calls. 
 
 The memory extraction model operates in the background, taking a first and second pass over the same context as the main model, recording memories of everything new, supersession chains for everything old, to form a database of atomic memories with dense vector embeddings for subconscious recall. Control depth of recall with granular configuration options. 
 
@@ -51,9 +51,6 @@ A notebook section where you can write down anything that doesn't warrant an imm
 ##### Skills
 Global and project-scoped `SKILL.md` skills. Classic `/` invocation. Automatic discovery in project directories, as well as a UI for installing global skills from remote sources and managing installed skills.
 
-##### Image sandbox
-Vision analysis with built-in description presets (Simple, Detailed, Z-Image, etc.). Image generation frontends for ComfyUI and/or stable-diffusion.cpp. A masonry gallery viewer and a D3 force-directed image corpus graph that clusters your generated collection by similarity. GPU/resource coordination is handled automatically so the LLM and image model can share hardware if you run the image and language servers on the same machine.
-
 ##### Backup and restore
 One-click snapshots of chats, the memory database, embeddings, and (optionally) the image corpus. Embedding backups and migration when changing embedding models. All data lives in SQLite databases under `~/.porrima/`.
 
@@ -63,23 +60,11 @@ Agent harness designed to be KV-cache-friendly with compaction-time memory conso
 ##### Hardware-aware
 Built-in llama.cpp server configuration (per-slot overrides, binary management, model scan paths, slot binding modes). Decode/prefill/hitrate stats, reranker latency and score quality, and a graphical hardware monitor for CPU/RAM/GPU.
 
-##### Self-modifying
-Open a project in the source code directory and ask Porrima to tweak anything in its own codebase.
-
-##### Personal AI
-Full sovereignty over data, model, infrastructure, and operation. Safe from deprecation, surveillance, and censorship.
-
-##### Recommended use cases
-- **Software engineering** — excellent at coding, learns your projects over time, very high context density.
-- **Personal agent** — does anything on your computer that's accessible by command line.
-- **Research** — keeps going down rabbit holes and writing about findings while you sleep.
-- **Therapist / companion / advisor** — complete privacy, long-term permanence, no topical restrictions.
-
 ## System requirements
 
 ##### Server (recommended)
 - **OS:** Linux with systemd
-- **GPU:** ≥16 GB dedicated VRAM, AMD RDNA 3+ or Nvidia Ampere+ (≥32GB recommended)
+- **GPU:** ≥32 GB dedicated VRAM, AMD RDNA 3+ or Nvidia Ampere+
 - **CPU:** Desktop x86_64, ≥8 physical/performance cores, AVX-512, AMD Zen 4+ or Intel Alder Lake+
 - **RAM:** ≥48 GB DDR5
 - **SSD:** NVMe Gen 4 or 5
@@ -94,17 +79,11 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 
 | Slot | Pick |
 |---|---|
-| Main chat (top picks) | Qwen 3.6 27B or Gemma 4 31B |
-| Main chat (lightweight options) | Qwen 3.6 35B A3B, Gemma 4 26B A4B, or Gemma 4 12B |
-| Memory extraction | Same family as the main model — Qwen 3.5 9B / 4B or Gemma 4 26B A4B / 12B / E4B |
-| Title generation | Gemma 4 E2B (or E4B) |
+| Main chat | Qwen 3.8 27B |
+| Memory extraction | Qwen 3.5 4B or 9B |
+| Title generation | Gemma 4 E2B |
 | Reranker | Qwen3-reranker 0.6B |
-| Embeddings | Qwen3-embedding 4B (or 0.6B) |
-| Images | Z-Image Base, Qwen Image |
-
-Use an extraction model from the same family as the main chat model. The main and extraction models share a first-person perspective, and matching families keep the main model from perceiving its memories as messages from an external entity.
-
-The main model should run on the GPU; the extraction, reranker, title, and embedding models typically run on CPU in parallel, drawing from a separate pool of system RAM and not contending with the interactive main model.
+| Embeddings | Qwen3-embedding 4B |
 
 These are recommendations, but you can run it with whatever model you want, and the choices will likely change in the future.
 
