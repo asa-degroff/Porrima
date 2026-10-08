@@ -30,10 +30,22 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
     success: null,
   });
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmingDeleteSkill, setConfirmingDeleteSkill] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const filterSourceDd = useDropdown();
   const urlInputRef = useRef<HTMLInputElement>(null);
+
+  // Escape dismisses a pending delete confirm (same as ChatListItem).
+  useEffect(() => {
+    if (!confirmingDeleteSkill) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmingDeleteSkill(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmingDeleteSkill]);
 
   useEffect(() => {
     loadSkills();
@@ -87,18 +99,18 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
     }
   }, [installForm.url, installForm.name, loadSkills]);
 
+  // Executes the delete — reached via the two-step Confirm/Cancel swap
+  // (matching the block-delete confirm in MemoryDebugPanel), not window.confirm.
   const handleDelete = useCallback(async (skillName: string) => {
-    if (!confirm(`Delete skill "${skillName}"? This cannot be undone.`)) {
-      return;
-    }
-
+    setConfirmingDeleteSkill(null);
+    setDeleteError(null);
     setDeleting(skillName);
     try {
       await deleteSkill(skillName);
       await loadSkills();
     } catch (err: any) {
       console.error("[SkillsBrowser] Failed to delete skill:", err);
-      alert(`Failed to delete skill: ${err.message}`);
+      setDeleteError(`Failed to delete "${skillName}": ${err.message}`);
     } finally {
       setDeleting(null);
     }
@@ -226,6 +238,12 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
         </div>
       )}
 
+      {deleteError && (
+        <div className="p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300 text-xs">
+          {deleteError}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="flex gap-2 text-xs">
         <span className="px-2 py-1 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-300">
@@ -332,22 +350,43 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {isGlobal && isManaged && (
-                      <button
-                        onClick={() => handleDelete(skill.name)}
-                        disabled={isDeleting}
-                        className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-all disabled:opacity-50"
-                        title="Delete skill"
-                      >
-                        {isDeleting ? (
-                          <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                          </svg>
-                        ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                          </svg>
-                        )}
-                      </button>
+                      confirmingDeleteSkill === skill.name ? (
+                        // Inline confirm (Confirm/Cancel swap) — the buttons stay
+                        // visible unlike the hover-only trash icon.
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => void handleDelete(skill.name)}
+                            disabled={isDeleting}
+                            className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium pressable disabled:opacity-50"
+                            title={`Delete "${skill.name}" now — this cannot be undone`}
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmingDeleteSkill(null)}
+                            className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium pressable"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmingDeleteSkill(skill.name)}
+                          disabled={isDeleting}
+                          className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-all disabled:opacity-50"
+                          title="Delete skill"
+                        >
+                          {isDeleting ? (
+                            <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                            </svg>
+                          ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                            </svg>
+                          )}
+                        </button>
+                      )
                     )}
                     <button
                       onClick={() => setExpandedSkill(isExpanded ? null : skill.name)}

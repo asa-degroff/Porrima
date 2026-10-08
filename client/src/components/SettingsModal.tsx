@@ -701,6 +701,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamaPathUpdating, setLlamaPathUpdating] = useState(false);
   const [llamaPathMessage, setLlamaPathMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
+  // Inline confirm for the binary switch (replaces window.confirm): selecting a
+  // dropdown entry arms the pending path, and a confirm bar below the dropdown
+  // executes or dismisses it.
+  const [llamaPathPending, setLlamaPathPending] = useState<string | null>(null);
   const [llamaServers, setLlamaServers] = useState<LlamaServerStatus[]>([]);
   const [llamaServersLoading, setLlamaServersLoading] = useState(false);
   const [llamaServerActionInFlight, setLlamaServerActionInFlight] = useState<string | null>(null);
@@ -2795,7 +2799,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const handleUpdateLlamaPath = useCallback(async (selectedPath: string) => {
     const path = selectedPath.trim();
     if (!path) return;
-    if (!window.confirm("Change the default llama.cpp binary and restart all five services? The inference prompt cache will be cleared.")) return;
+    setLlamaPathPending(null);
     setLlamaPathUpdating(true);
     setLlamaPathMessage(null);
     setLlamaPathUpdateResult(null);
@@ -3276,7 +3280,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       onClick={() => {
                         defaultBinaryDd.close();
                         setLlamaPathMessage(null);
-                        handleUpdateLlamaPath(bin.path);
+                        setLlamaPathPending(bin.path);
                       }}
                       className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${bin.isDefault ? "text-white" : "text-white/60 hover:bg-white/10"}`}
                     >
@@ -3284,6 +3288,28 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     </button>
                   ))}
                 </Dropdown>
+                {llamaPathPending && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-400/20 bg-amber-500/10 px-2 py-1">
+                    <span className="text-[11px] text-amber-200/75">
+                      Change the default llama.cpp binary to <span className="font-mono">{llamaPathPending.split("/").pop()}</span> and restart all five services? The inference prompt cache will be cleared.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdateLlamaPath(llamaPathPending)}
+                      disabled={llamaPathUpdating}
+                      className="rounded bg-amber-500/20 px-2 py-0.5 text-[11px] text-amber-200 hover:bg-amber-500/30 pressable disabled:opacity-40"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLlamaPathPending(null)}
+                      className="px-2 py-0.5 text-[11px] text-white/45 hover:text-white/70 pressable"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
                 {llamaPathMessage && (
                   <div className={`p-2 rounded-lg text-xs ${llamaPathMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : llamaPathMessage.type === "warn" ? "bg-amber-500/10 border border-amber-400/15 text-amber-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
                     <p>{llamaPathMessage.text}</p>
