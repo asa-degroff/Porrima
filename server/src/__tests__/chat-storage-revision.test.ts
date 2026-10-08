@@ -27,7 +27,6 @@ function makeChat(id: string, messages: Chat["messages"]): Chat {
     title: "Revision Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages,
     createdAt: now,
     lastModified: now,

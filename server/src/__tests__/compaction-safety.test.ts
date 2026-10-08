@@ -54,7 +54,6 @@ function makeChat(messages: ChatMessage[], id = "safety-chat"): Chat {
     title: "Compaction Safety",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages,
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),

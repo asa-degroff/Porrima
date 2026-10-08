@@ -113,7 +113,7 @@ the symptom and worsens the warm's hit rate; the fix below removes the need for 
 | Memory blocks | SQLite `memory_blocks` | ✓ |
 | Conversation history | SQLite `chat_messages` | ✓ |
 | Base system prompt | SQLite `chats.systemPrompt` | ✓ |
-| `stablePrefix` | derived — deterministic from durable inputs (base prompt, blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable |
+| `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable |
 | **Frozen set (ids + section text)** | **process Map** (memory-context.ts:134) | **✗ ← the bug** |
 | `deltaIds` | process Map | ✗ (minor: dedup only) |
 | `promptCache` / `stablePrefixCache` / `promptBreakdownCache` | process Maps | ✗ (derived, cheap) |

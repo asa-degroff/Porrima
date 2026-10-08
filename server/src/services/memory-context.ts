@@ -46,7 +46,6 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
 
 /** Estimated token cost of each section assembled into the stable prefix. */
 export interface StablePrefixSectionTokens {
-  basePrompt: number;
   persona: number;
   userDocument: number;
   /** Global + project memory-block sections combined. */
@@ -59,7 +58,6 @@ export interface StablePrefixSectionTokens {
 // before project-only context so new-chat baseline warms can match project chats
 // through global blocks and zeitgeist.
 const stablePrefixCache = new Map<string, {
-  basePrompt: string;
   prefix: string;
   blocksSection: string;
   hasIndexedBlocks: boolean;
@@ -77,7 +75,6 @@ const stablePrefixCache = new Map<string, {
  * describes the last built prompt, not necessarily the current on-disk state.
  */
 export interface PromptSectionBreakdown {
-  basePrompt: number;
   persona: number;
   userDocument: number;
   memoryBlocks: number;
@@ -874,7 +871,6 @@ function buildStableMemoryBlockSections(
 }
 
 export async function buildStablePrefix(
-  baseSystemPrompt: string,
   chatId: string,
   projectId?: string,
   projectPath?: string,
@@ -887,7 +883,6 @@ export async function buildStablePrefix(
 
   if (
     cached &&
-    cached.basePrompt === baseSystemPrompt &&
     cached.globalBlockTokenBudget === budgets.global &&
     cached.projectBlockTokenBudget === budgets.project
   ) {
@@ -897,7 +892,7 @@ export async function buildStablePrefix(
   let personaSection = "";
   try {
     const persona = await loadPersona();
-    personaSection = `\n${persona.content}\n\nThis is my core identity.`;
+    personaSection = `${persona.content}\n\nThis is my core identity.`;
   } catch (e) {
     console.error("[memory] Failed to load persona, continuing without:", e);
   }
@@ -961,16 +956,17 @@ export async function buildStablePrefix(
     // Zeitgeist not available yet — this is fine on first run
   }
 
-  const stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${globalBlocksSection}${zeitgeistSection}${projectSection}${projectBlocksSection}`;
+  // The persona document heads the prompt — there is no stored per-chat
+  // template anymore. Leading newlines are trimmed so a failed persona load
+  // still starts the prompt clean.
+  const stablePrefix = `${personaSection}${userSection}${globalBlocksSection}${zeitgeistSection}${projectSection}${projectBlocksSection}`.replace(/^\n+/, "");
   stablePrefixCache.set(cacheKey, {
-    basePrompt: baseSystemPrompt,
     prefix: stablePrefix,
     blocksSection: combinedBlocksSection,
     hasIndexedBlocks,
     globalBlockTokenBudget: budgets.global,
     projectBlockTokenBudget: budgets.project,
     sectionTokens: {
-      basePrompt: estimateTextTokens(baseSystemPrompt),
       persona: estimateTextTokens(personaSection),
       userDocument: estimateTextTokens(userSection),
       memoryBlocks: estimateTextTokens(globalBlocksSection) + estimateTextTokens(projectBlocksSection),
@@ -1109,7 +1105,6 @@ export interface MemoryAugmentationOptions {
  *    otherwise the delta stays owed for the next delivering build.
  */
 export async function buildSplitAugmentedPrompt(
-  baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,
   projectId?: string,
@@ -1118,7 +1113,7 @@ export async function buildSplitAugmentedPrompt(
   options?: MemoryAugmentationOptions
 ): Promise<AugmentedPromptResult> {
   const result = await buildSplitAugmentedPromptInner(
-    baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath, options
+    recentMessages, chatId, projectId, chatType, projectPath, options
   );
   const systemPrompt = result.systemPrompt;
 
@@ -1144,7 +1139,6 @@ export async function buildSplitAugmentedPrompt(
 }
 
 async function buildSplitAugmentedPromptInner(
-  baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,
   projectId?: string,
@@ -1161,11 +1155,11 @@ async function buildSplitAugmentedPromptInner(
   let stablePrefix: string;
   try {
     ({ stablePrefix } = await buildStablePrefix(
-      baseSystemPrompt, cacheKey, projectId, projectPath
+      cacheKey, projectId, projectPath
     ));
   } catch (e) {
-    console.error("[memory] buildStablePrefix failed, falling back to base prompt:", e);
-    return { systemPrompt: baseSystemPrompt, memoriesMessage: "", newMemoryIds: [], combined: baseSystemPrompt };
+    console.error("[memory] buildStablePrefix failed, sending without a stable prefix:", e);
+    return { systemPrompt: "", memoriesMessage: "", newMemoryIds: [], combined: "" };
   }
 
   const prefixCached = stablePrefixCache.get(cacheKey);

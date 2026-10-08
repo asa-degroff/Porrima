@@ -430,7 +430,6 @@ function RequestDetail({ detail }: { detail: LlmRequestDetail }) {
 // ---------------------------------------------------------------------------
 
 type SectionTokenKey =
-  | "basePrompt"
   | "persona"
   | "userDocument"
   | "memoryBlocks"
@@ -440,7 +439,6 @@ type SectionTokenKey =
   | "memoryDelta";
 
 const SECTION_LABELS: Array<{ key: SectionTokenKey; label: string }> = [
-  { key: "basePrompt", label: "Base prompt" },
   { key: "persona", label: "Persona" },
   { key: "userDocument", label: "User document" },
   { key: "memoryBlocks", label: "Memory blocks" },
@@ -459,7 +457,7 @@ function ContextTab({ context }: { context: ContextView | null }) {
       ? "from the last recorded request"
       : context.source === "cache"
         ? "from the in-memory prompt cache"
-        : "base prompt — no turn recorded yet";
+        : "stable prefix — no turn recorded yet";
   const sections = context.sections;
   return (
     <div className="px-5 py-4 space-y-4">

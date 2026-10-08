@@ -406,7 +406,7 @@ export function stripActiveSkillsSection(prompt: string): string {
  * identical output for the same skill set, which is required for LCP KV-cache
  * prefix matching between turns.
  *
- * At compaction time the system prompt is rebuilt from `chat.systemPrompt` (the
+ * At compaction time the system prompt is rebuilt from the stable prefix (the
  * base, which never contains skills), so stripping is a no-op and the output
  * is deterministic. Between turns (no compaction), the stable-prefix portion
  * is cached and byte-identical; skills are appended on top, so the full prompt

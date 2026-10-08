@@ -228,11 +228,6 @@ function wakePromptFromSteps(steps?: AutomationPromptStep[]): string {
 // injected as separate turn-based messages during synthesis execution.
 export const SYNTHESIS_INSTRUCTIONS = SYNTHESIS_PHASE1_INSTRUCTIONS;
 
-// Marker prefix used to detect + migrate pre-split system chats whose
-// systemPrompt was the full baked-in synthesis prompt.
-const LEGACY_SYSTEM_PROMPT_PREFIX =
-  "You are the agent's internal synthesis and reflection space.";
-
 export async function createSystemChat(): Promise<void> {
   const { getDb, createChat, saveChat, getChat, getSettings } = await import(
     "./chat-storage.js"
@@ -244,22 +239,11 @@ export async function createSystemChat(): Promise<void> {
     .get(SYSTEM_CHAT_ID) as { id: string } | undefined;
 
   const settings = await getSettings();
-  const defaultPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
 
   if (existing) {
     const loaded = await getChat(SYSTEM_CHAT_ID);
     if (loaded) {
       let dirty = false;
-
-      // One-shot migration: pre-split system chats stored the full synthesis
-      // prompt as chat.systemPrompt. Replace it with the user's default so the
-      // voice tracks `settings.defaultSystemPrompt` going forward. Respect any
-      // user-customized prompt (anything not starting with the legacy prefix).
-      if (loaded.systemPrompt.startsWith(LEGACY_SYSTEM_PROMPT_PREFIX)) {
-        console.log("[system-chat] Migrating legacy system chat prompt to default");
-        loaded.systemPrompt = defaultPrompt;
-        dirty = true;
-      }
 
       // One-shot migration: retroactively flag synthesis messages (triggers + responses).
       // Synthesis user-messages carry content starting with "# Synthesis Cycle"
@@ -325,7 +309,6 @@ export async function createSystemChat(): Promise<void> {
     title: SYSTEM_CHAT_TITLE,
     type: "system",
     modelId,
-    systemPrompt: defaultPrompt,
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
@@ -1048,7 +1031,6 @@ export async function runSystemSynthesis(options?: {
     // will supply relevant memories based on the agent's output.
     const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
     const splitPrompt = await buildSplitAugmentedPrompt(
-      chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,
       SYSTEM_CHAT_ID,
       chat.projectId,
@@ -1394,7 +1376,6 @@ export async function runWakeCycle(options?: {
     // wake trigger is not a conversational query, and passive recall during
     // the run will supply relevant memories based on the agent's own output.
     const splitPrompt = await buildSplitAugmentedPrompt(
-      chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,
       SYSTEM_CHAT_ID,
       chat.projectId,

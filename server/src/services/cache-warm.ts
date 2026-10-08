@@ -283,9 +283,9 @@ async function buildReplayMessages(
 }
 
 async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, messages: any[]): Promise<string> {
-  if (!chat) return "You are a helpful assistant.";
+  if (!chat) return "";
 
-  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  let systemPrompt = "";
 
   if (chat.type === "agent") {
     // Cache warming is meant to prepare the next turn's stable prefix. Freeze
@@ -299,7 +299,6 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
     resetMemoryContext(chat.id);
     const project = chat.projectId ? await getProject(chat.projectId) : null;
     const split = await buildSplitAugmentedPrompt(
-      systemPrompt,
       messages,
       chat.id,
       chat.projectId,
@@ -313,6 +312,18 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
     // next real turn still retrieves memories for that new prompt and injects
     // only the delta after the warmed prefix.
     invalidateMemoriesCache(chat.id);
+  } else {
+    // System chats (synthesis, wake, automations) send the stable prefix with
+    // the retained frozen section and no retrieval — warm exactly that shape.
+    const split = await buildSplitAugmentedPrompt(
+      messages,
+      chat.id,
+      chat.projectId,
+      chat.type,
+      undefined,
+      { skipMemoryRetrieval: true },
+    );
+    systemPrompt = split.systemPrompt;
   }
 
   if (chat.activeSkills?.length) {
@@ -659,9 +670,7 @@ export async function warmNewAgentChatBaselineCache(
       return result;
     }
 
-    const basePrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
     const { stablePrefix } = await buildStablePrefix(
-      basePrompt,
       NEW_AGENT_CHAT_BASELINE_CACHE_ID,
     );
 

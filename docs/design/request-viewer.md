@@ -79,7 +79,7 @@ The replacement for the old system prompt viewer, showing what the model is *pri
 
 - **Full system prompt** (`stablePrefix + frozenMemoriesSection`), persisted so it survives
   restarts (see §4 storage).
-- **Section breakdown** with token estimates per section: base prompt, persona, user doc,
+- **Section breakdown** with token estimates per section: persona, user doc,
   global blocks, zeitgeist, project/AGENTS.md, project blocks, frozen memories, skills —
   already computed in `promptBreakdownCache` (`memory-context.ts:79-100`).
 - **Tools**: full definitions — name, description, **JSON schema** (upgrade

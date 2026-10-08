@@ -61,7 +61,6 @@ function makeChat(): Chat {
     title: "Mid-turn extraction test",
     type: "agent",
     modelId: "chat-model",
-    systemPrompt: "You are helpful.",
     messages: [
       { role: "user", content: "Please work on the feature.", timestamp: 1 },
       { role: "assistant", content: "I found the relevant module.", timestamp: 2 },

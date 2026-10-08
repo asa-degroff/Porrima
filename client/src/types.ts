@@ -249,7 +249,6 @@ export interface Chat {
   title: string;
   type: ChatType;
   modelId: string;
-  systemPrompt: string;
   contextWindow?: number;
   messages: ChatMessage[];
   /** Absolute index of messages[0] when this Chat carries a paged message window. */
@@ -472,7 +471,6 @@ export interface Settings {
   /** True after first-time setup wizard has been completed */
   setupCompleted?: boolean;
   defaultModelId: string;
-  defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
   tavilyApiKey: string;

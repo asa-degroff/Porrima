@@ -22,7 +22,7 @@ function cacheWithTestSkill(): Map<string, Skill> {
 
 describe("skill prompt augmentation", () => {
   it("is idempotent when called with an already augmented prompt", () => {
-    const basePrompt = "You are a helpful assistant.";
+    const basePrompt = "You are Porrima. This is my core identity.";
     const once = buildSkillAugmentedPrompt(basePrompt, [skill.name], cacheWithTestSkill());
     const twice = buildSkillAugmentedPrompt(once, [skill.name], cacheWithTestSkill());
 
@@ -31,7 +31,7 @@ describe("skill prompt augmentation", () => {
   });
 
   it("collapses prompts that already contain duplicated active skill sections", () => {
-    const basePrompt = "You are a helpful assistant.";
+    const basePrompt = "You are Porrima. This is my core identity.";
     const once = buildSkillAugmentedPrompt(basePrompt, [skill.name], cacheWithTestSkill());
     const duplicated = `${once}\n\n[Active Skills]\n## Skill: stale\nold instructions\n`;
     const rebuilt = buildSkillAugmentedPrompt(duplicated, [skill.name], cacheWithTestSkill());

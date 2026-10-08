@@ -25,7 +25,6 @@ function makeChat(id: string, messages: Chat["messages"]): Chat {
     title: "Storage Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages,
     createdAt: now,
     lastModified: now,
@@ -209,10 +208,10 @@ describe("chat storage", () => {
       const db = storage.getDb();
       const now = new Date().toISOString();
       db.prepare(`
-        INSERT INTO chats (id, title, type, modelId, systemPrompt, messages, createdAt, lastModified, revision)
-        VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, 0)
+        INSERT INTO chats (id, title, type, modelId, messages, createdAt, lastModified, revision)
+        VALUES (?, ?, 'quick', ?, ?, ?, ?, 0)
       `).run(
-        "quick-gone", "Legacy Quick", "test-model", "You are helpful.",
+        "quick-gone", "Legacy Quick", "test-model",
         JSON.stringify([{ role: "user", content: "scratch", timestamp: 1 }]), now, now,
       );
       db.prepare(`
@@ -253,6 +252,37 @@ describe("chat storage", () => {
       expect(count("SELECT COUNT(*) AS value FROM context_archives WHERE chatId = ?")).toBe(0);
       expect(existsSync(join(queueDir, "quick-gone.json"))).toBe(false);
       expect(rdb.prepare("SELECT 1 FROM storage_migrations WHERE name = ?").get("remove-quick-chats")).toBeDefined();
+
+      const kept = await reopened.getChat("agent-keep");
+      expect(kept?.messages.map((message) => message.content)).toEqual(["keep me"]);
+      reopened.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops the legacy chats.systemPrompt column on open", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("agent-keep", [
+        { role: "user", content: "keep me", timestamp: 1 },
+      ]));
+
+      // Simulate a pre-removal database: re-add the column with the template
+      // seeded, and forget the migration already ran.
+      const db = storage.getDb();
+      db.exec("ALTER TABLE chats ADD COLUMN systemPrompt TEXT");
+      db.prepare("UPDATE chats SET systemPrompt = ? WHERE id = ?").run("You are helpful.", "agent-keep");
+      db.prepare("DELETE FROM storage_migrations WHERE name = ?").run("remove-chat-system-prompt");
+      storage.closeChatDb();
+
+      // Reopening runs the drop before any reads.
+      const reopened = await loadChatStorage(homeDir);
+      const rdb = reopened.getDb();
+      const columns = rdb.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
+      expect(columns.some((c) => c.name === "systemPrompt")).toBe(false);
+      expect(rdb.prepare("SELECT 1 FROM storage_migrations WHERE name = ?").get("remove-chat-system-prompt")).toBeDefined();
 
       const kept = await reopened.getChat("agent-keep");
       expect(kept?.messages.map((message) => message.content)).toEqual(["keep me"]);

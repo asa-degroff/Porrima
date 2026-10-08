@@ -37,7 +37,6 @@ function makeChat(messageCount: number, watermark: number): Chat {
     title: "Window Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages,
     createdAt: "2026-08-28T00:00:00.000Z",
     lastModified: "2026-08-28T00:00:00.000Z",

@@ -166,10 +166,9 @@ describe("memory context stable prefix shape", () => {
 
     const { buildStablePrefix, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
     resetAllMemoryContextCaches();
-    const { stablePrefix } = await buildStablePrefix("Base prompt.", "project-chat", "proj-1");
+    const { stablePrefix } = await buildStablePrefix("project-chat", "proj-1");
 
     expectInOrder(stablePrefix, [
-      "Base prompt.",
       "Persona text.",
       "## About the User",
       "## Memory Blocks",
@@ -204,14 +203,14 @@ describe("memory context stable prefix shape", () => {
     try {
       // Default 3000t budget: a 4000t block doesn't fit → index line only.
       blockTokenBudgets = { global: 3000, project: 5000 };
-      const defaultBudget = await buildStablePrefix("Base prompt.", "chat-1");
+      const defaultBudget = await buildStablePrefix("chat-1");
       expect(defaultBudget.stablePrefix).not.toContain("Global mid content.");
       expect(defaultBudget.stablePrefix).toContain("## Available Memory Blocks");
 
       // Raise the budget (same effect as a UI save, API write, or hand-edit):
       // the cached entry for chat-1 must be rebuilt, not served stale.
       blockTokenBudgets = { global: 10000, project: 5000 };
-      const raised = await buildStablePrefix("Base prompt.", "chat-1");
+      const raised = await buildStablePrefix("chat-1");
       expect(raised.stablePrefix).toContain("Global mid content.");
     } finally {
       blockTokenBudgets = { global: 3000, project: 5000 };
@@ -231,8 +230,8 @@ describe("memory context stable prefix shape", () => {
 
     const { buildStablePrefix, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
     resetAllMemoryContextCaches();
-    const noProject = await buildStablePrefix("Base prompt.", "new-agent-baseline");
-    const project = await buildStablePrefix("Base prompt.", "project-chat", "proj-1");
+    const noProject = await buildStablePrefix("new-agent-baseline");
+    const project = await buildStablePrefix("project-chat", "proj-1");
 
     expect(project.stablePrefix.startsWith(noProject.stablePrefix)).toBe(true);
     expect(project.stablePrefix.slice(noProject.stablePrefix.length)).toContain("## Project Context");
@@ -251,7 +250,6 @@ describe("memory context stable prefix shape", () => {
     const { buildSplitAugmentedPrompt, resetAllMemoryContextCaches } = await import("../services/memory-context.js");
     resetAllMemoryContextCaches();
     const split = await buildSplitAugmentedPrompt(
-      "Base prompt.",
       [{ role: "user", content: "How is this project set up?", timestamp: 1000 }],
       "project-chat",
       "proj-1",
@@ -307,8 +305,8 @@ describe("time anchor", () => {
     const now = Date.now();
     const messages: ChatMessage[] = [{ role: "user", content: "hi", timestamp: now - 5 * 60_000 }];
 
-    const first = await buildSplitAugmentedPrompt("Base prompt.", messages, "stable-chat", undefined, "agent");
-    const second = await buildSplitAugmentedPrompt("Base prompt.", messages, "stable-chat", undefined, "agent");
+    const first = await buildSplitAugmentedPrompt(messages, "stable-chat", undefined, "agent");
+    const second = await buildSplitAugmentedPrompt(messages, "stable-chat", undefined, "agent");
 
     // The anchor must NOT live in the system prompt — it's appended to the
     // trailing user message instead so the changing timestamp doesn't break
@@ -325,7 +323,7 @@ describe("time anchor", () => {
     const now = Date.now();
     const messages: ChatMessage[] = [{ role: "user", content: "hi", timestamp: now - 5 * 60_000 }];
 
-    const split = await buildSplitAugmentedPrompt("Base prompt.", messages, "anchor-chat", undefined, "agent");
+    const split = await buildSplitAugmentedPrompt(messages, "anchor-chat", undefined, "agent");
     const anchor = buildTimeAnchor(messages);
 
     expect(split.systemPrompt).not.toContain("[time:");

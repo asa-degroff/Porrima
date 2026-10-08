@@ -166,12 +166,11 @@ export function computeContextBreakdown(chat: Chat, contextWindow: number): Cont
   // Sections are only resolved when the breakdown capture ran: a resumed
   // prompt re-cached after a restart, or the stable-prefix fallback, can leave
   // the rendered-prompt cache warm while `section` is null (all memory
-  // sections read 0, and scaling would inflate the base-prompt row to absorb
+  // sections read 0, and scaling would inflate the persona row to absorb
   // them) — so the cold-cache footnote must fire.
   const promptCached = cachedPrompt != null && section != null;
 
   // ---- System prompt sections (from the captured stable-prefix breakdown) ----
-  const basePrompt = section?.basePrompt ?? estimateTextTokens(chat.systemPrompt || "");
   const persona = section?.persona ?? 0;
   const userDocument = section?.userDocument ?? 0;
   const memoryBlocks = section?.memoryBlocks ?? 0;
@@ -200,7 +199,6 @@ export function computeContextBreakdown(chat: Chat, contextWindow: number): Cont
 
   // ---- Assemble input-side rows (everything except the model's output) ----
   const inputRows: ContextBreakdownRow[] = [
-    { key: "basePrompt", label: "Instructions", group: "system", tokens: basePrompt },
     { key: "persona", label: "Persona", group: "system", tokens: persona },
     { key: "userDocument", label: "User profile", group: "system", tokens: userDocument },
     { key: "projectContext", label: "Project (AGENTS.md)", group: "system", tokens: projectContext },

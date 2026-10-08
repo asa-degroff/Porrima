@@ -108,7 +108,6 @@ async function ensureAutomationChat(task: AutomationTask): Promise<Chat | null> 
     title: task.title,
     type: "system",
     modelId: settings.defaultModelId || "",
-    systemPrompt: settings.defaultSystemPrompt || "You are a helpful assistant.",
     messages: [],
     createdAt: now,
     lastModified: now,
@@ -297,7 +296,6 @@ async function runPromptAutomation(
     // cached prefix survives. Resetting here re-rolled the section and forced
     // a full re-prefill on the next request.
     const splitPrompt = await buildSplitAugmentedPrompt(
-      chat.systemPrompt || "You are a helpful assistant.",
       chat.messages,
       task.chatId,
       chat.projectId,

@@ -302,7 +302,7 @@ describe("memory context persistence (service)", () => {
     messages: ChatMessage[],
     options?: { skipMemoryRetrieval?: boolean; stableOnly?: boolean },
   ) =>
-    mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
+    mod.buildSplitAugmentedPrompt(messages, "chat-1", undefined, "agent", undefined, options);
   const firstTurnMsgs: ChatMessage[] = [{ role: "user", content: "frozen topic", timestamp: 1000 }];
 
   afterEach(() => {
@@ -567,7 +567,7 @@ describe("clobber guard + soft reset (doc §10)", () => {
     });
   };
   const build = (mod: any, messages: ChatMessage[], options?: { skipMemoryRetrieval?: boolean }) =>
-    mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
+    mod.buildSplitAugmentedPrompt(messages, "chat-1", undefined, "agent", undefined, options);
   const firstTurnMsgs: ChatMessage[] = [{ role: "user", content: "frozen topic", timestamp: 1000 }];
 
   afterEach(() => {
@@ -685,7 +685,7 @@ describe("late-freeze guard (empty first retrieval then mid-chat freeze)", () =>
     messages: ChatMessage[],
     options?: { skipMemoryRetrieval?: boolean; allowLateFreeze?: boolean },
   ) =>
-    mod.buildSplitAugmentedPrompt("Base prompt.", messages, "chat-1", undefined, "agent", undefined, options);
+    mod.buildSplitAugmentedPrompt(messages, "chat-1", undefined, "agent", undefined, options);
 
   afterEach(() => {
     vi.resetModules();

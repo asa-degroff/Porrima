@@ -37,7 +37,6 @@ describe("storage diagnostics", () => {
         title: "Diagnostics Test",
         type: "agent",
         modelId: "test-model",
-        systemPrompt: "You are helpful.",
         messages: [
           {
             role: "user",

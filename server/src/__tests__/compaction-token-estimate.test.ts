@@ -214,7 +214,6 @@ describe("token estimation for dense tool results", () => {
       title: "Char Bias",
       type: "agent",
       modelId: "test-model",
-      systemPrompt: "You are helpful.",
       createdAt: new Date().toISOString(),
       lastModified: new Date().toISOString(),
       messages: [

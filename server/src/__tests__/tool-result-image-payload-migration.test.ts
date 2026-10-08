@@ -38,7 +38,6 @@ describe("tool result image payload migration", () => {
         title: "Tool Image Chat",
         type: "agent",
         modelId: "test-model",
-        systemPrompt: "You are helpful.",
         messages: [{
           role: "assistant",
           content: "done",

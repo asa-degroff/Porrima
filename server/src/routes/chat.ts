@@ -3509,7 +3509,6 @@ async function handleChatStream(
         if (compaction?.truncated) {
           softResetMemoryContext(chat.id);
           const split = await buildSplitAugmentedPrompt(
-            chat.systemPrompt || "You are a helpful assistant.",
             chat.messages, chat.id, chat.projectId, chat.type, projectPath
           );
           systemPrompt = split.systemPrompt;
@@ -3930,14 +3929,13 @@ async function handleChatStream(
               // (send/resume/edit) deliver it.
               softResetMemoryContext(chat.id);
               const split = await buildSplitAugmentedPrompt(
-                chat.systemPrompt || "You are a helpful assistant.",
                 chat.messages, chat.id, chat.projectId, chat.type, projectPath,
                 { stableOnly: true }
               );
               systemPrompt = split.systemPrompt;
 
               // Reinjected skills after compaction — they were lost when
-              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+              // buildSplitAugmentedPrompt rebuilt the prompt without skills.
               if (chat.activeSkills?.length) {
                 const skillsCache = new Map<string, Skill>();
                 const allSkills = await discoverSkills();
@@ -4081,7 +4079,7 @@ async function handleChatStream(
 
       // stableOnly: the follow-up path has no delta delivery point; leave any
       // owed delta to the next send/resume/edit build.
-      let followUpSystemPrompt = (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath, { stableOnly: true })).systemPrompt;
+      let followUpSystemPrompt = (await buildSplitAugmentedPrompt(chat.messages, chat.id, chat.projectId, chat.type, projectPath, { stableOnly: true })).systemPrompt;
 
       // Reinjected skills on follow-up turn — buildSplitAugmentedPrompt builds
       // from the base system prompt which doesn't include active skills.
@@ -4494,7 +4492,7 @@ router.post("/", async (req, res) => {
     res.write(`event: compacting\ndata: {}\n\n`);
 
     let contextWindow = 0;
-    let compactSystemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    let compactSystemPrompt = "";
     let compactTools: unknown;
 
     // Wrap the whole compaction + flush in a keepalive ping loop.
@@ -4517,7 +4515,6 @@ router.post("/", async (req, res) => {
       // stableOnly: this build only estimates; it must not run (and waste) the
       // Case 3 delta retrieval or claim anything.
       const split = await buildSplitAugmentedPrompt(
-        chat.systemPrompt || "You are a helpful assistant.",
         chat.messages,
         chat.id,
         chat.projectId,
@@ -4861,7 +4858,6 @@ router.post("/", async (req, res) => {
               resumeProjectPath = project?.path;
             }
             const split = await buildSplitAugmentedPrompt(
-              chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
               chat.projectId,
@@ -4873,7 +4869,7 @@ router.post("/", async (req, res) => {
             resumeMemoriesDelta = split.memoriesMessage;
             resumeMemoriesDeltaIds = split.newMemoryIds;
             // Reinjected skills after compaction — they were lost when
-            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+            // buildSplitAugmentedPrompt rebuilt the prompt without skills.
             if (chat.activeSkills?.length) {
               const skillsCache = new Map<string, Skill>();
               const allSkills = await discoverSkills();
@@ -5018,7 +5014,7 @@ router.post("/", async (req, res) => {
     // When extraction adds new memories, only the delta is appended at end of context.
     // User-initiated system-chat turns use the same memory prompt path as
     // automation-initiated system turns so both entry points have recall parity.
-    let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    let systemPrompt = "";
     let memoriesDelta = "";
     let memoriesDeltaIds: string[] = [];
     // Get project path for AGENTS.md loading
@@ -5028,7 +5024,6 @@ router.post("/", async (req, res) => {
       projectPath = project?.path;
     }
     const split = await buildSplitAugmentedPrompt(
-      systemPrompt,
       chat.messages,
       chat.id,
       chat.projectId,
@@ -5110,7 +5105,6 @@ router.post("/", async (req, res) => {
               preCompactProjectPath = project?.path;
             }
             const split = await buildSplitAugmentedPrompt(
-              chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
               chat.projectId,
@@ -5127,7 +5121,7 @@ router.post("/", async (req, res) => {
             memoriesDeltaIds = split.newMemoryIds;
 
             // Reinject skills after compaction — they were lost when
-            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+            // buildSplitAugmentedPrompt rebuilt the prompt without skills.
             if (chat.activeSkills?.length) {
               const skillsCache = new Map<string, Skill>();
               const allSkills = await discoverSkills();
@@ -5421,7 +5415,7 @@ router.post("/artifact-error", async (req, res) => {
   chat.messages.push(repairRow);
   await saveChat(chat);
 
-  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  let systemPrompt = "";
   let memoriesDelta = "";
   let memoriesDeltaIds: string[] = [];
   let repairProjectPath: string | undefined;
@@ -5430,7 +5424,6 @@ router.post("/artifact-error", async (req, res) => {
     repairProjectPath = project?.path;
   }
   const split = await buildSplitAugmentedPrompt(
-    systemPrompt,
     chat.messages,
     chat.id,
     chat.projectId,
@@ -5778,7 +5771,7 @@ router.post("/edit", async (req, res) => {
   );
 
   // Build context with skills (using delta-aware prompt builder for memory-augmented chats)
-  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  let systemPrompt = "";
   let editMemoriesDelta = "";
   let editMemoriesDeltaIds: string[] = [];
   let editProjectPath: string | undefined;
@@ -5787,7 +5780,7 @@ router.post("/edit", async (req, res) => {
     editProjectPath = project?.path;
   }
   const split = await buildSplitAugmentedPrompt(
-    systemPrompt, chat.messages, chat.id, chat.projectId, chat.type, editProjectPath
+    chat.messages, chat.id, chat.projectId, chat.type, editProjectPath
   );
   systemPrompt = split.systemPrompt;
   editMemoriesDelta = split.memoriesMessage;
@@ -5865,7 +5858,6 @@ router.post("/edit", async (req, res) => {
             editCompactProjectPath = project?.path;
           }
           const editSplit = await buildSplitAugmentedPrompt(
-            chat.systemPrompt || "You are a helpful assistant.",
             chat.messages,
             chat.id,
             chat.projectId,
@@ -5877,7 +5869,7 @@ router.post("/edit", async (req, res) => {
           editMemoriesDeltaIds = editSplit.newMemoryIds;
 
           // Reinject skills after compaction — they were lost when
-          // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+          // buildSplitAugmentedPrompt rebuilt the prompt without skills.
           if (chat.activeSkills?.length) {
             const skillsCache = new Map<string, Skill>();
             const allSkills = await discoverSkills();

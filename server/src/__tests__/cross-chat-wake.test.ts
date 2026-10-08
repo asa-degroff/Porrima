@@ -179,7 +179,6 @@ function makeChat(id: string, title: string, modelId: string, type: Chat["type"]
     title,
     type,
     modelId,
-    systemPrompt: "You are helpful.",
     messages: [],
     createdAt: now,
     lastModified: now,
@@ -221,8 +220,8 @@ describe("cross-chat wake turns", () => {
       expect(captured.headless?.modelId).toBe("target-model");
 
       // Target semantics: chatType flows to prompt, tools, and passive recall.
-      expect(captured.splitPromptArgs?.[4]).toBe("agent");
-      expect(captured.splitPromptArgs?.[6]).toBeUndefined();
+      expect(captured.splitPromptArgs?.[3]).toBe("agent");
+      expect(captured.splitPromptArgs?.[5]).toBeUndefined();
       expect(captured.toolArgs?.[4]).toBe("agent");
       expect(captured.headless?.passiveMemoryRecall?.chatType).toBe("agent");
 

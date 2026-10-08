@@ -123,7 +123,6 @@ describe("memory context after cache warming", () => {
 
     resetAllMemoryContextCaches();
     const warmed = await buildSplitAugmentedPrompt(
-      "Base prompt.",
       [{ role: "user", content: "old topic", timestamp: 1000 }],
       "chat-1",
       undefined,
@@ -136,7 +135,6 @@ describe("memory context after cache warming", () => {
     invalidateMemoriesCache("chat-1");
 
     const nextTurn = await buildSplitAugmentedPrompt(
-      "Base prompt.",
       [
         { role: "user", content: "old topic", timestamp: 1000 },
         { role: "assistant", content: "Old answer.", timestamp: 2000 },

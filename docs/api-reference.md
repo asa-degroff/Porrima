@@ -73,7 +73,7 @@ Managed systemd user units. Slot ids: `inference`, `extraction`, `reranker`, `em
 | GET | `/api/chats/:id` | Get a chat with messages. `?messageLimit=N` returns the most recent window plus `messageOffset`, `messageTotal`, `hasMoreMessages`; `N` capped at 1000 |
 | GET | `/api/chats/:id/messages` | Paged window before an absolute sequence: `?before=N&limit=M` (capped at 1000). Used by scroll-to-top history loading |
 | GET | `/api/chats/:id/header` | Lightweight chat header (id, title, type, modelId, lastModified, projectId, contextWindow, message count) — avoids loading the message window |
-| GET | `/api/chats/:id/context-view` | Context tab payload: last-assembled system prompt (request log → in-memory cache → base-prompt fallback), per-section token breakdown, and tool definitions including parameter schemas |
+| GET | `/api/chats/:id/context-view` | Context tab payload: last-assembled system prompt (request log → in-memory cache → live stable-prefix preview), per-section token breakdown, and tool definitions including parameter schemas |
 | GET | `/api/chats/:id/context-breakdown` | Per-section token attribution for the effective context window |
 | POST | `/api/chat` | Send a message (SSE stream) |
 | POST | `/api/chat/edit` | Edit and resend a message |

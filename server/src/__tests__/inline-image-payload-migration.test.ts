@@ -43,7 +43,6 @@ describe("inline image payload migration", () => {
         title: "Inline Image Chat",
         type: "agent",
         modelId: "test-model",
-        systemPrompt: "You are helpful.",
         messages: [{
           role: "user",
           content: "look",

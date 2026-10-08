@@ -81,7 +81,7 @@ export async function fetchChats(): Promise<ChatListItem[]> {
 
 export async function updateChat(
   id: string,
-  data: { title?: string; modelId?: string; systemPrompt?: string; contextWindow?: number | null }
+  data: { title?: string; modelId?: string; contextWindow?: number | null }
 ): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats/${id}`, {
     method: "PATCH",
@@ -153,7 +153,6 @@ export interface LlmRequestLogEvent {
 }
 
 export interface PromptSectionBreakdown {
-  basePrompt: number;
   persona: number;
   userDocument: number;
   memoryBlocks: number;

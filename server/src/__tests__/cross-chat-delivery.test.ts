@@ -36,7 +36,6 @@ function makeChat(id: string, title: string, type: Chat["type"] = "agent"): Chat
     title,
     type,
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages: [],
     createdAt: now,
     lastModified: now,

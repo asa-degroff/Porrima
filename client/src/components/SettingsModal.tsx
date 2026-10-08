@@ -591,8 +591,6 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
 
 export function SettingsModal({ settings, models, refreshModels, highEfficiencyMode, onHighEfficiencyModeChange, onApply, onSave, onClose, onLogout, onOpenSetup }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
-  const [defaultSystemPrompt] = useState(settings.defaultSystemPrompt);
-  const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
   const [agentName, setAgentName] = useState(settings.agentName || "");
   const [persona, setPersona] = useState<PersonaStore | null>(null);
   const [personaEditing, setPersonaEditing] = useState(false);
@@ -2090,7 +2088,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   }, [runSshConnectionTest]);
 
   const handleSave = (): Settings => {
-    const effectivePrompt = defaultSystemPrompt.trim();
     const savedExtractionCtxSize = clampIntegerDraft(
       extractionCtxSizeDraft,
       extractionCtxSize,
@@ -2133,7 +2130,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       ...settings,
       agentName: agentName.trim() || undefined,
       defaultModelId,
-      defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
       tavilyApiKey: tavilyApiKey.trim(),

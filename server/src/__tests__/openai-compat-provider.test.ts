@@ -2,6 +2,17 @@ import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The provider module graph pulls in chat-storage's getSettings()/getDb(), and
+// the tests above the temp-home doMock("os") blocks below would otherwise open
+// the REAL ~/.porrima/app.db — running startup storage migrations against live
+// user data. Pin PORRIMA_DATA_DIR to a scratch dir (paths.ts honors it before
+// homedir) so no test in this file can touch the real database.
+vi.hoisted(() => {
+  process.env.PORRIMA_DATA_DIR = `${process.env.TMPDIR || "/tmp"}/porrima-oai-provider-test-data`;
+});
+mkdirSync(process.env.PORRIMA_DATA_DIR!, { recursive: true });
+
 import sharp from "sharp";
 import {
   computePrefillProgress,

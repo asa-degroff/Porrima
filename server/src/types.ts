@@ -191,7 +191,6 @@ export interface Chat {
   title: string;
   type: ChatType;
   modelId: string;
-  systemPrompt: string;
   contextWindow?: number;
   messages: ChatMessage[];
   /** Row-table revision this in-memory snapshot was loaded from. Never persisted.
@@ -403,7 +402,6 @@ export interface Settings {
   /** True after first-time setup wizard has been completed */
   setupCompleted?: boolean;
   defaultModelId: string;
-  defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
   tavilyApiKey: string;

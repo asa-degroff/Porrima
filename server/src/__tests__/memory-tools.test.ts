@@ -483,7 +483,6 @@ describe("memory block scope resolution", () => {
       title: `Chat ${id}`,
       type: "agent",
       modelId: "test-model",
-      systemPrompt: "",
       messages: [],
       createdAt: now,
       lastModified: now,

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata } from "../services/chat-storage.js";
-import { getCachedAugmentedPrompt, getCachedPromptBreakdown } from "../services/memory-context.js";
+import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata, getProject } from "../services/chat-storage.js";
+import { buildStablePrefix, getCachedAugmentedPrompt, getCachedPromptBreakdown } from "../services/memory-context.js";
 import { getLatestRecordedSystemPrompt } from "../services/request-log.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
@@ -109,18 +109,18 @@ router.post("/", async (req, res) => {
   // Skip model validation on chat creation — it blocks for 1-2s due to model discovery.
   // The model will be validated when the first message is sent (chat.ts validates there).
   // This makes chat creation instant.
-  let systemPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
   
-  // Note: AGENTS.md is now loaded dynamically in memory-context.ts at prompt build time,
-  // not baked into the system prompt at chat creation. This allows for better KV cache
-  // efficiency since the stable prefix (persona + user doc + blocks) can be cached separately.
+  // Note: the system prompt has no stored template — it is assembled per turn
+  // in memory-context.ts from the persona document, user doc, memory blocks,
+  // zeitgeist, and project context. AGENTS.md is loaded dynamically at prompt
+  // build time, not baked into a chat row, for better KV cache efficiency
+  // since the stable prefix can be cached separately.
   
   const chat: Chat = {
     id: clientId || uuid(),
     title: "New Agent Chat",
     type: "agent",
     modelId: effectiveModelId,
-    systemPrompt,
     ...(contextWindow ? { contextWindow } : {}),
     messages: [],
     createdAt: new Date().toISOString(),
@@ -136,7 +136,6 @@ router.patch("/:id", async (req, res) => {
   const updates: ChatMetadataUpdate = {
     ...(req.body.title !== undefined ? { title: String(req.body.title) } : {}),
     ...(req.body.modelId !== undefined ? { modelId: String(req.body.modelId) } : {}),
-    ...(req.body.systemPrompt !== undefined ? { systemPrompt: String(req.body.systemPrompt) } : {}),
     clearContextWindow: req.body.modelId !== undefined && req.body.contextWindow === undefined,
   };
   if (req.body.contextWindow !== undefined) {
@@ -160,7 +159,8 @@ router.patch("/:id", async (req, res) => {
 // last-assembled system prompt with per-section token attribution, plus full
 // tool definitions including parameter schemas. Prompt resolution order:
 // persisted request log (survives restarts) → in-memory prompt cache →
-// base-prompt fallback with skills re-augmented. Never re-runs the
+// live stable-prefix preview (persona/user doc/blocks/project/zeitgeist —
+// retrieval-free) with skills re-augmented. Never re-runs the
 // retrieval pipeline just for display.
 router.get("/:id/context-view", async (req, res) => {
   const chat = await getChat(req.params.id);
@@ -177,7 +177,19 @@ router.get("/:id/context-view", async (req, res) => {
     systemPrompt = cached;
     source = "cache";
   } else {
-    systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    // No turn recorded yet: render the stable prefix the first send will use.
+    // buildStablePrefix reads persona/blocks/project context from disk but
+    // runs no memory retrieval, so this stays display-cheap.
+    let projectPath: string | undefined;
+    if (chat.projectId) {
+      const project = await getProject(chat.projectId);
+      projectPath = project?.path;
+    }
+    try {
+      ({ stablePrefix: systemPrompt } = await buildStablePrefix(chat.id, chat.projectId, projectPath));
+    } catch {
+      systemPrompt = "";
+    }
     source = "fallback";
 
     if (chat.activeSkills?.length) {

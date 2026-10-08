@@ -55,7 +55,6 @@ function makeChat(messages: ChatMessage[]): Chat {
     title: "Retention Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages,
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),

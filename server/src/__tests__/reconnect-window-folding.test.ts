@@ -62,7 +62,6 @@ beforeAll(async () => {
     title: "Reconnect Window Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are helpful.",
     messages: Array.from({ length: MESSAGE_COUNT }, (_, i) => ({
       role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
       content: `message ${i}`,

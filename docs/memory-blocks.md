@@ -87,7 +87,7 @@ In `buildStablePrefix` (the shared head of `buildSplitAugmentedPrompt`), blocks 
 
 **Token budget**: Global loaded blocks use a fixed ~3000-token budget so the no-project prefix is byte-identical to the start of project-chat prefixes. Project chats keep a ~5000-token total loaded-block budget by assigning the remaining budget to project blocks. The block index (one-liners) is lightweight.
 
-**Stable prefix caching**: The system prompt prefix (base prompt + persona + user doc + global blocks + zeitgeist + optional project context/blocks) is cached per-chat in `stablePrefixCache`. This keeps the prefix byte-for-byte identical across turns, maximizing llama.cpp KV cache reuse. Global sections come before project-only sections so a no-project baseline warm can be reused by project chats through the global prefix. Only the dynamic memories section changes between turns.
+**Stable prefix caching**: The system prompt prefix (persona + user doc + global blocks + zeitgeist + optional project context/blocks) is cached per-chat in `stablePrefixCache`. This keeps the prefix byte-for-byte identical across turns, maximizing llama.cpp KV cache reuse. Global sections come before project-only sections so a no-project baseline warm can be reused by project chats through the global prefix. Only the dynamic memories section changes between turns.
 
 ## Agent Tools
 

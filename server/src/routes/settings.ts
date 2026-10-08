@@ -54,7 +54,6 @@ function stripServerOwnedActivityFields(settings: Settings): Settings {
 function baselineSensitiveSettingsChanged(before: Settings, after: Settings): boolean {
   return (
     before.defaultModelId !== after.defaultModelId ||
-    before.defaultSystemPrompt !== after.defaultSystemPrompt ||
     before.llamacppUrl !== after.llamacppUrl ||
     before.preserveThinking !== after.preserveThinking ||
     JSON.stringify(before.modelPreserveThinking ?? {}) !== JSON.stringify(after.modelPreserveThinking ?? {})

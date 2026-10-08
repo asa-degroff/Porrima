@@ -9,7 +9,6 @@ function testChat(messages: ChatMessage[], contextWindow = 32768): Chat {
     title: "Test",
     type: "agent",
     modelId: "test-model",
-    systemPrompt: "You are a helpful assistant.",
     contextWindow,
     messages,
     createdAt: new Date().toISOString(),
@@ -168,7 +167,7 @@ describe("computeContextBreakdown", () => {
     // Simulates a resumed prompt re-cached after a restart (or a
     // stable-prefix fallback): rendered-prompt cache warm, breakdown cache
     // empty. The cold-cache footnote must fire instead of silently inflating
-    // the base-prompt row.
+    // the persona row.
     const chatId = "chat-cold-sections";
     setCachedAugmentedPrompt(chatId, "a warm cached prompt without sections");
     const chat: Chat = { ...testChat([]), id: chatId };

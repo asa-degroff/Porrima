@@ -145,7 +145,6 @@ export function useChats() {
         title,
         type: "agent",
         modelId,
-        systemPrompt: "",
         messages: [],
         createdAt: now,
         lastModified: now,

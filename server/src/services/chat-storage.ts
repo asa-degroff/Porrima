@@ -27,6 +27,7 @@ const QUEUE_DIR = join(BASE_DIR, "queue");
 const DB_PATH = join(BASE_DIR, "app.db");
 const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
 const QUICK_CHAT_REMOVAL_MIGRATION = "remove-quick-chats";
+const CHAT_SYSTEM_PROMPT_REMOVAL_MIGRATION = "remove-chat-system-prompt";
 // Upper bound when scanning backwards to find a tool-loop search group's first
 // row during an append. The HTTP loop allows 500 iterations, so 600 covers the
 // largest fragment chain with headroom.
@@ -103,7 +104,6 @@ interface ChatMetadataRow {
   title: string;
   type: string;
   modelId: string;
-  systemPrompt: string | null;
   contextWindow: number | null;
   projectId: string | null;
   activeSkills: string | null;
@@ -123,7 +123,6 @@ interface ChatMetadataWithMessageCount extends ChatMetadataRow {
 export interface ChatMetadataUpdate {
   title?: string;
   modelId?: string;
-  systemPrompt?: string;
   contextWindow?: number | null;
   clearContextWindow?: boolean;
 }
@@ -152,7 +151,6 @@ export function getDb(): Database.Database {
       title TEXT NOT NULL,
       type TEXT NOT NULL,
       modelId TEXT NOT NULL,
-      systemPrompt TEXT,
       contextWindow INTEGER,
       projectId TEXT,
       activeSkills TEXT,
@@ -511,6 +509,10 @@ export function getDb(): Database.Database {
   // only chats explicitly stored as quick are deleted.
   removeQuickChats(db);
 
+  // The template system prompt ("You are a helpful assistant.") was a quick
+  // chats leftover; prompts are persona-based now, so the column goes away.
+  dropChatSystemPromptColumn(db);
+
   backfillChatMessageRows(db);
   rebuildChatSearchFromRowsOnce(db);
   remergeChatSearchToolLoopRowsOnce(db);
@@ -586,7 +588,7 @@ export async function getChat(id: string): Promise<Chat | null> {
   const db = getDb();
   const row = db.prepare(`
     SELECT
-      id, title, type, modelId, systemPrompt, contextWindow, projectId,
+      id, title, type, modelId, contextWindow, projectId,
       activeSkills, createdAt, lastModified,
       lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
       revision,
@@ -729,7 +731,7 @@ export async function getChatWithWindow(
 ): Promise<Chat | null> {
   const db = getDb();
   const row = db.prepare(
-    `SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
+    `SELECT id, title, type, modelId, contextWindow, projectId,
             activeSkills, createdAt, lastModified,
             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
             revision
@@ -871,7 +873,6 @@ export async function saveChat(
         SET title = ?,
             type = ?,
             modelId = ?,
-            systemPrompt = ?,
             contextWindow = ?,
             projectId = ?,
             activeSkills = ?,
@@ -886,7 +887,6 @@ export async function saveChat(
         chat.title,
         chat.type,
         chat.modelId,
-        chat.systemPrompt || "",
         chat.contextWindow ?? null,
         chat.projectId ?? null,
         chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
@@ -981,10 +981,6 @@ export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate
       assignments.push("modelId = ?");
       params.push(updates.modelId);
     }
-    if (updates.systemPrompt !== undefined) {
-      assignments.push("systemPrompt = ?");
-      params.push(updates.systemPrompt);
-    }
     if (updates.contextWindow !== undefined) {
       assignments.push("contextWindow = ?");
       params.push(updates.contextWindow);
@@ -1004,7 +1000,7 @@ export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate
     }
 
     const row = db.prepare(`
-      SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
+      SELECT id, title, type, modelId, contextWindow, projectId,
              activeSkills, createdAt, lastModified,
              lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex, lastZeitgeistSynthesisAt,
              revision
@@ -1065,18 +1061,17 @@ export async function createChat(chat: Chat): Promise<void> {
   const create = db.transaction(() => {
     db.prepare(`
       INSERT INTO chats (
-        id, title, type, modelId, systemPrompt,
+        id, title, type, modelId,
         contextWindow, projectId, activeSkills, messages,
         createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex,
         preview, revision
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(
       chat.id,
       chat.title,
       chat.type,
       chat.modelId,
-      chat.systemPrompt || "",
       chat.contextWindow ?? null,
       chat.projectId ?? null,
       chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
@@ -1346,7 +1341,6 @@ export const MAX_REMINDER_TIMEOUT_MS = 240 * 60 * 1000;
 
 const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
-  defaultSystemPrompt: "You are a helpful assistant.",
   braveApiKey: "",
   exaApiKey: "",
   tavilyApiKey: "",
@@ -1375,6 +1369,7 @@ const DEFAULT_SETTINGS: Settings = {
 // normalizeSettings() result, which is the single choke point both reads and
 // writes pass through.
 const RETIRED_SETTINGS_KEYS = [
+  "defaultSystemPrompt",
   "imageSandboxEnabled",
   "imageBackend",
   "comfyuiUrl",
@@ -1760,7 +1755,6 @@ function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
     title: row.title,
     type: row.type === "system" ? "system" : "agent",
     modelId: row.modelId,
-    systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
     messages,
     _baseRevision: row.revision ?? 0,
@@ -2543,6 +2537,26 @@ function removeQuickChats(db: Database.Database): void {
   console.log(`[chat-storage] Removed ${ids.length} quick chats (feature removed)`);
 }
 
+/**
+ * One-time removal of the `chats.systemPrompt` column. It held the short
+ * template prompt ("You are a helpful assistant.") seeded from
+ * `settings.defaultSystemPrompt` — a quick chats leftover. The agent prompt is
+ * now built entirely from the persona document, user doc, memory blocks,
+ * zeitgeist, and project context at send time, so the stored template is
+ * dead weight. Idempotent: fresh databases are created without the column.
+ */
+function dropChatSystemPromptColumn(db: Database.Database): void {
+  if (hasStorageMigration(db, CHAT_SYSTEM_PROMPT_REMOVAL_MIGRATION)) return;
+
+  const columns = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
+  if (columns.some((c) => c.name === "systemPrompt")) {
+    db.exec("ALTER TABLE chats DROP COLUMN systemPrompt");
+  }
+
+  markStorageMigration(db, CHAT_SYSTEM_PROMPT_REMOVAL_MIGRATION);
+  console.log("[chat-storage] Dropped chats.systemPrompt (template placeholder removed)");
+}
+
 function backfillChatMessageRows(db: Database.Database): void {
   if (hasStorageMigration(db, MESSAGE_ROWS_MIGRATION)) return;
 
@@ -2700,11 +2714,11 @@ function migrateChatsFromJson(db: Database.Database): void {
   try {
     const insert = db.prepare(`
       INSERT OR REPLACE INTO chats (
-        id, title, type, modelId, systemPrompt,
+        id, title, type, modelId,
         contextWindow, projectId, activeSkills, messages,
         createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastDelayedExtractionTailIndex
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const migrate = db.transaction(() => {
@@ -2721,7 +2735,6 @@ function migrateChatsFromJson(db: Database.Database): void {
             chat.title,
             chat.type || "agent",
             chat.modelId,
-            chat.systemPrompt || "",
             chat.contextWindow ?? null,
             chat.projectId ?? null,
             chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
