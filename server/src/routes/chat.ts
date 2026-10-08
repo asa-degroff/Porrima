@@ -85,6 +85,7 @@ import {
   beginTurnIntent,
   abortPendingTurnIntent,
   detachSubscriber,
+  emitToStream,
   closeLiveSSEIfCurrent,
   installLiveStream,
   stampStreamPresence,
@@ -96,6 +97,7 @@ import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
 import { recordContextEstimateObservation } from "../services/token-estimate-observability.js";
+import { onLlmRequestEvent } from "../services/request-log.js";
 import { stampAssistantCompletionActivity, stampUserTurnActivity } from "../services/user-activity.js";
 
 const DEFAULT_LLAMACPP_URL = getDefaultLlamaServerUrl("inference");
@@ -955,6 +957,18 @@ async function estimatePostCompactionTokens(
 }
 
 const router = Router();
+
+// Wire-level request-log events (provider recorder) fan out onto the chat's
+// live stream as `llm_request_start` / `llm_request_end` frames so an open
+// request viewer appends rows the moment requests dispatch/resolve. Frames
+// carry ids + counters only — full bodies stay server-side and are fetched
+// lazily from /api/llm-requests. No live stream means nobody is watching:
+// drop silently.
+onLlmRequestEvent((event) => {
+  const stream = liveStreams.get(event.chatId);
+  if (!stream || stream.ended) return;
+  emitToStream(stream, `event: llm_request_${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+});
 
 async function stampUserActivity(chat: Chat): Promise<void> {
   if (chat.type === "system") return;
@@ -2243,6 +2257,7 @@ async function handleChatStream(
     // Pass llamacpp slot lease and hooks to the stream function
     const safeStreamFn = createSafeStreamFn(llamaSlotLease, {
       promptDebugChatId: chat.id,
+      getTurnId: () => state.toolLoopId,
       onModelProgress: emitModelProgress,
       // Heartbeat the turn-gate lease on every LLM activity sign — a healthy
       // streaming turn must never look like a hung holder to staleness steal.

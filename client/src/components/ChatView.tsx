@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import type { Artifact, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
-import { fetchRenderedPrompt, fetchSkills } from "../api/client";
+import { fetchSkills } from "../api/client";
+import { RequestViewerModal } from "./RequestViewerModal";
 import { MessageBubble } from "./MessageBubble";
 import { MidTurnCompactionIndicator } from "./CompactionIndicator";
 import { CrossChatPostCard } from "./CrossChatPostCard";
@@ -363,6 +364,9 @@ interface Props {
   headerImageEnabled?: boolean;
   headerImageId?: string;
   autoFocusInput?: boolean;
+  /** Bumped by `llm_request_start`/`llm_request_end` SSE events — forwarded
+   *  to the request viewer so its list appends rows live. */
+  requestLogVersion?: number;
 }
 
 export function ChatView({
@@ -422,6 +426,7 @@ export function ChatView({
   headerImageEnabled = false,
   headerImageId,
   autoFocusInput,
+  requestLogVersion = 0,
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -437,8 +442,7 @@ export function ChatView({
   const loadingOlderRef = useRef(false);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
-  const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[]; cached: boolean } | null>(null);
-  const [promptLoading, setPromptLoading] = useState(false);
+  const [requestViewerOpen, setRequestViewerOpen] = useState(false);
   const inputRef = useRef<HTMLDivElement | null>(null);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillSelectorOpen, setSkillSelectorOpen] = useState(false);
@@ -515,20 +519,6 @@ export function ChatView({
   const closeSkillSelector = useCallback(() => {
     setSkillSelectorOpen(false);
   }, []);
-
-  const openPromptViewer = useCallback(async () => {
-    if (!chatId) return;
-    setPromptLoading(true);
-    setPromptModal(null);
-    try {
-      const data = await fetchRenderedPrompt(chatId);
-      setPromptModal(data);
-    } catch {
-      setPromptModal({ systemPrompt: "(Failed to load)", tools: [], cached: false });
-    } finally {
-      setPromptLoading(false);
-    }
-  }, [chatId]);
 
   // Track whether user is scrolled near the bottom
   const handleScroll = useCallback(() => {
@@ -862,10 +852,10 @@ export function ChatView({
           )}
           <button
             className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50 pressable"
-            title="View rendered system prompt and tools"
-            onClick={openPromptViewer}
+            title="View per-turn model requests, responses, and assembled context"
+            onClick={() => setRequestViewerOpen(true)}
           >
-            Prompt
+            Requests
           </button>
           {/* Agent and system chats use the configured default model to preserve KV cache warmth. */}
           {headerImageEnabled ? (
@@ -1173,65 +1163,12 @@ export function ChatView({
         />
       )}
 
-      {/* Rendered Prompt Viewer Modal */}
-      {(promptModal || promptLoading) && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center app-modal-backdrop"
-          onClick={() => { setPromptModal(null); setPromptLoading(false); }}
-        >
-          <div
-            className="depth-raised relative prompt-viewer-surface theme-primary-bg border theme-primary-border rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-3 border-b theme-primary-border">
-              <h3 className="text-sm font-medium theme-primary-text">Rendered Agent Context</h3>
-              <button
-                className="theme-primary-text hover:opacity-80 text-lg leading-none"
-                onClick={() => { setPromptModal(null); setPromptLoading(false); }}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-              {promptLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="w-5 h-5 border-2 theme-primary-border border-t-theme-primary-text rounded-full animate-spin" />
-                  <span className="ml-3 text-sm theme-primary-text opacity-60">Loading prompt…</span>
-                </div>
-              ) : promptModal && (
-                <>
-                  {!promptModal.cached && (
-                    <div className="text-xs theme-primary-text opacity-50 italic px-1">
-                      Augmented prompt not cached — showing base system prompt. Send a message to populate.
-                    </div>
-                  )}
-                  <div>
-                    <h4 className="text-xs font-medium theme-accent-text opacity-70 uppercase tracking-wider mb-2">System Prompt</h4>
-                    <pre className="text-xs theme-primary-text opacity-90 font-mono whitespace-pre-wrap theme-accent-bg rounded-lg p-3 theme-accent-border max-h-[40vh] overflow-y-auto">
-                      {promptModal.systemPrompt}
-                    </pre>
-                  </div>
-                  {promptModal.tools.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium theme-accent-text opacity-70 uppercase tracking-wider mb-2">
-                        Tools ({promptModal.tools.length})
-                      </h4>
-                      <div className="space-y-1.5">
-                        {promptModal.tools.map((t) => (
-                          <div key={t.name} className="text-xs theme-accent-bg rounded-lg px-3 py-2 theme-accent-border">
-                            <span className="theme-secondary-text font-mono">{t.name}</span>
-                            <span className="theme-primary-text opacity-60 ml-2">{t.description}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <RequestViewerModal
+        isOpen={requestViewerOpen}
+        onClose={() => setRequestViewerOpen(false)}
+        chatId={chatId}
+        requestLogVersion={requestLogVersion}
+      />
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { listChats, getChat, deleteChat, getSettings, createChat, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata } from "../services/chat-storage.js";
-import { getCachedAugmentedPrompt } from "../services/memory-context.js";
+import { getCachedAugmentedPrompt, getCachedPromptBreakdown } from "../services/memory-context.js";
+import { getLatestRecordedSystemPrompt } from "../services/request-log.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
 import { isLiveStreamActive } from "../services/live-streams.js";
@@ -155,25 +156,29 @@ router.patch("/:id", async (req, res) => {
   res.json(updated);
 });
 
-// Get the rendered system prompt and tools for debugging.
-// Returns the cached prompt from the last message send when available.
-// When the cache is cold (e.g. after a server restart), returns the base
-// system prompt with a cached=false flag instead of running a full memory
+// The Context tab of the request viewer (docs/design/request-viewer.md): the
+// last-assembled system prompt with per-section token attribution, plus full
+// tool definitions including parameter schemas. Prompt resolution order:
+// persisted request log (survives restarts) → in-memory prompt cache →
+// base-prompt fallback with skills re-augmented. Never re-runs the
 // retrieval pipeline just for display.
-router.get("/:id/rendered-prompt", async (req, res) => {
+router.get("/:id/context-view", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
+  const fromRequestLog = getLatestRecordedSystemPrompt(chat.id);
   const cached = getCachedAugmentedPrompt(chat.id);
   let systemPrompt: string;
-  let cachedFlag: boolean;
-
-  if (cached) {
+  let source: "request-log" | "cache" | "fallback";
+  if (fromRequestLog) {
+    systemPrompt = fromRequestLog;
+    source = "request-log";
+  } else if (cached) {
     systemPrompt = cached;
-    cachedFlag = true;
+    source = "cache";
   } else {
     systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
-    cachedFlag = false;
+    source = "fallback";
 
     if (chat.activeSkills?.length) {
       const { buildSkillAugmentedPrompt, discoverSkills } = await import("../services/skills.js");
@@ -187,8 +192,9 @@ router.get("/:id/rendered-prompt", async (req, res) => {
   }
 
   const tools = getAgentToolDefinitions(chat.type);
+  const sections = getCachedPromptBreakdown(chat.id) ?? null;
 
-  res.json({ systemPrompt, tools, cached: cachedFlag });
+  res.json({ systemPrompt, source, sections, tools });
 });
 
 // Attribute the current context across system prompt, memory, tools,

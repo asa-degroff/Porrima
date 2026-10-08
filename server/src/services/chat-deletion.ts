@@ -5,6 +5,7 @@ import { cancelImmediateExtractionQueue, markChatInactive } from "./memory-extra
 import * as messageQueue from "./message-queue.js";
 import { resetMemoryContext } from "./memory-context.js";
 import { cleanupChat } from "./tool-output-store.js";
+import { clearLlmRequests } from "./request-log.js";
 import { disposeKernel } from "./python-kernel.js";
 
 /**
@@ -29,4 +30,6 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   await closeBrowserSession(chatId).catch(() => {});
   await cleanupChat(chatId).catch(() => {});
   await disposeKernel(chatId, { removeState: true }).catch(() => {});
+  // porrima.db side of the ledger: drop this chat's recorded LLM requests.
+  clearLlmRequests(chatId);
 }

@@ -24,6 +24,10 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 export interface SafeStreamHooks {
   onModelProgress?: ModelProgressCallback;
   promptDebugChatId?: string;
+  /** Turn identity for the request-log recorder. Evaluated per LLM call so a
+   *  mid-turn resetAccumulators (new toolLoopId) is picked up — request ids
+   *  stay unique either way (turn uuid + iteration). */
+  getTurnId?: () => string | undefined;
   /** Called on every sign of LLM activity (progress event, stream event).
    *  The chat route uses this to heartbeat the turn-gate lease so a healthy
    *  streaming turn is never mistaken for a hung holder. */
@@ -103,6 +107,17 @@ export function createSafeStreamFn(
     }
     if (hooks?.promptDebugChatId) {
       mergedOptions.llamaPromptDebugChatId = hooks.promptDebugChatId;
+      if (hooks.getTurnId) {
+        const turnId = hooks.getTurnId();
+        if (turnId) {
+          // Per-request identity for the wire-level recorder in the provider.
+          // Only real chat turns take this path — cache-warm and auxiliary
+          // callers never set both promptDebugChatId and getTurnId.
+          mergedOptions.llamaRequestId = `${turnId}:${iterationCount}`;
+          mergedOptions.llamaRequestTurnId = turnId;
+          mergedOptions.llamaRequestIteration = iterationCount;
+        }
+      }
     }
 
     const rawStream = streamLlamaCpp(model, ctx, mergedOptions as any);

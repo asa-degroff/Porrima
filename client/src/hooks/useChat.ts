@@ -331,6 +331,11 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   // corresponds to a fresh stats row — consumers (ModelStatsModal) use the
   // change as a "re-fetch" trigger so the display tracks a long turn live.
   const [modelStatsVersion, setModelStatsVersion] = useState(0);
+  // Monotonic counter bumped by the wire-level `llm_request_start` /
+  // `llm_request_end` events from the request-log recorder. One bump per LLM
+  // call — the request viewer refetches its list on change so rows append
+  // live while it is open.
+  const [requestLogVersion, setRequestLogVersion] = useState(0);
   // Separate from streamingUsage because the server-side display estimate
   // reflects the NEXT call's input (includes accumulated tool results), not the
   // last call's reported usage. When it exceeds reported usage, we show it as a
@@ -969,6 +974,13 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             rafRef.current = requestAnimationFrame(flushStreamingContent);
           }
         }
+      },
+      onLlmRequestEvent: () => {
+        // A wire-level LLM request just dispatched or resolved — bump so an
+        // open request viewer refetches its list. Unconditional on the active
+        // chat, mirroring modelStatsVersion: background streams belong to
+        // their own chat and the modal filters by chatId client-side.
+        setRequestLogVersion((v) => v + 1);
       },
       onIteration: (info) => {
         console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"} displayEst=${info.displayEstimatedTokens ?? "?"}`);
@@ -2350,6 +2362,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     streamingSegmentIndex,
     hasBackgroundActivity,
     modelStatsVersion,
+    requestLogVersion,
     reconnecting,
     send,
     reportArtifactRuntimeError,

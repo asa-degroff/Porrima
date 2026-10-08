@@ -445,10 +445,14 @@ function toolIsAvailable(name: string, chatType?: string): boolean {
   return chatType !== "system" || !SYSTEM_CHAT_EXCLUDED_TOOLS.has(name);
 }
 
-/** Get tool definitions (name + description) for display/metadata only */
-export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
+/** Get tool definitions for display/metadata only. `parameters` is the
+ *  TypeBox JSON schema — the request viewer's Context tab shows the same
+ *  surface the model sees (wire tools come from convertTools over these). */
+export function getAgentToolDefinitions(chatType?: string): { name: string; description: string; parameters?: unknown }[] {
   const allTools = [...MEMORY_TOOLS, ...WEB_TOOLS, ...BROWSER_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
-  return allTools.filter((tool) => toolIsAvailable(tool.name, chatType)).map(t => ({ name: t.name, description: t.description }));
+  return allTools
+    .filter((tool) => toolIsAvailable(tool.name, chatType))
+    .map((t) => ({ name: t.name, description: t.description, parameters: (t as { parameters?: unknown }).parameters }));
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */

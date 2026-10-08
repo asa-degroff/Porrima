@@ -103,6 +103,7 @@ porrima/
 │   │   ├── models.ts                # Model discovery + health probes
 │   │   ├── model-stats.ts           # Per-model token/latency samples
 │   │   ├── reranker-stats.ts        # Reranker usage and latency samples
+│   │   ├── request-log.ts           # Per-chat LLM request log: list/detail/clear (request viewer)
 │   │   ├── llama-servers.ts         # Managed llama.cpp unit supervision + config
 │   │   ├── settings.ts              # User preferences, SSH connections, header image, storage diagnostics
 │   │   ├── snapshots.ts             # Agent database snapshot create/restore
@@ -161,6 +162,7 @@ porrima/
 │   │   ├── embeddings.ts            # Embedding API wrapper (llama.cpp /v1/embeddings)
 │   │   ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
 │   │   ├── reranker-stats.ts        # Reranker sampling (porrima.db)
+│   │   ├── request-log.ts           # Wire-level per-request recorder (llm_requests + blob dedup, porrima.db)
 │   │   ├── cache-warm.ts            # llama.cpp prompt-cache warming
 │   │   ├── cache-warm-queue.ts      # Warm queue with position tracking
 │   │   ├── llama-cache-residency.ts # Observed prompt-cache residency
@@ -231,7 +233,7 @@ porrima/
 │   │   ├── time-marker.ts           # Time anchors injected into turns
 │   │   ├── time-format.ts           # Time formatting helpers
 │   │   ├── logger.ts                # Server logging
-│   ├── scripts/                    # CLI migrations (not HTTP): analyze-token-estimates, migrate-inline-image-payloads, migrate-tool-result-image-payloads
+│   ├── scripts/                    # CLI migrations (not HTTP): analyze-token-estimates, migrate-inline-image-payloads, migrate-tool-result-image-payloads, smoke-request-log
 │   └── utils/                       # message-window, mime, path helpers
 ├── client/src/
 │   ├── App.tsx                      # Root app shell, routing, theme/legacy-key migration
@@ -278,6 +280,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Memory Context Persistence](docs/design/memory-context-persistence.md)
 - [Memory Context Subject Lines](docs/design/memory-context-subject-lines.md)
 - [Mid-Turn Extraction](docs/design/mid-turn-extraction.md)
+- [Per-Turn Request Viewer](docs/design/request-viewer.md)
 - [P0B Storage Concurrency](docs/design/p0b-storage-concurrency.md)
 - [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
 

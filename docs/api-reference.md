@@ -73,7 +73,7 @@ Managed systemd user units. Slot ids: `inference`, `extraction`, `reranker`, `em
 | GET | `/api/chats/:id` | Get a chat with messages. `?messageLimit=N` returns the most recent window plus `messageOffset`, `messageTotal`, `hasMoreMessages`; `N` capped at 1000 |
 | GET | `/api/chats/:id/messages` | Paged window before an absolute sequence: `?before=N&limit=M` (capped at 1000). Used by scroll-to-top history loading |
 | GET | `/api/chats/:id/header` | Lightweight chat header (id, title, type, modelId, lastModified, projectId, contextWindow, message count) — avoids loading the message window |
-| GET | `/api/chats/:id/rendered-prompt` | The exact system prompt last sent for this chat, plus a `cached` flag indicating whether it came from the memory-context cache |
+| GET | `/api/chats/:id/context-view` | Context tab payload: last-assembled system prompt (request log → in-memory cache → base-prompt fallback), per-section token breakdown, and tool definitions including parameter schemas |
 | GET | `/api/chats/:id/context-breakdown` | Per-section token attribution for the effective context window |
 | POST | `/api/chat` | Send a message (SSE stream) |
 | POST | `/api/chat/edit` | Edit and resend a message |
@@ -132,7 +132,7 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | POST | `/api/automations/:id/reset-prompts` | Restore default prompt steps for a built-in |
 | GET | `/api/automations/:id/runs` | Run history. `?limit=N`, capped at 200 |
 
-## System control & stats (`routes/system.ts`, `routes/system-stats.ts`, `routes/model-stats.ts`, `routes/reranker-stats.ts`)
+## System control & stats (`routes/system.ts`, `routes/system-stats.ts`, `routes/model-stats.ts`, `routes/reranker-stats.ts`, `routes/request-log.ts`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -144,6 +144,9 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | GET | `/api/model-stats` | Per-model usage summaries (tokens, latency) |
 | GET | `/api/model-stats/:modelId` | Summaries for one model, optionally `?provider=` |
 | POST | `/api/model-stats/clear` | Reset collected model stats |
+| GET | `/api/llm-requests?chatId=&limit=` | Per-chat wire-level LLM request log (summaries, newest first) — backs the request viewer |
+| GET | `/api/llm-requests/:id` | Rehydrated full request body + response for one recorded LLM call |
+| DELETE | `/api/llm-requests?chatId=` | Clear the recorded request log for a chat |
 | GET | `/api/reranker-stats` | Reranker usage and latency stats |
 | POST | `/api/reranker-stats/clear` | Reset reranker stats |
 

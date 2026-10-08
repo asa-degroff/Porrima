@@ -843,7 +843,7 @@ export async function runHeadlessChatTurn(
         // context high-water floor for headless turns — without this,
         // system chat and automations (the long-turn workhorses) never
         // feed the floor and its stale-discovery protection.
-        streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id }),
+        streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id, getTurnId: () => turnId }),
         logPrefix,
         onEvent: async (event) => {
           // Live-only previews: text/thinking deltas, tool-call argument

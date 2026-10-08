@@ -31,6 +31,7 @@ import { getLlamaChatLastRequestDigest } from "./llama-cache-residency.js";
 import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message-utils.js";
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
 import { recordContextObservation } from "./context-high-water.js";
+import { recordLlmRequestStart, recordLlmRequestEnd } from "./request-log.js";
 import { countLlamaTextTokens } from "./token-count.js";
 import { getSettings } from "./chat-storage.js";
 
@@ -517,6 +518,26 @@ function getPromptDebugChatId(options?: SimpleStreamOptions): string | undefined
   const explicit = (options as any)?.llamaPromptDebugChatId;
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
   return getLlamaSlotLease(options)?.chatId;
+}
+
+/**
+ * Per-request identity for the request-log recorder. Only chat turns built
+ * through `createSafeStreamFn` with a `getTurnId` hook carry a request id —
+ * cache-warm bodies (byte-clones of live bodies) and auxiliary one-shots
+ * (extraction/title) never do, which is exactly the v1 recording gate.
+ */
+function getRequestRecordMeta(options?: SimpleStreamOptions):
+  | { requestId: string; turnId?: string; iteration?: number }
+  | undefined {
+  const requestId = (options as any)?.llamaRequestId;
+  if (typeof requestId !== "string" || requestId.length === 0) return undefined;
+  const turnId = (options as any)?.llamaRequestTurnId;
+  const iteration = (options as any)?.llamaRequestIteration;
+  return {
+    requestId,
+    turnId: typeof turnId === "string" ? turnId : undefined,
+    iteration: typeof iteration === "number" ? iteration : undefined,
+  };
 }
 
 async function renderPromptForDebug(
@@ -1842,6 +1863,9 @@ export const streamOpenAICompat = (
 
   (async () => {
     let stopPrefillMonitor: (() => void) | null = null;
+    // Set once the wire body is dispatched and the request-log recorder has
+    // taken its snapshot; read by both the success and error finalization.
+    let recordedRequest: { chatId: string; requestId: string; startedAt: number } | null = null;
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -1898,6 +1922,34 @@ export const streamOpenAICompat = (
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
       const promptDebugChatId = getPromptDebugChatId(options);
+
+      // Request-log recorder: capture the exact wire body right here — the
+      // single choke point where the complete request exists. Recording is a
+      // pure side channel: the body is read, never mutated, and any failure
+      // is swallowed so a logging bug can never disturb the turn (or its
+      // byte-identical KV prefix).
+      const requestMeta = typeof explicitDebugChatId === "string" ? getRequestRecordMeta(options) : undefined;
+      if (requestMeta && typeof explicitDebugChatId === "string") {
+        try {
+          recordLlmRequestStart({
+            chatId: explicitDebugChatId,
+            requestId: requestMeta.requestId,
+            turnId: requestMeta.turnId,
+            iteration: requestMeta.iteration,
+            modelId: model.id,
+            provider: typeof model.provider === "string" ? model.provider : "llamacpp",
+            body,
+            requestDigest: cacheMetadata.requestDigest,
+          });
+          recordedRequest = {
+            chatId: explicitDebugChatId,
+            requestId: requestMeta.requestId,
+            startedAt: Date.now(),
+          };
+        } catch (err) {
+          console.warn("[request-log] start capture failed:", err instanceof Error ? err.message : err);
+        }
+      }
       const onModelProgress = getModelProgressCallback(options);
       const showIndicator = getShowIndicatorFromOptions(options);
 
@@ -2410,6 +2462,25 @@ export const streamOpenAICompat = (
         output.stopReason = "toolUse";
       }
 
+      if (recordedRequest) {
+        try {
+          recordLlmRequestEnd({
+            chatId: recordedRequest.chatId,
+            requestId: recordedRequest.requestId,
+            status: "done",
+            output: {
+              content: output.content,
+              stopReason: output.stopReason,
+              usage: output.usage,
+            },
+            cachedTokens: output.usage.cacheRead,
+            durationMs: Date.now() - recordedRequest.startedAt,
+          });
+        } catch (err) {
+          console.warn("[request-log] end record failed:", err instanceof Error ? err.message : err);
+        }
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output } as AssistantMessageEvent);
       stream.end();
     } catch (error) {
@@ -2418,6 +2489,24 @@ export const streamOpenAICompat = (
       for (const block of output.content) delete (block as any).index;
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      if (recordedRequest) {
+        try {
+          recordLlmRequestEnd({
+            chatId: recordedRequest.chatId,
+            requestId: recordedRequest.requestId,
+            status: options?.signal?.aborted ? "aborted" : "error",
+            output: {
+              content: output.content,
+              stopReason: output.stopReason,
+              usage: output.usage,
+              errorMessage: output.errorMessage,
+            },
+            durationMs: Date.now() - recordedRequest.startedAt,
+          });
+        } catch (err) {
+          console.warn("[request-log] error record failed:", err instanceof Error ? err.message : err);
+        }
+      }
       stream.push({ type: "error", reason: output.stopReason, error: output } as AssistantMessageEvent);
       stream.end();
     }

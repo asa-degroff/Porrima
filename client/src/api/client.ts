@@ -92,9 +92,109 @@ export async function updateChat(
   return res.json();
 }
 
-export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[]; cached: boolean }> {
-  const res = await apiFetch(`${BASE}/chats/${id}/rendered-prompt`);
-  if (!res.ok) throw new Error("Failed to fetch rendered prompt");
+// ---------------------------------------------------------------------------
+// Per-turn LLM request log (docs/design/request-viewer.md)
+// ---------------------------------------------------------------------------
+
+export interface LlmRequestSummary {
+  id: string;
+  chatId: string;
+  turnId: string | null;
+  iteration: number | null;
+  timestamp: number;
+  modelId: string;
+  provider: string;
+  purpose: string;
+  status: "in_progress" | "done" | "error" | "aborted";
+  messageCount: number | null;
+  toolCount: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  cachedTokens: number | null;
+  durationMs: number | null;
+  requestDigest: string | null;
+  stopReason: string | null;
+  errorMessage: string | null;
+}
+
+export interface LlmRequestDetail extends LlmRequestSummary {
+  request: {
+    params: Record<string, unknown>;
+    messages: Array<Record<string, unknown>>;
+    tools: Array<Record<string, unknown>> | null;
+    reclaimed: number;
+  } | null;
+  response: {
+    content?: unknown[];
+    stopReason?: string;
+    usage?: unknown;
+    errorMessage?: string;
+  } | null;
+}
+
+/** Wire payload of the `llm_request_start` / `llm_request_end` SSE events. */
+export interface LlmRequestLogEvent {
+  type: "start" | "end";
+  chatId: string;
+  requestId: string;
+  turnId?: string;
+  iteration?: number;
+  modelId?: string;
+  timestamp: number;
+  messageCount?: number;
+  toolCount?: number;
+  status?: string;
+  stopReason?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
+  durationMs?: number;
+  errorMessage?: string;
+}
+
+export interface PromptSectionBreakdown {
+  basePrompt: number;
+  persona: number;
+  userDocument: number;
+  memoryBlocks: number;
+  zeitgeist: number;
+  projectContext: number;
+  retrievedMemories: number;
+  memoryDelta: number;
+  systemPromptChars: number;
+  updatedAt: number;
+}
+
+export interface ContextView {
+  systemPrompt: string;
+  source: "request-log" | "cache" | "fallback";
+  sections: PromptSectionBreakdown | null;
+  tools: { name: string; description: string; parameters?: unknown }[];
+}
+
+export async function fetchLlmRequests(chatId: string): Promise<LlmRequestSummary[]> {
+  const res = await apiFetch(`${BASE}/llm-requests?chatId=${encodeURIComponent(chatId)}`);
+  if (!res.ok) throw new Error("Failed to fetch request log");
+  const data = await res.json();
+  return data.requests;
+}
+
+export async function fetchLlmRequestDetail(id: string): Promise<LlmRequestDetail> {
+  const res = await apiFetch(`${BASE}/llm-requests/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error("Failed to fetch request detail");
+  return res.json();
+}
+
+export async function clearLlmRequests(chatId: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/llm-requests?chatId=${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to clear request log");
+}
+
+export async function fetchContextView(chatId: string): Promise<ContextView> {
+  const res = await apiFetch(`${BASE}/chats/${chatId}/context-view`);
+  if (!res.ok) throw new Error("Failed to fetch context view");
   return res.json();
 }
 
@@ -276,6 +376,9 @@ export interface StreamCallbacks {
   onSegment?: (segment: import("../types").MessageSegment) => void;
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
+  /** Per-LLM-call wire events from the request-log recorder. Carries ids and
+   *  counters only — the request viewer fetches full bodies lazily. */
+  onLlmRequestEvent?: (event: LlmRequestLogEvent) => void;
   onWarning?: (warning: StreamWarning) => void;
   onCompacting?: () => void;
 onCompaction?: (info: {
@@ -693,6 +796,10 @@ function processSSEEvent(
       break;
     case "iteration":
       callbacks.onIteration?.(data);
+      break;
+    case "llm_request_start":
+    case "llm_request_end":
+      callbacks.onLlmRequestEvent?.(data);
       break;
     case "warning":
       callbacks.onWarning?.(data);

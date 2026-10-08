@@ -508,6 +508,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     streamingSegmentIndex,
     hasBackgroundActivity,
     modelStatsVersion,
+    requestLogVersion,
     send,
     reportArtifactRuntimeError,
     editMessage,
@@ -1704,6 +1705,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         headerImageEnabled={settings.headerImageEnabled}
         headerImageId={settings.headerImageId}
         autoFocusInput={autoFocusInput}
+        requestLogVersion={requestLogVersion}
       />
       )}
       {settingsOpen && !settingsLoading && (
