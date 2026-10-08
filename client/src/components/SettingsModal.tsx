@@ -5351,7 +5351,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               </button>
             </div>
 
-            {skillsBrowserOpen && <SkillsBrowser onClose={() => setSkillsBrowserOpen(false)} projectId={undefined} />}
+            {skillsBrowserOpen && <SkillsBrowser onClose={() => setSkillsBrowserOpen(false)} />}
           </div>
 
           {/* Memory Extraction */}

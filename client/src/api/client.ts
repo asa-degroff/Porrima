@@ -1179,16 +1179,13 @@ export interface SkillInfo {
   metadata?: Record<string, string>;
   allowedTools?: string;
   resources?: Partial<Record<"scripts" | "references" | "assets", string[]>>;
-  source?: "global" | "project";
-  sourceRoot?: "porrima" | "agents" | "project";
+  sourceRoot?: "porrima" | "agents";
   managed?: boolean;
   folderPath?: string;
-  projectId?: string;
 }
 
-export async function fetchSkills(projectId?: string): Promise<SkillInfo[]> {
-  const url = `${BASE}/skills` + (projectId ? `?projectId=${encodeURIComponent(projectId)}` : "");
-  const res = await apiFetch(url);
+export async function fetchSkills(): Promise<SkillInfo[]> {
+  const res = await apiFetch(`${BASE}/skills`);
   if (!res.ok) throw new Error("Failed to fetch skills");
   return res.json();
 }

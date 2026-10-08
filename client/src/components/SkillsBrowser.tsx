@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchSkills, installSkill, deleteSkill } from "../api/client";
 import type { SkillInfo } from "../api/client";
-import { Dropdown } from "./ui/Dropdown";
-import { useDropdown } from "../hooks/useDropdown";
 
 interface Props {
   onClose: () => void;
-  projectId?: string;
 }
 
 interface InstallFormState {
@@ -17,11 +14,10 @@ interface InstallFormState {
   success: string | null;
 }
 
-export function SkillsBrowser({ onClose, projectId }: Props) {
+export function SkillsBrowser({ onClose }: Props) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterSource, setFilterSource] = useState<"all" | "global" | "project">("all");
   const [installForm, setInstallForm] = useState<InstallFormState>({
     url: "",
     name: "",
@@ -34,7 +30,6 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
-  const filterSourceDd = useDropdown();
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   // Escape dismisses a pending delete confirm (same as ChatListItem).
@@ -48,10 +43,6 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
   }, [confirmingDeleteSkill]);
 
   useEffect(() => {
-    loadSkills();
-  }, [projectId]);
-
-  useEffect(() => {
     if (installOpen && urlInputRef.current) {
       urlInputRef.current.focus();
     }
@@ -60,14 +51,18 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
   const loadSkills = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchSkills(projectId);
+      const data = await fetchSkills();
       setSkills(data);
     } catch (err: any) {
       console.error("[SkillsBrowser] Failed to load skills:", err);
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, []);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
 
   const handleInstall = useCallback(async () => {
     if (!installForm.url.trim()) {
@@ -120,12 +115,9 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
     const matchesSearch =
       skill.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       skill.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSource = filterSource === "all" || skill.source === filterSource;
-    return matchesSearch && matchesSource;
+    return matchesSearch;
   });
 
-  const globalSkillsCount = skills.filter((s) => s.source === "global").length;
-  const projectSkillsCount = skills.filter((s) => s.source === "project").length;
   const resourceEntries = (skill: SkillInfo) => Object.entries(skill.resources || {})
     .flatMap(([dir, files]) => (files || []).map((file) => ({ dir, file })));
 
@@ -247,53 +239,34 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
       {/* Stats */}
       <div className="flex gap-2 text-xs">
         <span className="px-2 py-1 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-300">
-          {globalSkillsCount} global
-        </span>
-        <span className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300">
-          {projectSkillsCount} project
+          {skills.length} skills
         </span>
       </div>
 
-      {/* Search and filter */}
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-            placeholder="Search skills..."
-          />
-        </div>
-        <Dropdown
-          state={filterSourceDd}
-          triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-          trigger={<span className="truncate flex-1 text-left">{filterSource === "all" ? "All" : filterSource === "global" ? "Global" : "Project"}</span>}
+      {/* Search */}
+      <div className="relative flex-1">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30"
         >
-          {(["all", "global", "project"] as const).map((source) => (
-            <button key={source} onClick={() => {
-              filterSourceDd.close();
-              setFilterSource(source);
-            }} className={`w-full text-left px-3 py-2 text-sm transition-all ${source === filterSource ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-              {source === "all" ? "All" : source === "global" ? "Global" : "Project"}
-            </button>
-          ))}
-        </Dropdown>
+          <circle cx="11" cy="11" r="8" />
+          <path d="M21 21l-4.35-4.35" />
+        </svg>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+          placeholder="Search skills..."
+        />
       </div>
 
       {/* Skills list */}
@@ -302,12 +275,11 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
           <p className="text-white/30 text-xs text-center py-4">Loading skills...</p>
         ) : filteredSkills.length === 0 ? (
           <p className="text-white/30 text-xs text-center py-4">
-            {searchQuery || filterSource !== "all" ? "No skills match your filters" : "No skills installed"}
+            {searchQuery ? "No skills match your search" : "No skills installed"}
           </p>
         ) : (
           filteredSkills.map((skill) => {
             const isExpanded = expandedSkill === skill.name;
-            const isGlobal = skill.source === "global";
             const isManaged = skill.managed !== false;
             const isDeleting = deleting === skill.name;
 
@@ -328,18 +300,11 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                         className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
                           skill.sourceRoot === "agents"
                             ? "bg-sky-500/15 text-sky-300 border border-sky-400/25"
-                            : isGlobal
-                            ? "bg-purple-500/20 text-purple-300 border border-purple-400/30"
-                            : "bg-emerald-500/20 text-emerald-300 border border-emerald-400/30"
+                            : "bg-purple-500/20 text-purple-300 border border-purple-400/30"
                         }`}
                       >
-                        {skill.sourceRoot === "agents" ? "agent global" : skill.source}
+                        {skill.sourceRoot === "agents" ? "agent global" : "global"}
                       </span>
-                      {skill.projectId && (
-                        <span className="text-[9px] text-white/30 truncate max-w-[150px]" title={skill.projectId}>
-                          {skill.projectId.slice(0, 8)}...
-                        </span>
-                      )}
                       {resourceEntries(skill).length > 0 && (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-sky-500/15 text-sky-300 border border-sky-400/25">
                           {resourceEntries(skill).length} resources
@@ -349,7 +314,7 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                     <p className="text-xs text-white/50 mt-1 line-clamp-2">{skill.description}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {isGlobal && isManaged && (
+                    {isManaged && (
                       confirmingDeleteSkill === skill.name ? (
                         // Inline confirm (Confirm/Cancel swap) — the buttons stay
                         // visible unlike the hover-only trash icon.
@@ -414,17 +379,15 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                 {isExpanded && (
                   <div className="mt-2 pt-2 border-t border-white/[0.06]">
                     <div className="space-y-2 text-xs">
-                      {skill.source === "global" && (
-                        <div className="flex items-center gap-2 text-white/40">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                          </svg>
-                          <span className="truncate">
-                            {skill.sourceRoot === "agents" ? `~/.agents/skills/${skill.name}/` : `~/.porrima/skills/${skill.name}/`}
-                          </span>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 text-white/40">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                        </svg>
+                        <span className="truncate">
+                          {skill.sourceRoot === "agents" ? `~/.agents/skills/${skill.name}/` : `~/.porrima/skills/${skill.name}/`}
+                        </span>
+                      </div>
                       <div className="text-white/50">
                         <span className="font-medium text-white/60">Description:</span> {skill.description}
                       </div>

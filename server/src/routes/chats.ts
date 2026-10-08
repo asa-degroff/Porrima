@@ -183,7 +183,7 @@ router.get("/:id/context-view", async (req, res) => {
     if (chat.activeSkills?.length) {
       const { buildSkillAugmentedPrompt, discoverSkills } = await import("../services/skills.js");
       const skillsCache = new Map<string, import("../services/skills.js").Skill>();
-      const allSkills = await discoverSkills(chat.projectId);
+      const allSkills = await discoverSkills();
       for (const s of allSkills) {
         skillsCache.set(s.name, s);
       }

@@ -12,7 +12,6 @@ const skill: Skill = {
   },
   instructions: "Use the test skill instructions.",
   folderPath: "/tmp/test-skill",
-  source: "global",
   sourceRoot: "porrima",
   managed: true,
 };

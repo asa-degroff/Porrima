@@ -317,7 +317,7 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
 
   if (chat.activeSkills?.length) {
     const skillsCache = new Map<string, Skill>();
-    const allSkills = await discoverSkills(chat.projectId);
+    const allSkills = await discoverSkills();
     for (const skill of allSkills) {
       skillsCache.set(skill.name, skill);
     }

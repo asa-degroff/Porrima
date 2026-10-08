@@ -21,10 +21,8 @@ export interface Skill {
   guidelines?: string[];
   folderPath: string;
   resources?: Partial<Record<(typeof RESOURCE_DIRS)[number], string[]>>;
-  source: "global" | "project";
-  sourceRoot: "porrima" | "agents" | "project";
+  sourceRoot: "porrima" | "agents";
   managed: boolean;
-  projectId?: string;
 }
 
 interface SkillFrontmatter {
@@ -248,10 +246,8 @@ function extractSections(markdown: string): { examples?: string[]; guidelines?: 
  */
 async function loadSkill(
   folderPath: string,
-  source: "global" | "project" = "global",
   sourceRoot: Skill["sourceRoot"] = "porrima",
   managed = sourceRoot === "porrima",
-  projectId?: string,
 ): Promise<Skill | null> {
   try {
     const skillMdPath = join(folderPath, "SKILL.md");
@@ -278,10 +274,8 @@ async function loadSkill(
       guidelines: sections.guidelines,
       folderPath,
       resources,
-      source,
       sourceRoot,
       managed,
-      projectId,
     };
   } catch (err: any) {
     console.warn(`[skills] Failed to load skill from ${folderPath}:`, err.message);
@@ -291,10 +285,8 @@ async function loadSkill(
 
 async function loadSkillsFromDirectory(
   rootDir: string,
-  source: "global" | "project",
   sourceRoot: Skill["sourceRoot"],
   managed: boolean,
-  projectId?: string,
 ): Promise<Skill[]> {
   const skills: Skill[] = [];
 
@@ -305,7 +297,7 @@ async function loadSkillsFromDirectory(
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
 
-      const skill = await loadSkill(join(rootDir, entry.name), source, sourceRoot, managed, projectId);
+      const skill = await loadSkill(join(rootDir, entry.name), sourceRoot, managed);
       if (skill) {
         skills.push(skill);
       }
@@ -359,39 +351,19 @@ async function collectResourceFiles(dirPath: string, relativeDir: string): Promi
 }
 
 /**
- * Discover all skills from global and project directories.
+ * Discover all skills from the global directories.
  */
-export async function discoverSkills(projectId?: string): Promise<Skill[]> {
+export async function discoverSkills(): Promise<Skill[]> {
   const skillsByName = new Map<string, Skill>();
 
   // Porrima-managed globals take precedence over shared agent globals.
-  for (const skill of await loadSkillsFromDirectory(GLOBAL_SKILLS_DIR, "global", "porrima", true)) {
+  for (const skill of await loadSkillsFromDirectory(GLOBAL_SKILLS_DIR, "porrima", true)) {
     addDiscoveredSkill(skillsByName, skill, false);
   }
 
   // Shared Agent Skills installed outside Porrima are available but read-only.
-  for (const skill of await loadSkillsFromDirectory(AGENT_GLOBAL_SKILLS_DIR, "global", "agents", false)) {
+  for (const skill of await loadSkillsFromDirectory(AGENT_GLOBAL_SKILLS_DIR, "agents", false)) {
     addDiscoveredSkill(skillsByName, skill, false);
-  }
-
-  // Project-specific skills override global skills with the same name.
-  if (projectId) {
-    try {
-      const { getProject } = await import("./chat-storage.js");
-      const project = await getProject(projectId);
-      if (project) {
-        const projectSkillsDir = join(project.path, ".agents", "skills");
-        const projectSkills = await loadSkillsFromDirectory(projectSkillsDir, "project", "project", false, project.id);
-        for (const skill of projectSkills) {
-          addDiscoveredSkill(skillsByName, skill, true);
-        }
-        if (projectSkills.length > 0) {
-          console.log(`[skills] Loaded project skills from ${projectSkillsDir}`);
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[skills] Failed to load project skills:`, err.message);
-    }
   }
 
   const skills = Array.from(skillsByName.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -402,8 +374,8 @@ export async function discoverSkills(projectId?: string): Promise<Skill[]> {
 /**
  * Get a skill by name.
  */
-export async function getSkillByName(name: string, projectId?: string): Promise<Skill | null> {
-  const skills = await discoverSkills(projectId);
+export async function getSkillByName(name: string): Promise<Skill | null> {
+  const skills = await discoverSkills();
   return skills.find(s => s.name.toLowerCase() === name.toLowerCase()) || null;
 }
 
@@ -674,7 +646,7 @@ function isSafeSkillRelativePath(path: string): boolean {
 }
 
 /**
- * Remove a global skill by name
+ * Remove a skill by name
  */
 export async function removeGlobalSkill(skillName: string): Promise<{ success: boolean; message: string }> {
   const nameError = validateSkillName(skillName);
@@ -700,7 +672,7 @@ export async function removeGlobalSkill(skillName: string): Promise<{ success: b
 }
 
 /**
- * Update a global skill's content
+ * Update a skill's content
  */
 export async function updateGlobalSkill(skillName: string, content: string): Promise<{ success: boolean; message: string; name?: string }> {
   const nameError = validateSkillName(skillName);
@@ -748,7 +720,7 @@ const INSTALL_SKILL_TOOL: Tool = {
 
 const REMOVE_SKILL_TOOL: Tool = {
   name: "remove_skill",
-  description: "Remove a global skill by name. This deletes the skill from ~/.porrima/skills/. Use when a skill is no longer needed or is causing issues.",
+  description: "Remove a skill by name. This deletes the skill from ~/.porrima/skills/. Use when a skill is no longer needed or is causing issues.",
   parameters: Type.Object({
     name: Type.String({ description: "Name of the skill to remove (folder name, not display name)" }),
   }),
@@ -756,10 +728,8 @@ const REMOVE_SKILL_TOOL: Tool = {
 
 const LIST_SKILLS_TOOL: Tool = {
   name: "list_skills",
-  description: "List all available global skills. Returns skill names, descriptions, and source (global vs project).",
-  parameters: Type.Object({
-    includeProject: Type.Optional(Type.Boolean({ description: "Include project-specific skills if in a project chat (default: false)" })),
-  }),
+  description: "List all available skills. Returns skill names and descriptions.",
+  parameters: Type.Object({}),
 };
 
 export const SKILL_TOOLS: Tool[] = [
@@ -779,7 +749,6 @@ interface SkillToolResult {
  */
 export async function executeSkillTool(
   toolCall: ToolCall,
-  projectId?: string,
 ): Promise<SkillToolResult> {
   const args = toolCall.arguments as Record<string, any>;
 
@@ -807,7 +776,7 @@ export async function executeSkillTool(
 
     case "list_skills": {
       try {
-        const skills = await discoverSkills(args.includeProject ? projectId : undefined);
+        const skills = await discoverSkills();
 
         if (skills.length === 0) {
           return {
@@ -817,7 +786,7 @@ export async function executeSkillTool(
         }
 
         const list = skills.map((s, i) => {
-          const label = s.sourceRoot === "agents" ? "agent global" : s.source;
+          const label = s.sourceRoot === "agents" ? "agent global" : "global";
           return `${i + 1}. **${s.name}** (${label})\n   ${s.description}`;
         }).join("\n");
 

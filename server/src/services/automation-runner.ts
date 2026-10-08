@@ -312,7 +312,7 @@ async function runPromptAutomation(
       // diverges at the prompt tail on automation ↔ user transitions (same
       // cache-busting class as the tool-surface filters).
       const skillsCache = new Map<string, Skill>();
-      for (const skill of await discoverSkills(chat.projectId)) {
+      for (const skill of await discoverSkills()) {
         skillsCache.set(skill.name, skill);
       }
       systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);

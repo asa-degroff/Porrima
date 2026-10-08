@@ -484,28 +484,14 @@ export function ChatView({
 
   const displayError = dismissedError === error ? null : error;
   
-  // Cache skills by projectId to avoid refetching on every render
-  const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
-  
+  // Skills are global — fetch the list once per mount.
   useEffect(() => {
-    // Use empty string as cache key for non-project chats (no projectId)
-    const cacheKey = projectId || "";
-    
-    // Check cache first
-    const cached = skillsCache.current.get(cacheKey);
-    if (cached) {
-      setSkills(cached);
-      return;
-    }
-    
-    // Fetch skills (global skills are always available, project skills added if projectId exists)
-    fetchSkills(projectId).then((fetched) => {
-      skillsCache.current.set(cacheKey, fetched);
+    fetchSkills().then((fetched) => {
       setSkills(fetched);
     }).catch(() => {
       setSkills([]);
     });
-  }, [projectId]);
+  }, []);
   
   const handleSlashTyping = useCallback((filterText: string = "", cursorRect?: DOMRect) => {
     if (!inputRef.current) return;
