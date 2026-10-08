@@ -274,3 +274,21 @@ Deltas from plan:
   in-progress row are deferred to P4 (v1 in-progress rows show the request + `Response still
   streaming…`, refreshed to the final response on the `llm_request_end` bump).
 - Retention ordering key is `(timestamp DESC, iteration DESC)`; the id is `${turnId}:${iteration}`.
+
+UX redesign (2026-10-08), same day as P1–P3: the v1 expanded entry nested scroll containers
+inside the modal body (message list, message bodies, response blocks, raw JSON, and the
+Context tab each had their own `max-h-[Nvh] overflow-y-auto` box), which made scrolling
+confusing. The modal now enforces **one scroll container** (the body's `flex-1 overflow-y-auto`)
+as an invariant, and content is a tree whose layers grow/shrink inline:
+
+- request entry (accordion row, chevron) → section nodes → wire messages → message content.
+- Section nodes are `<details>` trees (`TreeNode`): `Request` (message list, open by default),
+  `Tool definitions sent`, `Response` (open by default, per-block thinking nodes nested inside),
+  `Raw wire JSON` — children mount only while open, so collapsed sections cost nothing.
+- The wire message list is **tail-truncated**: only the last `MESSAGE_TAIL = 8` messages render
+  inline (each iteration re-sends the whole transcript and the tail is what gets inspected);
+  the prefix collapses into one `N earlier messages · <role breakdown>` node that expands
+  in place, with true wire-array indices preserved. Live in-progress refreshes keep following
+  the tail as rows append.
+- Context tab follows the same rule: system prompt and tool schemas render inline with no inner
+  scroll caps; tool definitions became tree nodes.

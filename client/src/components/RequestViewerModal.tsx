@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   clearLlmRequests,
   fetchContextView,
@@ -8,6 +8,7 @@ import {
   type LlmRequestDetail,
   type LlmRequestSummary,
 } from "../api/client";
+import { Chevron } from "./ui/Chevron";
 
 /**
  * Per-turn request viewer (docs/design/request-viewer.md).
@@ -18,9 +19,18 @@ import {
  * SSE events (surfaced as `requestLogVersion` bumps). Expanding a row lazily
  * fetches the full rehydrated wire body + accumulated response.
  *
+ * Layout is a tree — request entry → section nodes (message list, tool
+ * definitions, response, raw JSON) → individual wire messages → message
+ * content. The modal keeps **one scroll container** (the body): every nested
+ * layer grows/shrinks the page inline instead of opening its own scrollbox.
+ * The wire message list is tail-truncated (each iteration re-sends the whole
+ * transcript, so the prefix is long and the recent tail is what gets
+ * inspected); earlier messages collapse into a single expandable node, and
+ * live in-progress requests keep following the tail as rows append.
+ *
  * Tab "Context": the assembled system prompt with per-section token
  * attribution and full tool definitions including parameter schemas —
- * replaces the old "Rendered Agent Context" modal.
+ * replaces the old "Rendered Agent Context" modal. Same single-scroller rule.
  */
 
 interface Props {
@@ -32,6 +42,10 @@ interface Props {
 }
 
 type Tab = "requests" | "context";
+
+// Number of trailing wire messages shown inline before the prefix collapses
+// into an "earlier messages" node.
+const MESSAGE_TAIL = 8;
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -98,6 +112,64 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
+/**
+ * Collapsible tree node (`<details>` with a rotating chevron). Children mount
+ * only while open, so collapsed sections cost nothing and expanded ones grow
+ * the page inline — the modal body stays the single scroll container.
+ */
+function TreeNode({
+  label,
+  meta,
+  defaultOpen = false,
+  open: openProp,
+  onOpenChange,
+  tone = "neutral",
+  bodyClassName = "px-3 pb-3 pt-1 space-y-1.5",
+  children,
+}: {
+  label: ReactNode;
+  meta?: ReactNode;
+  defaultOpen?: boolean;
+  /** Pass to control the node from a parent (e.g. the message-list node
+   * mirrors the earlier-messages toggle so its header can show the truth). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  tone?: "neutral" | "violet";
+  bodyClassName?: string;
+  children: ReactNode;
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const open = openProp ?? uncontrolledOpen;
+  const box =
+    tone === "violet"
+      ? "rounded-lg bg-violet-500/5 border border-violet-400/10"
+      : "rounded-lg bg-black/20 border border-white/5";
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        // React simulates bubbling even for the non-delegated `toggle` event,
+        // so this fires when a nested <details> in the body toggles too.
+        // Ignore descendant toggles and read `currentTarget` (this node's own
+        // state) — never `target`, or collapsing one message would collapse
+        // the whole list node.
+        if (e.target !== e.currentTarget) return;
+        const next = e.currentTarget.open;
+        if (openProp === undefined) setUncontrolledOpen(next);
+        onOpenChange?.(next);
+      }}
+      className={box}
+    >
+      <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 text-xs select-none">
+        <Chevron variant="tree" open={open} className="opacity-40" />
+        <span className="min-w-0 truncate">{label}</span>
+        {meta ? <span className="ml-auto shrink-0 font-mono text-[10px] opacity-40">{meta}</span> : null}
+      </summary>
+      {open ? <div className={bodyClassName}>{children}</div> : null}
+    </details>
+  );
+}
+
 /** One-line preview for a collapsed wire message. */
 function messagePreview(message: Record<string, unknown>): string {
   const content = message.content;
@@ -136,22 +208,89 @@ function messageBody(message: Record<string, unknown>): string {
   return parts.join("\n\n") || JSON.stringify(message, null, 2);
 }
 
+/** Leaf of the request tree: role chip + preview, body expands inline. */
 function WireMessageBlock({ message, index }: { message: Record<string, unknown>; index: number }) {
   const role = String(message.role ?? "unknown");
   const style = ROLE_STYLES[role] ?? "bg-white/10 text-white/70";
+  const [open, setOpen] = useState(false);
   return (
-    <details className="group rounded-lg bg-black/20 border border-white/5">
+    <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)} className="rounded-lg bg-black/20 border border-white/5">
       <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 text-xs select-none">
+        <Chevron variant="tree" open={open} className="opacity-40" />
         <span className="opacity-30 font-mono w-6 text-right shrink-0">{index}</span>
         <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] shrink-0 ${style}`}>{role}</span>
         <span className="truncate opacity-50 font-mono text-[11px]">{messagePreview(message)}</span>
-        <span className="ml-auto opacity-30 text-[10px] shrink-0 group-open:hidden">▸</span>
-        <span className="ml-auto opacity-30 text-[10px] shrink-0 hidden group-open:inline">▾</span>
       </summary>
-      <pre className="px-3 pb-3 pt-1 text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words text-white/70 max-h-[45vh] overflow-y-auto">
-        {messageBody(message)}
-      </pre>
+      {open ? (
+        <pre className="px-3 pb-3 pt-1 text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words text-white/70">
+          {messageBody(message)}
+        </pre>
+      ) : null}
     </details>
+  );
+}
+
+function roleSummary(messages: Array<Record<string, unknown>>): string {
+  const counts = new Map<string, number>();
+  for (const m of messages) {
+    const role = String(m.role ?? "unknown");
+    counts.set(role, (counts.get(role) ?? 0) + 1);
+  }
+  return [...counts].map(([role, n]) => `${n} ${role}`).join(" · ");
+}
+
+/**
+ * Message list layer of the tree: the tail (most recent messages) renders
+ * inline, the prefix collapses into one expandable node. Chronological
+ * top-to-bottom; expanding the prefix grows the page above the tail.
+ */
+function WireMessageList({
+  messages,
+  showEarlier,
+  onShowEarlierChange,
+}: {
+  messages: Array<Record<string, unknown>>;
+  showEarlier: boolean;
+  onShowEarlierChange: (open: boolean) => void;
+}) {
+  if (messages.length === 0) {
+    return <p className="text-xs italic opacity-40">No messages on this wire body.</p>;
+  }
+  const earlierCount = Math.max(0, messages.length - MESSAGE_TAIL);
+  const earlier = messages.slice(0, earlierCount);
+  const tail = earlierCount > 0 ? messages.slice(earlierCount) : messages;
+  return (
+    <div className="space-y-1">
+      {earlierCount > 0 ? (
+        <TreeNode
+          open={showEarlier}
+          onOpenChange={onShowEarlierChange}
+          label={
+            showEarlier ? (
+              <span className="opacity-60">
+                showing all messages
+                <span className="opacity-60"> · {roleSummary(messages)}</span>
+              </span>
+            ) : (
+              <span className="opacity-60">
+                {earlierCount} earlier message{earlierCount === 1 ? "" : "s"}
+                <span className="opacity-60"> · {roleSummary(earlier)}</span>
+              </span>
+            )
+          }
+          bodyClassName="px-3 pb-3 pt-0.5"
+        >
+          <div className="space-y-1 ml-1 border-l border-white/5 pl-2">
+            {earlier.map((m, i) => (
+              <WireMessageBlock key={i} message={m} index={i} />
+            ))}
+          </div>
+        </TreeNode>
+      ) : null}
+      {tail.map((m, i) => (
+        <WireMessageBlock key={earlierCount + i} message={m} index={earlierCount + i} />
+      ))}
+    </div>
   );
 }
 
@@ -171,19 +310,20 @@ function ResponseBlocks({ detail }: { detail: LlmRequestDetail }) {
       {content.map((block: any, i: number) => {
         if (block?.type === "thinking") {
           return (
-            <details key={i} className="rounded-lg bg-violet-500/5 border border-violet-400/10">
-              <summary className="cursor-pointer list-none px-3 py-2 text-xs text-violet-300/70 select-none">
-                thinking ({String(block.thinking ?? "").length} chars)
-              </summary>
-              <pre className="px-3 pb-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-violet-200/70 font-mono max-h-[40vh] overflow-y-auto">
+            <TreeNode
+              key={i}
+              tone="violet"
+              label={`thinking · ${String(block.thinking ?? "").length} chars`}
+            >
+              <pre className="text-[11px] leading-relaxed whitespace-pre-wrap break-words text-violet-200/70 font-mono">
                 {block.thinking}
               </pre>
-            </details>
+            </TreeNode>
           );
         }
         if (block?.type === "text") {
           return (
-            <pre key={i} className="rounded-lg bg-black/20 border border-white/5 px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-white/80 font-mono max-h-[40vh] overflow-y-auto">
+            <pre key={i} className="rounded-lg bg-black/20 border border-white/5 px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-white/80 font-mono">
               {block.text}
             </pre>
           );
@@ -198,7 +338,7 @@ function ResponseBlocks({ detail }: { detail: LlmRequestDetail }) {
                 <span className="text-xs font-mono text-emerald-200/80">{block.name}</span>
                 {block.id ? <span className="ml-auto opacity-30 font-mono text-[10px] truncate">{block.id}</span> : null}
               </div>
-              <pre className="mt-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-white/60 font-mono max-h-[30vh] overflow-y-auto">
+              <pre className="mt-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-white/60 font-mono">
                 {JSON.stringify(block.arguments ?? {}, null, 2)}
               </pre>
             </div>
@@ -220,58 +360,67 @@ function ResponseBlocks({ detail }: { detail: LlmRequestDetail }) {
 function RequestDetail({ detail }: { detail: LlmRequestDetail }) {
   const messages = detail.request?.messages ?? [];
   const params = detail.request?.params ?? {};
+  const reclaimed = detail.request?.reclaimed ?? 0;
+  // Lifted so the section header can mirror the toggle: "showing last 8" vs
+  // "showing all N" once the earlier-messages node is expanded.
+  const [showEarlier, setShowEarlier] = useState(false);
+  const truncated = messages.length > MESSAGE_TAIL;
   const paramChips = Object.entries(params)
     .filter(([k]) => k !== "v")
     .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
   return (
-    <div className="space-y-3 px-3 pb-3 pt-2">
+    <div className="space-y-2 px-3 pb-3 pt-2">
       {paramChips.length > 0 ? (
         <p className="text-[10px] font-mono opacity-40 break-words">{paramChips.join("  ")}</p>
       ) : null}
 
-      <div>
-        <h4 className="text-[10px] uppercase tracking-wider opacity-50 mb-1.5">
-          Request — {messages.length} message{messages.length === 1 ? "" : "s"}
-          {detail.request?.tools ? ` · ${detail.request.tools.length} tools` : ""}
-          {detail.request && detail.request.reclaimed > 0
-            ? ` · ${detail.request.reclaimed} reclaimed by retention`
-            : ""}
-        </h4>
-        <div className="space-y-1 max-h-[50vh] overflow-y-auto pr-1">
-          {messages.map((m, i) => (
-            <WireMessageBlock key={i} message={m} index={i} />
-          ))}
-        </div>
-      </div>
+      <TreeNode
+        defaultOpen
+        label={
+          <span>
+            Request
+            <span className="opacity-50">
+              {" "}· {messages.length} message{messages.length === 1 ? "" : "s"}
+              {detail.request?.tools?.length ? ` · ${detail.request.tools.length} tools` : ""}
+              {reclaimed > 0 ? ` · ${reclaimed} reclaimed by retention` : ""}
+            </span>
+          </span>
+        }
+        meta={truncated ? (showEarlier ? `showing all ${messages.length}` : `showing last ${MESSAGE_TAIL}`) : undefined}
+        bodyClassName="px-3 pb-3 pt-0.5"
+      >
+        <WireMessageList
+          messages={messages}
+          showEarlier={showEarlier}
+          onShowEarlierChange={setShowEarlier}
+        />
+      </TreeNode>
 
       {detail.request?.tools?.length ? (
-        <details className="rounded-lg bg-black/20 border border-white/5">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs opacity-60 select-none">
-            Tool definitions sent ({detail.request.tools.length})
-          </summary>
-          <pre className="px-3 pb-3 text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/50 font-mono max-h-[40vh] overflow-y-auto">
+        <TreeNode label={`Tool definitions sent · ${detail.request.tools.length}`}>
+          <pre className="text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/50 font-mono">
             {JSON.stringify(detail.request.tools.map((t: any) => t.function?.name ?? t.name), null, 1)}
           </pre>
-        </details>
+        </TreeNode>
       ) : null}
 
-      <div>
-        <h4 className="text-[10px] uppercase tracking-wider opacity-50 mb-1.5">Response</h4>
+      <TreeNode
+        defaultOpen
+        label="Response"
+        meta={detail.response?.stopReason ?? undefined}
+      >
         <ResponseBlocks detail={detail} />
-      </div>
+      </TreeNode>
 
-      <details>
-        <summary className="cursor-pointer list-none text-[10px] uppercase tracking-wider opacity-40 hover:opacity-70 select-none">
-          Raw wire JSON
-        </summary>
-        <div className="mt-1.5 flex items-center gap-2">
+      <TreeNode label="Raw wire JSON">
+        <div className="flex items-center gap-2">
           <CopyButton text={JSON.stringify({ ...params, messages: detail.request?.messages ?? [], tools: detail.request?.tools ?? undefined }, null, 2)} label="Copy request" />
           <CopyButton text={JSON.stringify(detail.response ?? null, null, 2)} label="Copy response" />
         </div>
-        <pre className="mt-1.5 text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/40 font-mono max-h-[50vh] overflow-y-auto rounded-lg bg-black/30 p-3">
+        <pre className="text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/40 font-mono rounded-lg bg-black/30 p-3">
           {JSON.stringify({ request: { ...params, messages: detail.request?.messages ?? [], tools: detail.request?.tools ?? null }, response: detail.response }, null, 2)}
         </pre>
-      </details>
+      </TreeNode>
     </div>
   );
 }
@@ -341,28 +490,32 @@ function ContextTab({ context }: { context: ContextView | null }) {
           <h4 className="text-[10px] uppercase tracking-wider opacity-50">System prompt</h4>
           <CopyButton text={context.systemPrompt} />
         </div>
-        <pre className="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words text-white/70 rounded-lg bg-black/25 border border-white/5 p-3 max-h-[35vh] overflow-y-auto">
+        <pre className="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words text-white/70 rounded-lg bg-black/25 border border-white/5 p-3">
           {context.systemPrompt}
         </pre>
       </div>
 
       <div>
         <h4 className="text-[10px] uppercase tracking-wider opacity-50 mb-2">Tools ({context.tools.length})</h4>
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {context.tools.map((t) => (
-            <details key={t.name} className="rounded-lg bg-black/20 border border-white/5">
-              <summary className="cursor-pointer list-none px-3 py-2 flex items-start gap-2 text-xs select-none">
-                <span className="font-mono text-emerald-200/80 shrink-0">{t.name}</span>
-                <span className="opacity-50">{t.description}</span>
-              </summary>
+            <TreeNode
+              key={t.name}
+              label={
+                <span>
+                  <span className="font-mono text-emerald-200/80">{t.name}</span>
+                  <span className="opacity-50"> · {t.description}</span>
+                </span>
+              }
+            >
               {t.parameters !== undefined ? (
-                <pre className="px-3 pb-3 text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/50 font-mono max-h-[35vh] overflow-y-auto">
+                <pre className="text-[10px] leading-relaxed whitespace-pre-wrap break-words text-white/50 font-mono">
                   {JSON.stringify(t.parameters, null, 2)}
                 </pre>
               ) : (
-                <p className="px-3 pb-3 text-[10px] opacity-40 italic">No parameter schema.</p>
+                <p className="text-[10px] italic opacity-40">No parameter schema.</p>
               )}
-            </details>
+            </TreeNode>
           ))}
         </div>
       </div>
@@ -523,7 +676,7 @@ export function RequestViewerModal({ isOpen, onClose, chatId, requestLogVersion 
           </button>
         </div>
 
-        {/* Body */}
+        {/* Body — the modal's single scroll container; tree nodes grow inline */}
         <div className="flex-1 overflow-y-auto">
           {tab === "requests" ? (
             loading && requests.length === 0 ? (
@@ -550,6 +703,7 @@ export function RequestViewerModal({ isOpen, onClose, chatId, requestLogVersion 
                         className="w-full px-3 py-2 flex items-center gap-2.5 text-xs hover:bg-white/5 transition-colors text-left"
                         onClick={() => handleToggle(r.id)}
                       >
+                        <Chevron variant="tree" open={expanded} className="opacity-40" />
                         <span className="opacity-40 font-mono shrink-0">{fmtTime(r.timestamp)}</span>
                         <span className="font-mono opacity-60 shrink-0">#{r.iteration ?? "?"}</span>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0 ${STATUS_STYLES[r.status]}`}>
