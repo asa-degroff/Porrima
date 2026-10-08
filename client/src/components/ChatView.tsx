@@ -763,8 +763,11 @@ export function ChatView({
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
-      {/* Chat Header — fixed min-height so it doesn't shift between chat types or when the prefill indicator appears */}
-      <div className="px-3 md:px-6 min-h-[3rem] border-b border-white/10 flex items-center justify-between gap-3 app-glass-surface relative z-20">
+      {/* Chat Header — fixed min-height so it doesn't shift between chat types or when the prefill indicator appears.
+          z-[25]: header popovers (BlockIndicator, TokenIndicator) are trapped in this stacking context, so it must
+          sit above the centered new-chat composer (z-20) — while staying below the mobile gesture drawer (z-30)
+          and z-40/z-50 chrome. */}
+      <div className="px-3 md:px-6 min-h-[3rem] border-b border-white/10 flex items-center justify-between gap-3 app-glass-surface relative z-[25]">
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpenSidebar}

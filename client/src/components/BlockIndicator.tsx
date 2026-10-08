@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { fetchMemoryBlocks, fetchBlockHistory, updateMemoryBlockApi } from "../api/client";
 import type { MemoryBlock } from "../types";
+import { Chevron } from "./ui/Chevron";
 
 interface Props {
   projectId?: string;
@@ -39,6 +40,36 @@ async function fetchBlocks(projectId?: string): Promise<MemoryBlock[]> {
   return [...global, ...project].filter(isUserBlock);
 }
 
+/**
+ * Editor that grows with its content instead of scrolling internally, keeping
+ * the popover's block list as the only scroll container.
+ */
+function AutoGrowTextarea({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    // +2px for the 1px borders (Tailwind box-border: height includes them)
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      className="w-full bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[10px] text-white/80 resize-none overflow-hidden outline-none focus:border-white/20 font-mono"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={6}
+    />
+  );
+}
+
 export function BlockIndicator({ projectId }: Props) {
   const cacheKey = getCacheKey(projectId);
   const [open, setOpen] = useState(false);
@@ -49,7 +80,19 @@ export function BlockIndicator({ projectId }: Props) {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockContent, setEditBlockContent] = useState("");
+  const [confirmingArchiveId, setConfirmingArchiveId] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Escape dismisses a pending archive confirm (same as the delete-confirm
+  // rows in ChatListItem / MemoryDebugPanel).
+  useEffect(() => {
+    if (!confirmingArchiveId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmingArchiveId(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmingArchiveId]);
 
   // Close on outside click
   useEffect(() => {
@@ -60,6 +103,7 @@ export function BlockIndicator({ projectId }: Props) {
         setExpandedBlockId(null);
         setHistory(null);
         setEditingBlockId(null);
+        setConfirmingArchiveId(null);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -116,16 +160,19 @@ export function BlockIndicator({ projectId }: Props) {
       setHistory(null);
       setEditingBlockId(null);
       setEditBlockContent("");
+      setConfirmingArchiveId(null);
     } else {
       setExpandedBlockId(blockId);
       setHistory(null);
       setEditingBlockId(null);
       setEditBlockContent("");
+      setConfirmingArchiveId(null);
     }
   }, [expandedBlockId]);
 
   const handleViewHistory = useCallback(async (block: MemoryBlock, e: React.MouseEvent) => {
     e.stopPropagation();
+    setConfirmingArchiveId(null);
     if (expandedBlockId !== block.id) {
       setExpandedBlockId(block.id);
     }
@@ -149,6 +196,7 @@ export function BlockIndicator({ projectId }: Props) {
   }, []);
 
   const handleEditBlock = useCallback((block: MemoryBlock) => {
+    setConfirmingArchiveId(null);
     if (editingBlockId === block.id) {
       setEditingBlockId(null);
       setEditBlockContent("");
@@ -158,6 +206,27 @@ export function BlockIndicator({ projectId }: Props) {
       setExpandedBlockId(block.id);
     }
   }, [editingBlockId]);
+
+  // Executes the archive — reached via the two-step Confirm/Cancel swap that
+  // mirrors the delete confirms in ChatListItem / MemoryDebugPanel. Same call
+  // the memory blocks viewer makes (scope -> "archived"); archived blocks
+  // drop out of `isUserBlock`, so the row is removed locally and the cache
+  // is dropped so the next fetch is fresh.
+  const handleArchiveBlock = useCallback(async (block: MemoryBlock) => {
+    setConfirmingArchiveId(null);
+    try {
+      await updateMemoryBlockApi(block.id, { scope: "archived" });
+    } catch {
+      // Silent fail — block stays loaded in the list.
+      return;
+    }
+    setBlocks((prev) => (prev ? prev.filter((b) => b.id !== block.id) : []));
+    blocksCache.delete(cacheKey);
+    setExpandedBlockId(null);
+    setHistory(null);
+    setEditingBlockId(null);
+    setEditBlockContent("");
+  }, [cacheKey]);
 
   const handleSaveBlock = useCallback(async (blockId: string) => {
     try {
@@ -206,7 +275,7 @@ export function BlockIndicator({ projectId }: Props) {
 
       {open && (
         <div
-          className="absolute right-0 top-full mt-1 z-30 min-w-[280px] max-w-[400px] app-solid-popover border rounded-xl shadow-2xl py-2 px-1 animate-dropdown-enter"
+          className="absolute right-0 top-full mt-1 z-30 w-[min(640px,calc(100vw-1rem))] app-solid-popover border rounded-xl shadow-2xl py-2 px-1 animate-dropdown-enter"
           style={{
             backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
             borderColor: `rgba(var(--theme-primary-border))`,
@@ -222,7 +291,10 @@ export function BlockIndicator({ projectId }: Props) {
           ) : !blocks || blocks.length === 0 ? (
             <div className="px-2 py-3 text-xs text-white/30 text-center">No blocks loaded</div>
           ) : (
-            <div className="max-h-[400px] overflow-y-auto space-y-0.5">
+            /* Single scroll container for the whole popover: expanded blocks
+               grow inline (full content, history list, editor) instead of
+               opening their own scrollboxes. */
+            <div className="max-h-[75vh] overflow-y-auto overscroll-contain space-y-0.5">
               {blocks.map((block) => {
                 const isExpanded = expandedBlockId === block.id;
                 return (
@@ -240,22 +312,7 @@ export function BlockIndicator({ projectId }: Props) {
                       className="px-2 py-1.5 cursor-pointer"
                     >
                       <div className="flex items-center gap-1.5">
-                        {/* Expand/collapse arrow */}
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className={`text-white/40 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                        >
-                          <polyline points="9 18 15 12 9 6" />
-                        </svg>
-                        
+                        <Chevron variant="tree" open={isExpanded} size={12} className="text-white/40" />
                         <span className="text-xs text-white/70 font-medium truncate flex-1">{block.name}</span>
                         <span className={`text-[9px] px-1 py-0.5 rounded shrink-0 ${
                           block.scope === "global" ? "bg-blue-500/15 text-blue-300" : "bg-emerald-500/15 text-emerald-300"
@@ -288,9 +345,34 @@ export function BlockIndicator({ projectId }: Props) {
                           >
                             Edit
                           </button>
+                          {confirmingArchiveId === block.id ? (
+                            <div className="flex items-center gap-1 ml-auto">
+                              <button
+                                onClick={() => void handleArchiveBlock(block)}
+                                className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/30 text-amber-200 hover:bg-amber-500/30 transition-colors font-medium"
+                                title="Confirm archive"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setConfirmingArchiveId(null)}
+                                className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 transition-colors font-medium"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmingArchiveId(block.id)}
+                              className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/25 text-amber-300/80 hover:text-amber-200 transition-colors ml-auto"
+                              title="Archive this block (stops loading it into chat context)"
+                            >
+                              Archive
+                            </button>
+                          )}
                           <button
                             onClick={() => handleCopyContent(block.content)}
-                            className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 transition-colors ml-auto"
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 transition-colors"
                             title="Copy content"
                           >
                             Copy
@@ -300,12 +382,7 @@ export function BlockIndicator({ projectId }: Props) {
                         {/* Inline editor */}
                         {editingBlockId === block.id ? (
                           <div className="mb-2 space-y-2">
-                            <textarea
-                              className="w-full bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[10px] text-white/80 resize-y outline-none focus:border-white/20 font-mono"
-                              value={editBlockContent}
-                              onChange={(e) => setEditBlockContent(e.target.value)}
-                              rows={6}
-                            />
+                            <AutoGrowTextarea value={editBlockContent} onChange={setEditBlockContent} />
                             <div className="flex gap-1.5 justify-end">
                               <button
                                 onClick={handleCancelEdit}
@@ -327,7 +404,7 @@ export function BlockIndicator({ projectId }: Props) {
                         {history !== null && (
                           <div className="mb-2 pb-2 border-b border-white/10">
                             <div className="text-[9px] text-white/40 mb-1">Revision history ({history.length} versions)</div>
-                            <div className="max-h-[150px] overflow-y-auto space-y-1">
+                            <div className="space-y-1">
                               {loadingHistory ? (
                                 <div className="text-xs text-white/30">Loading...</div>
                               ) : history.length === 0 ? (
@@ -348,8 +425,9 @@ export function BlockIndicator({ projectId }: Props) {
                           </div>
                         )}
 
-                        {/* Full content */}
-                        <div className="max-h-[200px] overflow-y-auto">
+                        {/* Full content — renders in its entirety; the list
+                            above is the only scroller */}
+                        <div>
                           <div className="text-[10px] text-white/50 mb-1">Content:</div>
                           <pre className="text-[10px] text-white/60 whitespace-pre-wrap font-sans leading-relaxed">
                             {block.content}
