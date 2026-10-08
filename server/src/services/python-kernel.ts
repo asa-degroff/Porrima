@@ -995,6 +995,14 @@ export async function disposeKernel(
   chatId: string,
   opts?: { force?: boolean; removeState?: boolean },
 ): Promise<void> {
+  // Disposal clears the protocol-failure disable: the flag exists to stop a
+  // respawn loop against one broken kernel generation, and every fresh
+  // generation gets a clean attempt (a repeat corruption re-marks it,
+  // protocolFailure §4.3). Sticky-until-restart would silently strand a
+  // long-lived chat — the system chat is never deleted, so its kernel would
+  // stay stateless for the server's whole lifetime.
+  const wasBroken = brokenChats.has(chatId);
+  brokenChats.delete(chatId);
   const instance = kernels.get(chatId);
   if (!instance) {
     if (opts?.removeState) {
@@ -1008,8 +1016,10 @@ export async function disposeKernel(
     instance.snapshotTimer = null;
   }
   // Flush only when idle: a snapshot queued behind a running cell would never
-  // finish before SIGKILL, so a busy kernel gets hard-crash semantics.
-  if (!opts?.force && !instance.wedged && !instance.busy && !instance.restoreIncomplete) {
+  // finish before SIGKILL, so a busy kernel gets hard-crash semantics. A
+  // protocol-broken kernel cannot serve the control request either — skip the
+  // bounded attempt.
+  if (!opts?.force && !wasBroken && !instance.wedged && !instance.busy && !instance.restoreIncomplete) {
     // Bounded: a sync job can block the loop, and disposal must not wait the
     // full control timeout for a snapshot that cannot be served.
     await runSnapshot(instance, 2000).catch(() => {});

@@ -34,6 +34,10 @@ describe("agent tool registry", () => {
     // verification turn can report its result to a target thread).
     expect(systemDefinitions).toContain("schedule_chat_message");
     expect(systemDefinitions).toContain("list_chats");
+    // The persistent kernel runs in system chats, so its control surface must
+    // be present too — python_jobs is the only completion read between
+    // scheduled runs and the only model-reachable kill/wedge escape.
+    expect(systemDefinitions).toContain("python_jobs");
     expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_reminder");
     expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_chat_message");
     expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("list_chats");
@@ -70,6 +74,21 @@ describe("agent tool registry", () => {
     // Foreground is still clamped to its 300 s max.
     await py.execute("t4", { code: "1", timeout: 400 });
     expect(spy.mock.calls.at(-1)?.[0].timeoutMs).toBe(300_000);
+  });
+
+  it("routes system-chat run_python through the persistent kernel", async () => {
+    const { executeInKernel } = await import("./python-kernel.js");
+    const spy = executeInKernel as unknown as ReturnType<typeof vi.fn>;
+    const py = getAgentTools("system", effects, 32768, undefined, "system")
+      .find((t) => t.name === "run_python")!;
+
+    await py.execute("t1", { code: "1", background: true });
+    expect(spy.mock.calls.at(-1)?.[0]).toMatchObject({ chatId: "system", background: true });
+
+    // No chat-type stateless notice — the kernel path answers for system
+    // chats now; only remote workspaces and fallbacks carry notices.
+    const resultText = JSON.stringify(await py.execute("t2", { code: "1" }));
+    expect(resultText).not.toContain("stateless mode in this chat type");
   });
 
   it("keeps p5 guidance out of the repeated tool schema", () => {

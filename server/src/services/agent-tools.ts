@@ -422,15 +422,18 @@ const AUTOMATION_TOOLS: Tool[] = [
 // bounded by the pending-reminder cap, the 2-minute minimum lead time, and
 // per-run iteration/time budgets. What stays out are the tools that require a
 // live user: ask_user and the per-chat skill tools (system chats don't
-// activate skills). This gate is keyed to chatType only, so HTTP and headless
-// builds of the same chat type produce identical schemas — tool definitions
-// render into the system prompt, and any per-path difference busts the KV
-// prefix. Agent-chat automation runs keep ask_user in the schema and swap its
-// executor instead (headless-tools.ts); never re-filter ask_user out of a
-// headless tool array.
+// activate skills). python_jobs is deliberately IN: the persistent kernel
+// runs in system chats too, and background jobs must be observable there —
+// list/tail is the only completion surface between scheduled runs, and kill
+// (force: true) is the only model-reachable L3/wedge escape
+// (docs/design/session-python-kernel.md §4.5, §4.7). This gate is keyed to
+// chatType only, so HTTP and headless builds of the same chat type produce
+// identical schemas — tool definitions render into the system prompt, and any
+// per-path difference busts the KV prefix. Agent-chat automation runs keep
+// ask_user in the schema and swap its executor instead (headless-tools.ts);
+// never re-filter ask_user out of a headless tool array.
 const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
   "ask_user",
-  "python_jobs",
   ...SKILL_TOOLS.map((tool) => tool.name),
 ]);
 const SEQUENTIAL_TOOL_NAMES = new Set([
@@ -942,7 +945,11 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const workspace = await workspacePromise;
       const args = params as Record<string, any>;
       return withMutationLock(`workspace:${workspace.label}`, async () => {
-        const useKernel = chatType !== "system" && workspace.kind === "local";
+        // Every local chat gets the kernel, system chats included. The
+        // manager keys on chatId alone, and the system-chat cadence (runs
+        // spaced past the idle TTL) rides snapshot/restore exactly like an
+        // idle agent chat (docs/design/session-python-kernel.md §8.1).
+        const useKernel = workspace.kind === "local";
         const background = args.background === true;
         if (useKernel) {
           const maxSec = background ? 3600 : 300;
@@ -988,8 +995,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
           );
         }
         const oneShot = await workspace.runPython(args, signal);
+        // Reached only by remote workspaces now — local chats fell through the
+        // kernel path (or its one-shot fallback with its own notice).
         const prefixes: string[] = [];
-        if (chatType === "system") prefixes.push("[stateless mode in this chat type]");
         if (background) prefixes.push("[background unavailable in stateless mode; ran synchronously]");
         if (prefixes.length > 0) {
           return wrapResult(

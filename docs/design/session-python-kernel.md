@@ -1,6 +1,6 @@
 # Session Python Kernel — Persistent REPL for `run_python`
 
-**Status**: P1–P3 implemented (T3, P2.5, T4; 2026-10-04/05): persistent kernel, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + sweep, live tool-output streaming, background jobs + `python_jobs`, snapshot/restore (debounced, EOF flush, freshness memo), MIME display → tool-result images. P4 (remote SSH kernels, kernel venv) is design.
+**Status**: P1–P3 implemented (T3, P2.5, T4; 2026-10-04/05): persistent kernel, interrupts L1/L2, wedge policy, TTL/LRU, one-shot fallback, child journal + sweep, live tool-output streaming, background jobs + `python_jobs`, snapshot/restore (debounced, EOF flush, freshness memo), MIME display → tool-result images. P4 (remote SSH kernels, kernel venv) is design. **System chats enabled 2026-10-08** (§8.1 resolved): kernel + `python_jobs` live for the system chat type; the sticky `broken` flag is now cleared on disposal.
 **Date**: 2026-10-03
 **Reviewed**: 10-03 — present-tense claims verified against code (`workspace.ts`, `agent-tools.ts`, `tool-system.md`, `turn-gate.ts`, `sandbox.ts`, pi-agent-core 0.85 dist); revisions from that review are marked inline.
 **Reviewed**: 10-04 — second review against a local prime-agent clone (`repl.md`, `repl.py`, `crates/pa-core/src/kernel/`), the installed `@earendil-works/pi-agent-core@0.85.1`, and this box's Python (`python3` 3.14.4, no `dill`); 10-04 revisions are marked inline and summarized in §9.
@@ -724,19 +724,35 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   preserved (§4.5 L2), and that long-lived subprocesses belong in background
   cells.
 - New `PYTHON_JOBS_TOOL` (list/status/tail/kill/force), added to
-  `SEQUENTIAL_TOOL_NAMES` (it mutates jobs) and excluded from system chats
-  (not yet implemented)
+  `SEQUENTIAL_TOOL_NAMES` (it mutates jobs). Excluded from system chats in P1
+  (the kernel was gated off there); exposed alongside the kernel when system
+  chats were enabled (2026-10-08) — a background job the model cannot observe
+  or kill is a trap, not a capability: the description cross-references the
+  tool, the foreground-rejection error names it as the escape (§4.7 finding C),
+  and `kill force` is the only model-reachable L3 (§4.5).
 - `run_python`'s schema keeps the 300 s `timeout` max for foreground calls;
   `background: true` allows up to 3600 s. TypeBox has no conditional max, so
   execute validates the combination and the description states it (10-04
   review).
-- System chats currently run one-shot; their result carries a one-line "stateless
-  mode in this chat type" prefix (the same notice pattern as restore).
-  Pending further work on the system chat type. 
-  The one-shot path keeps the adapter's internal options
+- System chats run the same kernel as of 2026-10-08 (the P1 gate predated the
+  system-chat streaming refactor; the headless `tool_partial` parity seam and
+  the run-timeout `AbortSignal` → L1/L2 mapping were already in place, so the
+  flip is the gate itself: `useKernel` keys on `workspace.kind` only and
+  `python_jobs` leaves `SYSTEM_CHAT_EXCLUDED_TOOLS`). ChatId `system` holds one
+  kernel shared by synthesis, wake, and automation runs; the scheduled cadence
+  puts nearly every run past the idle TTL, so spawn + restore is the normal
+  per-run cost and the first tool result carries the restore notice — the same
+  idle-chat story as agents, with snapshot/restore as the bridge (§8.1).
+  Job completion surfaces on the next run's `python_jobs list`; the §8.3 wake
+  stays open. The `[stateless mode in this chat type]` prefix is gone.
+  Adding `python_jobs` changes the system-chat tool schema once — a single
+  re-prefill of its frozen prefix at the flip deploy; the gate stays keyed to
+  `chatType` only so HTTP, headless, cache-warm, and context-breakdown builds
+  remain schema-identical.
+  The one-shot path remains for remote workspaces; it keeps the adapter's internal options
   (`WorkspacePythonOptions` carries `maxBuffer`/`trusted`; `argv` is a
-  per-call argument, not an option — 10-04 third review); internal callers
-  are not routed through the kernel in P1.
+  per-call argument, not an option — 10-04 third review); internal
+  callers are not routed through the kernel in P1.
 - Results must stay byte-stable for the wire/replay invariant: no wall-clock
   timestamps inside result text (Porrima's time marker is appended by the
   wrapper, not the tool), deterministic ordering for `python_jobs list`, and
@@ -866,7 +882,14 @@ only the human-facing stream.
 ## 8. Open questions
 
 1. **System chats**: exclude persistent kernels (one-shot fallback) or allow
-   them with a tighter TTL? Current lean: exclude in P1.
+   them with a tighter TTL? Current lean: exclude in P1. **Resolved
+   2026-10-08: allowed, shared TTL — no special case.** The run cadence
+   already exceeds the 30-min TTL, so snapshot/restore is the bridge and a
+   resident system kernel would just hold 1 of the 4 capacity slots between
+   runs for no benefit. `python_jobs` exposure travels with the flip (§4.13).
+   Wedge recovery needs no user: the reaper anchors wedged kernels at
+   `wedgedAt` and disposes them TTL-bounded, and the fresh spawn restores from
+   the last snapshot.
 2. **Snapshot engine**: depend on `dill` (function/class pickling) or
    `pickle`-only (plain data), matching prime-agent's lazy import? Current
    lean: lazy `dill`, fall back to `pickle` — but note the 10-04 finding: this
