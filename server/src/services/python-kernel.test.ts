@@ -1,19 +1,24 @@
-import { existsSync } from "fs";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "fs/promises";
+import { existsSync, readFileSync } from "fs";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "fs/promises";
+import { spawn } from "child_process";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildRemoteKernelLaunchLine,
   disposeAllKernels,
   disposeKernel,
   executeInKernel,
   isKernelWedge,
   killKernelJob,
   listKernelJobs,
+  localDriverInfo,
   sweepKernelJournals,
   tailKernelJob,
+  type KernelHost,
   type KernelJobInfo,
   type KernelRunOutcome,
+  type KernelSpawnPlan,
 } from "./python-kernel.js";
 import { listSupervised } from "./process-supervisor.js";
 
@@ -96,6 +101,28 @@ function kernel(outcome: KernelRunOutcome): KernelOutcome {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntil(
+  pred: () => boolean | Promise<boolean>,
+  timeoutMs = 8000,
+  message = "condition",
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await pred()) return;
+    await delay(50);
+  }
+  throw new Error(`timed out waiting for ${message}`);
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 describe("python kernel manager", () => {
@@ -420,5 +447,200 @@ describe("python kernel manager", () => {
       expect(outcome.content).toContain("False False");
       expect(outcome.isError).toBe(false);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Remote kernel host (docs/design/remote-python-kernel.md, P4a)
+  //
+  // FakeRemoteHost reproduces the SSH host contract without a network:
+  // prepare() stages the driver into a fake home and returns a launch plan
+  // that runs the REAL buildRemoteKernelLaunchLine through bash — exercising
+  // the quoting, the PORRIMA_KERNEL_DIR prefix, host-side state placement,
+  // the driver boot self-heal, and the manager's host seam (manifest stat,
+  // removeState, fallback reason).
+  // -------------------------------------------------------------------------
+  describe("remote kernel host (P4a)", () => {
+    let home: string;
+
+    beforeEach(async () => {
+      home = await mkdtemp(join(tmpdir(), "porrima-sshhome-"));
+    });
+
+    afterEach(async () => {
+      await rm(home, { recursive: true, force: true });
+    });
+
+    const stagedDriver = (h: string) => join(h, ".porrima", "kernel", "porrima_kernel.py");
+    const remoteStateDir = (h: string, chatId: string) => join(h, ".porrima", "kernels", chatId);
+
+    function makeRemoteHost(opts: { tamperHash?: string; skipStage?: boolean } = {}): KernelHost {
+      return {
+        kind: "ssh:fake-host",
+        failureReason: "transport",
+        async prepare(chatId: string): Promise<KernelSpawnPlan | null> {
+          const driver = localDriverInfo();
+          if (!driver) return null;
+          const target = stagedDriver(home);
+          if (!opts.skipStage) {
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, driver.text);
+          }
+          const stateDir = remoteStateDir(home, chatId);
+          const line = buildRemoteKernelLaunchLine({
+            root: home,
+            pythonPath: process.env.PORRIMA_PYTHON || "python3",
+            driverPath: target,
+            stateDir,
+          });
+          return {
+            command: "bash",
+            args: ["-c", line],
+            cwd: process.cwd(),
+            env: { ...process.env },
+            stateDir,
+            driverHash: opts.tamperHash ?? driver.hash,
+          };
+        },
+        async readSnapshotManifest(stateDir: string): Promise<string | null> {
+          const payload = join(stateDir, "namespace.pkl");
+          const manifest = join(stateDir, "manifest.json");
+          if (!existsSync(payload) || !existsSync(manifest)) return null;
+          return readFile(manifest, "utf8").catch(() => null);
+        },
+        async statMtime(path: string): Promise<number | null> {
+          return (await stat(path).catch(() => null))?.mtimeMs ?? null;
+        },
+        async removeState(chatId: string): Promise<void> {
+          await rm(remoteStateDir(home, chatId), { recursive: true, force: true }).catch(() => {});
+        },
+      };
+    }
+
+    function remoteRun(
+      chatId: string,
+      code: string,
+      host: KernelHost,
+      opts: { timeoutMs?: number; background?: boolean } = {},
+    ): Promise<KernelRunOutcome> {
+      return executeInKernel({
+        chatId,
+        cwd: `ssh:fake-host:${home}`,
+        code,
+        timeoutMs: opts.timeoutMs ?? 30_000,
+        background: opts.background,
+        host,
+      });
+    }
+
+    it("builds a launch line that survives hostile path characters", () => {
+      const line = buildRemoteKernelLaunchLine({
+        root: `/it's a "root"`,
+        pythonPath: "python3",
+        driverPath: `/home/u/.porrima/kernel/porrima_kernel.py`,
+        stateDir: `/home/u/.porrima/kernels/automation:abc`,
+      });
+      expect(line).toContain(`cd -- '/it'\\''s a "root"'`);
+      expect(line).toContain(`PORRIMA_KERNEL_DIR='/home/u/.porrima/kernels/automation:abc'`);
+      expect(line).toContain(`PYTHONDONTWRITEBYTECODE=1 'python3' -u '/home/u/.porrima/kernel/porrima_kernel.py'`);
+      // Functional proof: the quoted cd actually works with the apostrophe.
+      expect(line.startsWith(`cd -- `)).toBe(true);
+    }, 10_000);
+
+    it("runs a foreground cell through the host plan with host-side state (§4.2)", async () => {
+      const outcome = kernel(await remoteRun("r-1", "print(6*7)", makeRemoteHost()));
+      expect(outcome.content).toContain("42");
+      // Staged driver and boot artifacts live in the HOST tree, never the
+      // local kernel root (PORRIMA_KERNEL_ROOT above).
+      expect(existsSync(stagedDriver(home))).toBe(true);
+      await waitUntil(() => existsSync(join(remoteStateDir(home, "r-1"), "kernel.pid")), 8000, "host pidfile");
+      expect(existsSync(join(root, "r-1"))).toBe(false);
+      await disposeKernel("r-1");
+    }, 30_000);
+
+    it("persists the namespace across host kernel generations via snapshot/restore (§3.2)", async () => {
+      kernel(await remoteRun("r-2", "answer = 40 + 2", makeRemoteHost()));
+      await disposeKernel("r-2", {});
+      expect(existsSync(join(remoteStateDir(home, "r-2"), "namespace.pkl"))).toBe(true);
+
+      const second = kernel(await remoteRun("r-2", "print(answer)", makeRemoteHost()));
+      expect(second.content).toContain("restored");
+      expect(second.content).toContain("42");
+      await disposeKernel("r-2", { removeState: true });
+      // removeState goes through the host handle (§4.4).
+      expect(existsSync(remoteStateDir(home, "r-2"))).toBe(false);
+    }, 30_000);
+
+    it("degrades driver skew to the transport fallback, unstickily (§4.3, §4.9)", async () => {
+      const skewed = await remoteRun("r-3", "print(1)", makeRemoteHost({ tamperHash: "deadbeefdeadbeef" }));
+      expect(skewed).toEqual({ mode: "fallback", reason: "transport" });
+
+      // Skew is stale staging, not protocol corruption: the next clean
+      // attempt must get a real kernel, not a permanent disable.
+      const ok = await remoteRun("r-3", "print(1)", makeRemoteHost());
+      expect(ok.mode).toBe("kernel");
+      await disposeKernel("r-3", { removeState: true });
+    }, 30_000);
+
+    it("boot self-heal kills a predecessor holding the same state dir (§4.4)", async () => {
+      const driver = localDriverInfo();
+      expect(driver).not.toBeNull();
+      const stateDir = remoteStateDir(home, "r-guard");
+      const target = stagedDriver(home);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, driver!.text);
+      const line = buildRemoteKernelLaunchLine({
+        root: home,
+        pythonPath: process.env.PORRIMA_PYTHON || "python3",
+        driverPath: target,
+        stateDir,
+      });
+
+      // stdio[0] stays an OPEN pipe: stdin EOF makes the driver shut down by
+      // design, so a raw-spawned test driver must keep its "channel" alive.
+      const first = spawn("bash", ["-c", line], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+      try {
+        const pidfile = join(stateDir, "kernel.pid");
+        await waitUntil(() => existsSync(pidfile), 15_000, "first driver pidfile");
+        const firstPid = Number(await readFile(pidfile, "utf8"));
+        expect(firstPid).toBeGreaterThan(0);
+        expect(pidAlive(firstPid)).toBe(true);
+
+        const second = spawn("bash", ["-c", line], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+        await waitUntil(async () => {
+          const pid = Number(await readFile(pidfile, "utf8").catch(() => "0"));
+          return pid !== firstPid && pidAlive(pid);
+        }, 15_000, "second driver to take over");
+        expect(pidAlive(firstPid)).toBe(false);
+
+        const finalPid = Number(await readFile(pidfile, "utf8"));
+        try { process.kill(finalPid, "SIGKILL"); } catch { /* gone */ }
+      } finally {
+        try { first.kill(); } catch { /* already exited */ }
+      }
+    }, 40_000);
+
+    it("boot self-heal reaps journaled children of a crashed kernel (§4.4)", async () => {
+      const stateDir = remoteStateDir(home, "r-sweep");
+      await mkdir(stateDir, { recursive: true, mode: 0o700 });
+
+      // An orphaned child as the "previous kernel's child", plus a torn tail
+      // line the reader must tolerate (§4.15). Node's `detached` spawn runs
+      // setsid(2) itself, so the child leads its own group (pgid == pid) —
+      // exactly what the Popen patch journals.
+      const sleeper = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+      const sleeperPid = sleeper.pid!;
+      expect(pidAlive(sleeperPid)).toBe(true);
+      const statText = readFileSync(`/proc/${sleeperPid}/stat`, "utf8");
+      const startId = `proc:${statText.slice(statText.lastIndexOf(")") + 2).split(" ")[19]}`;
+      await writeFile(
+        join(stateDir, "children.jsonl"),
+        `${JSON.stringify({ version: 1, pid: sleeperPid, pgid: sleeperPid, startId, cell: null, active: true, recordedAt: new Date().toISOString() })}\n{"version":1,"pi`,
+      );
+
+      kernel(await remoteRun("r-sweep", "print('booted')", makeRemoteHost()));
+      await waitUntil(() => !pidAlive(sleeperPid), 10_000, "stale journaled child to be reaped");
+      await waitUntil(async () => (await readFile(join(stateDir, "children.jsonl"), "utf8")).length === 0, 5_000, "journal truncate");
+      await disposeKernel("r-sweep", { removeState: true });
+    }, 60_000);
   });
 });

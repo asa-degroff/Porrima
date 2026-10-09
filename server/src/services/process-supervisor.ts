@@ -454,8 +454,13 @@ async function taskkillTree(pid: number): Promise<void> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    // REFED on purpose: every await of this delay is a bounded kill-
+    // confirmation ladder that must complete before the process may exit.
+    // With an unref'd timer, a bare CLI whose only other handle was the child
+    // just SIGTERMed would see a zero-ref'd loop mid-await and exit silently
+    // (live-found by the remote-kernel smoke script on 2026-10-08; the server
+    // never notices because its sockets keep the loop alive).
+    setTimeout(resolve, ms);
   });
 }
 

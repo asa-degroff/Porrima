@@ -646,6 +646,11 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 
 ### 4.10 Remote SSH (phase 4)
 
+> **Design promoted** to [remote-python-kernel.md](remote-python-kernel.md) (2026-10-08).
+> P4a (foreground kernel over ssh, dark behind `PORRIMA_REMOTE_KERNEL=1`) is
+> approved for implementation; P4b (background jobs + remote spill placement)
+> follows. This section remains the seed spec.
+
 - Same driver and protocol over the existing SSH ControlMaster; the driver is
   staged once to `~/.porrima/kernel/porrima_kernel.py` on the host via the
   existing write path, then spawned with stdio piped through ssh.

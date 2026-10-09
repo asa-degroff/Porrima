@@ -118,6 +118,7 @@ const KERNEL_FALLBACK_NOTICES: Record<KernelFallbackReason, string> = {
   "spawn-failed": "[kernel: unavailable; ran stateless this call]",
   wedge: "[kernel: previous cell is wedged; ran stateless this call]",
   broken: "[kernel: disabled after a protocol failure; ran stateless this call]",
+  transport: "[kernel: remote session unavailable; ran per-call this call]",
 };
 
 function formatDurationMs(ms: number): string {
@@ -949,37 +950,56 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         // manager keys on chatId alone, and the system-chat cadence (runs
         // spaced past the idle TTL) rides snapshot/restore exactly like an
         // idle agent chat (docs/design/session-python-kernel.md §8.1).
-        const useKernel = workspace.kind === "local";
+        // P4: an SSH workspace MAY carry a host-side kernel — the adapter
+        // supplies it when the feature flag is on and preconditions hold;
+        // null keeps the per-call path (docs/design/remote-python-kernel.md §4.1).
         const background = args.background === true;
+        const kernelHost =
+          workspace.kind === "local" ? undefined : await workspace.createKernelHost?.();
+        const useKernel = workspace.kind === "local" || kernelHost != null;
         if (useKernel) {
-          const maxSec = background ? 3600 : 300;
+          // Background jobs over a remote kernel wait for P4b: job output
+          // spills land in the server-local store, and the footer path would
+          // not resolve against the remote workspace's read_file (§4.6). The
+          // cell runs synchronously at the foreground ceiling with a notice.
+          const backgroundOverSsh = background && kernelHost != null;
+          const effectiveBackground = background && !backgroundOverSsh;
+          const maxSec = effectiveBackground ? 3600 : 300;
           // Background defaults to its own ceiling: the path exists for work
           // longer than the foreground default, and a lazy background: true
           // should not silently die at 30 s. Foreground keeps 30 s as the
-          // fast-fail signal (it holds the global turn-gate lease).
-          const timeoutSec = Math.min(maxSec, Math.max(1, args.timeout || (background ? 3600 : 30)));
+          // fast-fail signal (it holds the global turn-gate lease); a
+          // background request demoted to synchronous gets the 300 s ceiling.
+          const timeoutSec = Math.min(
+            maxSec,
+            Math.max(1, args.timeout || (effectiveBackground ? 3600 : backgroundOverSsh ? 300 : 30)),
+          );
           const outcome = await executeInKernel({
             chatId,
             cwd: workspace.label,
             code: String(args.code ?? ""),
             timeoutMs: timeoutSec * 1000,
             signal,
-            background,
+            background: effectiveBackground,
+            host: kernelHost ?? undefined,
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,
           });
           if (outcome.mode === "kernel") {
+            const lead = backgroundOverSsh
+              ? "[background unavailable on remote kernels yet; ran as a foreground cell]\n"
+              : "";
             const content = outcome.images?.length
               ? [
-                  { type: "text" as const, text: outcome.content },
+                  { type: "text" as const, text: `${lead}${outcome.content}` },
                   ...outcome.images.map((image) => ({
                     type: "image" as const,
                     data: image.data,
                     mimeType: image.mimeType,
                   })),
                 ]
-              : outcome.content;
+              : `${lead}${outcome.content}`;
             return wrapResult({ content, isError: outcome.isError }, "run_python");
           }
           const oneShot = await workspace.runPython(args, signal);
@@ -995,8 +1015,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
           );
         }
         const oneShot = await workspace.runPython(args, signal);
-        // Reached only by remote workspaces now — local chats fell through the
-        // kernel path (or its one-shot fallback with its own notice).
+        // Reached only by remote workspaces without a kernel host now — local
+        // chats fell through the kernel path (or its one-shot fallback with
+        // its own notice).
         const prefixes: string[] = [];
         if (background) prefixes.push("[background unavailable in stateless mode; ran synchronously]");
         if (prefixes.length > 0) {

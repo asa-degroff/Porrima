@@ -233,7 +233,7 @@ porrima/
 │   │   ├── time-marker.ts           # Time anchors injected into turns
 │   │   ├── time-format.ts           # Time formatting helpers
 │   │   ├── logger.ts                # Server logging
-│   ├── scripts/                    # CLI migrations (not HTTP): analyze-token-estimates, migrate-inline-image-payloads, migrate-tool-result-image-payloads, smoke-request-log
+│   ├── scripts/                    # CLI (not HTTP): analyze-token-estimates, migrate-inline-image-payloads, migrate-tool-result-image-payloads, smoke-request-log, smoke-remote-kernel (live-host P4a checklist)
 │   └── utils/                       # message-window, mime, path helpers
 ├── client/src/
 │   ├── App.tsx                      # Root app shell, routing, theme/legacy-key migration
@@ -283,6 +283,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Per-Turn Request Viewer](docs/design/request-viewer.md)
 - [P0B Storage Concurrency](docs/design/p0b-storage-concurrency.md)
 - [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
+- [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (design; P4a in implementation)
 
 Release and onboarding:
 

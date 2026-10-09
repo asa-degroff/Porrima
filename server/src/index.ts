@@ -65,6 +65,17 @@ const gracefulShutdown = async () => {
   if (httpServer) {
     httpServer.close();
   }
+  // Dispose Python kernels BEFORE the SSH masters go away: a remote kernel's
+  // graceful teardown is a protocol shutdown request over the ssh channel
+  // (EOF flush + child reaping on the host), and the supervisor kill below is
+  // only the backstop (docs/design/remote-python-kernel.md §4.5).
+  try {
+    const { disposeAllKernels } = await import("./services/python-kernel.js");
+    await disposeAllKernels();
+    console.log("[shutdown] Python kernels disposed");
+  } catch {
+    // Non-fatal
+  }
   await destroyAllMasters();
   // Shut down TTS workers
   try {
@@ -78,15 +89,6 @@ const gracefulShutdown = async () => {
     const { closeAllBrowserSessions } = await import("./services/browser-session.js");
     await closeAllBrowserSessions();
     console.log("[shutdown] Browser sessions closed");
-  } catch {
-    // Non-fatal
-  }
-  // Dispose Python kernels: protocol shutdown first (bounded), then the
-  // supervisor kill below is the backstop.
-  try {
-    const { disposeAllKernels } = await import("./services/python-kernel.js");
-    await disposeAllKernels();
-    console.log("[shutdown] Python kernels disposed");
   } catch {
     // Non-fatal
   }

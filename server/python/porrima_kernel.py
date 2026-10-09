@@ -30,12 +30,14 @@ import asyncio
 import builtins
 import codecs
 import contextvars
+import hashlib
 import inspect
 import io
 import json
 import linecache
 import os
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -930,6 +932,165 @@ def _kill_all_children() -> None:
     _kill_children(entries)
 
 
+# ---------------------------------------------------------------------------
+# Boot self-heal (remote-python-kernel.md §4.4)
+#
+# The Node manager's startup sweep can only reach this box's filesystem, and
+# an SSH kernel's state lives on the host. So the cleanup belongs to the
+# driver: it runs in the kernel directory before `ready` and is idempotent.
+# Local kernels get the same protection (defense in depth against the owner
+# watchdog missing a case); nothing here may block the kernel from starting.
+# ---------------------------------------------------------------------------
+
+_PIDFILE = "kernel.pid"
+_STATE_TTL_S = 14 * 24 * 3600  # mirrors KERNEL_STATE_TTL_MS in python-kernel.ts
+
+
+def _driver_hash() -> str:
+    """Content hash reported in `ready` so the manager can spot a stale or
+    externally-mutated staged driver on this host (§4.3). Hashed from the
+    file that is actually running."""
+    try:
+        with open(__file__, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _signal_direct(pid: int, sig: int) -> None:
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def _kill_predecessor(kernel_dir: str) -> None:
+    """If a previous kernel for this state dir is still alive, take it down
+    before we write anything into the dir it owns."""
+    try:
+        with open(os.path.join(kernel_dir, _PIDFILE)) as fh:
+            pid = int(fh.read().strip())
+    except (OSError, ValueError):
+        return
+    if pid <= 0 or pid == os.getpid() or not _pid_alive(pid):
+        return
+    # Targeted kill, NOT a group kill: over ssh the predecessor shares the
+    # session process group with sshd plumbing, and this driver is about to
+    # join the same group. Its journaled children are handled by the stale
+    # journal sweep below.
+    _signal_direct(pid, signal.SIGTERM)
+    deadline = time.monotonic() + _CHILD_TERM_GRACE_S
+    while time.monotonic() < deadline and _pid_alive(pid):
+        time.sleep(0.02)
+    if _pid_alive(pid):
+        _signal_direct(pid, signal.SIGKILL)
+        deadline = time.monotonic() + _CHILD_KILL_WAIT_S
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.02)
+
+
+def _sweep_stale_journal(kernel_dir: str) -> None:
+    """Reap setsid children a crashed predecessor left running, then truncate.
+    Same identity rule as the manager's startup sweep (§4.11): a record is
+    skipped only when its pid is ALIVE with a different start time — pid
+    recycled, not our family."""
+    path = os.path.join(kernel_dir, "children.jsonl")
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    entries: list[dict[str, Any]] = []
+    for raw in lines:
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue  # torn tail line: tolerate (§4.15)
+        if not isinstance(record, dict) or not record.get("active"):
+            continue
+        pid = record.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            continue
+        recorded_start = record.get("startId")
+        if recorded_start is not None:
+            current_start = _process_start_id(pid)
+            if current_start is not None and current_start != recorded_start:
+                continue  # pid recycled — leave the stranger alone
+        entries.append({
+            "pid": pid,
+            "pgid": record.get("pgid") or pid,
+            "start_id": recorded_start,
+        })
+    if entries:
+        _kill_children(entries)
+    try:
+        with open(path, "w"):
+            pass
+    except OSError:
+        pass
+
+
+def _prune_expired_state(kernel_dir: str) -> None:
+    """Drop sibling chat state dirs past the TTL, skipping any with a live
+    kernel (dir mtime only moves when files change — an idle-but-live chat
+    must never be pruned out from under itself)."""
+    parent = os.path.dirname(kernel_dir)
+    own = os.path.basename(kernel_dir)
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return
+    now = time.time()
+    for name in names:
+        if name == own:
+            continue
+        full = os.path.join(parent, name)
+        if not os.path.isdir(full):
+            continue
+        try:
+            with open(os.path.join(full, _PIDFILE)) as fh:
+                pid = int(fh.read().strip())
+            if _pid_alive(pid):
+                continue
+        except (OSError, ValueError):
+            pass
+        try:
+            if now - os.stat(full).st_mtime < _STATE_TTL_S:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(full, ignore_errors=True)
+
+
+def _boot_self_heal() -> None:
+    if not _kernel_dir:
+        return
+    try:
+        os.makedirs(_kernel_dir, mode=0o700, exist_ok=True)
+    except OSError:
+        return
+    for step in (_kill_predecessor, _sweep_stale_journal, _prune_expired_state):
+        try:
+            step(_kernel_dir)
+        except BaseException as err:  # noqa: BLE001 — self-heal never blocks startup
+            _protocol_error(f"boot self-heal ({step.__name__}) failed: {type(err).__name__}: {err}")
+    try:
+        with open(os.path.join(_kernel_dir, _PIDFILE), "w") as fh:
+            fh.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 def _install_popen_patch() -> None:
     """Give ordinary Popen children their own session and journal them.
 
@@ -1504,6 +1665,7 @@ def main() -> None:
 
     stdin_fd = _setup_fds()
     _install_popen_patch()
+    _boot_self_heal()
     _start_owner_watchdog()
 
     ns = _make_namespace()
@@ -1512,7 +1674,7 @@ def main() -> None:
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     signal.signal(signal.SIGINT, _sigint_handler)
     threading.Thread(target=_read_requests, args=(stdin_fd, queue), daemon=True).start()
-    _send({"event": "ready", "protocol": PROTOCOL_VERSION, "python": sys.version.split()[0]})
+    _send({"event": "ready", "protocol": PROTOCOL_VERSION, "python": sys.version.split()[0], "driver": _driver_hash()})
     _serve_task = _loop.create_task(_serve(queue, ns))
     while not _serve_task.done():
         try:

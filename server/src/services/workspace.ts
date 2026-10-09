@@ -15,6 +15,14 @@ import {
   createSpillPath,
   formatSpillFooter,
 } from "./tool-output-store.js";
+// Type-only plus two pure helpers from the kernel manager — python-kernel.ts
+// never imports this module, so there is no cycle (remote-python-kernel.md §4.1).
+import {
+  buildRemoteKernelLaunchLine,
+  localDriverInfo,
+  type KernelHost,
+  type KernelSpawnPlan,
+} from "./python-kernel.js";
 
 const HOME = homedir();
 const SSH_MUX_DIR = appDataPath("ssh-mux");
@@ -98,6 +106,14 @@ export interface WorkspaceAdapter {
   listFiles(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   bash(args: Record<string, any>, signal?: AbortSignal, opts?: WorkspaceBashOptions): Promise<{ content: string; isError: boolean }>;
   runPython(args: Record<string, any>, signal?: AbortSignal, opts?: WorkspacePythonOptions): Promise<{ content: string; isError: boolean }>;
+  /**
+   * Remote Python kernel host (docs/design/remote-python-kernel.md §4.1).
+   * A non-null host means this workspace can run a persistent session kernel
+   * on its host machine; null/undefined means "per-call execution only".
+   * The local adapter does not implement this — the kernel manager carries
+   * the local behavior natively (localKernelHost).
+   */
+  createKernelHost?(): Promise<KernelHost | null>;
   readAgentsMd(): Promise<string | null>;
   validateRoot(): Promise<WorkspaceValidationResult>;
   createRootDirectory(): Promise<{ success: boolean; alreadyExists?: boolean; path?: string; error?: string }>;
@@ -483,6 +499,8 @@ function sshTarget(connection: SshConnection): string {
 interface MasterState {
   establishing: Promise<boolean> | null;
   pythonInfo: Promise<PythonInfo | null> | null;
+  /** Resolved $HOME on the host (remote-python-kernel.md §4.3); retried on failure. */
+  remoteHome: Promise<string | null> | null;
 }
 
 interface PythonInfo {
@@ -495,7 +513,7 @@ const masterRegistry = new Map<string, MasterState>();
 function getMasterState(connectionId: string): MasterState {
   let state = masterRegistry.get(connectionId);
   if (!state) {
-    state = { establishing: null, pythonInfo: null };
+    state = { establishing: null, pythonInfo: null, remoteHome: null };
     masterRegistry.set(connectionId, state);
   }
   return state!;
@@ -982,6 +1000,132 @@ else:
     const py = await this.resolvePython();
     const argv = (args.argv ?? []).map((value: unknown) => shellQuote(String(value))).join(" ");
     return this.inRoot(`${shellQuote(py)} -${argv ? ` ${argv}` : ""}`, timeoutMs, String(args.code || ""), signal, opts.maxBuffer);
+  }
+
+  /** Cached `$HOME` on the host (the same login-shell environment run_python
+   *  gets). A failed lookup is un-cached so a transient error is retried. */
+  private async remoteHome(): Promise<string | null> {
+    const state = getMasterState(this.connection.id);
+    if (!state.remoteHome) {
+      state.remoteHome = this.exec(`printf %s "$HOME"`, 10000)
+        .then((result) => (!result.isError && result.content.trim() ? result.content.trim() : null))
+        .catch(() => null);
+    }
+    const home = await state.remoteHome;
+    if (!home) state.remoteHome = null;
+    return home;
+  }
+
+  /**
+   * §4.3 staging: upload the driver once per (host, build) to
+   * `~/.porrima/kernel/porrima_kernel.py`, verified by a `.sha256` marker
+   * written atomically after success. Staging writes into the SSH user's
+   * `~/.porrima` — app-owned state outside the workspace-root containment the
+   * model's file tools live under, gated by the same `allowBash` permission
+   * as remote run_python. The `ready` handshake re-checks the hash so a
+   * mutated host file degrades instead of poisoning a spawn loop.
+   */
+  private async stageKernelDriver(home: string): Promise<{ hash: string; path: string } | null> {
+    const driver = localDriverInfo();
+    if (!driver) return null;
+    const target = join(home, ".porrima", "kernel", "porrima_kernel.py");
+    const marker = `${target}.sha256`;
+    const current = await this.exec(`cat -- ${shellQuote(marker)} 2>/dev/null || true`, 10000).catch(() => null);
+    if (current && !current.isError && current.content.trim() === driver.hash) {
+      return { hash: driver.hash, path: target };
+    }
+    const tmp = `${target}.tmp-${randomUUID().slice(0, 8)}`;
+    const upload =
+      `mkdir -p ${shellQuote(dirname(target))} && ` +
+      `cat > ${shellQuote(tmp)} && mv -f ${shellQuote(tmp)} ${shellQuote(target)} && ` +
+      `printf %s ${shellQuote(driver.hash)} > ${shellQuote(marker)}`;
+    const result = await this.exec(upload, 30000, driver.text).catch(() => null);
+    if (!result || result.isError) {
+      console.warn(`[kernel] driver staging failed on ${sshTarget(this.connection)}`);
+      return null;
+    }
+    return { hash: driver.hash, path: target };
+  }
+
+  /**
+   * Remote Python kernel host (docs/design/remote-python-kernel.md §4.1-4.3).
+   * Null means "no remote kernel" — feature flag off or bash disabled — and
+   * the caller stays on the per-call path. Preconditions the ssh client
+   * cannot promise (master, $HOME, staging) are re-checked per prepare so a
+   * settings edit between calls is honored; any failure is a graceful
+   * one-shot degrade, never a retry loop.
+   */
+  async createKernelHost(): Promise<KernelHost | null> {
+    if (process.env.PORRIMA_REMOTE_KERNEL !== "1") return null;
+    if (!this.connection.allowBash) return null;
+    const adapter = this;
+    // Chat ids are embedded in remote paths; uuid / "system" /
+    // "automation:<id>" all pass. Reject anything else rather than let it
+    // near a shell string.
+    const safeChatId = (chatId: string) => /^[A-Za-z0-9._:-]+$/.test(chatId);
+
+    const host: KernelHost = {
+      kind: `ssh:${sshTarget(adapter.connection)}`,
+      failureReason: "transport",
+      async prepare(chatId, _cwd): Promise<KernelSpawnPlan | null> {
+        if (!safeChatId(chatId) || !adapter.connection.allowBash) return null;
+        if (!(await adapter.ensureMaster())) return null;
+        const home = await adapter.remoteHome();
+        if (!home) return null;
+        const staged = await adapter.stageKernelDriver(home);
+        if (!staged) return null;
+        const pythonPath = await adapter.resolvePython();
+        const stateDir = join(home, ".porrima", "kernels", chatId);
+        const line = buildRemoteKernelLaunchLine({
+          root: adapter.root,
+          pythonPath,
+          driverPath: staged.path,
+          stateDir,
+        });
+        return {
+          command: "ssh",
+          args: sshClientArgs(adapter.controlSocket, adapter.connection, line),
+          // The client's own cwd/env never reach the host; the remote side
+          // gets its environment from the launch line (PORRIMA_KERNEL_DIR)
+          // and the login shell. Owner pid is deliberately unset: the
+          // driver's getppid watchdog fallback is the correct liveness
+          // signal over ssh (§3.3 of the design doc).
+          cwd: process.cwd(),
+          env: { ...process.env },
+          stateDir,
+          driverHash: staged.hash,
+        };
+      },
+      async readSnapshotManifest(stateDir): Promise<string | null> {
+        const payload = join(stateDir, "namespace.pkl");
+        const manifest = join(stateDir, "manifest.json");
+        const result = await adapter
+          .exec(
+            `[ -f ${shellQuote(payload)} ] && [ -f ${shellQuote(manifest)} ] && cat -- ${shellQuote(manifest)}`,
+            15000,
+          )
+          .catch(() => null);
+        if (!result || result.isError || result.content === "(no output)") return null;
+        return result.content;
+      },
+      async statMtime(path): Promise<number | null> {
+        const result = await adapter
+          .exec(`stat -c %Y -- ${shellQuote(path)} 2>/dev/null || true`, 15000)
+          .catch(() => null);
+        if (!result || result.isError) return null;
+        const seconds = Number(result.content.trim());
+        return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+      },
+      async removeState(chatId): Promise<void> {
+        if (!safeChatId(chatId)) return;
+        const home = await adapter.remoteHome().catch(() => null);
+        if (!home) return;
+        await adapter
+          .exec(`rm -rf -- ${shellQuote(join(home, ".porrima", "kernels", chatId))}`, 15000)
+          .catch(() => {});
+      },
+    };
+    return host;
   }
 
   async readAgentsMd(): Promise<string | null> {

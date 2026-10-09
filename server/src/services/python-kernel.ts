@@ -1,9 +1,9 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { mkdir, readFile, readdir, rm, stat, truncate } from "fs/promises";
 import { dirname, join } from "path";
 import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { appDataPath } from "./paths.js";
 import { createOutputCapture, type OutputCapture } from "./output-capture.js";
 import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js";
@@ -68,7 +68,50 @@ function snapshotMaxVariableBytes(): number {
   return readPositiveIntEnv("PORRIMA_KERNEL_SNAPSHOT_MAX_VARIABLE_BYTES", SNAPSHOT_MAX_VARIABLE_BYTES_DEFAULT);
 }
 
-export type KernelFallbackReason = "capacity" | "spawn-failed" | "wedge" | "broken";
+export type KernelFallbackReason = "capacity" | "spawn-failed" | "wedge" | "broken" | "transport";
+
+// ---------------------------------------------------------------------------
+// KernelHost — the transport/state seam for remote-python-kernel.md §4.1.
+//
+// Everything the manager does that is filesystem-shaped or process-shaped
+// goes through this handle. LocalKernelHost reproduces the pre-P4 behavior
+// exactly; the SSH adapter (workspace.ts) supplies a host whose launch plan
+// is an `ssh` client process and whose state paths live on the remote host.
+// The protocol machinery (execute/interrupt/snapshot/jobs) cannot tell the
+// difference: it only ever touches `proc.write` / stdout / exited.
+// ---------------------------------------------------------------------------
+
+export interface KernelSpawnPlan {
+  command: string;
+  args: string[];
+  /** Local cwd/env for the spawned transport process (the ssh client's own
+   *  cwd/env is irrelevant to the remote side). */
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  /** Host-resolved absolute state dir for this chat; snapshot/restore
+   *  request paths are derived from it (remote paths live on the host). */
+  stateDir: string;
+  /** sha256[:16] the driver's `ready` event must report (§4.3 skew check). */
+  driverHash: string;
+}
+
+export interface KernelHost {
+  /** Log label: "local" or "ssh:<target>". */
+  readonly kind: string;
+  /** Fallback reason reported when prepare()/spawn fails (§4.9 notices). */
+  readonly failureReason: KernelFallbackReason;
+  /** Verify transport liveness, stage the driver, build the launch plan.
+   *  `cwd` is the chat's workspace label: a real local directory for the
+   *  local host (today's kernel-cwd semantics), irrelevant to ssh clients.
+   *  Null on any failure — the call degrades to one-shot, never a retry loop. */
+  prepare(chatId: string, cwd: string): Promise<KernelSpawnPlan | null>;
+  /** Manifest text iff both payload and manifest exist on the host; else null. */
+  readSnapshotManifest(stateDir: string): Promise<string | null>;
+  /** mtime in ms, or null when not observable (freshness memo skips remote). */
+  statMtime(path: string): Promise<number | null>;
+  /** Best-effort host-side state removal (workspace change, chat deletion). */
+  removeState(chatId: string): Promise<void>;
+}
 
 export type KernelRunOutcome =
   | {
@@ -91,6 +134,9 @@ export interface KernelRunOptions {
   background?: boolean;
   /** Live view updates (stdout+stderr so far) for the streaming seam. */
   onUpdate?: (text: string) => void;
+  /** Transport/state host (§4.1). Defaults to localKernelHost — every
+   *  pre-P4 caller keeps working unchanged. */
+  host?: KernelHost;
 }
 
 interface KernelErrorEvent {
@@ -140,6 +186,12 @@ interface KernelJob {
 interface KernelInstance {
   chatId: string;
   cwd: string;
+  /** Transport/state owner for this kernel (§4.1). */
+  host: KernelHost;
+  /** Host-resolved state dir (local dir, or remote dir string on the host). */
+  stateDir: string;
+  /** Driver content hash the `ready` event must report (§4.3). */
+  expectedDriverHash: string;
   proc: SupervisedProcess;
   pending: Map<string, PendingExecution>;
   jobs: Map<string, KernelJob>;
@@ -204,6 +256,94 @@ function resolveDriverPath(): string | null {
   ];
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
+
+/**
+ * The driver source plus its content hash (first 16 hex of sha256). Cached
+ * per server process — the file cannot change within a build. Both the local
+ * host and the SSH staging path (§4.3) use it: locally it feeds the `ready`
+ * comparison trivially, remotely it is the staging marker and the expected
+ * handshake value.
+ */
+let driverInfoCache: { path: string; text: string; hash: string } | null | undefined;
+export function localDriverInfo(): { path: string; text: string; hash: string } | null {
+  if (driverInfoCache !== undefined) return driverInfoCache;
+  const path = resolveDriverPath();
+  if (!path) {
+    driverInfoCache = null;
+    return null;
+  }
+  try {
+    const text = readFileSync(path, "utf8");
+    const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+    driverInfoCache = { path, text, hash };
+  } catch {
+    driverInfoCache = null;
+  }
+  return driverInfoCache;
+}
+
+/**
+ * Build the remote launch line executed by the host shell
+ * (remote-python-kernel.md §4.2): cd into the workspace root, create the
+ * 0700 state dir, and start the staged driver with PORRIMA_KERNEL_DIR set.
+ * PORRIMA_KERNEL_OWNER_PID is deliberately absent — unset env makes the
+ * driver's watchdog watch its direct parent (the per-connection sshd child),
+ * which is exactly the right liveness signal over ssh (§3.3). Quoting lives
+ * here so it is unit-testable against hostile roots.
+ */
+export function buildRemoteKernelLaunchLine(opts: {
+  root: string;
+  pythonPath: string;
+  driverPath: string;
+  stateDir: string;
+}): string {
+  const q = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  return [
+    `cd -- ${q(opts.root)}`,
+    `mkdir -p ${q(opts.stateDir)}`,
+    `chmod 700 ${q(opts.stateDir)}`,
+    `PORRIMA_KERNEL_DIR=${q(opts.stateDir)} PYTHONDONTWRITEBYTECODE=1 ${q(opts.pythonPath)} -u ${q(opts.driverPath)}`,
+  ].join(" && ");
+}
+
+/** The pre-P4 default host: state under ~/.porrima/kernels, driver spawned
+ *  directly through the supervisor, §4.10 "a local kernel cannot have a
+ *  remote cwd" made literal by `cwd` being a real local directory. */
+export const localKernelHost: KernelHost = {
+  kind: "local",
+  failureReason: "spawn-failed",
+  async prepare(chatId: string, cwd: string): Promise<KernelSpawnPlan | null> {
+    const driver = localDriverInfo();
+    if (!driver) return null;
+    const stateDir = kernelStateDir(chatId);
+    await mkdir(stateDir, { recursive: true, mode: 0o700 }).catch(() => {});
+    return {
+      command: process.env.PORRIMA_PYTHON || "python3",
+      args: ["-u", driver.path],
+      cwd,
+      env: {
+        ...process.env,
+        PORRIMA_KERNEL_DIR: stateDir,
+        PORRIMA_KERNEL_OWNER_PID: String(process.pid),
+        PYTHONDONTWRITEBYTECODE: "1",
+      },
+      stateDir,
+      driverHash: driver.hash,
+    };
+  },
+  async readSnapshotManifest(stateDir: string): Promise<string | null> {
+    const payloadPath = join(stateDir, "namespace.pkl");
+    const manifestPath = join(stateDir, "manifest.json");
+    if (!existsSync(payloadPath) || !existsSync(manifestPath)) return null;
+    return readFile(manifestPath, "utf8").catch(() => null);
+  },
+  async statMtime(path: string): Promise<number | null> {
+    return (await stat(path).catch(() => null))?.mtimeMs ?? null;
+  },
+  async removeState(chatId: string): Promise<void> {
+    await rm(kernelStateDir(chatId), { recursive: true, force: true }).catch(() => {});
+  },
+};
 
 function sendRequest(instance: KernelInstance, request: Record<string, unknown>): void {
   if (instance.disposed) return;
@@ -410,7 +550,7 @@ function sendControl(
 }
 
 function snapshotPaths(instance: KernelInstance): { payloadPath: string; manifestPath: string } {
-  const dir = kernelStateDir(instance.chatId);
+  const dir = instance.stateDir;
   return { payloadPath: join(dir, "namespace.pkl"), manifestPath: join(dir, "manifest.json") };
 }
 
@@ -432,10 +572,12 @@ async function runSnapshot(
   // (asyncio tasks are not serializable and are never captured).
   if (instance.disposed || instance.busy || instance.restoreIncomplete) return;
   const { payloadPath, manifestPath } = snapshotPaths(instance);
-  // Capture-freshness memo: skip the re-dump while provably unchanged.
+  // Capture-freshness memo: skip the re-dump while provably unchanged. The
+  // witness is a host stat (§4.1) — a remote host whose stat is not
+  // observable yields null and the memo simply never fires.
   if (instance.lastSnapshot && instance.lastSnapshot.executions === instance.executions) {
-    const payloadStat = await stat(payloadPath).catch(() => null);
-    if (payloadStat && payloadStat.mtimeMs === instance.lastSnapshot.payloadMtimeMs) return;
+    const payloadMtime = await instance.host.statMtime(payloadPath);
+    if (payloadMtime !== null && payloadMtime === instance.lastSnapshot.payloadMtimeMs) return;
   }
   const result = await sendControl(
     instance,
@@ -450,12 +592,12 @@ async function runSnapshot(
     controlTimeoutMs,
   );
   if (result?.status === "ok") {
-    const payloadStat = await stat(payloadPath).catch(() => null);
-    const manifestStat = await stat(manifestPath).catch(() => null);
+    const payloadMtime = await instance.host.statMtime(payloadPath);
+    const manifestMtime = await instance.host.statMtime(manifestPath);
     instance.lastSnapshot = {
       executions: instance.executions,
-      payloadMtimeMs: payloadStat?.mtimeMs ?? 0,
-      manifestMtimeMs: manifestStat?.mtimeMs ?? 0,
+      payloadMtimeMs: payloadMtime ?? 0,
+      manifestMtimeMs: manifestMtime ?? 0,
     };
   } else if (result) {
     console.warn(`[kernel] chat=${shortId(instance.chatId)} snapshot failed: ${result.reason ?? "unknown"}`);
@@ -669,6 +811,22 @@ function handleLine(instance: KernelInstance, line: string): void {
       protocolFailure(instance, `protocol mismatch (driver ${event.protocol}, expected ${PROTOCOL_VERSION})`);
       return;
     }
+    // §4.3 driver skew: the staged file is not what we launched expecting
+    // (another install touched it). Fail the handshake — spawnKernel kills
+    // the client and the call degrades to one-shot. Never mark the chat
+    // broken: this is stale staging, not protocol corruption.
+    if (
+      instance.expectedDriverHash &&
+      typeof event.driver === "string" &&
+      event.driver !== instance.expectedDriverHash
+    ) {
+      console.warn(
+        `[kernel] chat=${shortId(instance.chatId)} driver skew (host ${event.driver}, expected ${instance.expectedDriverHash})`,
+      );
+      instance.readyResolve?.(false);
+      instance.readyResolve = undefined;
+      return;
+    }
     instance.pythonVersion = String(event.python ?? "");
     instance.readyResolve?.(true);
     instance.readyResolve = undefined;
@@ -696,27 +854,20 @@ function attachReaders(instance: KernelInstance): void {
   });
 }
 
-async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance | null> {
-  const driver = resolveDriverPath();
-  if (!driver) {
-    console.warn("[kernel] driver not found; run_python stays stateless");
+async function spawnKernel(chatId: string, cwd: string, host: KernelHost): Promise<KernelInstance | null> {
+  const plan = await host.prepare(chatId, cwd).catch(() => null);
+  if (!plan) {
+    console.warn(`[kernel] host prepare failed for chat=${shortId(chatId)} (${host.kind}); staying stateless`);
     return null;
   }
-  const stateDir = kernelStateDir(chatId);
-  await mkdir(stateDir, { recursive: true, mode: 0o700 }).catch(() => {});
 
   let proc: SupervisedProcess;
   try {
     proc = spawnSupervised({
-      command: process.env.PORRIMA_PYTHON || "python3",
-      args: ["-u", driver],
-      cwd,
-      env: {
-        ...process.env,
-        PORRIMA_KERNEL_DIR: stateDir,
-        PORRIMA_KERNEL_OWNER_PID: String(process.pid),
-        PYTHONDONTWRITEBYTECODE: "1",
-      },
+      command: plan.command,
+      args: plan.args,
+      cwd: plan.cwd,
+      env: plan.env,
       key: `kernel:${chatId}`,
       killGraceMs: KERNEL_KILL_GRACE_MS,
     });
@@ -728,6 +879,9 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
   const instance: KernelInstance = {
     chatId,
     cwd,
+    host,
+    stateDir: plan.stateDir,
+    expectedDriverHash: plan.driverHash,
     proc,
     pending: new Map(),
     jobs: new Map(),
@@ -777,16 +931,18 @@ async function spawnKernel(chatId: string, cwd: string): Promise<KernelInstance 
 
   // Restore a previous snapshot before the kernel serves any cell. A failed
   // or partial restore marks the kernel so the debounced flush never
-  // overwrites a fuller on-disk payload.
-  const { payloadPath, manifestPath } = snapshotPaths(instance);
-  if (existsSync(payloadPath) && existsSync(manifestPath)) {
+  // overwrites a fuller on-disk payload. Existence is checked host-side
+  // (§4.1): on a remote host the manager never sees the files themselves.
+  const manifestText = await instance.host.readSnapshotManifest(instance.stateDir).catch(() => null);
+  if (manifestText) {
     try {
-      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      const manifest = JSON.parse(manifestText);
       const manifestMajor = String(manifest.pythonVersion ?? "").split(".")[0];
       const runningMajor = instance.pythonVersion.split(".")[0];
       if (manifestMajor && runningMajor && manifestMajor !== runningMajor) {
         instance.firstNotice = `[kernel: snapshot skipped (python ${manifest.pythonVersion} -> ${instance.pythonVersion})]`;
       } else {
+        const { payloadPath } = snapshotPaths(instance);
         const restored = await sendControl(
           instance,
           { type: "restore", id: randomUUID(), path: payloadPath },
@@ -832,20 +988,20 @@ type KernelAcquisition =
   | { instance: KernelInstance; recreated: boolean }
   | { reason: KernelFallbackReason };
 
-async function acquireKernel(chatId: string, cwd: string): Promise<KernelAcquisition> {
+async function acquireKernel(chatId: string, cwd: string, host: KernelHost): Promise<KernelAcquisition> {
   const existing = kernels.get(chatId);
   if (existing?.wedged) return { reason: "wedge" };
-  if (existing && existing.cwd === cwd) return { instance: existing, recreated: false };
+  if (existing && existing.cwd === cwd && existing.host.kind === host.kind) return { instance: existing, recreated: false };
   if (existing) {
-    // Project/location change: a kernel's cwd is fixed at creation, and the
-    // snapshot belongs to the old workspace — remove it rather than restore
-    // stale paths into the new one.
+    // Project/location change (or a switch to a different host/transport): a
+    // kernel's cwd is fixed at creation, and the snapshot belongs to the old
+    // workspace — remove it rather than restore stale paths into the new one.
     await disposeKernel(chatId, { removeState: true }).catch(() => {});
   }
   await evictIdleKernels(maxKernels());
   if (kernels.size >= maxKernels()) return { reason: "capacity" };
-  const instance = await spawnKernel(chatId, cwd);
-  if (!instance) return { reason: "spawn-failed" };
+  const instance = await spawnKernel(chatId, cwd, host);
+  if (!instance) return { reason: host.failureReason };
   return { instance, recreated: Boolean(existing) };
 }
 
@@ -890,6 +1046,7 @@ function makePendingBase(
 
 export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRunOutcome> {
   const { chatId, cwd, code, timeoutMs, signal, background } = opts;
+  const host = opts.host ?? localKernelHost;
   if (brokenChats.has(chatId)) return { mode: "fallback", reason: "broken" };
 
   if (background) {
@@ -897,7 +1054,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
     if (pause?.active) {
       return { mode: "kernel", isError: true, content: "[system paused: background jobs cannot start]" };
     }
-    const acquisition = await acquireKernel(chatId, cwd);
+    const acquisition = await acquireKernel(chatId, cwd, host);
     if ("reason" in acquisition) return { mode: "fallback", reason: acquisition.reason };
     const instance = acquisition.instance;
     const runningOnKernel = countRunningJobs(instance);
@@ -932,7 +1089,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
     });
   }
 
-  const acquisition = await acquireKernel(chatId, cwd);
+  const acquisition = await acquireKernel(chatId, cwd, host);
   if ("reason" in acquisition) return { mode: "fallback", reason: acquisition.reason };
   const instance = acquisition.instance;
   if (instance.busy) return { mode: "fallback", reason: "capacity" };
@@ -1056,8 +1213,11 @@ export async function disposeKernel(
   await instance.proc.kill({ graceMs: opts?.force ? 300 : KERNEL_KILL_GRACE_MS }).catch(() => {});
   // Ordinary disposal (TTL, LRU, shutdown) keeps the snapshot for the next
   // kernel to restore; only a workspace change or chat deletion removes it.
+  // Removal is host-side (§4.4) — for an ssh kernel the state lives on the
+  // host; a dropped channel makes it a best-effort no-op and the driver's
+  // boot prune expires it there eventually.
   if (opts?.removeState) {
-    await rm(kernelStateDir(chatId), { recursive: true, force: true }).catch(() => {});
+    await instance.host.removeState(chatId).catch(() => {});
   }
 }
 
