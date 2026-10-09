@@ -262,7 +262,7 @@ What shipped, by file:
 - `server/src/services/agent-tools.ts` — `getAgentToolDefinitions` now returns `parameters`.
 - `server/src/services/chat-deletion.ts` — `clearLlmRequests` on delete.
 - Client: `api/client.ts` (fetchers + types + SSE cases; `fetchRenderedPrompt` removed),
-  `hooks/useChat.ts` (`requestLogVersion` bumped by the wire events, returned), `App.tsx`
+  `hooks/useChat.ts` (latest `LlmRequestLogEvent` state, returned), `App.tsx`
   (prop threading), `ChatView.tsx` (header `Prompt` → `Requests`; old modal deleted),
   `components/RequestViewerModal.tsx` (Requests + Context tabs, lazy detail fetch, per-role
   collapsible message blocks, raw JSON + copy, section token grid, tool schemas, Clear).
@@ -294,3 +294,20 @@ as an invariant, and content is a tree whose layers grow/shrink inline:
   the tail as rows append.
 - Context tab follows the same rule: system prompt and tool schemas render inline with no inner
   scroll caps; tool definitions became tree nodes.
+
+Post-review refinements (2026-10-09, review of the three launch commits):
+
+- **Targeted live refresh.** The modal now receives the latest
+  `LlmRequestLogEvent` (fresh object per event) instead of a version counter.
+  The list refetches on every event (summaries only — cheap); the expanded
+  entry refetches only when its **own** `end` lands (previously every event
+  re-downloaded and re-parsed the full rehydrated body); the Context tab
+  refreshes only on `start`, when the latest recorded system prompt may have
+  changed. (`useChat` state, `App.tsx`/`ChatView.tsx` threading, modal effect.)
+- **Suite coverage.** `src/__tests__/request-log.test.ts` (14 tests,
+  `PORRIMA_DATA_DIR` isolation per the memory-tools pattern): id-only events,
+  newest-first listing, blob dedup counts + exact rehydration, 50/chat
+  retention, targeted blob vacuum, latest-system-prompt defensive branches,
+  chat scoping, in-process routes, and restart hygiene (in_progress → aborted
+  via module re-init). The smoke script now refuses to run without
+  `PORRIMA_DATA_DIR` so it can never hit the live DB.

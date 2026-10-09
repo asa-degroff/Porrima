@@ -16,6 +16,18 @@ import {
 } from "../services/request-log.js";
 import requestLogRouter from "../routes/request-log.js";
 
+// The smoke inserts and deletes rows and vacuums blobs — it must never run
+// against the default data dir. (The suite test src/__tests__/request-log.test.ts
+// covers the same paths with proper isolation; this script is the manual
+// end-to-end check.)
+if (!process.env.PORRIMA_DATA_DIR) {
+  console.error(
+    "[smoke-request-log] refusing to run without PORRIMA_DATA_DIR (it would hit the live DB).\n" +
+    "  PORRIMA_DATA_DIR=$(mktemp -d) npx tsx src/scripts/smoke-request-log.ts"
+  );
+  process.exit(2);
+}
+
 const CHAT = "request-log-smoke";
 const TURN = "smoke-turn-1";
 
