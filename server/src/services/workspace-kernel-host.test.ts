@@ -48,5 +48,7 @@ describe("SshWorkspaceAdapter.createKernelHost (P4a gate)", () => {
     expect(host).not.toBeNull();
     expect(host!.kind).toBe("ssh:tester@example.invalid");
     expect(host!.failureReason).toBe("transport");
+    // P4b: the host must own the model-side spill delivery surface.
+    expect(typeof host!.deliverJobOutput).toBe("function");
   });
 });

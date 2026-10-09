@@ -70,7 +70,7 @@ describe("run_python remote kernel routing (P4a)", () => {
     expect(spy.mock.calls[0][0].host).toBe(fakeHost);
   });
 
-  it("background over an ssh host is demoted to a synchronous foreground cell (§4.6)", async () => {
+  it("background over an ssh host runs as a real background job (P4b)", async () => {
     workspaceStub = {
       kind: "ssh",
       label: "ssh:host:/root",
@@ -78,13 +78,12 @@ describe("run_python remote kernel routing (P4a)", () => {
       createKernelHost: async () => fakeHost,
     };
 
-    const result: any = await runPythonTool().execute("t3", { code: "1", background: true });
     const spy = await kernelSpy();
+    await runPythonTool().execute("t3", { code: "1", background: true });
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0][0].background).toBe(false);
-    // Demoted cells get the foreground ceiling (300 s), not the 30 s default.
-    expect(spy.mock.calls[0][0].timeoutMs).toBe(300_000);
-    expect(JSON.stringify(result.content)).toContain("background unavailable on remote kernels yet");
+    expect(spy.mock.calls[0][0].background).toBe(true);
+    expect(spy.mock.calls[0][0].timeoutMs).toBe(3_600_000);
+    expect(spy.mock.calls[0][0].host).toBe(fakeHost);
   });
 
   it("ssh without a host stays per-call with the stateless notice", async () => {

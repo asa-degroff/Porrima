@@ -50,6 +50,9 @@ const JOB_MAX_BOX = 8;
 const JOB_RETENTION = 64;
 const JOB_ACK_TIMEOUT_MS = 10_000;
 const JOB_TAIL_BYTES = 16 * 1024;
+// Remote spill delivery bound (§4.6): the whole payload crosses one ssh
+// stdin, so it is capped well under the store's 64 MiB local cap.
+const JOB_DELIVERY_MAX_CHARS = 8_000_000;
 
 // Snapshot / restore (§4.8).
 const SNAPSHOT_DEBOUNCE_MS = 1500;
@@ -111,6 +114,17 @@ export interface KernelHost {
   statMtime(path: string): Promise<number | null>;
   /** Best-effort host-side state removal (workspace change, chat deletion). */
   removeState(chatId: string): Promise<void>;
+  /**
+   * P4b (remote-python-kernel.md §4.6): deliver a finished background job's
+   * full output into the workspace's spill location on the host. Defined on
+   * hosts whose model-facing `read_file` resolves against a workspace the
+   * server cannot write locally (ssh). Its return value — a workspace-
+   * relative, `read_file`-able path — replaces the server-local spill path
+   * in every job view; a null return means NO footer, never an unreachable
+   * path. The local host omits this: the server-local spill is already
+   * readable there.
+   */
+  deliverJobOutput?(chatId: string, jobId: string, content: string): Promise<string | null>;
 }
 
 export type KernelRunOutcome =
@@ -181,6 +195,9 @@ interface KernelJob {
   resultText: string | null;
   error: KernelErrorEvent | null;
   spillPath?: string;
+  /** The host delivers spills model-side (§4.6): the server-local spill path
+   *  must never surface in a job view for this kind of kernel. */
+  remoteSpill: boolean;
 }
 
 interface KernelInstance {
@@ -413,6 +430,7 @@ function createJob(instance: KernelInstance, jobId: string): KernelJob {
     capture,
     resultText: null,
     error: null,
+    remoteSpill: typeof instance.host.deliverJobOutput === "function",
   };
 }
 
@@ -445,7 +463,29 @@ async function finishJob(instance: KernelInstance, event: Record<string, any>): 
   job.timedOut = event.timed_out === true;
   job.finishedAt = Date.now();
   const result = await job.capture.finish().catch(() => null);
-  if (result?.spillPath) job.spillPath = result.spillPath;
+  if (result?.spillPath) {
+    if (job.remoteSpill && instance.host.deliverJobOutput) {
+      // §4.6: push the full output model-side and expose only the host path.
+      // The server-local spill stays on disk as the forensic copy. Delivery
+      // is size-bounded: jobs can spill up to the store cap, and the whole
+      // file crosses one ssh stdin, so the manager truncates the payload at
+      // the delivery cap and says so in the file.
+      try {
+        const full = await readFile(result.spillPath, "utf8");
+        const payload =
+          full.length > JOB_DELIVERY_MAX_CHARS
+            ? `${full.slice(0, JOB_DELIVERY_MAX_CHARS)}\n... [truncated at ${Math.round(JOB_DELIVERY_MAX_CHARS / 1_000_000)} MB for remote delivery]\n`
+            : full;
+        const delivered = await instance.host.deliverJobOutput(instance.chatId, job.id, payload);
+        job.spillPath = delivered ?? undefined;
+      } catch (error) {
+        console.warn(`[kernel] chat=${shortId(instance.chatId)} job ${shortId(job.id)} remote spill delivery failed:`, error);
+        job.spillPath = undefined;
+      }
+    } else {
+      job.spillPath = result.spillPath;
+    }
+  }
   pruneJobs(instance);
 }
 
@@ -490,7 +530,9 @@ export function listKernelJobs(chatId: string): KernelJobInfo[] {
       status: job.status,
       durationMs: (job.finishedAt ?? Date.now()) - job.startedAt,
       timedOut: job.timedOut,
-      spillPath: job.spillPath ?? job.capture.snapshot().spillPath,
+      // Remote-spill jobs only ever show the host-side path; the local
+      // capture spill is invisible to the model there (§4.6).
+      spillPath: job.remoteSpill ? job.spillPath : job.spillPath ?? job.capture.snapshot().spillPath,
     }));
 }
 

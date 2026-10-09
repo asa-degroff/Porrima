@@ -7,11 +7,12 @@
 // Exercises: createKernelHost gating, master + $HOME, driver staging with the
 // hash marker, supervised ssh spawn, the ready handshake (protocol + driver
 // hash), host-side state dir placement, a foreground cell, streaming updates,
-// L1 interrupt with namespace survival, snapshot persistence, HARD DROP
-// (force-dispose kills only the local ssh client — the remote kernel must
-// tear itself down via the getppid watchdog / EOF path), respawn + restore,
-// and removeState teardown. The staged driver is left on the host (app-owned
-// cache reused by production); everything else is cleaned up.
+// L1 interrupt with namespace survival, snapshot persistence, background job
+// + model-side spill delivery (P4b), HARD DROP (force-dispose kills only the
+// local ssh client — the remote kernel must tear itself down via the
+// getppid watchdog / EOF path), respawn + restore, and removeState teardown.
+// The staged driver is left on the host (app-owned cache reused by
+// production); everything else is cleaned up.
 //
 // Destructive only to its own smoke chat state. Read the checks, not just the
 // exit code: a watchdog teardown slower than the poll window is a finding.
@@ -57,10 +58,12 @@ async function main(): Promise<void> {
     executeInKernel,
     disposeKernel,
     localDriverInfo,
+    listKernelJobs,
   } = await import("../services/python-kernel.js");
 
   const chatId = `smoke-${Date.now().toString(36)}`;
-  const adapter = new SshWorkspaceAdapter(connection, remoteRoot ?? `/home/${connection.username}`);
+  const workspaceRoot = remoteRoot ?? `/home/${connection.username}`;
+  const adapter = new SshWorkspaceAdapter(connection, workspaceRoot);
   const results: string[] = [];
   const check = (name: string, ok: boolean, detail = "") => {
     results.push(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
@@ -156,7 +159,38 @@ async function main(): Promise<void> {
   check("respawn restores the namespace", respawned.mode === "kernel" && respawned.content.includes("42"), respawned.mode === "kernel" ? respawned.content.split("\n")[0] : JSON.stringify(respawned));
   check("restore notice present", respawned.mode === "kernel" && respawned.content.includes("restored"));
 
-  // 9. removeState teardown.
+  // 9. P4b: background job over the remote host — real job ack, output
+  //    delivered INTO the remote workspace, workspace-relative footer.
+  const jobAck = await executeInKernel({
+    chatId,
+    cwd: adapter.label,
+    code: `print("p4b" * 500_000)`,
+    timeoutMs: 30_000,
+    background: true,
+    host: host!,
+  });
+  const jobId = jobAck.mode === "kernel" ? jobAck.jobId : undefined;
+  check("background job acks with a job id", jobAck.mode === "kernel" && !!jobId, `job=${jobId ?? "none"}`);
+  let jobView = undefined as undefined | (ReturnType<typeof listKernelJobs>[number] & object);
+  for (let waited = 0; waited <= 40 && jobId; waited += 1) {
+    jobView = listKernelJobs(chatId).find((j) => j.id === jobId);
+    if (jobView && jobView.status !== "running" && jobView.spillPath) break;
+    await delay(1000);
+  }
+  check(
+    "job finished with a workspace-relative spill footer",
+    !!jobView && jobView.status === "done" && (jobView.spillPath ?? "").startsWith(".porrima-tool-output/py-"),
+    `${jobView?.status ?? "?"} ${jobView?.spillPath ?? "no spill"}`,
+  );
+  // The footer must resolve from the workspace root and hold the real bytes.
+  const spillRel = jobView?.spillPath ?? "";
+  const spillPath = `"${workspaceRoot}/${spillRel}"`;
+  const spillStat = spillRel ? await adapter.exec(`wc -c -- ${spillPath}`) : null;
+  const spillBytes = Number((spillStat?.content ?? "").trim().split(/\s+/)[0] ?? "0");
+  check("delivered job output lands in the remote workspace", Number.isFinite(spillBytes) && spillBytes > 1_000_000, `${spillBytes} B`);
+  if (spillRel) await adapter.exec(`rm -f -- ${spillPath} && rmdir -- "${workspaceRoot}/.porrima-tool-output" 2>/dev/null; true`);
+
+  // 10. removeState teardown.
   await disposeKernel(chatId, { removeState: true });
   const gone = await adapter.exec(`test -d "$HOME/.porrima/kernels/${chatId}" && echo present || echo removed`);
   check("removeState deleted the host state dir", gone.content.trim() === "removed");

@@ -1124,6 +1124,25 @@ else:
           .exec(`rm -rf -- ${shellQuote(join(home, ".porrima", "kernels", chatId))}`, 15000)
           .catch(() => {});
       },
+      /**
+       * P4b (§4.6): write a finished job's full output inside the remote
+       * workspace and return the workspace-relative footer path — the exact
+       * remote-bash convention, so `read_file(path=...)` resolves it. The
+       * server-local capture spill stays as the forensic copy. Retention of
+       * the remote dir inherits remote bash's gap (design §8.3): the model
+       * owns its workspace.
+       */
+      async deliverJobOutput(chatId, jobId, content): Promise<string | null> {
+        if (!safeChatId(chatId) || !/^[a-f0-9-]{6,36}$/i.test(jobId)) return null;
+        const rel = `.porrima-tool-output/py-${jobId.slice(0, 8)}.txt`;
+        const abs = join(adapter.root, rel);
+        const upload =
+          `mkdir -p ${shellQuote(join(adapter.root, ".porrima-tool-output"))} && ` +
+          `cat > ${shellQuote(abs)}`;
+        const result = await adapter.exec(upload, 60000, content).catch(() => null);
+        if (!result || result.isError) return null;
+        return rel;
+      },
     };
     return host;
   }

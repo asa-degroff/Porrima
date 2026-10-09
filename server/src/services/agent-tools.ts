@@ -958,48 +958,37 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
           workspace.kind === "local" ? undefined : await workspace.createKernelHost?.();
         const useKernel = workspace.kind === "local" || kernelHost != null;
         if (useKernel) {
-          // Background jobs over a remote kernel wait for P4b: job output
-          // spills land in the server-local store, and the footer path would
-          // not resolve against the remote workspace's read_file (§4.6). The
-          // cell runs synchronously at the foreground ceiling with a notice.
-          const backgroundOverSsh = background && kernelHost != null;
-          const effectiveBackground = background && !backgroundOverSsh;
-          const maxSec = effectiveBackground ? 3600 : 300;
+          const maxSec = background ? 3600 : 300;
           // Background defaults to its own ceiling: the path exists for work
           // longer than the foreground default, and a lazy background: true
           // should not silently die at 30 s. Foreground keeps 30 s as the
-          // fast-fail signal (it holds the global turn-gate lease); a
-          // background request demoted to synchronous gets the 300 s ceiling.
-          const timeoutSec = Math.min(
-            maxSec,
-            Math.max(1, args.timeout || (effectiveBackground ? 3600 : backgroundOverSsh ? 300 : 30)),
-          );
+          // fast-fail signal (it holds the global turn-gate lease). Over a
+          // remote host the job runs in the host kernel; its full output is
+          // delivered into the remote workspace at completion (§4.6).
+          const timeoutSec = Math.min(maxSec, Math.max(1, args.timeout || (background ? 3600 : 30)));
           const outcome = await executeInKernel({
             chatId,
             cwd: workspace.label,
             code: String(args.code ?? ""),
             timeoutMs: timeoutSec * 1000,
             signal,
-            background: effectiveBackground,
+            background,
             host: kernelHost ?? undefined,
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,
           });
           if (outcome.mode === "kernel") {
-            const lead = backgroundOverSsh
-              ? "[background unavailable on remote kernels yet; ran as a foreground cell]\n"
-              : "";
             const content = outcome.images?.length
               ? [
-                  { type: "text" as const, text: `${lead}${outcome.content}` },
+                  { type: "text" as const, text: outcome.content },
                   ...outcome.images.map((image) => ({
                     type: "image" as const,
                     data: image.data,
                     mimeType: image.mimeType,
                   })),
                 ]
-              : `${lead}${outcome.content}`;
+              : outcome.content;
             return wrapResult({ content, isError: outcome.isError }, "run_python");
           }
           const oneShot = await workspace.runPython(args, signal);

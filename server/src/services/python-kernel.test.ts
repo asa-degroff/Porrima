@@ -513,6 +513,15 @@ describe("python kernel manager", () => {
         async removeState(chatId: string): Promise<void> {
           await rm(remoteStateDir(home, chatId), { recursive: true, force: true }).catch(() => {});
         },
+        // P4b: mirrors the ssh host contract — output lands inside the
+        // "workspace" (the fake home) and the footer is workspace-relative.
+        async deliverJobOutput(chatId: string, jobId: string, content: string): Promise<string | null> {
+          const rel = `.porrima-tool-output/py-${jobId.slice(0, 8)}.txt`;
+          const abs = join(home, ".porrima-tool-output", `py-${jobId.slice(0, 8)}.txt`);
+          await mkdir(dirname(abs), { recursive: true });
+          await writeFile(abs, content);
+          return rel;
+        },
       };
     }
 
@@ -580,6 +589,28 @@ describe("python kernel manager", () => {
       expect(ok.mode).toBe("kernel");
       await disposeKernel("r-3", { removeState: true });
     }, 30_000);
+
+    it("delivers background job output model-side over the host (§4.6, P4b)", async () => {
+      const ack = kernel(await remoteRun("r-job", 'print("x" * 1_300_000)', makeRemoteHost(), { background: true }));
+      expect(ack.isError).toBe(false);
+      expect(ack.jobId).toBeTruthy();
+      const jobId = ack.jobId!;
+
+      // Delivery happens after the status flip inside finishJob — wait on the
+      // view carrying the host-relative path, not just the status.
+      const jobs = await waitForJob("r-job", (js) => js.some((j) => j.id === jobId && j.status !== "running" && j.spillPath), 30_000);
+      const job = jobs.find((j) => j.id === jobId)!;
+      expect(job.status).toBe("done");
+      // The footer is the HOST-relative path — the server-local capture
+      // spill must never surface for a remote job.
+      expect(job.spillPath).toBe(`.porrima-tool-output/py-${jobId.slice(0, 8)}.txt`);
+
+      const delivered = join(home, ".porrima-tool-output", `py-${jobId.slice(0, 8)}.txt`);
+      await waitUntil(() => existsSync(delivered), 5000, "delivered spill file");
+      expect((await readFile(delivered, "utf8")).length).toBeGreaterThan(1_000_000);
+
+      await disposeKernel("r-job", { removeState: true });
+    }, 60_000);
 
     it("boot self-heal kills a predecessor holding the same state dir (§4.4)", async () => {
       const driver = localDriverInfo();
