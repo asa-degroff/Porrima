@@ -366,7 +366,11 @@ router.post("/cache-warm/:chatId", async (req, res) => {
 router.get("/cache-residency", async (_req, res) => {
   try {
     const { listLlamaCacheResidency } = await import("../services/llama-cache-residency.js");
-    const records = listLlamaCacheResidency();
+    const { getChatTitle } = await import("../services/chat-storage.js");
+    const records = listLlamaCacheResidency().map((r) => ({
+      ...r,
+      chatTitle: r.targetKind === "chat" ? getChatTitle(r.chatId) ?? undefined : undefined,
+    }));
     res.json({ records });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

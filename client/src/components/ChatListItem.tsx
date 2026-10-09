@@ -5,6 +5,7 @@ import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
 import { QueuedMessageIcon } from "./QueuedMessageIcon";
 import { getStreamingChatIds } from "../hooks/useChat";
+import { formatCacheResidencyTitle, residencyHighlightClass } from "../lib/residency";
 
 interface Props {
   chat: ChatListItemType;
@@ -17,20 +18,6 @@ interface Props {
   onWarmCache?: (chatId: string) => void;
   cacheWarming?: boolean;
   cacheWarmError?: string;
-}
-
-function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
-  if (!residency) return undefined;
-  const parts = [residency.active ? "Cache active" : "Cache warm"];
-  if (typeof residency.inferredCacheHitRatio === "number") {
-    parts.push(`last hit ${(residency.inferredCacheHitRatio * 100).toFixed(1)}%`);
-  }
-  if (typeof residency.slotId === "number") {
-    parts.push(`slot ${residency.slotId}`);
-  } else {
-    parts.push(`${residency.bindingMode} slot selection`);
-  }
-  return parts.join(" - ");
 }
 
 export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook, onWarmCache, cacheWarming = false, cacheWarmError }: Props) {
@@ -118,20 +105,8 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       onContextMenu={handleContextMenu}
       {...longPressProps}
       className={`w-full min-h-8 text-left px-2 py-1.5 rounded-lg transition-all group relative border select-none ${
-        active ? "depth-raised bg-white/10" : "hover:bg-white/6"
-      } ${
-        active
-          ? "border-white/20" + (cacheResidency && lastActive
-              ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-              : cacheResidency
-                ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-                : "")
-          : cacheResidency && lastActive
-            ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-            : cacheResidency
-              ? "border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-              : "border-transparent"
-      }`}
+        active ? "depth-raised bg-white/10 border-white/20" : "hover:bg-white/6 border-transparent"
+      } ${residencyHighlightClass(cacheResidency, lastActive)}`}
       title={effectiveTitle}
     >
       {/* Vignette overlay — darkens edges for a brighter-center active highlight effect */}

@@ -4,6 +4,7 @@ import Busboy from "busboy";
 import {
   createSshConnection,
   deleteSshConnection,
+  getChatTitle,
   getSettings,
   getSshConnection,
   listProjects,
@@ -244,7 +245,11 @@ router.get("/slot-assignments", async (_req, res) => {
 });
 
 // GET /api/settings/cache-residency - Observed llama.cpp prompt-cache residency.
-// Enriched with queue position for visual distinction between queued and actively warming.
+// Enriched with queue position for visual distinction between queued and
+// actively warming, and with the chat's current title so UIs can render a
+// human-friendly label instead of a raw chat ID. Titles are resolved at read
+// time (not stored on the record) so renames and LLM title generation are
+// always reflected.
 router.get("/cache-residency", async (_req, res) => {
   try {
     const { getQueuePosition } = await import("../services/cache-warm-queue.js");
@@ -252,6 +257,7 @@ router.get("/cache-residency", async (_req, res) => {
     const enriched = records.map((r) => ({
       ...r,
       queuePosition: getQueuePosition(r.chatId, r.targetKind),
+      chatTitle: r.targetKind === "chat" ? getChatTitle(r.chatId) ?? undefined : undefined,
     }));
     res.json(enriched);
   } catch (e: any) {

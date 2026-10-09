@@ -1599,6 +1599,8 @@ export interface CacheResidency {
   chatId: string;
   targetKind?: CacheResidencyTargetKind;
   targetLabel?: string;
+  /** Current chat title, resolved server-side at read time (GET /settings/cache-residency). */
+  chatTitle?: string;
   baseUrl: string;
   modelId: string;
   contextWindow?: number;

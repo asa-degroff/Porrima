@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from "rea
 import type { ChatListItem as ChatListItemType, Project, ProjectLocationType, SshConnection, SystemPauseStatus } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
+import { formatCacheResidencyTitle, RESIDENCY_RING_AMBER, residencyHighlightClass } from "../lib/residency";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { Dropdown } from "./ui/Dropdown";
 import { AutomationRunnerDropdown } from "./AutomationRunnerDropdown";
@@ -161,7 +162,7 @@ function formatNewChatBaselineTitle(residency?: CacheResidency | null): string |
 }
 
 function newChatBaselineClass(residency?: CacheResidency | null): string {
-  return residency ? "ring-1 ring-amber-400/35 shadow-[0_0_8px_rgba(251,191,36,0.12)]" : "";
+  return residency ? RESIDENCY_RING_AMBER : "";
 }
 
 function isResidencyQueued(residency?: CacheResidency | null): boolean {
@@ -1429,8 +1430,8 @@ export function Sidebar({
                         : isLastActive
                           ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
                           : 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.1)]'
-                    }`}
-                    title={warmError ? `Cache warm failed: ${warmError}` : undefined}
+                    } ${residencyHighlightClass(cr, isLastActive)}`}
+                    title={warmError ? `Cache warm failed: ${warmError}` : formatCacheResidencyTitle(cr)}
                   >
                     <span className="min-w-0 flex-1 truncate md:group-hover:pr-5">{chat.title}</span>
 
