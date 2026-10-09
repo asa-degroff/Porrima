@@ -119,8 +119,13 @@ async function main(): Promise<void> {
   const driver = localDriverInfo();
   const [marker, remotePidStr] = (staged.content ?? "").trim().split(/\s+/);
   check("staged driver marker matches local build", marker === driver?.hash, `host=${marker} local=${driver?.hash}`);
-  const remotePid = Number(remotePidStr);
-  check("kernel.pid written to host state dir", Number.isFinite(remotePid) && remotePid > 0, `pid=${remotePidStr}`);
+  // The pidfile is compact JSON {"pid": int, "startId": str} — the identity
+  // guard for the next generation's predecessor kill (§4.4): a live pid with
+  // a mismatched start time is a recycled pid and must be spared.
+  const pidMatch = /"pid":(\d+)/.exec(remotePidStr ?? "");
+  const remotePid = pidMatch ? Number(pidMatch[1]) : NaN;
+  check("kernel.pid written to host state dir", Number.isFinite(remotePid) && remotePid > 0, `pidfile=${remotePidStr}`);
+  check("kernel.pid carries the start-id identity guard", /"startId":"proc:\d+"/.test(remotePidStr ?? ""), remotePidStr);
   const fs = await import("fs");
   check("no local kernel state dir for the smoke chat", !fs.existsSync(path.join(os.homedir(), ".porrima", "kernels", chatId)));
 

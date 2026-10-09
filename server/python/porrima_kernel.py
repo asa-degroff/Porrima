@@ -974,15 +974,78 @@ def _signal_direct(pid: int, sig: int) -> None:
         pass
 
 
-def _kill_predecessor(kernel_dir: str) -> None:
-    """If a previous kernel for this state dir is still alive, take it down
-    before we write anything into the dir it owns."""
+def _read_pidfile(kernel_dir: str) -> tuple[int, str | None] | None:
+    """Parse the pidfile. Current format: compact JSON
+    {"pid": int, "startId": str} (startId null when unreadable at boot).
+    Legacy format (pre-identity-guard): bare integer pid. Returns
+    (pid, startId-or-None), or None when absent/unparseable."""
     try:
         with open(os.path.join(kernel_dir, _PIDFILE)) as fh:
-            pid = int(fh.read().strip())
-    except (OSError, ValueError):
+            raw = fh.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        record = json.loads(raw)
+        if isinstance(record, dict):
+            pid = record.get("pid")
+            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+                start_id = record.get("startId")
+                return pid, (start_id if isinstance(start_id, str) and start_id else None)
+    except (ValueError, TypeError):
+        pass
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    return (pid, None) if pid > 0 else None
+
+
+def _cmdline_is_driver(pid: int) -> bool:
+    """Identity check for legacy (bare-pid) pidfiles: a true predecessor was
+    launched from the staged driver path, so its argv references that exact
+    path. A live pid whose argv does not match is not our family."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            argv = fh.read().split(b"\x00")
+    except OSError:
+        return False
+    driver = os.path.abspath(__file__)
+    return any(arg == driver.encode() for arg in argv if arg)
+
+
+def _kill_predecessor(kernel_dir: str) -> None:
+    """If a previous kernel for this state dir is still alive, take it down
+    before we write anything into the dir it owns. Liveness is not identity:
+    the pidfile carries the driver's start time, and a live pid whose start
+    time differs was recycled to an unrelated process — killing it would
+    TERM/KILL a stranger (the journal reap applies the same startId rule).
+    Legacy bare-pid files fall back to a cmdline match against the staged
+    driver path. With no positive identity match, nothing is killed: a true
+    orphan lingers until the next generation or the 14-day prune (the
+    documented residual)."""
+    parsed = _read_pidfile(kernel_dir)
+    if not parsed:
         return
+    pid, recorded_start = parsed
     if pid <= 0 or pid == os.getpid() or not _pid_alive(pid):
+        return
+    if recorded_start is not None:
+        current_start = _process_start_id(pid)
+        if current_start is not None and current_start != recorded_start:
+            print(
+                f"[kernel] boot self-heal: pidfile pid {pid} was recycled "
+                f"(start id mismatch); leaving it alone",
+                file=sys.stderr,
+            )
+            return
+    elif not _cmdline_is_driver(pid):
+        print(
+            f"[kernel] boot self-heal: legacy pidfile pid {pid} is not the "
+            f"driver; leaving it alone",
+            file=sys.stderr,
+        )
         return
     # Targeted kill, NOT a group kill: over ssh the predecessor shares the
     # session process group with sshd plumbing, and this driver is about to
@@ -1057,13 +1120,9 @@ def _prune_expired_state(kernel_dir: str) -> None:
         full = os.path.join(parent, name)
         if not os.path.isdir(full):
             continue
-        try:
-            with open(os.path.join(full, _PIDFILE)) as fh:
-                pid = int(fh.read().strip())
-            if _pid_alive(pid):
-                continue
-        except (OSError, ValueError):
-            pass
+        parsed = _read_pidfile(full)
+        if parsed and _pid_alive(parsed[0]):
+            continue
         try:
             if now - os.stat(full).st_mtime < _STATE_TTL_S:
                 continue
@@ -1084,9 +1143,12 @@ def _boot_self_heal() -> None:
             step(_kernel_dir)
         except BaseException as err:  # noqa: BLE001 — self-heal never blocks startup
             _protocol_error(f"boot self-heal ({step.__name__}) failed: {type(err).__name__}: {err}")
+    # pid + startId: the start time is the identity guard the next generation
+    # checks before killing the pid (a bare pid could be recycled).
     try:
+        own_pid = os.getpid()
         with open(os.path.join(_kernel_dir, _PIDFILE), "w") as fh:
-            fh.write(str(os.getpid()))
+            fh.write(json.dumps({"pid": own_pid, "startId": _process_start_id(own_pid)}, separators=(",", ":")))
     except OSError:
         pass
 

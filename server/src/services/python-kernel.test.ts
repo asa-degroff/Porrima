@@ -472,6 +472,21 @@ describe("python kernel manager", () => {
 
     const stagedDriver = (h: string) => join(h, ".porrima", "kernel", "porrima_kernel.py");
     const remoteStateDir = (h: string, chatId: string) => join(h, ".porrima", "kernels", chatId);
+    // The pidfile is compact JSON {"pid": int, "startId": str} (legacy files
+    // hold a bare pid); startId is the identity guard for the predecessor
+    // kill (remote-python-kernel.md §4.4).
+    const readPidfile = async (stateDir: string): Promise<{ pid: number; startId: string | null }> => {
+      const raw = (await readFile(join(stateDir, "kernel.pid"), "utf8").catch(() => "")).trim();
+      try {
+        const record = JSON.parse(raw);
+        if (record && typeof record.pid === "number") {
+          return { pid: record.pid, startId: typeof record.startId === "string" ? record.startId : null };
+        }
+      } catch {
+        /* legacy bare-pid format */
+      }
+      return { pid: Number(raw), startId: null };
+    };
 
     function makeRemoteHost(opts: { tamperHash?: string; skipStage?: boolean } = {}): KernelHost {
       return {
@@ -632,21 +647,102 @@ describe("python kernel manager", () => {
       try {
         const pidfile = join(stateDir, "kernel.pid");
         await waitUntil(() => existsSync(pidfile), 15_000, "first driver pidfile");
-        const firstPid = Number(await readFile(pidfile, "utf8"));
-        expect(firstPid).toBeGreaterThan(0);
-        expect(pidAlive(firstPid)).toBe(true);
+        const firstRecord = await readPidfile(stateDir);
+        expect(firstRecord.pid).toBeGreaterThan(0);
+        expect(pidAlive(firstRecord.pid)).toBe(true);
+        // The identity guard ships with the pidfile: the first driver must
+        // have recorded its own start id (what the second generation matches).
+        expect(firstRecord.startId).toBeTruthy();
 
         const second = spawn("bash", ["-c", line], { stdio: ["pipe", "ignore", "ignore"], detached: true });
         await waitUntil(async () => {
-          const pid = Number(await readFile(pidfile, "utf8").catch(() => "0"));
-          return pid !== firstPid && pidAlive(pid);
+          const { pid } = await readPidfile(stateDir);
+          return pid !== firstRecord.pid && pidAlive(pid);
         }, 15_000, "second driver to take over");
-        expect(pidAlive(firstPid)).toBe(false);
+        expect(pidAlive(firstRecord.pid)).toBe(false);
 
-        const finalPid = Number(await readFile(pidfile, "utf8"));
+        const finalPid = (await readPidfile(stateDir)).pid;
         try { process.kill(finalPid, "SIGKILL"); } catch { /* gone */ }
       } finally {
         try { first.kill(); } catch { /* already exited */ }
+      }
+    }, 40_000);
+
+    it("boot self-heal spares a recycled pidfile pid (identity, not liveness, §4.4)", async () => {
+      const driver = localDriverInfo();
+      expect(driver).not.toBeNull();
+      const stateDir = remoteStateDir(home, "r-recycled");
+      await mkdir(stateDir, { recursive: true, mode: 0o700 });
+      const target = stagedDriver(home);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, driver!.text);
+      const line = buildRemoteKernelLaunchLine({
+        root: home,
+        pythonPath: process.env.PORRIMA_PYTHON || "python3",
+        driverPath: target,
+        stateDir,
+      });
+
+      // A live stranger whose pid is planted in the pidfile with a start id
+      // no live process can have — the exact state of a recycled pid after
+      // the predecessor died and the number was reused.
+      const stranger = spawn(process.env.PORRIMA_PYTHON || "python3", ["-c", "import time; time.sleep(30)"], { stdio: "ignore", detached: true });
+      let first: ReturnType<typeof spawn> | undefined;
+      try {
+        expect(stranger.pid).toBeGreaterThan(0);
+        // Planted BEFORE the driver spawns: boot self-heal reads the
+        // pidfile at boot, so the planted record must be in place.
+        await writeFile(join(stateDir, "kernel.pid"), JSON.stringify({ pid: stranger.pid, startId: "proc:0" }));
+        first = spawn("bash", ["-c", line], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+        await waitUntil(async () => {
+          const { pid } = await readPidfile(stateDir);
+          return pid !== stranger.pid && pidAlive(pid);
+        }, 15_000, "fresh driver to rewrite the pidfile");
+        // A start-id mismatch means the live pid is a stranger, not our
+        // predecessor — boot self-heal must leave it alone.
+        expect(pidAlive(stranger.pid!)).toBe(true);
+        const finalPid = (await readPidfile(stateDir)).pid;
+        try { process.kill(finalPid, "SIGKILL"); } catch { /* gone */ }
+      } finally {
+        try { process.kill(stranger.pid!, "SIGKILL"); } catch { /* gone */ }
+        try { first?.kill(); } catch { /* already exited */ }
+      }
+    }, 40_000);
+
+    it("boot self-heal spares a legacy bare-pid file pointing at a non-driver (§4.4)", async () => {
+      const driver = localDriverInfo();
+      expect(driver).not.toBeNull();
+      const stateDir = remoteStateDir(home, "r-legacy");
+      await mkdir(stateDir, { recursive: true, mode: 0o700 });
+      const target = stagedDriver(home);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, driver!.text);
+      const line = buildRemoteKernelLaunchLine({
+        root: home,
+        pythonPath: process.env.PORRIMA_PYTHON || "python3",
+        driverPath: target,
+        stateDir,
+      });
+
+      // Legacy format (pre-identity-guard): a bare pid of a live process
+      // whose argv is not the staged driver — no positive identity match.
+      const stranger = spawn(process.env.PORRIMA_PYTHON || "python3", ["-c", "import time; time.sleep(30)"], { stdio: "ignore", detached: true });
+      let first: ReturnType<typeof spawn> | undefined;
+      try {
+        expect(stranger.pid).toBeGreaterThan(0);
+        // Planted BEFORE the driver spawns (same ordering constraint).
+        await writeFile(join(stateDir, "kernel.pid"), String(stranger.pid));
+        first = spawn("bash", ["-c", line], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+        await waitUntil(async () => {
+          const { pid } = await readPidfile(stateDir);
+          return pid !== stranger.pid && pidAlive(pid);
+        }, 15_000, "fresh driver to rewrite the pidfile");
+        expect(pidAlive(stranger.pid!)).toBe(true);
+        const finalPid = (await readPidfile(stateDir)).pid;
+        try { process.kill(finalPid, "SIGKILL"); } catch { /* gone */ }
+      } finally {
+        try { process.kill(stranger.pid!, "SIGKILL"); } catch { /* gone */ }
+        try { first?.kill(); } catch { /* already exited */ }
       }
     }, 40_000);
 
