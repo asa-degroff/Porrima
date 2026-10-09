@@ -6,6 +6,7 @@ import {
   fetchLlmRequests,
   type ContextView,
   type LlmRequestDetail,
+  type LlmRequestLogEvent,
   type LlmRequestSummary,
 } from "../api/client";
 import { Chevron } from "./ui/Chevron";
@@ -16,8 +17,9 @@ import { Chevron } from "./ui/Chevron";
  * Tab "Requests": the wire-level log of every LLM call this chat made — one
  * row per provider request (a user turn fans out into several as the tool
  * loop iterates). Rows append live via `llm_request_start`/`llm_request_end`
- * SSE events (surfaced as `requestLogVersion` bumps). Expanding a row lazily
- * fetches the full rehydrated wire body + accumulated response.
+ * SSE events (surfaced as the `lastRequestLogEvent` prop). Expanding a row
+ * lazily fetches the full rehydrated wire body + accumulated response; the
+ * expanded row refreshes only when its own `end` event lands.
  *
  * Layout is a tree — request entry → section nodes (message list, tool
  * definitions, response, raw JSON) → individual wire messages → message
@@ -37,8 +39,10 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   chatId: string | null;
-  /** Bumped by the request-log SSE events — drives live refresh. */
-  requestLogVersion?: number;
+  /** The latest wire-level request-log event (fresh object per event).
+   *  Drives live refresh: the list refetches on every event, the expanded
+   *  entry on its own `end`, the Context tab on `start`. */
+  lastRequestLogEvent?: LlmRequestLogEvent | null;
 }
 
 type Tab = "requests" | "context";
@@ -525,7 +529,7 @@ function ContextTab({ context }: { context: ContextView | null }) {
 // Main modal
 // ---------------------------------------------------------------------------
 
-export function RequestViewerModal({ isOpen, onClose, chatId, requestLogVersion = 0 }: Props) {
+export function RequestViewerModal({ isOpen, onClose, chatId, lastRequestLogEvent = null }: Props) {
   const [tab, setTab] = useState<Tab>("requests");
   const [requests, setRequests] = useState<LlmRequestSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -590,16 +594,21 @@ export function RequestViewerModal({ isOpen, onClose, chatId, requestLogVersion 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, chatId]);
 
-  // Live updates: each recorded request start/end bumps requestLogVersion.
-  // Refetch the list silently, and refresh the expanded entry so an
-  // in-progress row completes without a click.
+  // Live updates: each recorded request start/end replaces
+  // lastRequestLogEvent (fresh object identity per event). The list
+  // refetches on every event — it's summaries only and cheap. The expanded
+  // entry refetches only when its own `end` lands, so an in-progress row
+  // completes without a click without re-downloading the full body for
+  // unrelated requests. The Context tab refreshes on `start`, when the
+  // latest recorded system prompt may have changed.
   useEffect(() => {
-    if (!isOpen || !chatId) return;
+    if (!isOpen || !chatId || !lastRequestLogEvent) return;
+    const event = lastRequestLogEvent;
     void fetchList(true);
-    if (expandedId) void fetchDetail(expandedId);
-    if (tab === "context") void fetchContext();
+    if (expandedId && event.type === "end" && event.requestId === expandedId) void fetchDetail(expandedId);
+    if (tab === "context" && event.type === "start") void fetchContext();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestLogVersion]);
+  }, [lastRequestLogEvent]);
 
   useEffect(() => {
     if (tab === "context" && isOpen && !contextLoaded) void fetchContext();

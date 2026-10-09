@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
-import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
+import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import {
   enqueueMessage,
@@ -331,11 +331,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   // corresponds to a fresh stats row — consumers (ModelStatsModal) use the
   // change as a "re-fetch" trigger so the display tracks a long turn live.
   const [modelStatsVersion, setModelStatsVersion] = useState(0);
-  // Monotonic counter bumped by the wire-level `llm_request_start` /
-  // `llm_request_end` events from the request-log recorder. One bump per LLM
-  // call — the request viewer refetches its list on change so rows append
-  // live while it is open.
-  const [requestLogVersion, setRequestLogVersion] = useState(0);
+  // The latest wire-level `llm_request_start` / `llm_request_end` event from
+  // the request-log recorder — a fresh object per event, so the request
+  // viewer can see which requestId triggered the update and refetch only
+  // what that event actually changed (its list always; the expanded detail
+  // only when its own `end` lands).
+  const [lastRequestLogEvent, setLastRequestLogEvent] = useState<LlmRequestLogEvent | null>(null);
   // Separate from streamingUsage because the server-side display estimate
   // reflects the NEXT call's input (includes accumulated tool results), not the
   // last call's reported usage. When it exceeds reported usage, we show it as a
@@ -975,12 +976,12 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
       },
-      onLlmRequestEvent: () => {
-        // A wire-level LLM request just dispatched or resolved — bump so an
-        // open request viewer refetches its list. Unconditional on the active
-        // chat, mirroring modelStatsVersion: background streams belong to
-        // their own chat and the modal filters by chatId client-side.
-        setRequestLogVersion((v) => v + 1);
+      onLlmRequestEvent: (event) => {
+        // A wire-level LLM request just dispatched or resolved. The event
+        // carries the requestId — the request viewer uses it to refresh only
+        // the rows it affects. Events arrive on this chat's own stream, so
+        // they always belong to this chat.
+        setLastRequestLogEvent(event);
       },
       onIteration: (info) => {
         console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"} displayEst=${info.displayEstimatedTokens ?? "?"}`);
@@ -2362,7 +2363,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     streamingSegmentIndex,
     hasBackgroundActivity,
     modelStatsVersion,
-    requestLogVersion,
+    lastRequestLogEvent,
     reconnecting,
     send,
     reportArtifactRuntimeError,

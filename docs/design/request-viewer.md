@@ -195,7 +195,9 @@ watching):
 - `ChatView.tsx` header: swap `Prompt` button → `Requests`; keep desktop visibility rules.
 - `api/client.ts`: add `fetchLlmRequests`, `fetchLlmRequestDetail`, `fetchContextView`;
   remove `fetchRenderedPrompt`.
-- `useChat` SSE switch: new event cases bump a `requestLogVersion` the modal consumes.
+- `useChat` SSE switch: new event cases surface the latest `llm_request_start`/
+  `llm_request_end` event (with its `requestId`) as a fresh object the modal
+  consumes.
 - Mobile: modal renders full-screen sheet (existing modal patterns in the repo).
 
 ## 5. Phasing

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import type { Artifact, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
-import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
+import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchSkills } from "../api/client";
 import { RequestViewerModal } from "./RequestViewerModal";
 import { MessageBubble } from "./MessageBubble";
@@ -364,9 +364,10 @@ interface Props {
   headerImageEnabled?: boolean;
   headerImageId?: string;
   autoFocusInput?: boolean;
-  /** Bumped by `llm_request_start`/`llm_request_end` SSE events — forwarded
-   *  to the request viewer so its list appends rows live. */
-  requestLogVersion?: number;
+  /** Latest `llm_request_start`/`llm_request_end` SSE event — forwarded to
+   *  the request viewer so its list appends rows live and the expanded
+   *  entry refreshes when its own request resolves. */
+  lastRequestLogEvent?: LlmRequestLogEvent | null;
 }
 
 export function ChatView({
@@ -426,7 +427,7 @@ export function ChatView({
   headerImageEnabled = false,
   headerImageId,
   autoFocusInput,
-  requestLogVersion = 0,
+  lastRequestLogEvent = null,
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -1156,7 +1157,7 @@ export function ChatView({
         isOpen={requestViewerOpen}
         onClose={() => setRequestViewerOpen(false)}
         chatId={chatId}
-        requestLogVersion={requestLogVersion}
+        lastRequestLogEvent={lastRequestLogEvent}
       />
     </div>
   );
