@@ -7,6 +7,7 @@ import {
   normalizeHexColor,
   normalizeThemePresetName,
   saveThemePreset,
+  saveThemePresetAsNew,
 } from "./custom-theme";
 import type { ThemePreset } from "../types";
 
@@ -110,6 +111,50 @@ describe("theme presets", () => {
 
   it("rejects empty names without writing", () => {
     const result = saveThemePreset([], undefined, "   ", dawn);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("name");
+  });
+
+  it("always creates a new preset, suffixing colliding names", () => {
+    const result = saveThemePresetAsNew([base], "Night", dawn);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.id).not.toBe(base.id);
+    expect(result.presets).toHaveLength(2);
+    expect(result.presets[0]).toEqual(base);
+    expect(result.presets[1]).toEqual({ id: result.id, name: "Night (2)", ...dawn });
+  });
+
+  it("keeps incrementing the suffix until the name is unique", () => {
+    const dup: ThemePreset = { id: "preset-2", name: "Night (2)", background: "#101525", accent: "#ef6c3b" };
+    const result = saveThemePresetAsNew([base, dup], "night", dawn);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.presets[2].name).toBe("night (3)");
+  });
+
+  it("uses free names as-is and caps suffixed names to the length limit", () => {
+    const fresh = saveThemePresetAsNew([base], "Dawn Chorus", dawn);
+
+    expect(fresh.ok).toBe(true);
+    if (!fresh.ok) return;
+    expect(fresh.presets[1].name).toBe("Dawn Chorus");
+
+    const taken = "a".repeat(32);
+    const existing: ThemePreset = { id: "preset-9", name: taken, ...dawn };
+    const capped = saveThemePresetAsNew([existing], taken, dawn);
+
+    expect(capped.ok).toBe(true);
+    if (!capped.ok) return;
+    expect(capped.presets[1].name.length).toBeLessThanOrEqual(32);
+    expect(capped.presets[1].name.endsWith(" (2)")).toBe(true);
+  });
+
+  it("rejects empty names without writing", () => {
+    const result = saveThemePresetAsNew([base], "   ", dawn);
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("name");

@@ -65,6 +65,45 @@ export function saveThemePreset(
   };
 }
 
+/**
+ * Save the current colors as a brand-new preset, ignoring any bound preset.
+ * Mirrors {@link saveThemePreset}'s name validation but resolves collisions by
+ * appending " (2)", " (3)", … instead of erroring, so one-click duplication of
+ * a loaded theme never needs a manual rename.
+ */
+export function saveThemePresetAsNew(
+  presets: ThemePreset[],
+  name: string,
+  colors: CustomTheme,
+): ThemePresetSaveResult {
+  const normalized = normalizeThemePresetName(name);
+  if (!normalized) return { ok: false, error: "Enter a name to save this theme." };
+  const id = crypto.randomUUID();
+  return {
+    ok: true,
+    id,
+    presets: [
+      ...presets,
+      { id, name: uniqueThemePresetName(normalized, presets), background: colors.background, accent: colors.accent },
+    ],
+  };
+}
+
+/** First name free of case-insensitive collisions: `name` itself or `name (2)`, `name (3)`, … */
+function uniqueThemePresetName(name: string, presets: ThemePreset[]): string {
+  const taken = new Set(presets.map((preset) => preset.name.toLowerCase()));
+  if (!taken.has(name.toLowerCase())) return name;
+  for (let i = 2; ; i += 1) {
+    const suffix = ` (${i})`;
+    const base =
+      name.length + suffix.length > THEME_PRESET_MAX_NAME_LENGTH
+        ? name.slice(0, THEME_PRESET_MAX_NAME_LENGTH - suffix.length).trim()
+        : name;
+    const candidate = `${base}${suffix}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
 // The application uses light text and translucent white surfaces throughout.
 // This threshold is approximately the maximum luminance that still gives
 // white text a 4.5:1 contrast ratio.

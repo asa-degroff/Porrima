@@ -36,7 +36,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
 import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
-import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme, normalizeThemePresetName, saveThemePreset } from "../utils/custom-theme";
+import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme, normalizeThemePresetName, saveThemePreset, saveThemePresetAsNew } from "../utils/custom-theme";
 
 /**
  * Working-copy shape of a llama service config. The only difference from the
@@ -771,6 +771,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     // A loaded preset is edited in place (the name field renames it); without
     // a binding the save creates a new preset.
     const result = saveThemePreset(themePresets, activeThemePresetId, name, customTheme);
+    if (!result.ok) {
+      setThemePresetError(result.error);
+      return;
+    }
+    setThemePresetError(null);
+    setThemePresets(result.presets);
+    setActiveThemePresetId(result.id);
+  };
+  const handleThemePresetSaveAsNew = (name: string) => {
+    // Always creates a fresh preset (auto-suffixed on name collisions) and
+    // binds the editor to it, so tweaking a loaded theme need not overwrite it.
+    const result = saveThemePresetAsNew(themePresets, name, customTheme);
     if (!result.ok) {
       setThemePresetError(result.error);
       return;
@@ -4324,6 +4336,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               activeThemePresetId={activeThemePresetId}
               onLoadPreset={handleThemePresetLoad}
               onSavePreset={handleThemePresetSave}
+              onSavePresetAsNew={handleThemePresetSaveAsNew}
               onDeletePreset={handleThemePresetDelete}
               onPresetNameChange={handleThemePresetNameChange}
               presetError={themePresetError}

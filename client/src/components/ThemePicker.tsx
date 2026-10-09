@@ -28,12 +28,16 @@ interface ThemePickerProps {
   themePresets?: ThemePreset[];
   /** Id of the preset currently loaded into the editor. While set, the save
    *  row edits that preset in place (rename via the name field, recolor via
-   *  the color controls). */
+   *  the color controls); "Save as new" creates a fresh preset instead. */
   activeThemePresetId?: string;
   onLoadPreset?: (preset: ThemePreset) => void;
   /** Save the current colors under the draft name. Applies to the bound
    *  preset in place when one is loaded, otherwise creates a new preset. */
   onSavePreset?: (name: string) => void;
+  /** Save the current colors as a brand-new preset even while one is bound,
+   *  so tweaking a loaded theme does not have to overwrite it. Receives the
+   *  draft name; callers may adjust it to stay unique. */
+  onSavePresetAsNew?: (name: string) => void;
   /** Delete the bound (loaded) preset. */
   onDeletePreset?: () => void;
   /** Report draft-name edits so the parent can clear save errors and unbind
@@ -51,6 +55,7 @@ export function ThemePicker({
   activeThemePresetId,
   onLoadPreset,
   onSavePreset,
+  onSavePresetAsNew,
   onDeletePreset,
   onPresetNameChange,
   presetError,
@@ -75,9 +80,15 @@ export function ThemePicker({
   const prevBoundId = useRef(activeThemePresetId);
 
   // Clearing the binding (delete, theme switch) empties the draft so the
-  // editor starts from a clean, unbound state.
+  // editor starts from a clean, unbound state. Moving the binding to a
+  // different preset (chip load, save-as-new) prefills that preset's name.
   useEffect(() => {
-    if (prevBoundId.current && !activeThemePresetId) setPresetNameDraft("");
+    if (prevBoundId.current && !activeThemePresetId) {
+      setPresetNameDraft("");
+    } else if (activeThemePresetId && activeThemePresetId !== prevBoundId.current) {
+      const name = presets.find((preset) => preset.id === activeThemePresetId)?.name;
+      if (name !== undefined) setPresetNameDraft(name);
+    }
     prevBoundId.current = activeThemePresetId;
     setConfirmDeleteArmed(false);
   }, [activeThemePresetId]);
@@ -222,11 +233,23 @@ export function ThemePicker({
                   aria-label="Preset name"
                   className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/30"
                 />
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {boundPreset && onSavePresetAsNew && (
+                    <button
+                      type="button"
+                      onClick={() => onSavePresetAsNew(presetNameDraft)}
+                      disabled={!canSavePreset}
+                      title={`Save these colors as a new theme instead of overwriting “${boundPreset.name}”`}
+                      className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
+                    >
+                      Save as new
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onSavePreset?.(presetNameDraft)}
                     disabled={!canSavePreset}
+                    title={boundPreset ? `Overwrite “${boundPreset.name}” with these colors` : "Save these colors as a new theme"}
                     className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
                   >
                     {boundPreset ? "Update preset" : "Save preset"}
