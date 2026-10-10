@@ -35,6 +35,13 @@ export default defineConfig({
       },
     }),
   ],
+  test: {
+    // Resolve React's dev builds under bare `vitest run` too — the npm
+    // script's NODE_ENV=test is not the only entry point, and the
+    // production react-dom-test-utils delegates to React.act, which only
+    // exists in the dev build.
+    env: { NODE_ENV: "test" },
+  },
   server: {
     proxy: {
       "/api": {
