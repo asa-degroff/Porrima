@@ -1,6 +1,7 @@
 # Browser Observability — Live Screenshot Viewer (design plan)
 
-Status: **Phase 1 implemented** — 2026-10-09 (§8 records what shipped and deltas).
+Status: **Phase 1 implemented** — 2026-10-09 (§8 records what shipped and deltas) ·
+**Phase 1.5 movable/resizable** — 2026-10-10 (§9).
 Phase 2 (**auto-capture after every browser action**) remains planned. Decisions locked
 with the user: ship Phase 1 first, viewer is a floating PiP card over the message area.
 
@@ -164,6 +165,7 @@ by message rows, never hydrated for replay, and would leak on disk with no owner
 | Area | Files |
 |---|---|
 | Phase 1 client | `client/src/hooks/useBrowserViewer.ts` (new), `client/src/components/BrowserViewer.tsx` (new), `client/src/components/ChatView.tsx` (mount card), `client/src/components/ToolIcons.tsx` (reuse) |
+| Phase 1.5 client | `client/src/hooks/useBrowserViewerGeometry.ts` (new), `client/src/components/BrowserViewer.tsx` (drag/resize/keyboard/reset), `client/src/components/ChatView.tsx` (wrapper ref, pill z-30) |
 | Phase 2 server | `server/src/services/browser-tools.ts`, `browser-session.ts`, `agent-tools.ts` (`ToolSideEffects`), `routes/chat.ts` (wiring + resync), `services/synthesis-stream.ts` (frame constructor), `services/chat-turn-runner.ts`, new `routes/browser.ts` (status/frame), `index.ts` (mount) |
 | Phase 2 client | `client/src/api/client.ts`, `client/src/hooks/useChat.ts`, `BrowserViewer.tsx`, `useBrowserViewer.ts` |
 
@@ -198,3 +200,47 @@ lightbox scroll-mode question). The running indicator reads ChatView's existing
 `activeTools` prop instead of segment `liveStatus` — same signal, less plumbing. Frames
 without a server `url` (legacy base64-only rows) are skipped rather than rebuilt from
 `data`, since the payload migration is the supported path.
+
+Field-verified 10-10 in a live browser session: card appearance, in-place frame
+updates across three screenshots, host/title footer, pulse-while-running, and
+minimize all confirmed by the user from the client.
+
+## 9. Phase 1.5 — movable + resizable card (2026-10-10)
+
+The fixed top-right placement made the card a focus-stealer in exactly the
+position a user might want it in (over the composer, over the scroll pill).
+The card is now movable and width-resizable, still zero-server:
+
+- `client/src/hooks/useBrowserViewerGeometry.ts` (new) — geometry state
+  `{ x, y, w }` in messages-wrapper coordinates. Pure
+  `clampGeometry` / `defaultGeometry` / `estimateCardHeight` exported and
+  unit-tested. The hook clamps on every change (idempotent layout pass) and
+  on a `ResizeObserver` over the wrapper — window resizes and the pinned
+  panel appearing can never push the card out of the visible area. Stored
+  geometry that predates a smaller window is clamped back in on load.
+  Degenerate bounds (no layout, e.g. jsdom) pass through unclamped.
+- `BrowserViewer.tsx` — **drag from the frame image**: pointer capture with
+  a 4px travel threshold separating drag from click-to-enlarge (the click
+  that follows a drag is suppressed). **Width-only resize** via a
+  bottom-right corner grip — height stays locked to the 16:10 frame aspect
+  (free 2D would make `object-cover` crop unpredictably). A reset button
+  restores the default docked position. The chip on minimize **sits where
+  the card was** — the window shrinks in place and restores in place.
+  Keyboard: arrows nudge (shift = 3× step), `+`/`-` resize, while the frame
+  is focused.
+- `ChatView.tsx` — the messages wrapper carries `messagesAreaRef` (the
+  measured bounds source); the scroll-to-bottom pill bumps to `z-30` so it
+  stays clickable when the card is parked in its corner (lightbox remains
+  `z-50`, above both).
+- Limits: 120–520px width, 8px margin from wrapper edges. Defaults: 210px
+  desktop / 132px mobile — the original fixed placement, computed from
+  wrapper width (the `sm` breakpoint).
+- Persistence: `porrima-browser-viewer-geom` in localStorage, written at
+  gesture end and on clamping events, not per pointer move.
+
+Decisions locked with the user: width-only fixed-aspect resize (not free
+2D), drag-from-image (not a handle strip), chip follows position.
+
+Caveat: jsdom has no pointer capture, so the drag/resize wiring is
+field-verified, not unit-tested — the clamping math (the part with real
+edge cases) is fully unit-tested instead.

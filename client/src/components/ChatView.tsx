@@ -456,6 +456,9 @@ export function ChatView({
   const [focusAfterFirstSend, setFocusAfterFirstSend] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [tooltipOffsetX, setTooltipOffsetX] = useState(0);
+  // Positioned ancestor for the browser PiP — the viewer clamps its
+  // movable geometry against this wrapper's live bounds.
+  const messagesAreaRef = useRef<HTMLDivElement>(null);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
   // Live browser view: the latest browser_screenshot derived from message data
   // (docs/design/browser-observability.md Phase 1 — no dedicated event stream).
@@ -895,7 +898,7 @@ export function ChatView({
       <div className="flex-1 flex flex-row min-h-0 min-w-0 relative">
 
       {/* Messages */}
-      <div className="flex-1 relative min-h-0 min-w-0">
+      <div ref={messagesAreaRef} className="flex-1 relative min-h-0 min-w-0">
         <div
           ref={scrollRef}
           onScroll={handleScroll}
@@ -1046,7 +1049,7 @@ export function ChatView({
         {scrollPaused && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full depth-raised bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm pressable"
+            className="absolute bottom-4 right-4 md:right-6 z-30 flex items-center gap-1.5 px-3 py-1.5 rounded-full depth-raised bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm pressable"
             title="Scroll to bottom"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1057,9 +1060,10 @@ export function ChatView({
           </button>
         )}
 
-        {/* Persistent browser PiP — latest agent screenshot, updated in place */}
+        {/* Persistent browser PiP — latest agent screenshot, updated in place;
+            movable/width-resizable geometry clamped to this wrapper (§9) */}
         {browserFrame && !isSwitching && !isFirstMessageMode && (
-          <BrowserViewer frame={browserFrame} active={browserToolActive} />
+          <BrowserViewer frame={browserFrame} active={browserToolActive} wrapperRef={messagesAreaRef} />
         )}
       </div>
 
