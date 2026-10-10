@@ -1,17 +1,19 @@
 /**
- * Derives the "latest browser screenshot" for the persistent PiP viewer from
- * the chat's message data. No dedicated event stream: browser_screenshot
- * results already reach the client through the `tool_result` segment (live
- * SSE, reconnect resync replay, and loaded history all carry the same
- * url-only image refs persisted by `buildPersistedToolResult`).
+ * Derives the frame for the persistent browser PiP viewer from two sources:
  *
- * Phase 2 (docs/design/browser-observability.md) will add server-pushed
- * `browser_frame` events after every browser action; this hook's output shape
- * is what that live frame will slot into.
+ * - **Live** `browser_frame` events (Phase 2, docs/design/browser-observability.md):
+ *   auto-captures after every browser action, plus explicit screenshots, served
+ *   from the server's in-memory ring. Preferred while present — the newest
+ *   visual the user is following.
+ * - **Derived** from message data (Phase 1): the latest persisted
+ *   `browser_screenshot` result, which reaches the client through the
+ *   `tool_result` segment (live SSE, reconnect resync replay, and loaded
+ *   history alike, as url-only refs from `buildPersistedToolResult`).
+ *   The fallback for page loads and chats with no live stream.
  */
 
 import { useMemo } from "react";
-import type { ChatMessage, ChatToolResult, ImageAttachment } from "../types";
+import type { BrowserFrameEvent, ChatMessage, ChatToolResult, ImageAttachment } from "../types";
 
 export interface BrowserViewerFrame {
   /** The screenshot attachment — always carries a server URL (url-only after
@@ -21,7 +23,8 @@ export interface BrowserViewerFrame {
   pageUrl: string | null;
   /** Page title parsed from the label, when present. */
   pageTitle: string | null;
-  /** Timestamp of the message that carried the screenshot. */
+  /** Timestamp of the message that carried the screenshot, or the live
+   *  frame's capturedAt. */
   at: number;
 }
 
@@ -66,11 +69,35 @@ export function findLatestFrame(messages: ChatMessage[]): BrowserViewerFrame | n
   return null;
 }
 
+/** Map a live `browser_frame` event (or resync ring snapshot) into the
+ *  viewer's frame shape. Exported for tests. */
+export function liveToViewerFrame(frame: BrowserFrameEvent): BrowserViewerFrame {
+  return {
+    image: { url: frame.imageUrl, mimeType: "image/png", name: "browser-frame" },
+    pageUrl: frame.pageUrl || null,
+    pageTitle: frame.pageTitle || null,
+    at: frame.capturedAt,
+  };
+}
+
 /**
- * Latest browser screenshot in the loaded message window, recomputed when the
- * messages array changes. Reverse scan with early exit: the common case finds
- * the frame in the most recent assistant message or returns null quickly.
+ * Frame to show: the live stream's newest frame when one exists, otherwise
+ * the newest screenshot derivable from loaded messages. Arrival order makes
+ * "live present" mean "at least as fresh as any persisted screenshot" — the
+ * server also pushes explicit screenshots into the ring, so the live frame
+ * never trails the derived one during a watched session.
  */
-export function useBrowserViewer(messages: ChatMessage[]): BrowserViewerFrame | null {
-  return useMemo(() => findLatestFrame(messages), [messages]);
+export function pickViewerFrame(
+  live: BrowserFrameEvent | null | undefined,
+  derived: BrowserViewerFrame | null,
+): BrowserViewerFrame | null {
+  return live ? liveToViewerFrame(live) : derived;
+}
+
+export function useBrowserViewer(
+  messages: ChatMessage[],
+  liveFrame?: BrowserFrameEvent | null,
+): BrowserViewerFrame | null {
+  const derived = useMemo(() => findLatestFrame(messages), [messages]);
+  return useMemo(() => pickViewerFrame(liveFrame, derived), [liveFrame, derived]);
 }

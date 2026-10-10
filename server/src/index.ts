@@ -35,6 +35,7 @@ import pushRouter from "./routes/push.js";
 import automationsRouter from "./routes/automations.js";
 import systemStatsRouter from "./routes/system-stats.js";
 import systemRouter from "./routes/system.js";
+import browserRouter from "./routes/browser.js";
 import { assertNoProductionDevTokenBypass, requireAuth } from "./middleware/auth.js";
 import { ensureSetupTokenForFirstRun, getSessionSecret } from "./services/auth-storage.js";
 import { getSessionCookieConfig } from "./services/session-cookie-config.js";
@@ -222,6 +223,7 @@ app.use("/api/push", pushRouter);
 app.use("/api/automations", automationsRouter);
 app.use("/api/system-stats", systemStatsRouter);
 app.use("/api/system", systemRouter);
+app.use("/api/browser", browserRouter);
 
 // Production static serving
 if (isProd) {

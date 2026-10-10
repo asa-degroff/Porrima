@@ -1,9 +1,9 @@
 # Browser Observability — Live Screenshot Viewer (design plan)
 
 Status: **Phase 1 implemented** — 2026-10-09 (§8 records what shipped and deltas) ·
-**Phase 1.5 movable/resizable** — 2026-10-10 (§9).
-Phase 2 (**auto-capture after every browser action**) remains planned. Decisions locked
-with the user: ship Phase 1 first, viewer is a floating PiP card over the message area.
+**Phase 1.5 movable/resizable** — 2026-10-10 (§9) · **Phase 2 live follow-along** —
+2026-10-10 (§10). Decisions locked with the user: ship Phase 1 first, viewer is a
+floating PiP card over the message area.
 
 ## 1. Problem
 
@@ -244,3 +244,68 @@ Decisions locked with the user: width-only fixed-aspect resize (not free
 Caveat: jsdom has no pointer capture, so the drag/resize wiring is
 field-verified, not unit-tested — the clamping math (the part with real
 edge cases) is fully unit-tested instead.
+
+## 10. Phase 2 — live follow-along, what shipped (2026-10-10)
+
+Auto-capture after every browser action, delivered on a live-only side channel.
+§5 described the design; this records what shipped and the deltas.
+
+**Server**
+
+- `services/browser-frames.ts` (new) — per-chat in-memory ring (last 5 frames,
+  PNG `Buffer` + page metadata) with a 1.5s per-chat throttle for auto-captures.
+  Cleared by `closeBrowserSession` (so also on idle sweep and chat deletion).
+  Never touches disk — observability bytes, not conversation content.
+- `browser-session.ts` — `screenshotPage` takes a `maxWidth` override and returns
+  the raw `buffer` alongside base64; a `consentPending` set tracks chats parked on
+  Chrome's remote-debugging WS handshake (`withConsentPending` around
+  `openConsentTransport`); new sync `getBrowserSessionSnapshot(chatId)` exposes
+  `{ active, mode, pageUrl, pendingConsent, latestFrame }` (title comes from the
+  frame's capture-time metadata so the read stays sync on the resync path).
+- `browser-tools.ts` — `executeBrowserTool` accepts a frame sink (passed from
+  `agent-tools.ts`, structurally `ToolSideEffects.onBrowserFrame`; kept local to
+  avoid an import cycle). `publishFrame` stores + emits; `captureActionFrame`
+  (viewport-only, 720px) runs after successful navigate/click/type/hover, gated on
+  subscriber presence + throttle, and can never fail the observed action.
+- `ToolSideEffects.onBrowserFrame?` — optional member, so the many noop/estimation
+  effects sites are untouched.
+- Transports: `chat.ts` effects write the shared `browserFrameFrame` builder
+  (defined in `synthesis-stream.ts` next to the other live-only frames);
+  `createEmitterSideEffects` wires the headless (synthesis/wake/automation) path
+  to `SynthesisEmitter.emitBrowserFrame` — the two transports cannot drift.
+  Both `buildResyncPayload` implementations carry `browser: getBrowserSessionSnapshot(...)`
+  so a reconnect restores the PiP without waiting for the next action.
+- `routes/browser.ts` (new, mounted at `/api/browser`, behind the global
+  `requireAuth`): `GET /frame/:chatId/:frameId` (PNG from memory,
+  `private, max-age=1y, immutable`) and `GET /status/:chatId`.
+
+**Client**
+
+- `useChat` — per-chat `browserFrame` accumulator in `bgStreams` (mirrored to
+  `liveBrowserFrame` state while displayed), fed by `onBrowserFrame` (new
+  `StreamCallbacks` member + `browser_frame` SSE case in `client.ts`); resync
+  adopts `payload.browser.latestFrame` (null clears back to derived); hydration
+  on chat switch follows the `modelProgress` pattern.
+- `useBrowserViewer` — `pickViewerFrame(live, derived)`: live wins when present,
+  else the Phase 1 derivation. This is the merge that makes "live is always the
+  freshest visual" true: **delta from §5** — explicit `browser_screenshot`s now
+  also push to the ring and publish a live event (their bytes already exist, so
+  it costs a uuid + SSE frame; deliberately not subscriber-gated or throttled).
+  Without this, a message-row `timestamp` (turn-start for the streaming
+  placeholder) could lose a timestamp comparison against an action frame and
+  show a stale image.
+- `ChatView` — passes `liveBrowserFrame`; viewer mounts while any `browser_*`
+  tool runs (`frame || browserToolActive`), showing the connecting placeholder;
+  consent probe (§5.3): while a browser tool runs and nothing is captured yet,
+  status is polled every 2s and `pendingConsent` swaps the placeholder copy to
+  the "allow remote debugging" prompt hint. App.tsx plumbs the state through.
+- `BrowserViewer` — `frame: BrowserViewerFrame | null` renders a spinner
+  placeholder (consent copy when flagged); `img onError` shows "Frame expired —
+  waiting for the next browser action" when a live URL outlives its ring entry.
+
+**Tests**: server `browser-frames.test.ts` (7: storage/eviction/per-chat throttle
+reset/clear/summary shape); client +`pickViewerFrame` (4) and null-frame/consent
+placeholder (2). Full suites green: server 950, client 69, both builds clean.
+
+**Field verification still open**: attach-consent hint and mid-turn reconnect
+restore need a real Chrome session to confirm end-to-end.

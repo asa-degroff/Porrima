@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage, ChatToolResult, MessageSegment } from "../types";
-import { findLatestFrame } from "./useBrowserViewer";
+import type { BrowserFrameEvent, ChatMessage, ChatToolResult, MessageSegment } from "../types";
+import { findLatestFrame, liveToViewerFrame, pickViewerFrame } from "./useBrowserViewer";
 
 const IMAGE_URL = "/api/tool-result-images/img-1/image.png";
 
@@ -98,5 +98,49 @@ describe("findLatestFrame", () => {
       { ...assistantMessage({ timestamp: 1 }), role: "user", segments: toolResultSegments([screenshotResult()]) },
     ];
     expect(findLatestFrame(messages)).toBeNull();
+  });
+});
+
+function liveEvent(overrides?: Partial<BrowserFrameEvent>): BrowserFrameEvent {
+  return {
+    chatId: "c1",
+    frameId: "f-1",
+    imageUrl: "/api/browser/frame/c1/f-1",
+    pageUrl: "https://example.com/live",
+    pageTitle: "Live Page",
+    mode: "attached",
+    capturedAt: 5000,
+    ...overrides,
+  };
+}
+
+describe("pickViewerFrame", () => {
+  it("prefers the live frame when present", () => {
+    const derived = findLatestFrame([
+      assistantMessage({ timestamp: 1, segments: toolResultSegments([screenshotResult()]) }),
+    ]);
+    const picked = pickViewerFrame(liveEvent(), derived);
+    expect(picked!.image.url).toBe("/api/browser/frame/c1/f-1");
+    expect(picked!.pageUrl).toBe("https://example.com/live");
+    expect(picked!.pageTitle).toBe("Live Page");
+    expect(picked!.at).toBe(5000);
+  });
+
+  it("falls back to the derived frame without a live event", () => {
+    const derived = findLatestFrame([
+      assistantMessage({ timestamp: 1, segments: toolResultSegments([screenshotResult()]) }),
+    ]);
+    expect(pickViewerFrame(null, derived)).toBe(derived);
+    expect(pickViewerFrame(undefined, derived)).toBe(derived);
+  });
+
+  it("returns null when neither source has a frame", () => {
+    expect(pickViewerFrame(null, null)).toBeNull();
+  });
+
+  it("maps empty live metadata to nulls", () => {
+    const frame = liveToViewerFrame(liveEvent({ pageUrl: "", pageTitle: "" }));
+    expect(frame.pageUrl).toBeNull();
+    expect(frame.pageTitle).toBeNull();
   });
 });

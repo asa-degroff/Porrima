@@ -20,7 +20,7 @@ import {
   type KernelFallbackReason,
 } from "./python-kernel.js";
 import { v4 as uuid } from "uuid";
-import type { Artifact, InlineVisual, Project } from "../types.js";
+import type { Artifact, BrowserFrameEvent, InlineVisual, Project } from "../types.js";
 
 const MAX_AUTOMATIC_ARTIFACT_REVIEW_UPDATES = 2;
 const mutationQueues = new Map<string, Promise<void>>();
@@ -190,6 +190,12 @@ export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onVisual: (visual: InlineVisual) => void;
   onAskUser: (question: string, toolCallId: string) => void;
+  /**
+   * Live-only browser action frame (Phase 2 viewer). Optional: only the SSE
+   * transports wire it. Frames never touch tool-result content — they ride
+   * this side channel exclusively (the KV-cache shape invariant holds).
+   */
+  onBrowserFrame?: (frame: BrowserFrameEvent) => void;
 }
 
 // --- Adapter helpers ---
@@ -582,7 +588,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       label: tool.name,
       execute: async (toolCallId, params, signal) => {
         const args = params as Record<string, any>;
-        return wrapResult(await executeBrowserTool(makeToolCall(toolCallId, tool.name, args), chatId, signal), tool.name);
+        return wrapResult(await executeBrowserTool(makeToolCall(toolCallId, tool.name, args), chatId, signal, effects), tool.name);
       },
     });
   }

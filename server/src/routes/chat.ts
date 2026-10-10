@@ -92,7 +92,8 @@ import {
   buildAttachFrames,
   isLiveStreamActive,
 } from "../services/live-streams.js";
-import { partialToolText, toolCallDeltaFrame, toolCallStartFrame, toolPartialFrame } from "../services/synthesis-stream.js";
+import { partialToolText, toolCallDeltaFrame, toolCallStartFrame, toolPartialFrame, browserFrameFrame } from "../services/synthesis-stream.js";
+import { getBrowserSessionSnapshot } from "../services/browser-session.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
@@ -1620,6 +1621,9 @@ async function handleChatStream(
       waitingForInput: waitingForInput || !!askUserRef.current || undefined,
       compacting: compactingActive || undefined,
       thinkingActive: state.thinkingStartTime !== null || undefined,
+      // Live browser viewer: session/ring state so an attaching client
+      // restores the PiP immediately instead of waiting for the next action.
+      browser: getBrowserSessionSnapshot(chat.id),
     };
   }
 
@@ -1956,6 +1960,13 @@ async function handleChatStream(
     onAskUser: (question, toolCallId) => {
       askUserRef.current = { question, toolCallId };
       turnAbortController.abort(); // Only abort the current turn, not the SSE connection
+    },
+
+    // Live browser viewer (Phase 2): frame bytes live in the in-memory ring;
+    // the SSE event carries only the URL + page metadata. res.write is the
+    // patched fan-out writer, so this reaches every subscriber.
+    onBrowserFrame: (frame) => {
+      res.write(browserFrameFrame(frame));
     },
   };
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
 import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
+import type { Artifact, BrowserFrameEvent, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -48,6 +48,9 @@ interface BackgroundStream {
   compacting: boolean;
   compaction: CompactionInfo | null;
   modelProgress: ModelProgress | null;
+  /** Newest live browser viewer frame (Phase 2). Ephemeral: never persisted,
+   *  cleared with the stream entry; resync rehydrates from the ring. */
+  browserFrame: BrowserFrameEvent | null;
   inferenceActivityPhase: InferenceActivityPhase | null;
   queueInfo: TurnQueueInfo | null;
   doneCalled: boolean;
@@ -137,6 +140,7 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     compacting: false,
     compaction: null,
     modelProgress: null,
+    browserFrame: null,
     inferenceActivityPhase: "prefill",
     queueInfo: null,
     doneCalled: false,
@@ -312,6 +316,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   const [compacting, setCompacting] = useState(false);
   const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
   const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
+  // Newest live browser viewer frame (Phase 2) — transient side-channel state,
+  // like modelProgress: per-chat in bgStreams, mirrored here while displayed.
+  const [liveBrowserFrame, setLiveBrowserFrame] = useState<BrowserFrameEvent | null>(null);
   const [inferenceActivityPhase, setInferenceActivityPhase] = useState<InferenceActivityPhase | null>(null);
   // Set while this chat's turn is queued behind another session (single GPU
   // slot); cleared as soon as the turn starts producing output.
@@ -402,6 +409,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       setCompacting(bg.compacting);
       setCompaction(bg.compaction);
       setModelProgress(bg.modelProgress);
+      setLiveBrowserFrame(bg.browserFrame);
       setInferenceActivityPhase(bg.inferenceActivityPhase);
       setTurnQueueInfo(bg.queueInfo);
       doneCalledRef.current = bg.doneCalled;
@@ -434,6 +442,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       setCompacting(false);
       setCompaction(null);
       setModelProgress(null);
+      setLiveBrowserFrame(null);
       setInferenceActivityPhase(null);
       setTurnQueueInfo(null);
       setPostCompactionEstimate(null);
@@ -1025,6 +1034,16 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setInferenceActivityPhase(bg.inferenceActivityPhase);
         }
       },
+      // Live browser viewer frames (Phase 2): pure side-channel observability —
+      // not segments, not persisted; only the newest one matters.
+      onBrowserFrame: (frame) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        bg.browserFrame = frame;
+        if (activeChatIdRef.current === streamChatId) {
+          setLiveBrowserFrame(frame);
+        }
+      },
       // State snapshot delivered when attaching to an in-flight stream
       // (refresh-reconnect, silent reconnect, duplicate-send reattach). The
       // server builds it from the turn's live accumulators; the client
@@ -1088,6 +1107,21 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         bg.compacting = !!payload?.compacting;
         bg.waitingForInput = !!payload?.waitingForInput;
         bg.queueInfo = payload?.queue ?? null;
+        // Live browser viewer: the ring's newest frame is authoritative on
+        // attach (reconnect mid-turn restores the PiP); no frame clears back
+        // to the derived-from-history frame.
+        const ringFrame = payload?.browser?.latestFrame;
+        bg.browserFrame = ringFrame
+          ? {
+              chatId: streamChatId,
+              frameId: ringFrame.frameId,
+              imageUrl: ringFrame.imageUrl,
+              pageUrl: ringFrame.pageUrl,
+              pageTitle: ringFrame.pageTitle,
+              mode: payload?.browser?.mode ?? "launched",
+              capturedAt: ringFrame.capturedAt,
+            }
+          : null;
 
         // Fold the uncommitted tail into the live row. A complete persisted
         // row keeps its identity; a fresh placeholder gets the turn's
@@ -1137,6 +1171,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setCompacting(bg.compacting);
           setWaitingForInput(bg.waitingForInput);
           setTurnQueueInfo(bg.queueInfo);
+          setLiveBrowserFrame(bg.browserFrame);
           const lastIdx = bg.segments.length - 1;
           const lastType = lastIdx >= 0 ? bg.segments[lastIdx].type : null;
           setStreamingSegmentIndex(
@@ -2357,6 +2392,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     compaction,
     modelProgress,
     inferenceActivityPhase,
+    liveBrowserFrame,
     turnQueueInfo,
     error,
     warning,

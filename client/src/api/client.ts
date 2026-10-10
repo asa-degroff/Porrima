@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ContextBreakdown, ImageAttachment, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
+import type { Artifact, BrowserFrameEvent, BrowserSessionSnapshot, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ContextBreakdown, ImageAttachment, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -409,6 +409,9 @@ onCompaction?: (info: {
    *  even if pre-stream work delays the first model event. */
   onTurnStart?: (data: { chatId: string }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
+  /** One live browser action frame from the in-memory ring (Phase 2 viewer).
+   *  Live-only: never persisted, the URL serves bytes from memory. */
+  onBrowserFrame?: (frame: BrowserFrameEvent) => void;
   /** State snapshot delivered when attaching to an in-flight stream — the
    *  turn's uncommitted tail, built from the server's live accumulators.
    *  Hydrates client state on reconnect. */
@@ -789,6 +792,9 @@ function processSSEEvent(
       break;
     case "visual":
       callbacks.onVisual?.(data);
+      break;
+    case "browser_frame":
+      callbacks.onBrowserFrame?.(data);
       break;
     case "ask_user":
       callbacks.onAskUser?.(data.question);
@@ -1186,6 +1192,14 @@ export interface SkillInfo {
 export async function fetchSkills(): Promise<SkillInfo[]> {
   const res = await apiFetch(`${BASE}/skills`);
   if (!res.ok) throw new Error("Failed to fetch skills");
+  return res.json();
+}
+
+/** Live browser-session state for the PiP viewer (mode, consent wait, newest
+ *  frame in the server-side ring). Polled only while a browser tool runs. */
+export async function fetchBrowserStatus(chatId: string): Promise<BrowserSessionSnapshot> {
+  const res = await apiFetch(`${BASE}/browser/status/${encodeURIComponent(chatId)}`);
+  if (!res.ok) throw new Error("Failed to fetch browser status");
   return res.json();
 }
 

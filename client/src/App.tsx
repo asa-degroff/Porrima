@@ -502,6 +502,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     compaction,
     modelProgress,
     inferenceActivityPhase,
+    liveBrowserFrame,
     turnQueueInfo,
     error,
     warning,
@@ -1662,6 +1663,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         compaction={compaction}
         modelProgress={modelProgress}
         inferenceActivityPhase={inferenceActivityPhase}
+        liveBrowserFrame={liveBrowserFrame}
         turnQueueInfo={turnQueueInfo}
         hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}

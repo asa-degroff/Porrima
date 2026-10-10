@@ -2,6 +2,8 @@ import puppeteer, { type Browser, type ConnectionTransport, type Page, type Elem
 import sharp from "sharp";
 import WebSocket from "ws";
 import { discoverDevToolsTarget, findChromePath } from "./chrome.js";
+import { clearBrowserFrames, frameSummary, latestBrowserFrame } from "./browser-frames.js";
+import type { BrowserSessionSnapshot } from "../types.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CONSENT_TIMEOUT_MS = 60_000;
@@ -41,6 +43,10 @@ export interface BrowserSession {
 
 const sessions = new Map<string, BrowserSession>();
 const opening = new Map<string, Promise<BrowserSession>>();
+/** Chats whose attach is parked on Chrome's "allow remote debugging" prompt
+ *  (the WS handshake stays pending until the user answers). Drives the live
+ *  viewer's consent hint — see getBrowserSessionSnapshot. */
+const consentPending = new Set<string>();
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 function touch(session: BrowserSession): void {
@@ -76,6 +82,7 @@ async function teardownBrowser(session: BrowserSession): Promise<void> {
 export async function closeBrowserSession(chatId: string): Promise<void> {
   const session = sessions.get(chatId);
   sessions.delete(chatId);
+  clearBrowserFrames(chatId);
   if (session) {
     await teardownBrowser(session);
   }
@@ -153,12 +160,27 @@ function openConsentTransport(endpoint: string, handshakeTimeoutMs: number): Pro
   });
 }
 
+/**
+ * Mark a chat as waiting on Chrome's remote-debugging consent prompt for the
+ * duration of the WS handshake, so getBrowserSessionSnapshot can surface
+ * "approve the prompt in Chrome" to the live viewer instead of a silent
+ * stall. Cleared on settle (approval, rejection, or handshake timeout).
+ */
+async function withConsentPending<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
+  consentPending.add(chatId);
+  try {
+    return await fn();
+  } finally {
+    consentPending.delete(chatId);
+  }
+}
+
 async function attachSession(chatId: string, endpoint: string, consentTimeoutMs?: number): Promise<BrowserSession> {
   // Only ws/wss endpoints can hit the consent handshake; an explicit HTTP
   // endpoint (PORRIMA_BROWSER_CDP_URL) goes through puppeteer's own browserURL
   // discovery.
   const transport = /^wss?:\/\//i.test(endpoint)
-    ? await openConsentTransport(endpoint, consentTimeoutMs ?? DEFAULT_CONSENT_TIMEOUT_MS)
+    ? await withConsentPending(chatId, () => openConsentTransport(endpoint, consentTimeoutMs ?? DEFAULT_CONSENT_TIMEOUT_MS))
     : undefined;
   let browser: Browser;
   try {
@@ -555,20 +577,58 @@ export async function hoverRef(session: BrowserSession, ref: number): Promise<{ 
 
 // --- Screenshot ---
 
-export async function screenshotPage(session: BrowserSession, fullPage: boolean): Promise<{ data: string; mimeType: string; width: number; height: number; url: string; title: string }> {
+export interface ScreenshotResult {
+  /** Base64 PNG for the pi-ai image content item (explicit screenshots). */
+  data: string;
+  /** Raw PNG bytes for the in-memory frame ring (no re-decode needed). */
+  buffer: Buffer;
+  mimeType: string;
+  width: number;
+  height: number;
+  url: string;
+  title: string;
+}
+
+export async function screenshotPage(
+  session: BrowserSession,
+  fullPage: boolean,
+  maxWidth: number = MAX_SCREENSHOT_WIDTH,
+): Promise<ScreenshotResult> {
   const raw = Buffer.from(await session.page.screenshot({ type: "png", fullPage }));
   const pipeline = fullPage
-    ? sharp(raw).resize({ width: MAX_SCREENSHOT_WIDTH, height: MAX_FULLPAGE_HEIGHT, fit: "inside", withoutEnlargement: true })
-    : sharp(raw).resize({ width: MAX_SCREENSHOT_WIDTH, withoutEnlargement: true });
+    ? sharp(raw).resize({ width: maxWidth, height: MAX_FULLPAGE_HEIGHT, fit: "inside", withoutEnlargement: true })
+    : sharp(raw).resize({ width: maxWidth, withoutEnlargement: true });
   const png = await pipeline.png({ compressionLevel: 9 }).toBuffer();
   const meta = await sharp(png).metadata();
   touch(session);
   return {
     data: png.toString("base64"),
+    buffer: png,
     mimeType: "image/png",
     width: meta.width ?? DEFAULT_VIEWPORT.width,
     height: meta.height ?? DEFAULT_VIEWPORT.height,
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
+  };
+}
+
+// --- Session status (live viewer observability) ---
+
+/**
+ * Sync snapshot of a chat's browser session + frame ring for the viewer:
+ * status route and the turn resync payload. Deliberately synchronous — page
+ * URL is a sync CDP read; the page TITLE comes from the newest frame's
+ * capture-time metadata, avoiding an await on the resync request path.
+ */
+export function getBrowserSessionSnapshot(chatId: string): BrowserSessionSnapshot {
+  const session = sessions.get(chatId);
+  const live = !!session && session.browser.connected && !session.page.isClosed();
+  const latest = latestBrowserFrame(chatId);
+  return {
+    active: live,
+    mode: live ? session.mode : null,
+    pageUrl: live ? session.page.url() : null,
+    pendingConsent: consentPending.has(chatId),
+    latestFrame: latest ? frameSummary(chatId, latest) : null,
   };
 }

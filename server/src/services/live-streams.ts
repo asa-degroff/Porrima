@@ -352,6 +352,18 @@ export function isLiveStreamActive(chatId: string): boolean {
 }
 
 /**
+ * True when a live stream for this chat has at least one connected
+ * subscriber — someone can actually watch. Gates optional work that exists
+ * only for viewers (e.g. browser action-frame capture): no subscriber, no
+ * sharp encode. Dead connections are pruned lazily by emitToStream; a stale
+ * subscriber only risks one extra capture, never a missed frame.
+ */
+export function hasLiveSubscribers(chatId: string): boolean {
+  const stream = liveStreams.get(chatId);
+  return !!stream && !stream.ended && stream.subscribers.size > 0;
+}
+
+/**
  * Build the SSE frames an attaching client (e.g. /reconnect) should receive
  * before going live: the owner's resync snapshot. Every stream owner
  * installs a builder (chat turns, turn-gate waiters, headless synthesis);

@@ -129,6 +129,37 @@ export interface ReminderMetadata {
   firedAt: string;
 }
 
+/**
+ * One auto-captured browser action frame, delivered live on the chat stream
+ * (Phase 2, docs/design/browser-observability.md §9). Observability bytes
+ * only: never persisted, never in model context. Mirrors the server type.
+ */
+export interface BrowserFrameEvent {
+  chatId: string;
+  frameId: string;
+  /** GET /api/browser/frame/:chatId/:frameId — PNG from the in-memory ring. */
+  imageUrl: string;
+  pageUrl: string;
+  pageTitle: string;
+  mode: "attached" | "launched";
+  capturedAt: number;
+}
+
+/** Live browser-session state for a chat (GET /api/browser/status/:chatId). */
+export interface BrowserSessionSnapshot {
+  active: boolean;
+  mode: "attached" | "launched" | null;
+  pageUrl: string | null;
+  pendingConsent: boolean;
+  latestFrame: {
+    frameId: string;
+    imageUrl: string;
+    pageUrl: string;
+    pageTitle: string;
+    capturedAt: number;
+  } | null;
+}
+
 export interface ImageAttachment {
   /** Base64-encoded image bytes. Present for new uploads and transient previews only. */
   data?: string;
@@ -242,6 +273,8 @@ export interface TurnResyncPayload {
     position: number;
     queuedCount: number;
   };
+  /** Browser-session state at snapshot time (live viewer restore). */
+  browser?: BrowserSessionSnapshot;
 }
 
 export interface Chat {

@@ -1,12 +1,15 @@
 /**
  * BrowserViewer — persistent picture-in-picture card showing the agent's
- * latest browser screenshot, floating over the message area. Frames update
- * in place as new screenshots arrive; clicking the frame opens the shared
+ * latest browser frame, floating over the message area. Frames update in
+ * place as new captures arrive; clicking the frame opens the shared
  * ImageLightbox. Collapsing minimizes it to an icon chip that badges when a
  * newer frame lands.
  *
- * State is derived from the chat's messages (see useBrowserViewer) — there
- * is no separate browser event stream in Phase 1.
+ * Frame sources (see useBrowserViewer): live `browser_frame` events (Phase 2)
+ * preferred, else the latest persisted screenshot derived from messages.
+ * `frame` is null while a browser tool is starting up — the card shows a
+ * connecting placeholder, or an explicit consent hint when the attach to the
+ * user's Chrome is waiting on the native remote-debugging prompt.
  *
  * Phase 1.5 (docs/design/browser-observability.md §9): the card is movable
  * — drag the frame (a 4px threshold separates drag from click-to-enlarge) —
@@ -76,10 +79,14 @@ interface GripState {
 export function BrowserViewer({
   frame,
   active,
+  consentPending = false,
   wrapperRef,
 }: {
-  frame: BrowserViewerFrame;
+  frame: BrowserViewerFrame | null;
   active: boolean;
+  /** The attach to the user's Chrome is parked on the native remote-debugging
+   *  prompt. Shown in the connecting placeholder so the stall is visible. */
+  consentPending?: boolean;
   wrapperRef: RefObject<HTMLElement | null>;
 }) {
   const [collapsed, setCollapsed] = useState(() => readStoredValue(COLLAPSED_KEY) === "true");
@@ -95,7 +102,10 @@ export function BrowserViewer({
   const suppressClickRef = useRef(false);
   const [interacting, setInteracting] = useState(false);
 
-  const frameUrl = frame.image.url ?? "";
+  const frameUrl = frame?.image.url ?? "";
+  // Live frames can outlive their ring entry (session swept while this tab
+  // stayed open) — a failed load swaps in an "expired" placeholder.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   // URL of the frame the user last saw expanded — drives the chip badge.
   const [lastSeenUrl, setLastSeenUrl] = useState<string | null>(frameUrl);
 
@@ -111,15 +121,15 @@ export function BrowserViewer({
   // new frame landing while expanded). While collapsed, lastSeenUrl holds so
   // a newer frame lights the chip badge.
   useEffect(() => {
-    if (!collapsed) setLastSeenUrl(frameUrl);
+    if (!collapsed && frameUrl) setLastSeenUrl(frameUrl);
   }, [frameUrl, collapsed]);
 
   // null only before the first layout pass — nothing paints in that frame.
   if (!geom) return null;
   const { x, y, w } = geom;
 
-  const hasUnseenUpdate = collapsed && frameUrl !== lastSeenUrl;
-  const host = formatHost(frame.pageUrl);
+  const hasUnseenUpdate = collapsed && !!frameUrl && frameUrl !== lastSeenUrl;
+  const host = formatHost(frame?.pageUrl ?? null);
 
   // --- Drag: the frame image is the drag surface -------------------------
 
@@ -254,32 +264,60 @@ export function BrowserViewer({
           interacting ? "shadow-xl" : "shadow-lg"
         }`}
       >
-        <button
-          onPointerDown={onFramePointerDown}
-          onPointerMove={onFramePointerMove}
-          onPointerUp={onFramePointerUp}
-          onPointerCancel={onFramePointerUp}
-          onClick={onFrameClick}
-          onKeyDown={onFrameKeyDown}
-          className={`block w-full touch-none select-none ${interacting ? "cursor-grabbing" : "cursor-grab"}`}
-          title={
-            frame.pageUrl
-              ? `${frame.pageUrl}\nClick to enlarge · drag to move · corner to resize`
-              : "Click to enlarge · drag to move · corner to resize"
-          }
-          aria-label="Enlarge browser screenshot. Drag to move, corner to resize, arrow keys to nudge."
-        >
-          {/* key forces a remount per frame so a full-page→viewport swap never
-              stretches the old bitmap while the new one decodes */}
-          <img
-            key={frameUrl}
-            src={frameUrl}
-            alt="Latest browser screenshot"
-            decoding="async"
-            draggable={false}
-            className="w-full aspect-[16/10] object-cover object-top"
-          />
-        </button>
+        {frame ? (
+          <button
+            onPointerDown={onFramePointerDown}
+            onPointerMove={onFramePointerMove}
+            onPointerUp={onFramePointerUp}
+            onPointerCancel={onFramePointerUp}
+            onClick={onFrameClick}
+            onKeyDown={onFrameKeyDown}
+            className={`block w-full touch-none select-none ${interacting ? "cursor-grabbing" : "cursor-grab"}`}
+            title={
+              frame.pageUrl
+                ? `${frame.pageUrl}\nClick to enlarge · drag to move · corner to resize`
+                : "Click to enlarge · drag to move · corner to resize"
+            }
+            aria-label="Enlarge browser screenshot. Drag to move, corner to resize, arrow keys to nudge."
+          >
+            {failedUrl === frameUrl ? (
+              // Live frame whose ring entry was cleared (session swept or
+              // server restarted) — the bytes are gone; say so instead of
+              // showing a broken image.
+              <div className="w-full aspect-[16/10] flex items-center justify-center bg-black/30">
+                <span className="text-[10px] text-white/40 px-3 text-center">
+                  Frame expired — waiting for the next browser action
+                </span>
+              </div>
+            ) : (
+              /* key forces a remount per frame so a full-page→viewport swap never
+                 stretches the old bitmap while the new one decodes */
+              <img
+                key={frameUrl}
+                src={frameUrl}
+                alt="Latest browser screenshot"
+                decoding="async"
+                draggable={false}
+                onError={() => setFailedUrl(frameUrl)}
+                className="w-full aspect-[16/10] object-cover object-top"
+              />
+            )}
+          </button>
+        ) : (
+          // Browser tool running but nothing captured yet: connecting spinner,
+          // or the consent hint when the Chrome attach is parked on the
+          // native "allow remote debugging" prompt (Phase 2 §5.3).
+          <div className="flex items-center justify-center aspect-[16/10]">
+            <div className="flex flex-col items-center gap-2 px-3 text-center">
+              <div className="w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+              <span className="text-[10px] text-white/50 leading-snug">
+                {consentPending
+                  ? 'Approve the "allow remote debugging" prompt in Chrome'
+                  : "Opening the browser…"}
+              </span>
+            </div>
+          </div>
+        )}
         <button
           onClick={resetGeometry}
           className="absolute top-1.5 right-[42px] flex items-center justify-center w-6 h-6 rounded-full bg-black/50 border border-white/15 text-white/60 hover:text-white hover:bg-black/70 transition-colors"
@@ -304,7 +342,7 @@ export function BrowserViewer({
             title={active ? "Agent is driving the browser" : "Browser idle"}
           />
           <span className="text-[10px] text-white/70 truncate">{host ?? "Browser"}</span>
-          {frame.pageTitle && (
+          {frame?.pageTitle && (
             <span className="text-[10px] text-white/35 truncate hidden sm:inline">
               · {frame.pageTitle}
             </span>
@@ -321,7 +359,7 @@ export function BrowserViewer({
           {gripIcon}
         </div>
       </div>
-      {lightboxOpen &&
+      {lightboxOpen && frame &&
         createPortal(
           <ImageLightbox image={frame.image} onClose={() => setLightboxOpen(false)} />,
           document.body,

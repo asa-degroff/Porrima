@@ -1,5 +1,6 @@
 import type {
   Artifact,
+  BrowserFrameEvent,
   ChatMessage,
   ChatToolCall,
   ChatToolResult,
@@ -13,6 +14,7 @@ import {
   endLiveStreamIfCurrent,
   installHeadlessLiveStream,
 } from "./live-streams.js";
+import { getBrowserSessionSnapshot } from "./browser-session.js";
 
 // ---------------------------------------------------------------------------
 // Synthesis SSE emitter
@@ -90,6 +92,11 @@ export function toolCallDeltaFrame(index: number, delta: string): string {
   return `event: tool_call_delta\ndata: ${JSON.stringify({ index, delta })}\n\n`;
 }
 
+/** SSE frame for one browser action frame from the live viewer ring. */
+export function browserFrameFrame(frame: BrowserFrameEvent): string {
+  return `event: browser_frame\ndata: ${JSON.stringify(frame)}\n\n`;
+}
+
 export class SynthesisEmitter {
   readonly stream: LiveStream;
   readonly state: SynthesisStreamState;
@@ -157,6 +164,11 @@ export class SynthesisEmitter {
   emitToolCallDelta(index: number, delta: string): void {
     if (!delta) return;
     this.write(toolCallDeltaFrame(index, delta));
+  }
+
+  /** Browser action frame from the live viewer ring (live-only). */
+  emitBrowserFrame(frame: BrowserFrameEvent): void {
+    this.write(browserFrameFrame(frame));
   }
 
   /**
@@ -379,6 +391,9 @@ export class SynthesisEmitter {
       message,
       iteration: this.lastIteration ? { ...this.lastIteration } : undefined,
       modelProgress: null,
+      // Live viewer state: an attaching client restores the browser PiP from
+      // the session snapshot instead of waiting for the next action frame.
+      browser: getBrowserSessionSnapshot(this.stream.chatId),
     };
   }
 
@@ -421,6 +436,7 @@ export function createEmitterSideEffects(
   onVisual: (v: InlineVisual) => void;
   onPendingReviewImage: () => void;
   onAskUser: () => void;
+  onBrowserFrame: (f: BrowserFrameEvent) => void;
 } {
   return {
     onArtifact: (a) => {
@@ -433,5 +449,8 @@ export function createEmitterSideEffects(
     },
     onPendingReviewImage: () => {},
     onAskUser: () => {},
+    // Browser frames are pure observability — nothing to bucket for the
+    // final result, the ring holds the bytes and the stream fans them out.
+    onBrowserFrame: (f) => emitter.emitBrowserFrame(f),
   };
 }

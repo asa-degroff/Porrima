@@ -9,7 +9,79 @@ import {
   screenshotPage,
   drainDialogNotes,
   formatElementLine,
+  type BrowserSession,
 } from "./browser-session.js";
+import { hasLiveSubscribers } from "./live-streams.js";
+import { browserFrameUrl, pushBrowserFrame, shouldCaptureBrowserFrame } from "./browser-frames.js";
+import type { BrowserFrameEvent } from "../types.js";
+
+/**
+ * Optional frame sink — structurally ToolSideEffects.onBrowserFrame without
+ * importing agent-tools (which imports this module; keep the graph acyclic).
+ */
+type BrowserFrameSink = { onBrowserFrame?: (frame: BrowserFrameEvent) => void } | undefined;
+
+/** Viewer-only frame width: smaller than the 1280px the model sees — these
+ *  bytes never enter the LLM context, they only need to read on screen. */
+const FRAME_MAX_WIDTH = 720;
+
+/**
+ * Store an already-encoded PNG in the ring and push the live event. Shared by
+ * action auto-captures and explicit screenshots (whose bytes exist anyway),
+ * so the ring's latestFrame always reflects the newest visual — during a
+ * watched session the live frame is therefore always the freshest source.
+ * Never throws: an observability failure must not fail the tool.
+ */
+function publishFrame(
+  session: BrowserSession,
+  sink: BrowserFrameSink,
+  shot: { buffer: Buffer; url: string; title: string; width: number; height: number },
+): void {
+  if (!sink?.onBrowserFrame) return;
+  try {
+    const record = pushBrowserFrame(session.chatId, {
+      png: shot.buffer,
+      pageUrl: shot.url,
+      pageTitle: shot.title,
+      capturedAt: Date.now(),
+      width: shot.width,
+      height: shot.height,
+    });
+    sink.onBrowserFrame({
+      chatId: session.chatId,
+      frameId: record.frameId,
+      imageUrl: browserFrameUrl(session.chatId, record.frameId),
+      pageUrl: shot.url,
+      pageTitle: shot.title,
+      mode: session.mode,
+      capturedAt: record.capturedAt,
+    });
+  } catch (err) {
+    console.warn(`[browser-frames] frame publish failed: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Auto-capture a viewport frame after a successful browser action (Phase 2
+ * live viewer). Fully opportunistic: skipped when nothing can watch (no
+ * effects sink, no live subscribers), throttled per chat, and any failure
+ * only logs — observability must never fail the action it observes.
+ */
+async function captureActionFrame(
+  session: BrowserSession,
+  sink: BrowserFrameSink,
+  toolName: string,
+): Promise<void> {
+  if (!sink?.onBrowserFrame) return;
+  if (!hasLiveSubscribers(session.chatId)) return;
+  if (!shouldCaptureBrowserFrame(session.chatId)) return;
+  try {
+    const shot = await screenshotPage(session, false, FRAME_MAX_WIDTH);
+    publishFrame(session, sink, shot);
+  } catch (err) {
+    console.warn(`[browser-frames] frame capture after ${toolName} failed: ${(err as Error).message}`);
+  }
+}
 
 const BROWSER_NAVIGATE_TOOL: Tool = {
   name: "browser_navigate",
@@ -84,22 +156,23 @@ export async function executeBrowserTool(
   toolCall: ToolCall,
   chatId: string,
   signal?: AbortSignal,
+  effects?: BrowserFrameSink,
 ): Promise<ToolOutcome> {
   if (signal?.aborted) return { content: "Browser tool call was cancelled.", isError: true };
   try {
     switch (toolCall.name) {
       case "browser_navigate":
-        return await executeNavigate(toolCall.arguments, chatId);
+        return await executeNavigate(toolCall.arguments, chatId, effects);
       case "browser_snapshot":
         return await executeSnapshot(toolCall.arguments, chatId);
       case "browser_click":
-        return await executeClick(toolCall.arguments, chatId);
+        return await executeClick(toolCall.arguments, chatId, effects);
       case "browser_hover":
-        return await executeHover(toolCall.arguments, chatId);
+        return await executeHover(toolCall.arguments, chatId, effects);
       case "browser_type":
-        return await executeType(toolCall.arguments, chatId);
+        return await executeType(toolCall.arguments, chatId, effects);
       case "browser_screenshot":
-        return await executeScreenshot(toolCall.arguments, chatId);
+        return await executeScreenshot(toolCall.arguments, chatId, effects);
       default:
         return { content: `Unknown browser tool: ${toolCall.name}`, isError: true };
     }
@@ -108,7 +181,7 @@ export async function executeBrowserTool(
   }
 }
 
-async function executeNavigate(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+async function executeNavigate(args: Record<string, any>, chatId: string, effects?: BrowserFrameSink): Promise<ToolOutcome> {
   const url = String(args.url ?? "");
   if (!/^https?:\/\//i.test(url)) {
     return { content: "browser_navigate requires an http:// or https:// URL.", isError: true };
@@ -116,6 +189,7 @@ async function executeNavigate(args: Record<string, any>, chatId: string): Promi
   const session = await getBrowserSession(chatId);
   const timeoutMs = (args.timeout ?? 30) * 1000;
   const { finalUrl } = await navigateTo(session, url, timeoutMs);
+  await captureActionFrame(session, effects, "browser_navigate");
   const snapshot = await snapshotPage(session, undefined, 60);
   return {
     content: `Opened ${finalUrl}\n\n${snapshot.text}${drainDialogNotes(session)}`,
@@ -129,13 +203,14 @@ async function executeSnapshot(args: Record<string, any>, chatId: string): Promi
   return { content: `${snapshot.text}${drainDialogNotes(session)}`, isError: false };
 }
 
-async function executeClick(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+async function executeClick(args: Record<string, any>, chatId: string, effects?: BrowserFrameSink): Promise<ToolOutcome> {
   const ref = Number(args.ref);
   if (!Number.isInteger(ref) || ref < 1) {
     return { content: "browser_click requires a positive integer ref from browser_snapshot.", isError: true };
   }
   const session = await getBrowserSession(chatId);
   const result = await clickRef(session, ref);
+  await captureActionFrame(session, effects, "browser_click");
   const lines = [`Clicked ${result.clicked}`];
   if (result.urlAfter !== result.urlBefore) {
     lines.push(`Navigated to ${result.urlAfter} — "${result.title}"`);
@@ -149,13 +224,14 @@ async function executeClick(args: Record<string, any>, chatId: string): Promise<
   return { content: `${lines.join("\n")}${drainDialogNotes(session)}`, isError: false };
 }
 
-async function executeHover(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+async function executeHover(args: Record<string, any>, chatId: string, effects?: BrowserFrameSink): Promise<ToolOutcome> {
   const ref = Number(args.ref);
   if (!Number.isInteger(ref) || ref < 1) {
     return { content: "browser_hover requires a positive integer ref from browser_snapshot.", isError: true };
   }
   const session = await getBrowserSession(chatId);
   const { descriptor } = await hoverRef(session, ref);
+  await captureActionFrame(session, effects, "browser_hover");
   const lines = [
     `Pointer is over ${formatElementLine(descriptor)} and stays there until the next click/type/hover.`,
     "Refs are stale — if the hover revealed elements, call browser_snapshot to get refs for them.",
@@ -163,7 +239,7 @@ async function executeHover(args: Record<string, any>, chatId: string): Promise<
   return { content: `${lines.join("\n")}${drainDialogNotes(session)}`, isError: false };
 }
 
-async function executeType(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+async function executeType(args: Record<string, any>, chatId: string, effects?: BrowserFrameSink): Promise<ToolOutcome> {
   const ref = Number(args.ref);
   if (!Number.isInteger(ref) || ref < 1) {
     return { content: "browser_type requires a positive integer ref from browser_snapshot.", isError: true };
@@ -171,6 +247,7 @@ async function executeType(args: Record<string, any>, chatId: string): Promise<T
   const session = await getBrowserSession(chatId);
   const text = String(args.text ?? "");
   const result = await typeIntoRef(session, ref, text, args.submit === true);
+  await captureActionFrame(session, effects, "browser_type");
   const lines = [`Typed "${text.length > 60 ? text.slice(0, 60) + "…" : text}" into ${result.typed}`];
   if (result.submitted) {
     lines.push(`Pressed Enter. Now on ${session.page.url()} — refs are stale; call browser_snapshot before further interaction.`);
@@ -178,10 +255,15 @@ async function executeType(args: Record<string, any>, chatId: string): Promise<T
   return { content: `${lines.join("\n")}${drainDialogNotes(session)}`, isError: false };
 }
 
-async function executeScreenshot(args: Record<string, any>, chatId: string): Promise<ToolOutcome> {
+async function executeScreenshot(args: Record<string, any>, chatId: string, effects?: BrowserFrameSink): Promise<ToolOutcome> {
   const session = await getBrowserSession(chatId);
   const shot = await screenshotPage(session, args.fullPage === true);
   const label = `Screenshot of ${shot.url} — "${shot.title}" (${shot.width}x${shot.height}, ${args.fullPage ? "full page" : "viewport"})`;
+  // Keep the live ring in sync with what the model saw — the bytes already
+  // exist, so this costs only a uuid + SSE frame (no second capture, and
+  // deliberately NOT subscriber-gated: resync's latestFrame must stay
+  // truthful even when the watcher reconnects later).
+  publishFrame(session, effects, shot);
   const content: any[] = [
     { type: "text", text: `${label}${drainDialogNotes(session)}` },
     { type: "image", data: shot.data, mimeType: shot.mimeType, name: "browser-screenshot" },

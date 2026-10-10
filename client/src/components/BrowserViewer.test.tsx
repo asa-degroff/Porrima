@@ -19,8 +19,8 @@ function makeFrame(url: string, pageUrl = "https://example.com/page"): BrowserVi
  * the hook's defaults/clamps are exercised against known bounds.
  */
 function renderViewer(
-  frame: BrowserViewerFrame,
-  opts: { active?: boolean; storedGeom?: string } = {},
+  frame: BrowserViewerFrame | null,
+  opts: { active?: boolean; storedGeom?: string; consentPending?: boolean } = {},
 ) {
   if (opts.storedGeom !== undefined) {
     localStorage.setItem(GEOM_KEY, opts.storedGeom);
@@ -32,7 +32,12 @@ function renderViewer(
   document.body.appendChild(wrapper);
   const wrapperRef: RefObject<HTMLDivElement | null> = { current: wrapper };
   const utils = render(
-    <BrowserViewer frame={frame} active={opts.active ?? false} wrapperRef={wrapperRef} />,
+    <BrowserViewer
+      frame={frame}
+      active={opts.active ?? false}
+      consentPending={opts.consentPending}
+      wrapperRef={wrapperRef}
+    />,
     { container: wrapper },
   );
   return { wrapper, wrapperRef, ...utils };
@@ -123,6 +128,17 @@ describe("BrowserViewer", () => {
     renderViewer(makeFrame("/api/tool-result-images/f/image.png"), { active: true });
     const dot = screen.getByTitle("Agent is driving the browser");
     expect(dot.className).toContain("animate-pulse");
+  });
+
+  it("renders a connecting placeholder while a tool runs with no frame yet", () => {
+    renderViewer(null, { active: true });
+    expect(screen.getByText("Opening the browser…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /enlarge browser screenshot/i })).toBeNull();
+  });
+
+  it("surfaces the remote-debugging consent hint when pending", () => {
+    renderViewer(null, { active: true, consentPending: true });
+    expect(screen.getByText(/allow remote debugging/i)).toBeTruthy();
   });
 
   it("docks at the default position when no geometry is stored", () => {

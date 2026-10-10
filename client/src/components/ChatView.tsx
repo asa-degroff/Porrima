@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
+import type { Artifact, BrowserFrameEvent, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
 import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
-import { fetchSkills } from "../api/client";
+import { fetchSkills, fetchBrowserStatus } from "../api/client";
 import { RequestViewerModal } from "./RequestViewerModal";
 import { MessageBubble } from "./MessageBubble";
 import { MidTurnCompactionIndicator } from "./CompactionIndicator";
@@ -324,6 +324,8 @@ interface Props {
   streamingThinkingAccumulatedMs: number;
   streamingThinkingLastStartRef: React.RefObject<number>;
   activeTools: ToolStatus[];
+  /** Newest live browser viewer frame (Phase 2 browser_frame events). */
+  liveBrowserFrame?: BrowserFrameEvent | null;
   artifacts: Artifact[];
   totalUsage: MessageUsage;
   isUsageEstimated?: boolean;
@@ -387,6 +389,7 @@ export function ChatView({
   streamingThinkingAccumulatedMs,
   streamingThinkingLastStartRef,
   activeTools,
+  liveBrowserFrame = null,
   artifacts,
   totalUsage,
   isUsageEstimated,
@@ -460,12 +463,39 @@ export function ChatView({
   // movable geometry against this wrapper's live bounds.
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
-  // Live browser view: the latest browser_screenshot derived from message data
-  // (docs/design/browser-observability.md Phase 1 — no dedicated event stream).
-  const browserFrame = useBrowserViewer(messages);
+  // Live browser view (docs/design/browser-observability.md): prefer the newest
+  // live frame from the stream (Phase 2), fall back to the latest screenshot
+  // derived from message data (covers page loads and idle chats).
+  const browserFrame = useBrowserViewer(messages, liveBrowserFrame);
   const browserToolActive = activeTools.some(
     (t) => t.status === "running" && t.name.startsWith("browser_")
   );
+  // Consent surfacing (§5.3): attaching to the user's Chrome parks on the
+  // native "allow remote debugging" prompt for up to 60s. Without a hint the
+  // agent looks frozen; probe status while a browser tool runs with nothing
+  // captured yet, and let the viewer say what it's waiting for.
+  const [browserConsentPending, setBrowserConsentPending] = useState(false);
+  useEffect(() => {
+    if (!chatId || !browserToolActive || browserFrame) {
+      setBrowserConsentPending(false);
+      return;
+    }
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const snapshot = await fetchBrowserStatus(chatId);
+        if (!cancelled) setBrowserConsentPending(snapshot.pendingConsent);
+      } catch {
+        // Status is best-effort; auth failures or server races stay silent.
+      }
+    };
+    void probe();
+    const timer = setInterval(() => void probe(), 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [chatId, browserToolActive, browserFrame]);
   const availableSkillNames = useMemo(
     () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
     [skills]
@@ -1060,10 +1090,15 @@ export function ChatView({
           </button>
         )}
 
-        {/* Persistent browser PiP — latest agent screenshot, updated in place;
-            movable/width-resizable geometry clamped to this wrapper (§9) */}
-        {browserFrame && !isSwitching && !isFirstMessageMode && (
-          <BrowserViewer frame={browserFrame} active={browserToolActive} wrapperRef={messagesAreaRef} />
+        {/* Persistent browser PiP — live action frames / latest screenshot,
+            updated in place; movable geometry clamped to this wrapper (§9) */}
+        {(browserFrame || browserToolActive) && !isSwitching && !isFirstMessageMode && (
+          <BrowserViewer
+            frame={browserFrame}
+            active={browserToolActive}
+            consentPending={browserConsentPending}
+            wrapperRef={messagesAreaRef}
+          />
         )}
       </div>
 

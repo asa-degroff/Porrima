@@ -148,6 +148,40 @@ export interface ChatMessage {
 export type ChatType = "agent" | "system";
 
 /**
+ * One auto-captured browser action frame, delivered as a live-only
+ * `browser_frame` SSE event (docs/design/browser-observability.md Phase 2).
+ * Observability bytes only: never persisted, never enters model context, and
+ * never touches tool-result content (the KV-cache shape invariant holds).
+ * The image itself is served from the in-memory ring at `imageUrl`.
+ */
+export interface BrowserFrameEvent {
+  chatId: string;
+  frameId: string;
+  /** GET /api/browser/frame/:chatId/:frameId */
+  imageUrl: string;
+  pageUrl: string;
+  pageTitle: string;
+  mode: import("./services/browser-session.js").BrowserMode;
+  capturedAt: number;
+}
+
+/**
+ * Live browser-session state for one chat, read off the in-memory session and
+ * frame ring. Carried in the turn resync payload and served by
+ * GET /api/browser/status/:chatId.
+ */
+export interface BrowserSessionSnapshot {
+  active: boolean;
+  mode: import("./services/browser-session.js").BrowserMode | null;
+  /** Current page URL when a session exists (sync read of the active tab). */
+  pageUrl: string | null;
+  /** True while waiting on Chrome's native remote-debugging consent prompt. */
+  pendingConsent: boolean;
+  /** Newest frame in the in-memory ring, or null (cleared with the session). */
+  latestFrame: import("./services/browser-frames.js").BrowserFrameSummary | null;
+}
+
+/**
  * State snapshot sent to a newly attaching client instead of replaying the
  * SSE buffer. Built from the turn's live accumulators, so a reconnecting
  * client hydrates straight from authoritative state instead of reprocessing
@@ -184,6 +218,10 @@ export interface TurnResyncPayload {
     position: number;
     queuedCount: number;
   };
+  /** Browser-session state at snapshot time — lets a reconnecting client
+   *  restore the live browser viewer without waiting for the next action.
+   *  Absent when the browser subsystem was never consulted for this chat. */
+  browser?: BrowserSessionSnapshot;
 }
 
 export interface Chat {
