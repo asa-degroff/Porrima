@@ -127,7 +127,7 @@ export function SkillsBrowser({ onClose }: Props) {
       {!installOpen ? (
         <button
           onClick={() => setInstallOpen(true)}
-          className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2"
+          className="w-full px-3 py-1.5 rounded-md text-xs font-medium border transition-all flex items-center justify-center gap-2"
           style={{
             backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
             borderColor: `rgba(var(--theme-secondary-border), 0.3)`,
@@ -184,7 +184,7 @@ export function SkillsBrowser({ onClose }: Props) {
                     handleInstall();
                   }
                 }}
-                className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="w-full bg-white/5 border border-white/10 rounded px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
                 placeholder="https://github.com/user/repo/blob/main/skills/example/SKILL.md"
                 disabled={installForm.loading}
               />
@@ -195,7 +195,7 @@ export function SkillsBrowser({ onClose }: Props) {
                 type="text"
                 value={installForm.name}
                 onChange={(e) => setInstallForm((prev) => ({ ...prev, name: e.target.value }))}
-                className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="w-full bg-white/5 border border-white/10 rounded px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
                 placeholder="Must match SKILL.md name"
                 disabled={installForm.loading}
               />
@@ -203,7 +203,7 @@ export function SkillsBrowser({ onClose }: Props) {
             <button
               onClick={handleInstall}
               disabled={installForm.loading}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+              className="w-full px-3 py-1.5 rounded-md text-xs font-medium border transition-all disabled:opacity-40 flex items-center justify-center gap-2"
               style={{
                 backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
                 borderColor: `rgba(var(--theme-secondary-border))`,
@@ -264,7 +264,7 @@ export function SkillsBrowser({ onClose }: Props) {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+          className="w-full bg-white/5 border border-white/10 rounded-md pl-8 pr-3 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
           placeholder="Search skills..."
         />
       </div>
@@ -322,14 +322,14 @@ export function SkillsBrowser({ onClose }: Props) {
                           <button
                             onClick={() => void handleDelete(skill.name)}
                             disabled={isDeleting}
-                            className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium pressable disabled:opacity-50"
+                            className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-[11px] font-medium pressable disabled:opacity-50"
                             title={`Delete "${skill.name}" now — this cannot be undone`}
                           >
                             Confirm
                           </button>
                           <button
                             onClick={() => setConfirmingDeleteSkill(null)}
-                            className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium pressable"
+                            className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-[11px] font-medium pressable"
                           >
                             Cancel
                           </button>

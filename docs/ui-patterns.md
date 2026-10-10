@@ -80,6 +80,19 @@ Custom mode takes a background and accent color directly, subject to a luminance
 - **High efficiency mode** is a *device-local* kill switch (not a server setting): cached in `porrima-high-efficiency-mode` and applied as `<html data-high-efficiency>` to drop backdrop blurs
 - **Surface depth**: Flat (default) / Beveled, with a locally scoped preview. `surfaceDepth` is saved with settings and cached as `porrima-surface-depth` for startup. `data-depth` controls explicit `.depth-raised` / `.depth-inset` opt-ins in `styles/glass.css`: send buttons, model picker trigger/panel, active sidebar chat cards, and the composer. The masked `::after` lights the existing 1px border without changing fills, state colors, or shadows. Hosts must be positioned, reserve `::after`, and keep scrolling on a child. Unsupported masking and forced colors retain ordinary borders. No new blur or animation is added
 
+### Settings Control Density
+
+The settings surfaces (`SettingsModal.tsx`, `ThemePicker.tsx`, `SkillsBrowser.tsx`) share one geometry scale, normalized in Oct-2026 so buttons read as one app instead of per-panel one-offs. Color/variant classes stay per-button; only padding, radius, and font size follow the scale:
+
+- **Action (default)** — `rounded-md px-2.5 py-1 text-[11px] font-medium`. The in-panel standard (e.g. llama-server "Restart"); every inline action uses this
+- **Primary** — `rounded-md px-3 py-1.5 text-xs font-medium`. Modal footer (Apply / Save and Close / Cancel), full-width block CTAs (Add Passkey, Sign Out, Run Setup Wizard), and flex-1 save rows. The only step up from the default
+- **Menu row** — `px-2.5 py-1.5 text-xs`. Dropdown items and ToC nav buttons; rows, not buttons
+- **Chip** — `px-2 py-0.5 text-[11px]`. Micro pills (weekday toggles, confirm/remove chips)
+- **Segmented tabs** — keep existing geometry, `text-[11px] font-medium`
+- **Selector tiles** — same geometry as Primary (`px-3 py-1.5 text-xs font-medium rounded-md`) with one deliberate step up in height via `min-h`: theme grid tiles `min-h-9` (36px), saved-preset chips `min-h-8` (32px), and the corner-radius / surface-depth / activity-shape selector rows in Settings (activity-shape stacks its logo above the label). Tiles are bigger than a standard button but not oversized
+- **Controls** — inputs and dropdown triggers: `rounded-md px-2.5 py-1 text-xs`; textareas `px-2.5 py-1.5`. Rows stay aligned with the action tier. Dropdowns that would take the app-wide `DEFAULT_TRIGGER_CLASS` pass `SETTINGS_TRIGGER_CLASS` inside SettingsModal instead — the chat-side default is deliberately looser
+- **Excluded** — option cards with title+description, underline tabs, icon-only and bare-link buttons, and the background-effect canvas tiles (live artwork previews keep their footprint)
+
 ### State
 
 No state-management library. Client state is split across:

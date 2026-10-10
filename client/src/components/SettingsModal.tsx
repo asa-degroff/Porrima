@@ -112,6 +112,15 @@ const SECTIONS = [
   { id: 'about', label: 'About' },
 ] as const;
 
+/**
+ * Shared trigger geometry for settings dropdowns that rely on the `Dropdown`
+ * default look. Kept on the settings control density scale (rounded-md
+ * px-2.5 py-1 text-xs); the app-wide default in ui/Dropdown.tsx stays looser
+ * for chat surfaces and is intentionally left alone.
+ */
+const SETTINGS_TRIGGER_CLASS =
+  "w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer";
+
 const DEFAULT_EXTRACTION_CTX_SIZE = 16384;
 const MIN_EXTRACTION_CTX_SIZE = 2048;
 const MAX_EXTRACTION_CTX_SIZE = 131072;
@@ -2845,7 +2854,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     return (
       <Dropdown
         state={state}
-        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
         panelClassName="left-0 right-0 top-full mt-1"
         panelContentClassName="max-h-[240px] overflow-y-auto"
         trigger={<span className="truncate flex-1 text-left">{getBinaryLabel(selected)}</span>}
@@ -2855,7 +2864,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             state.close();
             handleAssignBinary(server.id, "");
           }}
-          className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+          className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}
         >
           default (llama-current)
         </button>
@@ -2866,7 +2875,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               state.close();
               handleAssignBinary(server.id, b.path);
             }}
-            className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+            className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}
           >
             {b.path.split("/").pop()} (v{b.version || "?"}){b.isDefault ? " default" : ""}
           </button>
@@ -3015,7 +3024,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <div ref={tocDd.ref} className="relative">
               <button
                 onClick={tocDd.toggle}
-                className="w-full flex items-center justify-between px-4 py-2 text-xs text-white/40 hover:text-white/60 hover:bg-white/[0.03] transition-colors cursor-pointer"
+                className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-white/40 hover:text-white/60 hover:bg-white/[0.03] transition-colors cursor-pointer"
               >
                 <span className="flex items-center gap-1.5">
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -3088,13 +3097,13 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               <button
                 type="button"
 	                onClick={() => { refreshModels(); refreshScanPaths(); }}
-                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all pressable"
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all pressable"
                 title="Refresh model list"
               >
                 Refresh
               </button>
             </div>
-            <Dropdown
+            <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
               state={modelDd}
               trigger={
                 <span className="truncate flex-1 text-left">
@@ -3104,7 +3113,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             >
               <button
 	                onClick={() => { setDefaultModelId(""); setDefaultModelScanDir(undefined); modelDd.close(); }}
-                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                   !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                 }`} 
                 style={{
@@ -3121,7 +3130,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 <button
                   key={modelOptionKey(m)}
                   onClick={() => { setDefaultModelId(m.id); setDefaultModelScanDir(m.scanDir); modelDd.close(); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                  className={`w-full text-left px-2.5 py-1.5 text-xs transition-all flex items-center gap-2 ${
                     m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                   }`} 
                   style={{
@@ -3178,7 +3187,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   role="tab"
                   aria-selected={llamaSettingsView === view}
                   onClick={() => setLlamaSettingsView(view)}
-                  className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+                  className={`flex-1 rounded-md px-3 py-1.5 text-[11px] font-medium transition-all ${
                     llamaSettingsView === view
                       ? "bg-purple-500/20 text-purple-200 shadow-sm"
                       : "text-white/45 hover:bg-white/5 hover:text-white/70"
@@ -3209,7 +3218,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       setLlamaBinaryScanDir(e.target.value);
                       setLlamaBinaryScanMessage(null);
                     }}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                     placeholder="~/bin"
                     disabled={llamaBinariesLoading}
                   />
@@ -3217,7 +3226,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     type="button"
                     onClick={refreshLlamaBinaries}
                     disabled={llamaBinariesLoading || !llamaBinaryScanDir.trim()}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
+                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
                   >
                     {llamaBinariesLoading ? "Scanning..." : "Scan"}
                   </button>
@@ -3273,7 +3282,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 <Dropdown
                   state={defaultBinaryDd}
                   disabled={llamaPathUpdating || llamaBinaries.length === 0}
-                  triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono disabled:opacity-40"
+                  triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono disabled:opacity-40"
                   panelClassName="left-0 right-0 top-full mt-1"
                   panelContentClassName="max-h-[240px] overflow-y-auto"
                   trigger={
@@ -3290,7 +3299,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         setLlamaPathMessage(null);
                         setLlamaPathPending(bin.path);
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${bin.isDefault ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+                      className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${bin.isDefault ? "text-white" : "text-white/60 hover:bg-white/10"}`}
                     >
                       {bin.path.split("/").pop()} (v{bin.version || "?"}){bin.isDefault ? " default" : ""}
                     </button>
@@ -3362,7 +3371,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                  type="button"
 	                  onClick={() => refreshLlamaServers(true)}
 	                  disabled={llamaServersLoading}
-	                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
+	                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
 	                >
 	                  {llamaServersLoading ? "Refreshing..." : "Refresh"}
 	                </button>
@@ -3444,7 +3453,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            type="button"
 	                            onClick={() => handleRemoveScanPath(sp.path)}
 	                            disabled={scanPathRemoving === sp.path}
-	                            className="px-1.5 py-0.5 rounded text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0 pressable"
+	                            className="px-2 py-0.5 rounded text-[11px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0 pressable"
 	                            title="Remove from scan paths"
 	                          >
 	                            {scanPathRemoving === sp.path ? "..." : "remove"}
@@ -3464,7 +3473,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                        setScanPathPreview(null);
 	                      }}
 	                      onKeyDown={(e) => { if (e.key === "Enter") handlePreviewScanPath(); }}
-	                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                      placeholder="/path/to/models or ~/models"
 	                      disabled={scanPathPreviewLoading || scanPathAdding}
 	                    />
@@ -3472,7 +3481,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                      type="button"
 	                      onClick={handlePreviewScanPath}
 	                      disabled={scanPathPreviewLoading || !scanPathDraft.trim()}
-	                      className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
+	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
 	                    >
 	                      {scanPathPreviewLoading ? "Scanning..." : "Preview"}
 	                    </button>
@@ -3495,7 +3504,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            type="button"
 	                            onClick={handleAddScanPath}
 	                            disabled={scanPathAdding}
-	                            className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
 	                          >
 	                            {scanPathAdding ? "Adding..." : "Add"}
 	                          </button>
@@ -3609,7 +3618,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                      type="text"
 		                                      value={llamacppUrl}
 		                                      onChange={(e) => setLlamacppUrl(e.target.value)}
-	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_INFERENCE_URL}
 	                                    />
 	                                  </div>
@@ -3617,14 +3626,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <label className="block text-xs text-white/50 w-16">Slots</label>
 	                                    <Dropdown
 	                                      state={slotBindingModeDd}
-	                                      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer whitespace-nowrap"
+	                                      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer whitespace-nowrap"
 	                                      trigger={<span>{llamacppSlotBindingMode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}</span>}
 	                                    >
 	                                      {(["auto", "enforced"] as const).map((mode) => (
 	                                        <button key={mode} onClick={() => {
 	                                          slotBindingModeDd.close();
 	                                          setLlamacppSlotBindingMode(mode);
-	                                        }} className={`w-full text-left px-3 py-2 text-xs transition-all ${mode === llamacppSlotBindingMode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${mode === llamacppSlotBindingMode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                          {mode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}
 	                                        </button>
 	                                      ))}
@@ -3647,7 +3656,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  type="text"
 		                                  value={extractionModelUrl}
 		                                  onChange={(e) => setExtractionModelUrl(e.target.value)}
-	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                  className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                  placeholder={DEFAULT_EXTRACTION_URL}
 	                                />
 		                              </div>
@@ -3661,7 +3670,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                      onChange={(e) => setExtractionCtxSizeDraft(e.target.value)}
 		                                      onBlur={applyExtractionCtxSizeDraft}
 		                                      min={MIN_EXTRACTION_CTX_SIZE} max={MAX_EXTRACTION_CTX_SIZE} step={1024}
-		                                      className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+		                                      className="w-28 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
 		                                    />
 		                                    <span className="text-xs text-white/30 ml-2">tokens</span>
 		                                  </div>
@@ -3671,7 +3680,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  {extractionServerModels.length > 0 && !extractionUseCustom ? (
 	                                    <Dropdown
 	                                      state={extractionModelDd}
-	                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
 	                                      panelClassName="left-0 right-0 top-full mt-1"
 	                                      panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                      trigger={<span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>}
@@ -3680,17 +3689,17 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                        <button key={modelOptionKey(m)} onClick={() => {
 		                                          extractionModelDd.close();
 		                                          handleApplySlotModel("extraction", m.id, m.scanDir);
-		                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 		                                          <span className="block truncate">{m.name}</span>
 		                                          {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
 		                                        </button>
 		                                      ))}
-	                                      <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                      <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-2.5 py-1.5 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                    </Dropdown>
 	                                  ) : (
 	                                    <input type="text" value={extractionModelId} onChange={(e) => setExtractionModelId(e.target.value)}
 	                                      onBlur={() => handleLlamaServerSettings("extraction", { modelId: extractionModelId })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" placeholder="model-name" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" placeholder="model-name" />
 	                                  )}
 	                                </div>
 	                              </div>
@@ -3709,7 +3718,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                   return (
                                     <Dropdown
                                       state={extractionBinaryDd}
-                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
                                       panelClassName="left-0 right-0 top-full mt-1"
                                       panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
@@ -3717,14 +3726,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                       <button onClick={() => {
                                         extractionBinaryDd.close();
                                         handleAssignBinary(server.id as any, "");
-                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                      }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                         default (llama-current)
                                       </button>
                                       {llamaBinaries.filter(b => !b.isDefault).map(b => (
                                         <button key={b.path} onClick={() => {
                                           extractionBinaryDd.close();
                                           handleAssignBinary(server.id as any, b.path);
-                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                           {b.path.split("/").pop()} (v{b.version || "?"})
                                         </button>
                                       ))}
@@ -3741,7 +3750,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  <div className="flex gap-2">
 		                                    <label className="block text-xs text-white/50 w-12">URL</label>
 		                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
-	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_RERANKER_URL} />
 	                                  </div>
 	                                  <div>
@@ -3749,7 +3758,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    {rerankerModels.length > 0 && !rerankerUseCustom ? (
 	                                      <Dropdown
 	                                        state={rerankerModelDd}
-	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
 	                                        panelClassName="left-0 right-0 top-full mt-1"
 	                                        panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>}
@@ -3762,18 +3771,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                              setRerankerModelId(m.id);
 		                                              handleLlamaServerSettings("reranker", { modelId: m.id });
 	                                            }
-		                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                          }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 		                                            <span className="block truncate">{m.name}</span>
 		                                            {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
 		                                            {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
 		                                          </button>
 		                                        ))}
-	                                        <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                        <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-2.5 py-1.5 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                      </Dropdown>
 	                                    ) : (
 	                                      <input type="text" value={rerankerModelId} onChange={(e) => setRerankerModelId(e.target.value)}
 	                                        onBlur={() => handleLlamaServerSettings("reranker", { modelId: rerankerModelId })}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                        placeholder="qwen3-reranker" />
 	                                    )}
 	                                  </div>
@@ -3793,7 +3802,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                   return (
                                     <Dropdown
                                       state={rerankerBinaryDd}
-                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
                                       panelClassName="left-0 right-0 top-full mt-1"
                                       panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
@@ -3801,14 +3810,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                       <button onClick={() => {
                                         rerankerBinaryDd.close();
                                         handleAssignBinary(server.id as any, "");
-                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                      }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                         default (llama-current)
                                       </button>
                                       {llamaBinaries.filter(b => !b.isDefault).map(b => (
                                         <button key={b.path} onClick={() => {
                                           rerankerBinaryDd.close();
                                           handleAssignBinary(server.id as any, b.path);
-                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                           {b.path.split("/").pop()} (v{b.version || "?"})
                                         </button>
                                       ))}
@@ -3828,7 +3837,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              <div className="flex gap-2">
 		                                <label className="block text-xs text-white/50 w-12">URL</label>
 		                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
-	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                  className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                  placeholder={DEFAULT_EMBEDDING_URL} />
 	                              </div>
 	                              <div>
@@ -3836,7 +3845,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                {embeddingModels.length > 0 && !embeddingUseCustom ? (
 	                                  <Dropdown
 	                                    state={embeddingModelDd}
-	                                    triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                    triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
 	                                    panelClassName="left-0 right-0 top-full mt-1"
 	                                    panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                    trigger={<span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>}
@@ -3850,18 +3859,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                          setEmbeddingModel(m.id);
 		                                          handleLlamaServerSettings("embedding", { modelId: m.id });
 	                                        }
-		                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                      }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 		                                        <span className="block truncate">{m.name}</span>
 		                                        {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
 		                                        {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
 		                                      </button>
 		                                    ))}
-	                                    <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                    <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-2.5 py-1.5 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                  </Dropdown>
 	                                ) : (
 	                                  <input type="text" value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)}
 	                                    onBlur={() => handleLlamaServerSettings("embedding", { modelId: embeddingModel })}
-	                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                    placeholder="qwen3-embedding:0.6b" />
 	                                )}
 	                                {storedEmbeddingDimension && (
@@ -3890,7 +3899,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 							      return (
 							        <Dropdown
 							          state={embeddingBinaryDd}
-							          triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+							          triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
 							          panelClassName="left-0 right-0 top-full mt-1"
 							          panelContentClassName="max-h-[240px] overflow-y-auto"
 							          trigger={<span className="truncate flex-1 text-left">{label}</span>}
@@ -3898,14 +3907,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 							          <button onClick={() => {
 							            embeddingBinaryDd.close();
 							            handleAssignBinary(server.id as any, "");
-							          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+							          }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 							            default (llama-current)
 							          </button>
 							          {llamaBinaries.filter(b => !b.isDefault).map(b => (
 							            <button key={b.path} onClick={() => {
 							              embeddingBinaryDd.close();
 							              handleAssignBinary(server.id as any, b.path);
-							            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+							            }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 							              {b.path.split("/").pop()} (v{b.version || "?"})
 							            </button>
 							          ))}
@@ -3922,7 +3931,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  <div className="flex gap-2">
 		                                    <label className="block text-xs text-white/50 w-12">URL</label>
 		                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
-	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_TITLE_GENERATION_URL} />
 	                                  </div>
 	                                  <div>
@@ -3930,7 +3939,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    {titleGenerationModels.length > 0 && !titleGenerationUseCustom ? (
 	                                      <Dropdown
 	                                        state={titleGenerationModelDd}
-	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
 	                                        panelClassName="left-0 right-0 top-full mt-1"
 	                                        panelContentClassName="max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>}
@@ -3939,17 +3948,17 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                          <button key={modelOptionKey(m)} onClick={() => {
 		                                            titleGenerationModelDd.close();
 		                                            handleApplySlotModel("title-generation", m.id, m.scanDir);
-		                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                          }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 		                                            <span className="block truncate">{m.name}</span>
 		                                            {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
 		                                          </button>
 		                                        ))}
-	                                        <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                        <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-2.5 py-1.5 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                      </Dropdown>
 	                                    ) : (
 	                                      <input type="text" value={titleGenerationModelId} onChange={(e) => setTitleGenerationModelId(e.target.value)}
 	                                        onBlur={() => handleLlamaServerSettings("title-generation", { modelId: titleGenerationModelId })}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                        placeholder="qwen3.5-0.8b" />
 	                                    )}
 	                                  </div>
@@ -3969,7 +3978,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                   return (
                                     <Dropdown
                                       state={titleGenBinaryDd}
-                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
                                       panelClassName="left-0 right-0 top-full mt-1"
                                       panelContentClassName="max-h-[240px] overflow-y-auto"
                                       trigger={<span className="truncate flex-1 text-left">{label}</span>}
@@ -3977,14 +3986,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                       <button onClick={() => {
                                         titleGenBinaryDd.close();
                                         handleAssignBinary(server.id as any, "");
-                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                      }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                         default (llama-current)
                                       </button>
                                       {llamaBinaries.filter(b => !b.isDefault).map(b => (
                                         <button key={b.path} onClick={() => {
                                           titleGenBinaryDd.close();
                                           handleAssignBinary(server.id as any, b.path);
-                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                                           {b.path.split("/").pop()} (v{b.version || "?"})
                                         </button>
                                       ))}
@@ -4022,7 +4031,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <button
 	                                      type="button"
 	                                      onClick={() => handleClearSlotOverride(server.id as OverridableSlotId)}
-	                                      className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0 pressable"
+	                                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0 pressable"
 	                                    >
 	                                      Reset to default
 	                                    </button>
@@ -4037,7 +4046,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => handleConvertToRouter(server.id as RouterCapableSlotId)}
-	                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all shrink-0 pressable"
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all shrink-0 pressable"
 	                                  >
 	                                    Switch to router mode
 	                                  </button>
@@ -4100,7 +4109,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                        ref: smRef,
 	                                      };
 	                                      return (
-	                                        <Dropdown
+	                                        <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
 	                                          state={smState}
 	                                          disabled={!data?.capabilities.routerMode}
 	                                          trigger={<span className="truncate flex-1 text-left">{draft.mode === "single" ? "Single model" : "Router mode"}</span>}
@@ -4109,7 +4118,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                            <button key={mode} onClick={() => {
 	                                              smState.close();
 	                                              updateLlamaServiceDraft(server.id, { mode });
-	                                            }} className={`w-full text-left px-3 py-2 text-xs transition-all ${mode === draft.mode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                            }} className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${mode === draft.mode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                              {mode === "single" ? "Single model" : "Router mode"}
 	                                            </button>
 	                                          ))}
@@ -4122,7 +4131,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <input
 	                                      value={draft.binaryPath}
 	                                      onChange={(e) => updateLlamaServiceDraft(server.id, { binaryPath: e.target.value })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                    />
 	                                  </div>
 	                                  {draft.mode === "single" ? (
@@ -4137,7 +4146,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                            modelId: modelIdFromPath(modelPath),
 	                                          });
 	                                        }}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                      />
 	                                    </div>
 	                                  ) : (
@@ -4146,63 +4155,63 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                      <input
 	                                        value={draft.modelsDir || ""}
 	                                        onChange={(e) => updateLlamaServiceDraft(server.id, { modelsDir: e.target.value })}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                      />
 	                                    </div>
 	                                  )}
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Host</label>
 	                                    <input value={draft.host} onChange={(e) => updateLlamaServiceDraft(server.id, { host: e.target.value })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Port</label>
 	                                    <input type="number" value={draft.port} onChange={(e) => updateNumber("port", e.target.value)}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Context</label>
 	                                    <input type="number" value={draft.ctxSize} onChange={(e) => updateNumber("ctxSize", e.target.value)}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">GPU layers</label>
 	                                    <input value={draft.gpuLayers} onChange={(e) => updateLlamaServiceDraft(server.id, { gpuLayers: e.target.value.trim() === "auto" ? "auto" : Number.parseInt(e.target.value, 10) || 0 })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Parallel</label>
 	                                    <input type="number" value={draft.parallel ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { parallel: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Batch / ubatch</label>
 	                                    <div className="grid grid-cols-2 gap-2">
 	                                      <input type="number" value={draft.batchSize ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { batchSize: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                      <input type="number" value={draft.ubatchSize ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { ubatchSize: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
-	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                    </div>
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Reasoning format</label>
 	                                    <input value={draft.reasoningFormat || ""} onChange={(e) => updateLlamaServiceDraft(server.id, { reasoningFormat: e.target.value })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Template kwargs</label>
 	                                    <input value={draft.chatTemplateKwargs || ""} onChange={(e) => updateLlamaServiceDraft(server.id, { chatTemplateKwargs: e.target.value })}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Environment</label>
 	                                    <textarea value={draft.environment.join("\n")} onChange={(e) => updateLlamaServiceDraft(server.id, { environment: e.target.value.split("\n") })}
-	                                      rows={2} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                      rows={2} className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
 	                                  </div>
 	                                  <div className="sm:col-span-2">
 	                                    <label className="block text-xs text-white/50 mb-1">Extra args</label>
 	                                    <textarea value={draft.extraArgs} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value })}
-	                                      rows={5} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                      rows={5} className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
 	                                    <p className="text-[10px] text-white/30 mt-1">Space-separated arguments; quote values that contain spaces (parsed when you preview or apply).</p>
 	                                  </div>
 	                                </div>
@@ -4307,7 +4316,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                              <p className="text-[11px] text-white/35 font-mono truncate">{activeLogs?.unitName || activeLogs?.id || server.unitName}</p>
 		                            </div>
 			                            <button type="button" onClick={() => handleLlamaServerLogs(server.id)} disabled={activeLogs?.loading}
-			                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all pressable">
+			                              className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all pressable font-medium">
 			                              Refresh
 			                            </button>
 			                          </div>
@@ -4412,7 +4421,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 <button
                   key={opt.value}
                   onClick={() => setCornerRadius(opt.value)}
-                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                  className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all flex items-center justify-center gap-2 ${
                     cornerRadius === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
@@ -4443,7 +4452,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   type="button"
                   aria-pressed={surfaceDepth === value}
                   onClick={() => setSurfaceDepth(value)}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable ${
+                  className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable ${
                     surfaceDepth === value ? "border-white/30 bg-white/5" : "border-white/10 hover:border-white/20"
                   }`}
                 >
@@ -4466,7 +4475,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 <button
                   key={opt.value}
                   onClick={() => setActivityShape(opt.value)}
-                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all flex flex-col items-center gap-1.5 ${
+                  className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all flex flex-col items-center gap-1.5 ${
                     activityShape === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
@@ -4687,7 +4696,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         setPushTestState({ tone: "err", text: err?.message || "Failed to send test" });
                       }
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable"
+                    className="text-[11px] px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable font-medium"
                   >
                     Send test notification
                   </button>
@@ -4739,7 +4748,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               <button
                 type="button"
                 onClick={openCreateSshConnection}
-                className="shrink-0 rounded-lg border border-emerald-400/25 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-all hover:bg-emerald-500/25 pressable"
+                className="shrink-0 rounded-md border border-emerald-400/25 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200 transition-all hover:bg-emerald-500/25 pressable"
               >
                 Add host
               </button>
@@ -4796,14 +4805,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                           type="button"
                           onClick={() => handleTestSshConnection(connection.id)}
                           disabled={sshTestingId !== null || !connection.enabled}
-                          className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-50 pressable"
+                          className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-50 pressable font-medium"
                         >
                           {sshTestingId === connection.id ? "Testing..." : "Test"}
                         </button>
                         <button
                           type="button"
                           onClick={() => openEditSshConnection(connection)}
-                          className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all pressable"
+                          className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all pressable font-medium"
                         >
                           Manage
                         </button>
@@ -4847,37 +4856,37 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <label className="space-y-1">
                       <span className="text-xs text-white/45">Name</span>
                       <input type="text" value={sshDraft.name} onChange={(e) => setSshDraft((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="Workstation" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                        placeholder="Workstation" className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs text-white/45">Host</span>
                       <input type="text" value={sshDraft.host} onChange={(e) => setSshDraft((prev) => ({ ...prev, host: e.target.value }))}
-                        placeholder="Host or Tailscale DNS name" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                        placeholder="Host or Tailscale DNS name" className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs text-white/45">Username</span>
                       <input type="text" value={sshDraft.username || ""} onChange={(e) => setSshDraft((prev) => ({ ...prev, username: e.target.value }))}
-                        placeholder="Optional" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                        placeholder="Optional" className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs text-white/45">Port</span>
                       <input type="number" min={1} max={65535} value={sshDraft.port} onChange={(e) => setSshDraft((prev) => ({ ...prev, port: Number(e.target.value) || 22 }))}
-                        className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white/80 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                        className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/80 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
                     </label>
                     <label className="space-y-1 md:col-span-2">
                       <span className="text-xs text-white/45">Identity file</span>
                       <input type="text" value={sshDraft.identityFile || ""} onChange={(e) => setSshDraft((prev) => ({ ...prev, identityFile: e.target.value }))}
-                        placeholder="Optional path to a private key" className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
+                        placeholder="Optional path to a private key" className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-xs text-white/80 placeholder-white/25 outline-none transition-all focus:border-emerald-400/30 focus:ring-1 focus:ring-emerald-400/30" />
                     </label>
                   </div>
                 </div>
 
                 <div className="space-y-2 border-t border-white/5 pt-3">
                   <p className="text-[10px] font-medium uppercase tracking-widest text-white/30">Host verification</p>
-                  <Dropdown state={sshKnownHostsDd} trigger={<span className="truncate flex-1 text-left">{sshDraft.knownHostsMode === "accept-new" ? "Accept new host keys" : sshDraft.knownHostsMode === "strict" ? "Strict known hosts" : "Host key checks disabled"}</span>}>
+                  <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS} state={sshKnownHostsDd} trigger={<span className="truncate flex-1 text-left">{sshDraft.knownHostsMode === "accept-new" ? "Accept new host keys" : sshDraft.knownHostsMode === "strict" ? "Strict known hosts" : "Host key checks disabled"}</span>}>
                     {(["accept-new", "strict", "off"] as SshKnownHostsMode[]).map((mode) => (
                       <button key={mode} type="button" onClick={() => { setSshDraft((prev) => ({ ...prev, knownHostsMode: mode })); sshKnownHostsDd.close(); }}
-                        className={`w-full px-3 py-2 text-left text-xs transition-all ${mode === sshDraft.knownHostsMode ? "bg-white/10 text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"}`}>
+                        className={`w-full px-2.5 py-1.5 text-left text-xs transition-all ${mode === sshDraft.knownHostsMode ? "bg-white/10 text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"}`}>
                         <span className="block">{mode === "accept-new" ? "Accept new host keys" : mode === "strict" ? "Strict known hosts" : "Disable host key checks"}</span>
                         <span className="mt-0.5 block text-[10px] text-white/30">{mode === "accept-new" ? "Trust a host on first connection, then require the same key." : mode === "strict" ? "Only connect to hosts already present in the local known-hosts file." : "Do not verify host identity. Not recommended."}</span>
                       </button>
@@ -4907,11 +4916,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 
                 <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
                   <button type="button" onClick={closeSshEditor} disabled={sshSaving}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/50 transition-all hover:bg-white/10 hover:text-white/70 disabled:opacity-40 pressable">Cancel</button>
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/50 transition-all hover:bg-white/10 hover:text-white/70 disabled:opacity-40 pressable font-medium">Cancel</button>
                   <button type="button" onClick={() => handleSaveSshConnection(false)} disabled={sshSaving || !sshDraft.name.trim() || !sshDraft.host.trim()}
-                    className="rounded-md border border-emerald-400/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-all hover:bg-emerald-500/20 disabled:opacity-40 pressable">{sshSaving ? "Saving…" : "Save"}</button>
+                    className="rounded-md border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200 transition-all hover:bg-emerald-500/20 disabled:opacity-40 pressable">{sshSaving ? "Saving…" : "Save"}</button>
                   <button type="button" onClick={() => handleSaveSshConnection(true)} disabled={sshSaving || !sshDraft.name.trim() || !sshDraft.host.trim() || !sshDraft.enabled}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60 transition-all hover:bg-white/10 hover:text-white/80 disabled:opacity-40 pressable">Save and test</button>
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/60 transition-all hover:bg-white/10 hover:text-white/80 disabled:opacity-40 pressable font-medium">Save and test</button>
 
                   {sshEditingId && (
                     <div className="ml-auto">
@@ -4922,7 +4931,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                           <button type="button" onClick={() => setSshDeleteConfirmId(null)} className="px-2 py-0.5 text-[11px] text-white/45 hover:text-white/70 pressable">Cancel</button>
                         </div>
                       ) : (
-                        <button type="button" onClick={() => setSshDeleteConfirmId(sshEditingId)} className="rounded-md border border-red-400/15 bg-red-500/5 px-2.5 py-1 text-[11px] text-red-300/65 transition-all hover:bg-red-500/15 pressable">Remove host</button>
+                        <button type="button" onClick={() => setSshDeleteConfirmId(sshEditingId)} className="rounded-md border border-red-400/15 bg-red-500/5 px-2.5 py-1 text-[11px] text-red-300/65 transition-all hover:bg-red-500/15 pressable font-medium">Remove host</button>
                       )}
                     </div>
                   )}
@@ -4944,7 +4953,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 type="text"
                 value={agentName}
                 onChange={(e) => setAgentName(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
                 placeholder="Porrima"
               />
             </div>
@@ -5023,7 +5032,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       </label>
                       <button
                         onClick={handleHeaderImageRemove}
-                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10 pressable"
+                        className="px-2.5 py-1 text-[11px] text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-md transition-colors border border-red-500/10 pressable font-medium"
                       >
                         Remove
                       </button>
@@ -5050,14 +5059,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     value={personaContent}
                     onChange={(e) => setPersonaContent(e.target.value)}
                     rows={12}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
                     placeholder="# Who I Am..."
                   />
                   <div className="flex gap-2">
                     <button
                       onClick={handleSavePersona}
                       disabled={personaSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
+                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all disabled:opacity-40 pressable"
                       style={{
                         backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                         borderColor: `rgba(var(--theme-primary-border))`,
@@ -5069,7 +5078,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <button
                       onClick={handleCancelPersonaEdit}
                       disabled={personaSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
+                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                     >
                       Cancel
                     </button>
@@ -5090,7 +5099,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       setPersonaEditing(true);
                       setPersonaContent(persona.content);
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+                    className="text-[11px] px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable font-medium"
                   >
                     Edit
                   </button>
@@ -5121,14 +5130,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     value={userDocContent}
                     onChange={(e) => setUserDocContent(e.target.value)}
                     rows={10}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all font-mono"
+                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all font-mono"
                     placeholder="# About Me&#10;&#10;**Name:** &#10;&#10;**Preferences:** "
                   />
                   <div className="flex gap-2">
                     <button
                       onClick={handleSaveUserDoc}
                       disabled={userDocSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
+                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all disabled:opacity-40 pressable"
                       style={{
                         backgroundColor: `rgba(16, 185, 129, 0.15)`,
                         borderColor: `rgba(16, 185, 129, 0.3)`,
@@ -5140,7 +5149,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <button
                       onClick={handleCancelUserDocEdit}
                       disabled={userDocSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
+                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                     >
                       Cancel
                     </button>
@@ -5149,7 +5158,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <button
                       onClick={handleDeleteUserDoc}
                       disabled={userDocSaving}
-                      className="w-full px-3 py-2 rounded-lg text-xs font-medium border border-red-400/20 text-red-300/70 hover:bg-red-500/10 transition-all disabled:opacity-40 pressable"
+                      className="w-full px-3 py-1.5 rounded-md text-xs font-medium border border-red-400/20 text-red-300/70 hover:bg-red-500/10 transition-all disabled:opacity-40 pressable"
                     >
                       Delete document
                     </button>
@@ -5170,7 +5179,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       setUserDocEditing(true);
                       setUserDocContent(userDoc.content);
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+                    className="text-[11px] px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable font-medium"
                   >
                     Edit
                   </button>
@@ -5181,7 +5190,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     setUserDocEditing(true);
                     setUserDocContent("# About Me\n\n**Name:** \n\n**Communication style:** \n\n**Technical background:** \n\n**Preferences:** \n\n---\n\n*Feel free to share as much or as little as you want.*\n");
                   }}
-                  className="text-xs px-3 py-2 rounded-lg border border-emerald-400/20 text-emerald-300/70 hover:bg-emerald-500/10 transition-all pressable"
+                  className="text-[11px] px-2.5 py-1 rounded-md border border-emerald-400/20 text-emerald-300/70 hover:bg-emerald-500/10 transition-all pressable font-medium"
                 >
                   + Create document
                 </button>
@@ -5194,7 +5203,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <h3 className="text-sm font-medium text-white/70">API Keys</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Default Web Search Provider</label>
-              <Dropdown
+              <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                 state={webSearchProviderDd}
                 panelClassName="left-0 right-0 top-full mt-1"
                 panelContentClassName="overflow-hidden"
@@ -5208,7 +5217,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   <button
                     key={provider.id}
                     onClick={() => { setDefaultWebSearchProvider(provider.id); webSearchProviderDd.close(); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                       defaultWebSearchProvider === provider.id ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`} 
                     style={{
@@ -5248,7 +5257,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   type="password"
                   value={braveApiKey}
                   onChange={(e) => setBraveApiKey(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
                   placeholder="BSA..."
                   autoComplete="off"
                 />
@@ -5268,7 +5277,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   type="password"
                   value={exaApiKey}
                   onChange={(e) => setExaApiKey(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
                   placeholder="exa_api_key..."
                   autoComplete="off"
                 />
@@ -5288,7 +5297,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   type="password"
                   value={tavilyApiKey}
                   onChange={(e) => setTavilyApiKey(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
                   placeholder="tvly-..."
                   autoComplete="off"
                 />
@@ -5347,7 +5356,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <div className="flex gap-2">
               <button
                 onClick={() => setSkillsBrowserOpen(!skillsBrowserOpen)}
-                className="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all pressable"
+                className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all pressable"
                 style={{
                   backgroundColor: skillsBrowserOpen
                     ? `rgba(var(--theme-secondary), 0.2)`
@@ -5377,7 +5386,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   openLlamaServerDetail("extraction", "configuration");
                   requestAnimationFrame(() => scrollToSection("inference"));
                 }}
-                className="px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/45 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/45 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
               >
                 Manage server
               </button>
@@ -5496,7 +5505,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                           min={MIN_MID_TURN_EXTRACTION_THRESHOLD}
                           max={MAX_MID_TURN_EXTRACTION_THRESHOLD}
                           step={500}
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                          className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                         />
                         <span className="text-xs text-white/30">tokens</span>
                       </div>
@@ -5514,7 +5523,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                           min={MIN_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000}
                           max={MAX_MID_TURN_EXTRACTION_TIMEOUT_MS / 1000}
                           step={1}
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                          className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                         />
                         <span className="text-xs text-white/30">seconds</span>
                       </div>
@@ -5532,7 +5541,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                           min={MIN_TIME_MARKER_INTERVAL_MINUTES}
                           max={MAX_TIME_MARKER_INTERVAL_MINUTES}
                           step={5}
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                          className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                         />
                         <span className="text-xs text-white/30">min</span>
                       </div>
@@ -5564,7 +5573,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         min={MIN_EXTRACTION_MAX_TOKENS}
                         max={MAX_EXTRACTION_MAX_TOKENS}
                         step={100}
-                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                       />
                       <span className="text-xs text-white/30">tokens</span>
                     </div>
@@ -5582,7 +5591,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         min={MIN_EXTRACTION_TIMEOUT_MINUTES}
                         max={MAX_EXTRACTION_TIMEOUT_MINUTES}
                         step={1}
-                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
                       />
                       <span className="text-xs text-white/30">minutes</span>
                     </div>
@@ -5611,7 +5620,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                       value={extractionPromptContent}
                       onChange={(e) => setExtractionPromptContent(e.target.value)}
                       rows={14}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
                       placeholder="# Archival Mode..."
                     />
                     <div className="flex gap-2">
@@ -5619,7 +5628,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         type="button"
                         onClick={handleSaveExtractionPrompt}
                         disabled={extractionPromptSaving}
-                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
+                        className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-all disabled:opacity-40 pressable"
                         style={{
                           backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                           borderColor: `rgba(var(--theme-primary-border))`,
@@ -5632,7 +5641,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         type="button"
                         onClick={handleCancelExtractionPromptEdit}
                         disabled={extractionPromptSaving}
-                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
+                        className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                       >
                         Cancel
                       </button>
@@ -5654,7 +5663,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         setExtractionPromptEditing(true);
                         setExtractionPromptContent(extractionPrompt.content);
                       }}
-                      className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
+                      className="text-[11px] px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable font-medium"
                     >
                       Edit prompt
                     </button>
@@ -5705,11 +5714,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                  value={agentSnapshotLabel}
 	                  onChange={(e) => setAgentSnapshotLabel(e.target.value)}
 	                  placeholder="Optional label"
-	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+	                  className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
 	                />
 	                <button
 	                  onClick={handleCreateAgentSnapshot}
-	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
+	                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	                >
 	                  Create snapshot
 	                </button>
@@ -5804,11 +5813,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                  value={backupLabel}
 	                  onChange={(e) => setBackupLabel(e.target.value)}
 	                  placeholder="Optional label"
-	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+	                  className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
 	                />
 	                <button
 	                  onClick={handleCreateBackup}
-	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
+	                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	                >
 	                  Back up now
 	                </button>
@@ -5876,7 +5885,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                {!migrationRunning && !confirmMigrate && (
 	                  <button
 	                    onClick={() => setConfirmMigrate(true)}
-	                    className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all pressable"
+	                    className="w-full px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all pressable"
 	                  >
 	                    Re-embed all memories
 	                  </button>
@@ -5891,13 +5900,13 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                    <div className="flex gap-2">
 	                      <button
 	                        onClick={handleRunMigration}
-	                        className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all pressable"
+	                        className="px-2.5 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all pressable"
 	                      >
 	                        Start migration
 	                      </button>
 	                      <button
 	                        onClick={() => setConfirmMigrate(false)}
-	                        className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all pressable"
+	                        className="px-2.5 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all pressable font-medium"
 	                      >
 	                        Cancel
 	                      </button>
@@ -5976,7 +5985,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                <div>
 	                  <label className="block text-sm font-medium text-white/60">History window</label>
 	                  <p className="text-xs text-white/30 mb-2">How long to keep historical stats</p>
-	                  <Dropdown
+	                  <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
 	                    state={systemStatsBufferDd}
 	                    trigger={
 	                      <span className="truncate flex-1 text-left text-xs text-white/70">
@@ -5996,7 +6005,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                      <button
 	                        key={opt.value}
 	                        onClick={() => { setSystemStatsBufferSeconds(opt.value); systemStatsBufferDd.close(); }}
-	                        className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center justify-between ${
+	                        className={`w-full text-left px-2.5 py-1.5 text-xs transition-all flex items-center justify-between ${
 	                          opt.value === systemStatsBufferSeconds ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
 	                        }`} 
 	                        style={{
@@ -6279,7 +6288,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	              </div>
 	              <button
 	                onClick={handleAddAutomation}
-	                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
+	                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	              >
 	                Add
 	              </button>
@@ -6408,7 +6417,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                value={task.title}
 	                                onChange={(e) => updateAutomationDraft(task.id, { title: e.target.value })}
 	                                onBlur={() => saveAutomationPatch(task.id, { title: task.title })}
-	                                className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-sm text-white/80 outline-none focus:border-purple-400/30"
+	                                className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none focus:border-purple-400/30"
 	                              />
 	                            )}
 	                            {task.builtIn && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/35">Built-in</span>}
@@ -6428,14 +6437,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                            type="button"
 		                            onClick={() => handleRunAutomation(task.id)}
 		                            disabled={!!automationsRunningTaskId}
-		                            className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all pressable"
+		                            className="px-2.5 py-1 rounded-md text-[11px] bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all pressable font-medium"
 		                          >
 		                            {isRunning ? "Running" : "Run now"}
 		                          </button>
 		                          <button
 		                            type="button"
 		                            onClick={() => handleToggleAutomationEditor(task.id)}
-		                            className={`px-2 py-1 rounded-md text-xs border transition-all pressable ${editorOpen ? "bg-purple-500/15 border-purple-400/25 text-purple-100" : "bg-white/5 border-white/10 text-white/50 hover:text-white/75"}`}
+		                            className={`px-2.5 py-1 rounded-md text-[11px] border transition-all pressable ${editorOpen ? "bg-purple-500/15 border-purple-400/25 text-purple-100" : "bg-white/5 border-white/10 text-white/50 hover:text-white/75"} font-medium`}
 		                            aria-expanded={editorOpen}
 		                          >
 		                            {editorOpen ? "Close" : "Manage"}
@@ -6479,7 +6488,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                {task.schedule.type === "interval" ? "Interval" : task.schedule.type === "daily" ? "Daily" : "Once"}
 	                              </span>
 	                            }
-	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
+	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
 	                            panelClassName="left-0 right-0 top-full mt-1"
 	                            panelContentClassName="max-h-[120px] overflow-y-auto"
 	                          >
@@ -6488,7 +6497,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                handleAutomationScheduleTypeChange(task, "interval");
 	                                scheduleState.close();
 	                              }}
-	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                              className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
 	                                task.schedule.type === "interval" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
@@ -6499,7 +6508,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                handleAutomationScheduleTypeChange(task, "daily");
 	                                scheduleState.close();
 	                              }}
-	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                              className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
 	                                task.schedule.type === "daily" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
@@ -6508,7 +6517,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            {task.schedule.type === "once" && (
 	                              <button
 	                                disabled
-	                                className="w-full text-left px-2 py-1.5 text-xs text-white cursor-default"
+	                                className="w-full text-left px-2.5 py-1.5 text-xs text-white cursor-default"
 	                              >
 	                                Once
 	                              </button>
@@ -6532,7 +6541,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              value={dailyTime}
 	                              onChange={(e) => handleAutomationDailyTimeChange(task, e.target.value)}
 	                              onBlur={() => handleAutomationDailyTimeBlur(task)}
-	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                            />
 	                          </label>
 	                        ) : (
@@ -6547,7 +6556,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                              value={automationIntervalDraft[task.id] ?? everyMinutes}
 	                              onChange={(e) => handleAutomationIntervalChange(task, e.target.value)}
 	                              onBlur={() => handleAutomationIntervalBlur(task)}
-	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                            />
 	                            <span className="text-[11px] text-white/35">min</span>
 	                          </div>
@@ -6563,7 +6572,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                {formatAutomationActivationPolicy(task.activationPolicy)}
 	                              </span>
 	                            }
-	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
+	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
 	                            panelClassName="left-0 right-0 top-full mt-1"
 	                            panelContentClassName="max-h-[150px] overflow-y-auto"
 	                          >
@@ -6573,7 +6582,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                saveAutomationPatch(task.id, { activationPolicy: "idle" });
 	                                activationState.close();
 	                              }}
-	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                              className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "idle" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
@@ -6585,7 +6594,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                saveAutomationPatch(task.id, { activationPolicy: "absent" });
 	                                activationState.close();
 	                              }}
-	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                              className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "absent" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
@@ -6597,7 +6606,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                saveAutomationPatch(task.id, { activationPolicy: "manual_only" });
 	                                activationState.close();
 	                              }}
-	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                              className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "manual_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
 	                              }`} 
 	                            >
@@ -6616,7 +6625,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                value={automationAbsentWindowDraft[task.id]?.start ?? (task.absentWindow?.start ?? "")}
 	                                onChange={(e) => handleAutomationAbsentWindowChange(task, "start", e.target.value)}
 	                                onBlur={() => handleAutomationAbsentWindowBlur(task)}
-	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                              />
 	                              <span className="text-[11px] text-white/35 shrink-0">to</span>
 	                              <input
@@ -6625,7 +6634,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                value={automationAbsentWindowDraft[task.id]?.end ?? (task.absentWindow?.end ?? "")}
 	                                onChange={(e) => handleAutomationAbsentWindowChange(task, "end", e.target.value)}
 	                                onBlur={() => handleAutomationAbsentWindowBlur(task)}
-	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                                className="w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                              />
 	                            </div>
 	                            <span className="block text-[10px] text-white/30">Only count absence within this daily window. End past start crosses midnight. Empty = anytime.</span>
@@ -6674,7 +6683,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                  saveAutomationPatch(task.id, { timeoutMs: clamped * 60_000 });
 	                                }
 	                              }}
-	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                            />
 	                            <span className="text-[11px] text-white/35">min</span>
 	                          </div>
@@ -6705,7 +6714,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                saveAutomationPatch(task.id, { maxIterations: clamped });
 	                              }
 	                            }}
-	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                          />
 	                        </label>
 		                      </div>
@@ -6722,7 +6731,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                            <button
 			                              type="button"
 			                              onClick={() => handleResetAutomationPrompts(task.id)}
-			                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable"
+			                              className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable font-medium"
 			                            >
 			                              Reset prompts
 			                            </button>
@@ -6731,7 +6740,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                            <button
 		                              type="button"
 		                              onClick={() => handleAddAutomationPromptStep(task)}
-		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable"
+		                              className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable font-medium"
 		                            >
 			                              Add prompt
 			                            </button>
@@ -6783,7 +6792,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                                        updateAutomationDraft(task.id, { promptSteps });
 		                                                      }}
 		                                                      onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
-		                                                      className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white/65 outline-none focus:border-purple-400/30"
+		                                                      className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/65 outline-none focus:border-purple-400/30"
 		                                                    />
 		                                                  ) : (
 		                                                    <span className="block text-[11px] text-white/45 flex-1">{step.title}</span>
@@ -6794,7 +6803,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                                        type="button"
 		                                                        onClick={() => handleMoveAutomationPromptStep(task, stepIndex, -1)}
 		                                                        disabled={stepIndex === 0}
-		                                                        className="px-1.5 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
+		                                                        className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
 		                                                      >
 		                                                        Up
 		                                                      </button>
@@ -6802,7 +6811,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                                        type="button"
 		                                                        onClick={() => handleMoveAutomationPromptStep(task, stepIndex, 1)}
 		                                                        disabled={stepIndex === task.promptSteps.length - 1}
-		                                                        className="px-1.5 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
+		                                                        className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
 		                                                      >
 		                                                        Down
 		                                                      </button>
@@ -6810,7 +6819,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                                        type="button"
 		                                                        onClick={() => handleRemoveAutomationPromptStep(task, stepIndex)}
 		                                                        disabled={task.promptSteps.length <= 1}
-		                                                        className="px-1.5 py-1 rounded text-[10px] bg-red-500/10 border border-red-400/20 text-red-200/60 hover:bg-red-500/20 disabled:opacity-30 transition-all pressable"
+		                                                        className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-red-500/10 border border-red-400/20 text-red-200/60 hover:bg-red-500/20 disabled:opacity-30 transition-all pressable"
 		                                                      >
 		                                                        Remove
 		                                                      </button>
@@ -6825,7 +6834,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                                      }}
 	                                                      onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
 		                                                      rows={task.kind === "synthesis" ? 5 : 4}
-		                                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
+		                                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
 		                                                />
 		                                          </div>
 		                                    ))}
@@ -6838,14 +6847,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                        <button
 	                          onClick={() => moveAutomation(task.id, -1)}
 	                          disabled={index === 0}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable"
+	                          className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable font-medium"
 	                        >
 	                          Up
 	                        </button>
 	                        <button
 	                          onClick={() => moveAutomation(task.id, 1)}
 	                          disabled={index === list.length - 1}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable"
+	                          className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable font-medium"
 	                        >
 	                          Down
 	                        </button>
@@ -6869,7 +6878,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                          ) : (
 	                            <button
 	                              onClick={() => handleDeleteAutomationClick(task.id)}
-	                              className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all pressable"
+	                              className="ml-auto px-2.5 py-1 rounded-md text-[11px] bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all pressable font-medium"
 	                            >
 	                              Delete
 	                            </button>
@@ -6885,7 +6894,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                            <button
 	                              onClick={() => loadAutomationRuns(task.id)}
 	                              disabled={historyLoading}
-	                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 disabled:opacity-40 transition-all pressable"
+	                              className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 disabled:opacity-40 transition-all pressable font-medium"
 	                            >
 	                              {historyLoading ? "Loading" : "Refresh"}
 	                            </button>
@@ -6995,7 +7004,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                        </div>
 	                        <button
 	                          onClick={() => handleDeleteAutomationClick(task.id)}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/30 hover:text-white/60 transition-all pressable"
+	                          className="px-2.5 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/30 hover:text-white/60 transition-all pressable font-medium"
 	                        >
 	                          Clear
 	                        </button>
@@ -7152,7 +7161,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </div>
                   <div className="space-y-1">
                   <label className="block text-sm text-white/50">TTS Backend</label>
-                  <Dropdown
+                  <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                     state={backendDd}
                     trigger={
                       <span className="truncate flex-1 text-left">
@@ -7170,7 +7179,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7186,7 +7195,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7202,7 +7211,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.backend === "supertonic-3" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7279,7 +7288,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     {/* Boundary tier */}
                     <div className="space-y-1">
                       <label className="block text-sm text-white/50">Boundary Detection</label>
-                      <Dropdown
+                      <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                         state={boundaryTierDd}
                         trigger={
                           <span className="truncate flex-1 text-left">
@@ -7295,7 +7304,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                             applyTtsSettingsUpdate(updated);
                             boundaryTierDd.close();
                           }}
-                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                          className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                             ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                           }`} 
                           style={{
@@ -7311,7 +7320,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                             applyTtsSettingsUpdate(updated);
                             boundaryTierDd.close();
                           }}
-                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                          className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                             ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                           }`} 
                           style={{
@@ -7329,7 +7338,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 {/* Text preprocessing mode */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">Text Preprocessing</label>
-                  <Dropdown
+                  <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                     state={textModeDd}
                     trigger={
                       <span className="truncate flex-1 text-left">
@@ -7347,7 +7356,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         textModeDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "minimal" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7364,7 +7373,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         textModeDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "standard" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7381,7 +7390,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                         applyTtsSettingsUpdate(updated);
                         textModeDd.close();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "stripped" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`} 
                       style={{
@@ -7407,7 +7416,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 {/* Voice selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">Voice</label>
-                  <Dropdown
+                  <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                     state={voiceDd}
                     trigger={
                       <span className="truncate flex-1 text-left">
@@ -7434,7 +7443,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                               applyTtsSettingsUpdate(updated);
                               voiceDd.close();
                             }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                               voice.id === ttsSettings.voice
                                 ? "text-white"
                                 : "text-white/60 hover:bg-white/10 hover:text-white/80"
@@ -7482,14 +7491,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     value={ttsTestText}
                     onChange={(e) => setTtsTestText(e.target.value)}
                     rows={3}
-                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-400/50 resize-y"
+                    className="w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-400/50 resize-y"
                     placeholder="Type something to hear it read aloud…"
                   />
                   <button
                     type="button"
                     onClick={handleTestTts}
                     disabled={ttsTesting || !ttsTestText.trim()}
-                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full px-3 py-1.5 rounded-md text-xs font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {ttsTesting ? "Playing…" : "Test Voice"}
                   </button>
@@ -7518,7 +7527,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                               const updated = await updateTTSSettings({ kokoroPitchShiftProcessor: method });
                               applyTtsSettingsUpdate(updated);
                             }}
-                            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-all ${
+                            className={`flex-1 px-3 py-1.5 text-[11px] font-medium transition-all ${
                               ttsSettings.kokoroPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
@@ -7562,7 +7571,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   <div className="space-y-3 pt-2 border-t border-white/10">
                     <div className="space-y-1">
                       <label className="block text-sm text-white/50">Language</label>
-                      <Dropdown
+                      <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                         state={supertonicLanguageDd}
                         trigger={
                           <span className="truncate flex-1 text-left">
@@ -7579,7 +7588,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                               applyTtsSettingsUpdate(updated);
                               supertonicLanguageDd.close();
                             }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${
                               ttsSettings.supertonicLanguage === language.code
                                 ? "text-white"
                                 : "text-white/60 hover:bg-white/10 hover:text-white/80"
@@ -7605,7 +7614,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                               const updated = await updateTTSSettings({ supertonicPitchShiftProcessor: method });
                               applyTtsSettingsUpdate(updated);
                             }}
-                            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-all ${
+                            className={`flex-1 px-3 py-1.5 text-[11px] font-medium transition-all ${
                               ttsSettings.supertonicPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
@@ -7750,7 +7759,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             <button
               onClick={handleAddPasskey}
               disabled={passkeyAdding}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 pressable"
+              className="w-full px-3 py-1.5 rounded-md text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 pressable"
               style={{
                 backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                 borderColor: `rgba(var(--theme-primary-border))`,
@@ -7772,7 +7781,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div className="pt-2">
             <button
               onClick={onOpenSetup}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium text-white/50 hover:text-white/70 hover:bg-white/5 transition-all flex items-center justify-center gap-2 pressable"
+              className="w-full px-3 py-1.5 rounded-md text-xs font-medium text-white/50 hover:text-white/70 hover:bg-white/5 transition-all flex items-center justify-center gap-2 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 3v18" />
@@ -7792,7 +7801,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 type="button"
                 onClick={() => void refreshAppUpdate(true)}
                 disabled={appUpdateLoading}
-                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all pressable"
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all pressable"
               >
                 {appUpdateLoading ? "Checking..." : "Check"}
               </button>
@@ -7850,7 +7859,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     href={appUpdate.latest.htmlUrl}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 transition-all pressable"
+                    className="inline-flex shrink-0 items-center justify-center px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 transition-all pressable"
                   >
                     Open Release
                   </a>
@@ -7862,7 +7871,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div className="pt-2 border-t border-white/10">
             <button
               onClick={onLogout}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2 pressable"
+              className="w-full px-3 py-1.5 rounded-md text-xs font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -7880,7 +7889,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/10 shrink-0">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-white/60 hover:text-white/80 hover:bg-white/5 transition-all pressable"
+            className="px-3 py-1.5 rounded-md text-xs text-white/60 hover:text-white/80 hover:bg-white/5 transition-all pressable font-medium"
           >
             Cancel
           </button>
@@ -7894,7 +7903,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               setTimeout(() => setAppliedFeedback(false), 2000);
             }}
             disabled={applyingSlot === "inference" || Boolean(customThemeValidationError)}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
           >
             {applyingSlot === "inference" ? "Applying..." : appliedFeedback ? "Applied" : "Apply"}
           </button>
@@ -7906,7 +7915,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
               await onSave(nextSettings);
             }}
             disabled={applyingSlot === "inference" || Boolean(customThemeValidationError)}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
             {applyingSlot === "inference" ? "Applying..." : "Save and Close"}
           </button>

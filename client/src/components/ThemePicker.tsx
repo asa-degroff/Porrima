@@ -138,7 +138,7 @@ export function ThemePicker({
             key={option.value}
             onClick={() => handleTileClick(option.value)}
             aria-pressed={theme === option.value}
-            className={`relative px-3 py-3 rounded-lg text-sm font-medium border transition-all overflow-hidden min-h-12 ${
+            className={`relative px-3 py-1.5 rounded-md text-xs font-medium border transition-all overflow-hidden min-h-9 ${
               theme === option.value
                 ? "border-white/30"
                 : "border-white/10 hover:border-white/20"
@@ -173,7 +173,7 @@ export function ThemePicker({
                   onClick={() => loadPreset(preset)}
                   aria-pressed={active}
                   title={active ? `Editing “${preset.name}”` : `Load “${preset.name}”`}
-                  className={`relative px-3 py-2 rounded-lg text-sm font-medium border transition-all overflow-hidden min-h-10 ${
+                  className={`relative px-3 py-1.5 rounded-md text-xs font-medium border transition-all overflow-hidden min-h-8 ${
                     active
                       ? "border-white/30"
                       : "border-white/10 hover:border-white/20"
@@ -231,7 +231,7 @@ export function ThemePicker({
                   placeholder="Save as preset…"
                   maxLength={32}
                   aria-label="Preset name"
-                  className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/30"
+                  className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/10 px-2.5 py-1 text-xs text-white/90 placeholder:text-white/30"
                 />
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   {boundPreset && onSavePresetAsNew && (
@@ -240,7 +240,7 @@ export function ThemePicker({
                       onClick={() => onSavePresetAsNew(presetNameDraft)}
                       disabled={!canSavePreset}
                       title={`Save these colors as a new theme instead of overwriting “${boundPreset.name}”`}
-                      className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
+                      className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
                     >
                       Save as new
                     </button>
@@ -250,7 +250,7 @@ export function ThemePicker({
                     onClick={() => onSavePreset?.(presetNameDraft)}
                     disabled={!canSavePreset}
                     title={boundPreset ? `Overwrite “${boundPreset.name}” with these colors` : "Save these colors as a new theme"}
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 pressable"
                   >
                     {boundPreset ? "Update preset" : "Save preset"}
                   </button>
@@ -260,7 +260,7 @@ export function ThemePicker({
                       onClick={handleDeleteClick}
                       aria-label={confirmDeleteArmed ? `Confirm delete “${boundPreset.name}”` : `Delete “${boundPreset.name}”`}
                       title={confirmDeleteArmed ? "Click again to delete" : "Delete this preset"}
-                      className={`grid h-9 w-9 place-items-center rounded-md border transition-colors pressable ${
+                      className={`grid h-7 w-7 place-items-center rounded-md border transition-colors pressable ${
                         confirmDeleteArmed
                           ? "border-red-400/40 bg-red-500/20 text-red-200 hover:bg-red-500/30"
                           : "border-white/10 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
@@ -290,13 +290,13 @@ export function ThemePicker({
 
 function ColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <label className="flex items-center gap-3 rounded-md border border-white/10 bg-black/10 px-3 py-2 cursor-pointer">
+    <label className="flex items-center gap-3 rounded-md border border-white/10 bg-black/10 px-2.5 py-1.5 cursor-pointer">
       <input
         type="color"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={`${label} color`}
-        className="h-9 w-9 shrink-0 rounded border border-white/20 bg-transparent cursor-pointer"
+        className="h-8 w-8 shrink-0 rounded border border-white/20 bg-transparent cursor-pointer"
       />
       <span className="min-w-0">
         <span className="block text-xs text-white/60">{label}</span>
