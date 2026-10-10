@@ -125,6 +125,10 @@ export function BrowserViewer({
 
   const onFramePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
+    // A gesture's trailing click (if any) always arrives before the next
+    // pointerdown — clearing here prevents a pointercancel (which emits no
+    // click) from leaving the suppress flag set and eating the next enlarge.
+    suppressClickRef.current = false;
     dragState.current = {
       pointerId: e.pointerId,
       startX: e.clientX,

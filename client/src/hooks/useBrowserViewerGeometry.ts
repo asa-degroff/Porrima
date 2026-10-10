@@ -138,16 +138,17 @@ export function useBrowserViewerGeometry(
       const bounds = { w: target.clientWidth, h: target.clientHeight };
       if (bounds.w <= 0 || bounds.h <= 0) return;
       boundsRef.current = bounds;
-      setGeom((g) => {
-        const clamped = clampGeometry(g ?? defaultGeometry(bounds), bounds, collapsed);
-        if (g && clamped.x === g.x && clamped.y === g.y && clamped.w === g.w) return g;
-        writeStoredGeometry(clamped);
-        return clamped;
-      });
+      // Clamp off geomRef (not inside a state updater — the persistence
+      // write would be an impure side effect StrictMode double-invokes).
+      const current = geomRef.current;
+      const clamped = clampGeometry(current ?? defaultGeometry(bounds), bounds, collapsedRef.current);
+      if (current && clamped.x === current.x && clamped.y === current.y && clamped.w === current.w) return;
+      setGeom(clamped);
+      writeStoredGeometry(clamped);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [collapsed, wrapperRef]);
+  }, [wrapperRef]);
 
   const setGeometry = useCallback(
     (next: ViewerGeometry, opts?: { persist?: boolean }) => {
