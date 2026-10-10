@@ -284,6 +284,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [P0B Storage Concurrency](docs/design/p0b-storage-concurrency.md)
 - [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
 - [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (design; P4a in implementation)
+- [Browser Observability](docs/design/browser-observability.md) — Live screenshot PiP viewer (P1 client-only, P2 auto-capture)
 
 Release and onboarding:
 

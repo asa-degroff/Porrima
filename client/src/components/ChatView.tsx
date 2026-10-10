@@ -13,6 +13,8 @@ import { OfflineIndicator } from "./OfflineIndicator";
 import { BlockIndicator } from "./BlockIndicator";
 import { SkillSelector } from "./SkillSelector";
 import { PinnedPanel } from "./PinnedPanel";
+import { BrowserViewer } from "./BrowserViewer";
+import { useBrowserViewer } from "../hooks/useBrowserViewer";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
 import { ProgressRing } from "./ProgressRing";
@@ -455,6 +457,12 @@ export function ChatView({
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [tooltipOffsetX, setTooltipOffsetX] = useState(0);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
+  // Live browser view: the latest browser_screenshot derived from message data
+  // (docs/design/browser-observability.md Phase 1 — no dedicated event stream).
+  const browserFrame = useBrowserViewer(messages);
+  const browserToolActive = activeTools.some(
+    (t) => t.status === "running" && t.name.startsWith("browser_")
+  );
   const availableSkillNames = useMemo(
     () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
     [skills]
@@ -1047,6 +1055,11 @@ export function ChatView({
             </svg>
             <span className="text-xs font-medium">New</span>
           </button>
+        )}
+
+        {/* Persistent browser PiP — latest agent screenshot, updated in place */}
+        {browserFrame && !isSwitching && !isFirstMessageMode && (
+          <BrowserViewer frame={browserFrame} active={browserToolActive} />
         )}
       </div>
 
