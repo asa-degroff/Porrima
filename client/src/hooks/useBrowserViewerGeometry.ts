@@ -31,12 +31,13 @@ export interface ViewerBounds {
 export const VIEWER_MIN_W = 120;
 export const VIEWER_MAX_W = 520;
 export const VIEWER_MARGIN = 8;
-const CHIP_SIZE = 40;
+/** Minimized chip size — it docks at the card rectangle's top-right corner. */
+export const CHIP_SIZE = 40;
 export const GEOM_KEY = "porrima-browser-viewer-geom";
 
 /** Card height for clamping: the 16:10 frame plus the fixed footer row. */
-export function estimateCardHeight(w: number, collapsed: boolean): number {
-  return collapsed ? CHIP_SIZE : Math.round((w * 10) / 16) + 28;
+export function estimateCardHeight(w: number): number {
+  return Math.round((w * 10) / 16) + 28;
 }
 
 /** Default docked position: top-right — the original fixed placement. */
@@ -48,17 +49,17 @@ export function defaultGeometry(bounds: ViewerBounds): ViewerGeometry {
 
 /**
  * Keep geometry inside the wrapper: width within [min, min(max, fits)],
- * x/y inside the margin box left for the card — or the 40px chip when
- * collapsed, which preserves w so the card can restore in place.
+ * x/y inside the margin box left for the card. Always clamps against the
+ * CARD rectangle — the collapsed chip is derived from it (top-right
+ * corner), so a clamped card guarantees a visible chip.
  */
 export function clampGeometry(
   g: ViewerGeometry,
   bounds: ViewerBounds,
-  collapsed: boolean,
 ): ViewerGeometry {
   const maxW = Math.min(VIEWER_MAX_W, bounds.w - 2 * VIEWER_MARGIN);
-  const w = collapsed ? g.w : Math.min(Math.max(g.w, Math.min(VIEWER_MIN_W, maxW)), maxW);
-  const h = collapsed ? CHIP_SIZE : estimateCardHeight(w, false);
+  const w = Math.min(Math.max(g.w, Math.min(VIEWER_MIN_W, maxW)), maxW);
+  const h = estimateCardHeight(w);
   const maxX = Math.max(VIEWER_MARGIN, bounds.w - w - VIEWER_MARGIN);
   const maxY = Math.max(VIEWER_MARGIN, bounds.h - h - VIEWER_MARGIN);
   return {
@@ -104,14 +105,11 @@ export interface BrowserViewerGeometry {
 
 export function useBrowserViewerGeometry(
   wrapperRef: RefObject<HTMLElement | null>,
-  collapsed: boolean,
 ): BrowserViewerGeometry {
   const [geom, setGeom] = useState<ViewerGeometry | null>(loadStoredGeometry);
   const boundsRef = useRef<ViewerBounds | null>(null);
   const geomRef = useRef<ViewerGeometry | null>(null);
   geomRef.current = geom;
-  const collapsedRef = useRef(collapsed);
-  collapsedRef.current = collapsed;
 
   // Clamp against the live wrapper on mount and on every geometry change
   // (idempotent — converges in one pass).
@@ -122,11 +120,11 @@ export function useBrowserViewerGeometry(
     if (bounds.w <= 0 || bounds.h <= 0) return; // no layout (e.g. jsdom)
     boundsRef.current = bounds;
     const base = geom ?? defaultGeometry(bounds);
-    const clamped = clampGeometry(base, bounds, collapsed);
+    const clamped = clampGeometry(base, bounds);
     if (!geom || clamped.x !== geom.x || clamped.y !== geom.y || clamped.w !== geom.w) {
       setGeom(clamped);
     }
-  }, [geom, collapsed, wrapperRef]);
+  }, [geom, wrapperRef]);
 
   // Re-clamp when the wrapper itself resizes (window, pinned panel).
   useEffect(() => {
@@ -141,7 +139,7 @@ export function useBrowserViewerGeometry(
       // Clamp off geomRef (not inside a state updater — the persistence
       // write would be an impure side effect StrictMode double-invokes).
       const current = geomRef.current;
-      const clamped = clampGeometry(current ?? defaultGeometry(bounds), bounds, collapsedRef.current);
+      const clamped = clampGeometry(current ?? defaultGeometry(bounds), bounds);
       if (current && clamped.x === current.x && clamped.y === current.y && clamped.w === current.w) return;
       setGeom(clamped);
       writeStoredGeometry(clamped);
@@ -155,7 +153,7 @@ export function useBrowserViewerGeometry(
       const bounds = boundsRef.current;
       const clamped =
         bounds && bounds.w > 0 && bounds.h > 0
-          ? clampGeometry(next, bounds, collapsedRef.current)
+          ? clampGeometry(next, bounds)
           : next;
       setGeom(clamped);
       if (opts?.persist !== false) writeStoredGeometry(clamped);

@@ -20,10 +20,13 @@ function makeFrame(url: string, pageUrl = "https://example.com/page"): BrowserVi
  */
 function renderViewer(
   frame: BrowserViewerFrame | null,
-  opts: { active?: boolean; storedGeom?: string; consentPending?: boolean } = {},
+  opts: { active?: boolean; collapsed?: boolean; storedGeom?: string; consentPending?: boolean } = {},
 ) {
   if (opts.storedGeom !== undefined) {
     localStorage.setItem(GEOM_KEY, opts.storedGeom);
+  }
+  if (opts.collapsed) {
+    localStorage.setItem("porrima-browser-viewer-collapsed", "true");
   }
   const wrapper = document.createElement("div");
   wrapper.setAttribute("data-render-wrapper", "true");
@@ -139,6 +142,29 @@ describe("BrowserViewer", () => {
   it("surfaces the remote-debugging consent hint when pending", () => {
     renderViewer(null, { active: true, consentPending: true });
     expect(screen.getByText(/allow remote debugging/i)).toBeTruthy();
+  });
+
+  it("docks the chip at the card's top-right corner", () => {
+    const { wrapper } = renderViewer(makeFrame("/api/tool-result-images/n/image.png"), {
+      collapsed: true,
+      storedGeom: JSON.stringify({ x: 100, y: 200, w: 260 }),
+    });
+    const style = cardStyle(wrapper);
+    expect(style.left).toBe("320px"); // 100 + 260 - 40 (chip size)
+    expect(style.top).toBe("200px");
+  });
+
+  it("restores the card at its original position when the chip expands", async () => {
+    const user = userEvent.setup();
+    const { wrapper } = renderViewer(makeFrame("/api/tool-result-images/o/image.png"), {
+      collapsed: true,
+      storedGeom: JSON.stringify({ x: 100, y: 200, w: 260 }),
+    });
+    await user.click(screen.getByRole("button", { name: /open browser view/i }));
+    const style = cardStyle(wrapper);
+    expect(style.left).toBe("100px");
+    expect(style.top).toBe("200px");
+    expect(style.width).toBe("260px");
   });
 
   it("docks at the default position when no geometry is stored", () => {

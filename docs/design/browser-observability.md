@@ -224,10 +224,11 @@ The card is now movable and width-resizable, still zero-server:
   that follows a drag is suppressed). **Width-only resize** via a
   bottom-right corner grip — height stays locked to the 16:10 frame aspect
   (free 2D would make `object-cover` crop unpredictably). A reset button
-  restores the default docked position. The chip on minimize **sits where
-  the card was** — the window shrinks in place and restores in place.
-  Keyboard: arrows nudge (shift = 3× step), `+`/`-` resize, while the frame
-  is focused.
+  restores the default docked position. On minimize the chip **docks at the
+  card rectangle's top-right corner** (where the minimize button was — under
+  the cursor) and is itself **draggable**: the window moves with it and
+  restores at the same spot. Keyboard: arrows nudge (shift = 3× step),
+  `+`/`-` resize, while the frame is focused.
 - `ChatView.tsx` — the messages wrapper carries `messagesAreaRef` (the
   measured bounds source); the scroll-to-bottom pill bumps to `z-30` so it
   stays clickable when the card is parked in its corner (lightbox remains
@@ -239,10 +240,19 @@ The card is now movable and width-resizable, still zero-server:
   gesture end and on clamping events, not per pointer move.
 
 Decisions locked with the user: width-only fixed-aspect resize (not free
-2D), drag-from-image (not a handle strip), chip follows position.
+2D), drag-from-image (not a handle strip), chip docks top-right of the
+card and is draggable.
 
-Caveat: jsdom has no pointer capture, so the drag/resize wiring is
-field-verified, not unit-tested — the clamping math (the part with real
+**Revision (10-10, post-review):** the original chip sat at the card's
+top-left; it now docks at the top-right corner and moves by drag, so it
+lands where the minimize button was. Because the chip is *derived* from the
+card rectangle, `clampGeometry` no longer takes a `collapsed` mode — it
+always clamps the card, which guarantees a visible chip (a clamped card
+rectangle always contains its top-right corner inside the wrapper). Chip
+drag-vs-expand reuses the frame's 4px threshold and click suppression.
+
+Caveat: jsdom has no pointer capture, so the drag/resize/chip-drag wiring
+is field-verified, not unit-tested — the clamping math (the part with real
 edge cases) is fully unit-tested instead.
 
 ## 10. Phase 2 — live follow-along, what shipped (2026-10-10)

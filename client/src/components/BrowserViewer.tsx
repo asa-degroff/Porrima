@@ -22,7 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RefObject } from "react";
 import type { BrowserViewerFrame } from "../hooks/useBrowserViewer";
-import { useBrowserViewerGeometry } from "../hooks/useBrowserViewerGeometry";
+import { CHIP_SIZE, useBrowserViewerGeometry } from "../hooks/useBrowserViewerGeometry";
 import { readStoredValue, writeStoredValue } from "../lib/storage";
 import { ImageLightbox } from "./ImageLightbox";
 import { ToolIcon } from "./ToolIcons";
@@ -91,10 +91,7 @@ export function BrowserViewer({
 }) {
   const [collapsed, setCollapsed] = useState(() => readStoredValue(COLLAPSED_KEY) === "true");
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const { geom, setGeometry, persistGeometry, resetGeometry } = useBrowserViewerGeometry(
-    wrapperRef,
-    collapsed,
-  );
+  const { geom, setGeometry, persistGeometry, resetGeometry } = useBrowserViewerGeometry(wrapperRef);
 
   const dragState = useRef<DragState | null>(null);
   const gripState = useRef<GripState | null>(null);
@@ -186,6 +183,15 @@ export function BrowserViewer({
     setLightboxOpen(true);
   };
 
+  /** The chip's click expands — same drag-vs-click suppression as the frame. */
+  const onChipClick = () => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+    setCollapsed(false);
+  };
+
   // Keyboard access: arrows nudge (shift for 3x), +/- resize.
   const onFrameKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     const step = e.shiftKey ? 24 : 8;
@@ -232,14 +238,26 @@ export function BrowserViewer({
   };
 
   if (collapsed) {
-    // The chip sits where the card was — the window shrinks in place.
+    // The chip docks at the card rectangle's top-right corner — where the
+    // minimize button was, so it lands under the cursor. It is draggable:
+    // the window moves with it and restores at the same spot.
     return (
-      <div data-browser-viewer className="absolute z-20" style={{ left: x, top: y }}>
+      <div
+        data-browser-viewer
+        className="absolute z-20 select-none"
+        style={{ left: x + w - CHIP_SIZE, top: y }}
+      >
         <button
-          onClick={() => setCollapsed(false)}
-          className="relative flex items-center justify-center w-10 h-10 rounded-full depth-raised bg-black/40 border border-white/20 text-white/70 hover:text-white hover:bg-black/55 transition-all shadow-lg backdrop-blur-sm pressable"
-          title="Open browser view"
-          aria-label="Open browser view"
+          onPointerDown={onFramePointerDown}
+          onPointerMove={onFramePointerMove}
+          onPointerUp={onFramePointerUp}
+          onPointerCancel={onFramePointerUp}
+          onClick={onChipClick}
+          className={`relative flex items-center justify-center w-10 h-10 rounded-full depth-raised bg-black/40 border border-white/20 text-white/70 hover:text-white hover:bg-black/55 transition-all shadow-lg backdrop-blur-sm pressable touch-none select-none ${
+            interacting ? "cursor-grabbing" : "cursor-grab"
+          }`}
+          title="Open browser view · drag to move"
+          aria-label="Open browser view. Drag to move."
         >
           <ToolIcon name="browser_navigate" className="w-5 h-5" />
           {hasUnseenUpdate && (
