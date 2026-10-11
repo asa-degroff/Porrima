@@ -32,6 +32,7 @@ import { sanitizeProviderText, transformMessagesForProvider } from "./pi-message
 import { resolveCanonicalCachedTokens } from "./model-stats.js";
 import { recordContextObservation } from "./context-high-water.js";
 import { recordLlmRequestStart, recordLlmRequestEnd } from "./request-log.js";
+import { observeLlamaRequestBody } from "./kv-snapshot.js";
 import { countLlamaTextTokens } from "./token-count.js";
 import { getSettings } from "./chat-storage.js";
 
@@ -1950,6 +1951,22 @@ export const streamOpenAICompat = (
           console.warn("[request-log] start capture failed:", err instanceof Error ? err.message : err);
         }
       }
+      // KV snapshot parking (docs/design/kv-snapshot-parking.md §5.4): observe
+      // the wire head of this request for the digest gate, and on iteration 1
+      // of a lease-pinned turn, restore the parked snapshot before dispatch
+      // when tier-1 residency is cold. The call is total by contract — parking
+      // can delay the pre-send by at most one budgeted restore, never disturb
+      // the request or the byte-identical KV prefix.
+      if (typeof explicitDebugChatId === "string" && useLlamaSlotLease && llamaSlotLease) {
+        await observeLlamaRequestBody({
+          chatId: explicitDebugChatId,
+          lease: llamaSlotLease,
+          body,
+          turnId: requestMeta?.turnId,
+          iteration: requestMeta?.iteration ?? 0,
+        });
+      }
+
       const onModelProgress = getModelProgressCallback(options);
       const showIndicator = getShowIndicatorFromOptions(options);
 

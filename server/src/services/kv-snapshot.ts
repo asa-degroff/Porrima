@@ -1,8 +1,11 @@
 import Database from "better-sqlite3";
+import { createHash } from "crypto";
 import { access, readdir, statfs, unlink } from "fs/promises";
 import { appDataPath, KV_CACHE_DIR } from "./paths.js";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import { liveStreams } from "./live-streams.js";
+import { onLlmRequestEvent } from "./request-log.js";
+import { hasLlamaCacheTargetWarmRecord } from "./llama-cache-residency.js";
 
 /**
  * KV snapshot parking — Phase 2 (registry + save + budget/prune) of
@@ -201,9 +204,200 @@ export function listKvSnapshots(): KvSnapshotRow[] {
   return rows.map(toRow);
 }
 
-/** Open the registry, run the startup sweep. Idempotent; called from index.ts. */
+// ---------------------------------------------------------------------------
+// Restore gate (doc §5.4) — provider-side observation, pre-iteration-1
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable-prefix digest as observed on the WIRE (§5.2, landed refinement):
+ * the sha256 of [system head, tool surface] from the exact body llama.cpp
+ * will tokenize. The head is the frozen prefix by Porrima's construction
+ * (memory deltas ride at the tail), so it changes exactly when the parked KV
+ * stops matching — persona/extract prompt rewrites, tool-surface changes,
+ * compaction. It gates WASTED restores only; correctness never depends on it
+ * (§2.7: the server validates token identity and re-prefills from the first
+ * divergence).
+ */
+export function computeLlamaPrefixDigest(body: any): string {
+  const head = body?.system ?? body?.messages?.[0] ?? null;
+  return createHash("sha256")
+    .update(JSON.stringify([head ?? null, body?.tools ?? null]))
+    .digest("hex");
+}
+
+/** Latest wire-head digest per chat, observed by the provider on every
+ *  recorded turn request. Stamped into the row at park time. */
+const turnPrefixDigests = new Map<string, string>();
+/** One restore attempt per (chat, turn): turnId-keyed, mid-turn compaction
+ *  stream resets cannot re-arm it. */
+const restoreAttemptTurns = new Map<string, string>();
+/** Restore markers awaiting iteration-1 usage confirmation (breaker input). */
+const pendingRestoreValidation = new Map<string, { chatId: string; turnId?: string; restoredTokens: number }>();
+
+const BUILD_TAG_TTL_MS = 60_000;
+const buildTagCache = new Map<string, { tag: string; at: number }>();
+
+async function cachedBuildTag(baseUrl: string): Promise<string> {
+  const hit = buildTagCache.get(baseUrl);
+  if (hit && Date.now() - hit.at < BUILD_TAG_TTL_MS) return hit.tag;
+  const tag = await probeBuildTag(baseUrl);
+  if (tag) buildTagCache.set(baseUrl, { tag, at: Date.now() });
+  return tag;
+}
+
+/**
+ * Single provider-side observation point, called before EVERY dispatched
+ * turn request: records the wire-head digest, and on iteration 1 of a
+ * lease-pinned request, gates and (if warranted) performs the pre-send
+ * restore. Total by contract — must never throw toward the dispatch.
+ */
+export async function observeLlamaRequestBody(input: {
+  chatId: string;
+  lease: LlamaSlotLease;
+  body: any;
+  turnId?: string;
+  iteration: number;
+}): Promise<void> {
+  try {
+    const digest = computeLlamaPrefixDigest(input.body);
+    turnPrefixDigests.set(input.chatId, digest);
+    if (input.iteration !== 1) return; // restore is a start-of-turn operation
+
+    const settings = await readSettings();
+    const policy = resolveKvSnapshotSettings(settings);
+    if (!policy.enabled) return;
+
+    // One attempt per turn.
+    if (input.turnId && restoreAttemptTurns.get(input.chatId) === input.turnId) return;
+    if (input.turnId) restoreAttemptTurns.set(input.chatId, input.turnId);
+
+    const row = getKvSnapshot(input.chatId);
+    if (!row || row.state !== "ready" || !row.filename) return;
+    if (row.poolKey !== input.lease.poolKey) return; // chat moved pools
+
+    // Breaker (§5.4 step 5): confirmed-miss restores stop until a re-park.
+    if (row.missCount >= 2) {
+      console.log(`${LOG} chat=${short(input.chatId)} restore skipped: breaker (${row.missCount} misses)`);
+      return;
+    }
+
+    // Digest gate: head drift makes the restore worthless — skip, don't
+    // invalidate; the row's file stays valid for its own stored prefix.
+    if (row.prefixDigest && row.prefixDigest !== digest) {
+      console.log(`${LOG} chat=${short(input.chatId)} restore skipped: prefix digest drift`);
+      return;
+    }
+
+    // Build gate (§2.5/D5): files are only valid for the build that wrote
+    // them. A known mismatch invalidates; unknown-on-either-side is allowed
+    // through (llama.cpp's own version checks in the save file are the
+    // backstop, and a failure there is just a cold turn, as today).
+    const live = await cachedBuildTag(input.lease.baseUrl);
+    if (row.buildTag && live && row.buildTag !== live) {
+      console.log(
+        `${LOG} chat=${short(input.chatId)} snapshot invalidated: build ${row.buildTag} -> ${live}`,
+      );
+      setState(input.chatId, "stale");
+      return;
+    }
+
+    // Residency gate (§5.4 step 2): if tier 1 (RAM prompt cache) has this
+    // chat's prefix confirmed-warm, tier 2 must not touch it.
+    if (hasLlamaCacheTargetWarmRecord({
+      chatId: input.chatId,
+      baseUrl: input.lease.baseUrl,
+      modelId: input.lease.modelId,
+      contextWindow: input.lease.contextWindow,
+    })) {
+      return;
+    }
+
+    const restore = await callSlotAction(input.lease, "restore", row.filename, policy.opTimeoutMs);
+    if (!restore.ok) {
+      console.warn(`${LOG} chat=${short(input.chatId)} restore failed: ${restore.error}`);
+      return;
+    }
+    getDb()
+      .prepare("UPDATE kv_snapshots SET last_used_at = ?, restore_count = restore_count + 1 WHERE chat_id = ?")
+      .run(Date.now(), input.chatId);
+    pendingRestoreValidation.set(
+      `${input.chatId}:${input.turnId ?? ""}`,
+      { chatId: input.chatId, turnId: input.turnId, restoredTokens: restore.nTokens ?? row.nTokens },
+    );
+    console.log(
+      `${LOG} chat=${short(input.chatId)} restored slot=${input.lease.slotId} tokens=${restore.nTokens ?? row.nTokens} ms=${restore.ms ?? "n/a"}`,
+    );
+  } catch (error: any) {
+    console.warn(`${LOG} request observation failed:`, error?.message || error);
+  }
+}
+
+/**
+ * Breaker input (§5.4 step 5): iteration-1 usage of a turn that began with a
+ * restore confirms whether the parked KV actually hit. Wire-truth
+ * cached_tokens/prompt_tokens >= 0.5 counts as a hit (partial prefixes still
+ * save most of the prefill and are not the breaker's problem); anything
+ * below marks the park as ineffective for this chat. A re-park resets the
+ * count (see the save success path).
+ */
+export function validateRestoreFromUsage(input: {
+  chatId: string;
+  turnId?: string;
+  promptTokens?: number | null;
+  cachedTokens?: number | null;
+}): void {
+  const key = `${input.chatId}:${input.turnId ?? ""}`;
+  const pending = pendingRestoreValidation.get(key);
+  if (!pending) return;
+  pendingRestoreValidation.delete(key);
+
+  const prompt = input.promptTokens ?? 0;
+  const cached = input.cachedTokens ?? 0;
+  const row = getKvSnapshot(input.chatId);
+  if (!row) return;
+
+  if (prompt > 0 && cached / prompt >= 0.5) {
+    if (row.missCount > 0) {
+      getDb().prepare("UPDATE kv_snapshots SET miss_count = 0 WHERE chat_id = ?").run(input.chatId);
+    }
+    console.log(
+      `${LOG} chat=${short(input.chatId)} restore confirmed: cached ${cached}/${prompt}`,
+    );
+    return;
+  }
+  getDb()
+    .prepare("UPDATE kv_snapshots SET miss_count = miss_count + 1 WHERE chat_id = ?")
+    .run(input.chatId);
+  console.warn(
+    `${LOG} chat=${short(input.chatId)} restore missed: cached ${cached}/${prompt} (miss=${row.missCount + 1})`,
+  );
+}
+
+let requestEventsWired = false;
+
+/** Open the registry, run the startup sweep, wire restore-usage validation.
+ *  Idempotent; called from index.ts. */
 export function initializeKvSnapshotStore(): void {
   getDb();
+  if (!requestEventsWired) {
+    requestEventsWired = true;
+    // The request-log end events carry wire-truth usage (D7) — the breaker's
+    // only honest input. Listener failures are contained by the emitter.
+    onLlmRequestEvent((event) => {
+      if (event.type === "end" && event.iteration === 1 && event.status === "done") {
+        try {
+          validateRestoreFromUsage({
+            chatId: event.chatId,
+            turnId: event.turnId,
+            promptTokens: event.promptTokens,
+            cachedTokens: event.cachedTokens,
+          });
+        } catch (error: any) {
+          console.warn(`${LOG} usage validation failed:`, error?.message || error);
+        }
+      }
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -360,23 +554,36 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     return;
   }
 
-  const { nSaved, nWritten, saveMs } = save;
+  const parkedTokens = save.nTokens ?? lastUsage;
+  const parkedBytes = save.nBytes ?? estimate;
   const database = getDb();
+  // A successful park resets the restore breaker (§5.4 step 5): the parked
+  // state is fresh evidence that a restore can hit. The observed wire-head
+  // digest of this turn rides along for the Phase 3 restore gate (§5.2).
   database
     .prepare(
       `UPDATE kv_snapshots
-         SET filename = ?, n_tokens = ?, bytes = ?, build_tag = ?, state = 'ready',
-             saved_at = ?, last_used_at = ?
+         SET filename = ?, n_tokens = ?, bytes = ?, build_tag = ?, prefix_digest = ?,
+             state = 'ready', saved_at = ?, last_used_at = ?, miss_count = 0
        WHERE chat_id = ?`,
     )
-    .run(filename, nSaved ?? lastUsage, nWritten ?? estimate, buildTag, Date.now(), Date.now(), chatId);
+    .run(
+      filename,
+      parkedTokens,
+      parkedBytes,
+      buildTag,
+      turnPrefixDigests.get(chatId) ?? "",
+      Date.now(),
+      Date.now(),
+      chatId,
+    );
 
   // Overwrite policy: unlink the superseded file after the new one is durable.
   if (prior && prior.filename && prior.filename !== filename) {
     await unlinkFile(snapshotPath(prior.filename));
   }
   console.log(
-    `${LOG} chat=${short(chatId)} parked slot=${lease.slotId} tokens=${nSaved ?? lastUsage} bytes=${nWritten ?? estimate} ms=${saveMs ?? "n/a"}`,
+    `${LOG} chat=${short(chatId)} parked slot=${lease.slotId} tokens=${parkedTokens} bytes=${parkedBytes} ms=${save.ms ?? "n/a"}`,
   );
 }
 
@@ -446,14 +653,14 @@ function setState(chatId: string, state: KvSnapshotState): void {
 interface SlotCallResult {
   ok: boolean;
   error?: string;
-  nSaved?: number;
-  nWritten?: number;
-  saveMs?: number;
+  nTokens?: number;
+  nBytes?: number;
+  ms?: number;
 }
 
 async function callSlotAction(
   lease: LlamaSlotLease,
-  action: "save",
+  action: "save" | "restore",
   filename: string,
   timeoutMs: number,
 ): Promise<SlotCallResult> {
@@ -468,11 +675,14 @@ async function callSlotAction(
     if (!response.ok || !body || body.error) {
       return { ok: false, error: body?.error?.message || `HTTP ${response.status}` };
     }
+    const number = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+    // Save and restore report the same triple under different keys (§2.2).
+    const timings = body?.timings ?? {};
     return {
       ok: true,
-      nSaved: typeof body.n_saved === "number" ? body.n_saved : undefined,
-      nWritten: typeof body.n_written === "number" ? body.n_written : undefined,
-      saveMs: body?.timings?.save_ms,
+      nTokens: number(body.n_saved) ?? number(body.n_restored),
+      nBytes: number(body.n_written) ?? number(body.n_read),
+      ms: number(timings.save_ms) ?? number(timings.restore_ms),
     };
   } catch (error: any) {
     return { ok: false, error: error?.message || String(error) };
@@ -666,6 +876,11 @@ export async function pruneKvSnapshots(): Promise<KvSnapshotPruneReport> {
 export async function invalidateKvSnapshot(chatId: string, reason: string): Promise<void> {
   try {
     pendingTokens.set(chatId, (pendingTokens.get(chatId) ?? 0) + 1);
+    turnPrefixDigests.delete(chatId);
+    restoreAttemptTurns.delete(chatId);
+    for (const key of [...pendingRestoreValidation.keys()]) {
+      if (key.startsWith(`${chatId}:`)) pendingRestoreValidation.delete(key);
+    }
     const database = getDb();
     const row = database
       .prepare("SELECT filename FROM kv_snapshots WHERE chat_id = ?")

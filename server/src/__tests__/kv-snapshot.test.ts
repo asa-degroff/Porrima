@@ -47,6 +47,7 @@ async function loadHarness(options: {
   seedSnapshots?: Array<Record<string, unknown>>;
   fetchImpl?: (url: string, init: any) => Promise<Response>;
   skipKvInit?: boolean;
+  warm?: boolean;
 } = {}): Promise<Harness> {
   vi.useFakeTimers();
   vi.setSystemTime(BASE_TIME);
@@ -56,6 +57,9 @@ async function loadHarness(options: {
 
   const streamsMap = new Map();
   vi.doMock("../services/live-streams.js", () => ({ liveStreams: streamsMap }));
+  vi.doMock("../services/llama-cache-residency.js", () => ({
+    hasLlamaCacheTargetWarmRecord: vi.fn(() => options.warm === true),
+  }));
   vi.doMock("../services/chat-storage.js", () => ({
     getSettings: vi.fn(async () => settingsWith(options.settings ?? {})),
   }));
@@ -107,14 +111,14 @@ async function loadHarness(options: {
       filename: seed.filename ?? "old.bin",
       n_tokens: seed.nTokens ?? 50_000,
       bytes: seed.bytes ?? 1_000,
-      prefix_digest: "",
+      prefix_digest: seed.prefixDigest ?? "",
       build_tag: seed.buildTag ?? "",
       config_digest: "",
       state: seed.state ?? "ready",
       saved_at: seed.savedAt ?? BASE_TIME,
       last_used_at: seed.lastUsedAt ?? BASE_TIME,
       restore_count: 0,
-      miss_count: 0,
+      miss_count: seed.missCount ?? 0,
     };
     db.prepare(
       `INSERT INTO kv_snapshots (chat_id, pool_key, base_url, model_id, slot_id, filename,
@@ -140,6 +144,15 @@ async function loadHarness(options: {
         n_saved: 134_050,
         n_written: 6_398_851_904,
         timings: { save_ms: 4715.1 },
+      });
+    }
+    if (String(url).includes("action=restore")) {
+      return Response.json({
+        id_slot: 2,
+        filename: "x.bin",
+        n_restored: 134_050,
+        n_read: 6_398_851_904,
+        timings: { restore_ms: 2098.4 },
       });
     }
     return Response.json({ error: { message: "unexpected url" } }, { status: 404 });
@@ -373,6 +386,170 @@ describe("kv-snapshot pruning", () => {
     expect(h.kv.getKvSnapshot("ghost")?.state).toBe("stale");
     expect(existsSync(join(h.home, "kv-cache", "expired.bin"))).toBe(false);
     expect(existsSync(join(h.home, "kv-cache", "orphan.bin"))).toBe(false);
+    h.db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: restore gate, digest stamp, usage-confirmed breaker
+// ---------------------------------------------------------------------------
+
+const wireBody = {
+  messages: [{ role: "system", content: "You are a frozen prefix." }, { role: "user", content: "hi" }],
+  tools: [{ type: "function", function: { name: "a" } }],
+  stream: true,
+};
+
+const restoreCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter(([url]) => String(url).includes("action=restore"));
+
+const parkedSeed = { state: "ready", nTokens: 134_050, bytes: 6_398_851_904, savedAt: BASE_TIME - 5 * 60_000 };
+
+describe("kv-snapshot restore gate (Phase 3)", () => {
+  it("restores before iteration 1 of a cold, parked, pinned turn — once per turn", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+
+    const calls = restoreCalls(h.fetchMock);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0][0])).toBe(`http://localhost:8080/slots/${lease.slotId}?action=restore`);
+    expect(JSON.parse(calls[0][1].body).filename).toBe("old.bin");
+    expect(h.kv.getKvSnapshot(lease.chatId)?.restoreCount).toBe(1);
+
+    // Same turn: never re-attempt (iterations 2..n and replays alike).
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 2 });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(1);
+    h.db.close();
+  });
+
+  it("ignores non-first iterations (but still observes the digest)", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 2 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+  });
+
+  it("skips on prefix-digest drift without touching the row", async () => {
+    const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, prefixDigest: "deadbeef" }] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
+
+  it("defers to warm tier-1 residency", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed], warm: true });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+  });
+
+  it("invalidates on build-tag mismatch", async () => {
+    const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, buildTag: "b11000" }] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("stale");
+    h.db.close();
+  });
+
+  it("keeps the restore breaker closed at two misses", async () => {
+    const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, missCount: 2 }] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+  });
+
+  it("skips when the chat moved pools or the feature is off", async () => {
+    const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, poolKey: "other-pool" }] });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+
+    const h2 = await loadHarness({ settings: { kvSnapshotEnabled: false }, seedSnapshots: [parkedSeed] });
+    await h2.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h2.fetchMock)).toHaveLength(0);
+    h2.db.close();
+  });
+
+  it("parks stamp the observed wire-head digest and reset the breaker", async () => {
+    const h = await loadHarness({ seedPromptTokens: 150_000 });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t0", iteration: 1 });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.prefixDigest).toBe(h.kv.computeLlamaPrefixDigest(wireBody));
+    expect(row?.prefixDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    // A re-park resets a previously tripped breaker.
+    h.db.prepare("UPDATE kv_snapshots SET miss_count = 5 WHERE chat_id = ?").run(lease.chatId);
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    // (debounce skips the second park; force past it with growth)
+    h.db.prepare("UPDATE kv_snapshots SET n_tokens = 100 WHERE chat_id = ?").run(lease.chatId);
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(0);
+    h.db.close();
+  });
+});
+
+describe("kv-snapshot usage-confirmed breaker", () => {
+  async function restoreThenVerify(h: Harness, turnId: string, usage: { input: number; cacheRead: number }) {
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId, iteration: 1 });
+    const { recordLlmRequestStart, recordLlmRequestEnd } = await import("../services/request-log.js");
+    recordLlmRequestStart({
+      chatId: lease.chatId,
+      requestId: `${turnId}:1`,
+      turnId,
+      iteration: 1,
+      modelId: lease.modelId,
+      provider: "llamacpp",
+      body: wireBody,
+    });
+    recordLlmRequestEnd({
+      chatId: lease.chatId,
+      requestId: `${turnId}:1`,
+      status: "done",
+      output: { usage: { input: usage.input, output: 8, cacheRead: usage.cacheRead } as any },
+    });
+  }
+
+  it("a confirmed-miss restore trips the breaker after two strikes", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed] });
+
+    await restoreThenVerify(h, "t-miss-1", { input: 150_000, cacheRead: 10 }); // cold: miss #1
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(1);
+
+    await restoreThenVerify(h, "t-miss-2", { input: 150_000, cacheRead: 10 }); // miss #2
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(2);
+
+    // Breaker closed: no restore attempt on the third turn.
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t-miss-3", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(2);
+    h.db.close();
+  });
+
+  it("a hit (cached >= 50%) resets the miss count", async () => {
+    const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, missCount: 1 }] });
+    await restoreThenVerify(h, "t-hit", { input: 150_000, cacheRead: 148_000 });
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.missCount).toBe(0);
+    expect(row?.restoreCount).toBe(1);
+    h.db.close();
+  });
+
+  it("usage events for turns without a pending restore are ignored", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed] });
+    const { recordLlmRequestStart, recordLlmRequestEnd } = await import("../services/request-log.js");
+    recordLlmRequestStart({
+      chatId: lease.chatId, requestId: "no-restore:1", turnId: "no-restore", iteration: 1,
+      modelId: lease.modelId, provider: "llamacpp", body: wireBody,
+    });
+    recordLlmRequestEnd({
+      chatId: lease.chatId, requestId: "no-restore:1", status: "done",
+      output: { usage: { input: 150_000, output: 8, cacheRead: 0 } as any },
+    });
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(0);
     h.db.close();
   });
 });

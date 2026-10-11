@@ -162,21 +162,26 @@ CREATE TABLE IF NOT EXISTS kv_snapshots (
 ### 5.2 The stable-prefix digest
 
 Restore is only sane if the prefix llama.cpp will compare against hasn't moved.
-`prefix_digest` = hash over exactly the inputs that constitute the frozen prefix:
+`prefix_digest` is a **wire-head digest**: sha256 over `[system head, tools]` of
+the exact body the provider dispatches (`computeLlamaPrefixDigest`). The head is
+the frozen prefix by construction (memory deltas ride at the tail), so it shifts
+exactly when the parked KV stops matching — persona regeneration, extraction
+prompt edits, skill toggles, compaction.
 
-```
-system prompt bytes ⊕ tool-surface digest ⊕ persona/version marker
-⊕ loaded-by-scope block descriptions ⊕ skill set ⊕ compaction epoch counter
-```
+**Landed refinement (10-11):** the digest is *observed* by the provider on every
+recorded request (`observeLlamaRequestBody` stashes the latest per chat) rather
+than recomputed at the gate from prompt-building inputs — one serialization
+source for both sides of the comparison, no drift between the gate and the wire.
+Park stamps the observed value into the row; the restore gate compares the
+about-to-dispatch body's head against it.
 
-- Computed at save; re-computed cheaply at restore-gate time (all these parts are
-  already materialized in the prompt-building path; see `digestPromptPayload` for the
-  serialization approach).
-- Mismatch → row is `stale`, restore skipped, re-parked at end of turn. This makes
-  persona regeneration, memory promotion rewrites, extraction-prompt edits, and skill
-  toggles self-healing without eager invalidation from each source (D4).
-- Correctness never depends on the digest (§2.7); it is purely a wasted-work gate.
-  Conservative is fine.
+- Missing on either side (never-observed chat, row parked before pinning) → the
+  gate passes vacuously; residency and llama.cpp's token validation backstop it.
+- Mismatch → restore skipped **without invalidating**: the parked file is still
+  valid for its own stored prefix, and a prefix that flips back (a skill
+  toggled off) can hit again. The next park re-stamps the new digest.
+- Correctness never depends on the digest (§2.7); it is purely a wasted-work
+  gate. Conservative is fine.
 
 ### 5.3 Save (end-of-turn)
 
@@ -200,22 +205,29 @@ Save = one `POST action=save`; on response, record `n_saved`, `n_written`,
 
 ### 5.4 Restore (pre-send, iteration 1 only)
 
-Hooked in the pre-send path (HTTP: `chat.ts` before the first `runAgentLoop`;
-headless: `chat-turn-runner.ts` — same lease the iteration path will use):
+Hooked in the provider's single dispatch choke point (`openai-compat-provider.ts`,
+right after `buildOpenAICompatChatBody`, before the request URL exists on the wire)
+via `observeLlamaRequestBody`. Landed placement note: the earlier sketch gated in
+the route/runner pre-send paths, but only the provider has the *final wire body*
+— the digest (§5.2) compares the exact bytes llama.cpp will tokenize, and both
+turn routes flow through this one site, so HTTP and headless share the gate:
 
-1. Row exists, `state = ready`, `build_tag`/`config_digest` match the live server
-   (compare against supervisor-observed values), `prefix_digest` matches (§5.2).
+1. Row exists, `state = ready`, same `pool_key` as the lease, `build_tag` matches
+   the live server (cached `/server_info` probe, 60 s TTL; unknown-on-either-side
+   passes vacuously — the file's own version checks are the backstop),
+   `prefix_digest` matches (§5.2).
 2. Residency says **not confirmed-warm** (`status ∈ {stale, unknown}`, or no record).
    If tier 1 has it, tier 2 must not touch it.
-3. `POST action=restore`, budgeted by `kvSnapshotOpTimeoutMs`; row briefly
-   `restoring`. Success → `ready`, bump `restore_count`, stamp `last_used_at`.
+3. `POST action=restore`, budgeted by `kvSnapshotOpTimeoutMs`. Success → bump
+   `restore_count`, stamp `last_used_at`, register a usage-validation marker.
 4. Continue with the normal request; the existing `body.id_slot` pin routes it to the
    restored slot.
-5. **Validation:** iteration-1 usage (`cached_tokens ≈ prompt_tokens`) confirms the
-   park actually paid. A confirmed miss bumps `miss_count`; `miss_count ≥ 2` within the
-   snapshot's life → `stale` + circuit-break that chat's *restores* (still saves)
-   until a successful re-save resets it. Worst case is bounded: restore time + normal
-   cold prefill.
+5. **Validation:** iteration-1 usage of the turn (`onLlmRequestEvent` end events —
+   the same wire-truth channel as D7) confirms the park paid: cached ≥ 50% of
+   prompt → hit (resets `miss_count`), below → `miss_count++`. `miss_count ≥ 2`
+   circuit-breaks that chat's *restores* (saves continue) until a successful
+   re-park resets it. Worst case is bounded: one restore's seconds + normal cold
+   prefill, twice.
 
 Restore is **not** retried within a turn, and a turn never sees more than one restore.
 
@@ -321,8 +333,11 @@ reuse; §2.7), and the turn's output correctness is independent of this subsyste
    `kv-snapshot.ts` + `kv_snapshots` (porrima.db), end-of-turn save enqueue in both
    finalize paths, per-pool LRU + TTL + orphan sweeps. Ships the data to tune
    thresholds.
-3. **Restore + gates + breaker** — the actual TTFT win; enabled end-to-end behind the
-   setting (D8).
+3. **Restore + gates + breaker** *(done 10-11)* — the actual TTFT win; enabled
+   end-to-end behind the setting (D8). `observeLlamaRequestBody` (provider gate:
+   one-per-turn, pool/digest/build/residency/breaker checks) + usage-confirmed
+   `miss_count` breaker via request-log events; park stamps the observed wire-head
+   digest and resets the breaker.
 4. **Surfaces** — settings menu controls (§8), Inference Servers status panel,
    storage-diagnostics accounting.
 
