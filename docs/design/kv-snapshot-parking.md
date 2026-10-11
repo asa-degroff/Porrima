@@ -79,23 +79,23 @@ deliberately, not by accident:
    `<bin> --version` → `version: 0.6.0-dev (build 11552, commit 23b0202a1)`
    (implemented in `services/llama-build-probe.ts`). An HTTP `/server_info`
    fallback is kept for builds that expose it.
-3. **`id_slot` on OpenAI-compat requests.** Parsed in the shared completion handler;
+5. **`id_slot` on OpenAI-compat requests.** Parsed in the shared completion handler;
    pinning works through `/v1/chat/completions`. Porrima **already does this**:
    `buildOpenAICompatChatBody` sets `body.id_slot` from the llama slot lease whenever
    the lease matches the request's `baseUrl`/`modelId` (content anchor: the
    `useLlamaSlotLease` block in `services/openai-compat-provider.ts`).
-4. **Multimodal-safe serialization** since #26640 (`server_tokens::serialize` writes
+6. **Multimodal-safe serialization** since #26640 (`server_tokens::serialize` writes
    mtmd chunks via `mtmd_input_chunk_save`); the `check_no_mtmd` guard no longer
    exists. Slot save/restore is safe on servers launched with `--mmproj`.
-5. **Checkpoint appendix** since #26004: save files embed a versioned context-checkpoint
+7. **Checkpoint appendix** since #26004: save files embed a versioned context-checkpoint
    appendix (`SLOT_CKPT_MAGIC/VERSION`). Treat files as valid only for the exact
    `(llama build, launch config digest)` that wrote them. (10-11 correction:
    `/server_info` is not a stable identity endpoint — build tags come from the
    running binary, §5.4 step 1.)
-6. **Deferred slot tasks.** A save/restore targeting a processing slot is *deferred*,
+8. **Deferred slot tasks.** A save/restore targeting a processing slot is *deferred*,
    not rejected. Our global turn gate (§4) makes overlap rare, but the queue still
    serializes per slot (D3).
-7. **Restore performs no prompt validation.** Correctness is guaranteed downstream by
+9. **Restore performs no prompt validation.** Correctness is guaranteed downstream by
    llama.cpp's longest-common-prefix matching between restored slot tokens and the
    incoming prompt. A diverged prefix wastes the restore's seconds; it cannot produce
    wrong output.
@@ -126,7 +126,7 @@ Line numbers drift; the anchors are the distinctive code.
 |---|---|---|
 | Slot leases | `services/llama-slot-leases.ts` — `acquireLlamaSlotLease` / `releaseLlamaSlotLease`, `LlamaSlotLease{poolKey, baseUrl, modelId, slotId}` | Snapshot rows key on the lease tuple; `poolKey` isolates servers so files/rows never cross-dispatch |
 | Lease call sites | `routes/chat.ts` — acquire just before streaming starts, release in the turn-completion path | The save trigger for HTTP turns. **Gap:** `chat-turn-runner.ts` / `automation-runner.ts` acquire no lease at all → headless turns are unpinned (D2) |
-| Residency | `services/llama-cache-residency.ts` — `LlamaCacheResidencyRecord{slotId, status: warming/warm/stale, confidence: confirmed-hit/partial-hit/filled-after-miss/unknown, reportedPromptTokens, inferredCachedTokens}` | Cold detector: restore only when residency says the slot is not confirmed-warm |
+| Residency | `services/llama-cache-residency.ts` — `LlamaCacheResidencyRecord{slotId, status: warming/warm/stale, confidence: confirmed-hit/partial-hit/filled-after-miss/unknown, reportedPromptTokens, inferredCachedTokens}` | UI status surface only (10-11 review fix: the restore gate reads the slot's own `n_prompt_tokens` via `GET /slots` — the residency record's `warm` memory outlives llama.cpp's idle eviction by orders of magnitude) |
 | Table + startup sweep pattern | `services/request-log.ts` — `CREATE TABLE IF NOT EXISTS llm_requests …`, and the startup line that marks orphaned `in_progress` rows terminal | Copy for `kv_snapshots`: create-on-init + sweep `saving`/`restoring` rows at boot |
 | Compaction funnel | `services/turn-compaction.ts` → `truncateChatHistory` (the one shared end-of-turn execution) | The single invalidation call site — every path that rewrites the message spine |
 | Chat deletion | `services/chat-deletion.ts` — `cancelDeletedChatWork` | Remove row + unlink file with the chat |
@@ -189,11 +189,11 @@ Park stamps the observed value into the row; the restore gate compares the
 about-to-dispatch body's head against it.
 
 - Missing on either side (never-observed chat, row parked before pinning) → the
-  gate passes vacuously; residency and llama.cpp's token validation backstop it.
+  gate passes vacuously; llama.cpp's token validation backstops it (§2.9).
 - Mismatch → restore skipped **without invalidating**: the parked file is still
   valid for its own stored prefix, and a prefix that flips back (a skill
   toggled off) can hit again. The next park re-stamps the new digest.
-- Correctness never depends on the digest (§2.8); it is purely a wasted-work
+- Correctness never depends on the digest (§2.9); it is purely a wasted-work
   gate. Conservative is fine.
 
 ### 5.3 Save (end-of-turn)
@@ -298,9 +298,14 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
   API. The trailing separator (§2.1) is guaranteed by `kvCacheFlagPath()` in
   `services/paths.ts`; the directory itself is created import-time, alongside the
   data-dir migrations, by `ensureKvCacheDir()`.
-- Phase 3 records the rendered launch config into a `config_digest` (ctx-size,
-  parallel, cache-type-k/v, flash-attn, slot-save-path, mmproj, build tag) for
-  snapshot invalidation (§5.4).
+- **Deferred (column reserved):** the rendered launch config digest
+  (ctx-size, parallel, cache-type-k/v, flash-attn, slot-save-path, mmproj,
+  build tag) is *not yet written* — `config_digest` exists in the registry but
+  no path stamps it. Behaviorally a same-build config change costs at most one
+  wasted restore per chat before the `miss_count` breaker learns (llama.cpp's
+  LCP validation keeps it harmless); build-tag invalidation (§5.4 step 1)
+  covers the swap that actually matters. Add the writer when config changes
+  become common, not before.
 - `llama-supervisor.ts` restart/stop actions for a parking-enabled unit should flush
   eligible parked chats first where cheap; otherwise the restart simply invalidates
   residency, not snapshots (files stay restorable — §5.5).
@@ -341,20 +346,24 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 | `kvSnapshotTtlHours` | `72` | hard expiry after TTL even under cap |
 | `kvSnapshotMinFreeDiskBytes` | `68719476736` (64 GiB) | absolute disk floor respected by saves |
 | `kvSnapshotOpTimeoutMs` | `60000` | per-save/per-restore budget |
+| `kvSnapshotMinBuild` | `11552` | minimum llama build number for parking (conservative: the first end-to-end-verified build; lower it deliberately once the #26640/#26004 build numbers are pinned) |
 
 ## 9. Failure model (summary table)
 
 | Failure | Effect | Recovery |
 |---|---|---|
 | Save error/timeout, crash mid-save | row `stale`; partial file unlinked by sweeper | next eligible end-of-turn re-parks |
-| Restore error/timeout | pre-send proceeds immediately; strike counted at attempt time | two strikes close the breaker until a re-park |
+| Save captured a reassigned slot (`n_saved < lastUsage`) | new file discarded, prior snapshot restored | slot-identity guard; next eligible end-of-turn re-parks |
+| Live build below `kvSnapshotMinBuild` | save skipped, visible log line, no registry touch | upgrade the server or lower the setting deliberately |
+| Slot probe fails (pre-send) | restore skipped, no state change; turn pays normal prefill | automatic next turn |
+| Restore error/timeout | pre-send proceeds after the budgeted failure; strike counted at attempt time | two strikes close the breaker until a re-park |
 | Restore succeeds but prefix diverged | wasted restore seconds; LCP reuse degrades gracefully | digest gate tightens on next save; `miss_count` breaker caps repeats |
 | Disk full / headroom | save refused pre-flight (estimate), stale rows pruned | budget policy; log + panel status |
-| Server swap (build/config) | digest mismatch → restores skipped | lazy invalidation; files pruned |
+| Server swap (build/config) | build-tag mismatch → rows invalidated lazily | files pruned by the sweeper |
 | Lease reassigned / slot evicted by tier 1 | `slot_id` in row is history, not truth — re-park on next save with current lease | save always records the *current* slot |
 
 In every row: no data corruption is possible (llama.cpp validates token identity on
-reuse; §2.8), and the turn's output correctness is independent of this subsystem.
+reuse; §2.9), and the turn's output correctness is independent of this subsystem.
 
 ## 10. Phases
 
@@ -369,9 +378,9 @@ reuse; §2.8), and the turn's output correctness is independent of this subsyste
    thresholds.
 3. **Restore + gates + breaker** *(done 10-11)* — the actual TTFT win; enabled
    end-to-end behind the setting (D8). `observeLlamaRequestBody` (provider gate:
-   one-per-turn, pool/digest/build/residency/breaker checks) + usage-confirmed
-   `miss_count` breaker via request-log events; park stamps the observed wire-head
-   digest and resets the breaker.
+   one-per-turn, pool/digest/build/slot-probe/breaker checks — see §5.4) +
+   usage-confirmed `miss_count` breaker via request-log events; park stamps the
+   observed wire-head digest and resets the breaker.
 4. **Surfaces** — settings menu controls (§8), Inference Servers status panel,
    storage-diagnostics accounting.
 
@@ -383,8 +392,9 @@ match/mismatch; breaker trips and resets; LRU/TTL/prune under synthetic budget;
 orphan sweep idempotence.
 
 Integration with a mocked `/slots` API (live-streams' fetch-mock pattern): save on
-eligible end-of-turn, skip when resident, restore pre-send gated by residency, restore
-timeout → normal send, D2 lease balance for headless turns.
+eligible end-of-turn, skip when the slot is warm, restore pre-send gated by the slot
+probe (cold / warm / probe-failed), wire-failure strikes, min-build skip, slot-identity
+guard, estimate ordering, D2 lease balance for headless turns.
 
 Script smoke (`scripts/smoke-kv-snapshot.ts`, matching `smoke-request-log`): against a
 parking-capable managed server with a synthetic prompt — asserts `n_saved == n_restored`

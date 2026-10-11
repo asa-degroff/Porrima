@@ -232,7 +232,7 @@ export function listKvSnapshots(): KvSnapshotRow[] {
  * (memory deltas ride at the tail), so it changes exactly when the parked KV
  * stops matching — persona/extract prompt rewrites, tool-surface changes,
  * compaction. It gates WASTED restores only; correctness never depends on it
- * (§2.8: the server validates token identity and re-prefills from the first
+ * (§2.9: the server validates token identity and re-prefills from the first
  * divergence).
  */
 export function computeLlamaPrefixDigest(body: any): string {
@@ -308,7 +308,7 @@ export async function observeLlamaRequestBody(input: {
       return;
     }
 
-    // Build gate (§2.6/D5): files are only valid for the build that wrote
+    // Build gate (§2.7/D5): files are only valid for the build that wrote
     // them. A known mismatch invalidates; unknown-on-either-side is allowed
     // through (llama.cpp's own version checks in the save file are the
     // backstop, and a failure there is just a cold turn, as today).
