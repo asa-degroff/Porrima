@@ -20,6 +20,7 @@ import {
 } from "./context-pressure.js";
 import { partialToolText, type SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
+import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "./llama-slot-leases.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
@@ -831,6 +832,27 @@ export async function runHeadlessChatTurn(
   let compactionCycle = 0;
   let activeContext = context;
 
+  // KV slot pinning for headless turns (docs/design/kv-snapshot-parking.md
+  // D2). Same pool-key semantics as the HTTP route's acquire: the provider
+  // asserts `lease.modelId === model.id` and `lease.baseUrl === model.baseUrl`
+  // before honoring the pin, so acquire with the model's own identity, and
+  // the effective context window the caller stamped onto both. A null lease
+  // (bindings off, contention, probe failure) falls back to automatic slot
+  // selection — exactly the pre-feature behavior.
+  let llamaSlotLease: LlamaSlotLease | null = null;
+  if (String(model.provider) === "llamacpp" && model.baseUrl) {
+    try {
+      llamaSlotLease = await acquireLlamaSlotLease({
+        baseUrl: model.baseUrl,
+        chatId: chat.id,
+        modelId: model.id,
+        contextWindow: options.contextWindow ?? model.contextWindow,
+      });
+    } catch (err) {
+      console.warn(`[${logPrefix}] llama slot lease acquire failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+
   try {
     for (;;) {
       needsMidTurnCompaction = false;
@@ -843,7 +865,7 @@ export async function runHeadlessChatTurn(
         // context high-water floor for headless turns — without this,
         // system chat and automations (the long-turn workhorses) never
         // feed the floor and its stale-discovery protection.
-        streamFn: createSafeStreamFn(undefined, { promptDebugChatId: chat.id, getTurnId: () => turnId }),
+        streamFn: createSafeStreamFn(llamaSlotLease, { promptDebugChatId: chat.id, getTurnId: () => turnId }),
         logPrefix,
         onEvent: async (event) => {
           // Live-only previews: text/thinking deltas, tool-call argument
@@ -1022,6 +1044,13 @@ export async function runHeadlessChatTurn(
     stopReason = "error";
   } finally {
     clearTimeout(timeout);
+    // Balance the acquire above on every exit path (stop, error, timeout,
+    // supersede). release(null) is a no-op, so non-pinned turns stay cheap.
+    try {
+      await releaseLlamaSlotLease(llamaSlotLease);
+    } catch (err) {
+      console.warn(`[${logPrefix}] llama slot lease release failed:`, err instanceof Error ? err.message : err);
+    }
   }
 
   const state = currentState();

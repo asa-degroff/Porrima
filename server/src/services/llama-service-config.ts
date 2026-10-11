@@ -5,6 +5,7 @@ import type { LlamaServerId } from "./llama-supervisor.js";
 import { getLlamaModelsDir, resolveModelsDirs } from "./llama-models-disk.js";
 import { getDefaultLlamaBin, resolveBin, resolveSlotEnvironment } from "./llama-launch-templates.js";
 import { LLAMA_SERVER_HOST, LLAMA_SERVER_PORTS } from "./llama-ports.js";
+import { kvCacheFlagPath } from "./paths.js";
 
 export type LlamaServiceMode = "single" | "router";
 
@@ -285,6 +286,16 @@ export function renderServiceExecStart(id: LlamaServerId, config: LlamaServiceCo
   if (config.ubatchSize) args.push("--ubatch-size", String(config.ubatchSize));
   if (config.reasoningFormat) args.push("--reasoning-format", config.reasoningFormat);
   if (config.chatTemplateKwargs) args.push("--chat-template-kwargs", shellQuote(config.chatTemplateKwargs));
+  // KV snapshot parking (docs/design/kv-snapshot-parking.md §6): the inference
+  // slot always advertises its snapshot directory so the `/slots` save/restore
+  // API is available to the parking service. Derived at render time rather than
+  // stored in extraArgs — toggling parking never rewrites the unit, and a
+  // user-edited extraArgs list cannot drop or duplicate it. The trailing
+  // separator is load-bearing: llama.cpp concatenates the value with the
+  // filename without inserting one (§2.1).
+  if (id === "inference") {
+    args.push("--slot-save-path", shellQuote(kvCacheFlagPath()));
+  }
   args.push(...config.extraArgs);
   return joinArgs(args);
 }
@@ -379,6 +390,11 @@ export function parseManagedServiceConfig(id: LlamaServerId, contents: string, f
       i += 1;
     } else if (token === "--chat-template-kwargs" && value) {
       next.chatTemplateKwargs = value;
+      i += 1;
+    } else if (token === "--slot-save-path" && value && id === "inference") {
+      // Render-derived managed flag (kv-snapshot-parking §6): dropped on parse
+      // so a re-render cannot duplicate it, and stale manual entries (e.g. a
+      // hand-edited drop-in) are canonicalized to the derived path.
       i += 1;
     } else if (knownWithValues.has(token)) {
       i += 1;

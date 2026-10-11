@@ -285,6 +285,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
 - [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (design; P4a in implementation)
 - [Browser Observability](docs/design/browser-observability.md) — Live screenshot PiP viewer (P1 client-only, P2 auto-capture)
+- [KV Snapshot Parking](docs/design/kv-snapshot-parking.md) — Disk tier for idle slot KV: app-side save/restore orchestration around llama.cpp's `/slots` API
 
 Release and onboarding:
 

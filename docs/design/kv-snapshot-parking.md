@@ -1,0 +1,340 @@
+# KV Snapshot Parking — a disk tier for idle slot KV
+
+**Status:** Design. **Phase 1 (parking flag + headless slot leases) implemented 10-11.** Spike validated 10-11 on a live agent server (stock llama.cpp ≥ #26004 build): cold prefill → save → eviction → restore → repinned replay, end to end.
+**Author:** Qwen 3.8 Flash
+**Date**: 2026-10-11
+
+## 1. Problem
+
+The llama.cpp host-memory prompt cache (`--cache-ram` + `--cache-idle-slots`) is our
+tier-1 KV reuse. Its ceiling is the host RAM budget, and a chat whose context needs
+more state than that budget is simply **not cached at all** — the server logs
+`prompt state size … exceeds cache size limit … skipping` and every idle→active turn
+**re-prefills the entire prompt from scratch**. For a large-context agent chat that is
+the dominant term in time-to-first-token: a reminder-driven turn with a ~200k-token
+context sat in prompt processing for **minutes before emitting its first token**.
+
+Raising `--cache-ram` is not a general answer — the budget competes with model weights,
+the OS, and the helper CPU services on the same host. Meanwhile llama.cpp has had an
+orthogonal, already-supported mechanism: **slot save/restore to files**
+(`--slot-save-path` + `POST /slots/{id}?action=save|restore`). Files live on storage
+where size is cheap, and since 2026-08 (#26640) they serialize multimodal state too, so
+the old "not supported by multimodal" blocker no longer applies.
+
+The missing piece is *orchestration*: llama.cpp will not decide for itself when a chat
+is worth parking to disk and when to bring it back. That policy is exactly what a
+turn-serializing app layer can provide.
+
+### Spike reference (10-11, b11552, one synthetic 134k-token prompt)
+
+These are measurements from one reference run, **not constants** — everything the
+design keys on is either config or learned at runtime.
+
+| Step | Observed |
+|---|---|
+| Cold prefill, 134,043 tokens | 355 s wall, `cached_tokens: 0` |
+| `action=save` | 4.7 s, ~6.0 GiB (`n_written`), ~1.4 GB/s |
+| `action=erase` → slot verified empty | — |
+| `action=restore` | 2.1 s (page-cache-assisted) |
+| Replay, same prompt, repinned | 1.3 s, `cached_tokens` 134,039/134,043, correct continuation |
+
+Full round-trip (save + restore) cost seconds against a re-prefill that cost minutes.
+
+### Non-goals
+
+- **Incremental / append-only saves.** Stock saves are full-state. Forks add
+  `--slot-save-auto` / `--slot-save-incremental`; adopting one is an operational
+  shortcut we explicitly defer (D1).
+- **Replacing tier 1.** `--cache-ram` stays; it is strictly faster for chats that fit.
+  Parking only fires where tier 1 structurally cannot.
+- **Cross-build or cross-config cache portability.** Snapshot files are ephemeral
+  per `(build, slot launch config)`; invalidation is by digest, never migration.
+- **Vision fidelity work.** Media state rides #26640's serialization; we add nothing
+  custom.
+- **Compaction threshold changes.** Parking is orthogonal to the compaction triggers
+  in [turn-engine.md](turn-engine.md); it does not replace compaction or shrink any
+  context window.
+
+## 2. Upstream contract (verified against source, 10-11)
+
+Everything in this design holds with these facts; if they change, change the design
+deliberately, not by accident:
+
+1. **Slot actions need a save path.** `/slots/{id}?action=save|restore|erase` only
+   works when the server launched with `--slot-save-path`. llama.cpp concatenates
+   `slot_save_path + filename` with **no separator** — the path value must end with a
+   directory separator (enforced in our launcher, §6).
+2. **Request/response shapes.** Body key is `{"filename": "…"}` (older docs and issue
+   threads show `{"prompt": …}` — wrong on current builds). Responses carry
+   `n_saved`/`n_restored`, `n_written`/`n_read`, and `timings.{save_ms,restore_ms}` —
+   free metrics (§5.6).
+3. **`id_slot` on OpenAI-compat requests.** Parsed in the shared completion handler;
+   pinning works through `/v1/chat/completions`. Porrima **already does this**:
+   `buildOpenAICompatChatBody` sets `body.id_slot` from the llama slot lease whenever
+   the lease matches the request's `baseUrl`/`modelId` (content anchor: the
+   `useLlamaSlotLease` block in `services/openai-compat-provider.ts`).
+4. **Multimodal-safe serialization** since #26640 (`server_tokens::serialize` writes
+   mtmd chunks via `mtmd_input_chunk_save`); the `check_no_mtmd` guard no longer
+   exists. Slot save/restore is safe on servers launched with `--mmproj`.
+5. **Checkpoint appendix** since #26004: save files embed a versioned context-checkpoint
+   appendix (`SLOT_CKPT_MAGIC/VERSION`). Treat files as valid only for the exact
+   `(llama build, launch config digest)` that wrote them.
+6. **Deferred slot tasks.** A save/restore targeting a processing slot is *deferred*,
+   not rejected. Our global turn gate (§4) makes overlap rare, but the queue still
+   serializes per slot (D3).
+7. **Restore performs no prompt validation.** Correctness is guaranteed downstream by
+   llama.cpp's longest-common-prefix matching between restored slot tokens and the
+   incoming prompt. A diverged prefix wastes the restore's seconds; it cannot produce
+   wrong output.
+
+## 3. Goals
+
+1. **Cold-return TTFT collapses from re-prefill to I/O.** A chat parked at
+   end-of-turn resumes next turn in the time it takes to read a file, not to
+   re-tokenize a context.
+2. **Pure optimization.** Every parking failure — save error, restore error, stale
+   registry, wrong slot, disk full — degrades to *today's behavior*, never worse, and
+   never adds latency to the turn that triggered it.
+3. **Reuse, don't reinvent.** Slot leases already pin chats to slots; residency
+   already knows whether a slot is warm; the request-log already shows a SQLite-table +
+   startup-sweep pattern; compaction already funnels through one truncation call site.
+   The feature is a registry plus two hooks.
+4. **User-visible and tunable.** An on/off setting plus threshold and budget controls in
+   the settings menu, and a status surface on the Inference Servers panel.
+5. **The headless paths participate.** Automations and system-chat turns are the
+   primary victims (their turns are *born cold*), so the shared runner gets lease +
+   restore support too (D2 — a prerequisite, not a phase-2 garnish).
+
+## 4. Reusable components (content anchors)
+
+Line numbers drift; the anchors are the distinctive code.
+
+| Component | Site | Role here |
+|---|---|---|
+| Slot leases | `services/llama-slot-leases.ts` — `acquireLlamaSlotLease` / `releaseLlamaSlotLease`, `LlamaSlotLease{poolKey, baseUrl, modelId, slotId}` | Snapshot rows key on the lease tuple; `poolKey` isolates servers so files/rows never cross-dispatch |
+| Lease call sites | `routes/chat.ts` — acquire just before streaming starts, release in the turn-completion path | The save trigger for HTTP turns. **Gap:** `chat-turn-runner.ts` / `automation-runner.ts` acquire no lease at all → headless turns are unpinned (D2) |
+| Residency | `services/llama-cache-residency.ts` — `LlamaCacheResidencyRecord{slotId, status: warming/warm/stale, confidence: confirmed-hit/partial-hit/filled-after-miss/unknown, reportedPromptTokens, inferredCachedTokens}` | Cold detector: restore only when residency says the slot is not confirmed-warm |
+| Table + startup sweep pattern | `services/request-log.ts` — `CREATE TABLE IF NOT EXISTS llm_requests …`, and the startup line that marks orphaned `in_progress` rows terminal | Copy for `kv_snapshots`: create-on-init + sweep `saving`/`restoring` rows at boot |
+| Compaction funnel | `services/turn-compaction.ts` → `truncateChatHistory` (the one shared end-of-turn execution) | The single invalidation call site — every path that rewrites the message spine |
+| Chat deletion | `services/chat-deletion.ts` — `cancelDeletedChatWork` | Remove row + unlink file with the chat |
+| Request digest | `services/openai-compat-provider.ts` — `digestPromptPayload(body)` | Template for the stable-prefix digest (§5.2) |
+| Lease pinning block | `openai-compat-provider.ts` — `if (useLlamaSlotLease) body.id_slot = …` | Restore requires no new pinning; it is already there |
+| Launch templates | `services/llama-launch-templates.ts` — ExecStart construction for managed units | Emits `--slot-save-path` (§6) |
+| Background serialization | `services/turn-gate.ts` — single global slot, foreground priority | Bounds concurrent LLM work so saves queue behind turns, not against them |
+
+## 5. Design
+
+New service `services/kv-snapshot.ts` owning registry, policy, and the two hooks. No
+direct filesystem writes to snapshot files — all state moves through the server's
+`/slots` API, which is authoritative about its own KV.
+
+### 5.1 Registry
+
+One table in `porrima.db` (next to `llm_requests`, same create/sweep pattern):
+
+```sql
+CREATE TABLE IF NOT EXISTS kv_snapshots (
+  chat_id        TEXT PRIMARY KEY,
+  pool_key       TEXT NOT NULL,        -- [baseUrl, modelId, contextWindow] tuple
+  base_url       TEXT NOT NULL,
+  model_id       TEXT NOT NULL,
+  slot_id        INTEGER NOT NULL,
+  filename       TEXT NOT NULL,        -- server-assigned: <chatId>-<nonce>.bin
+  n_tokens       INTEGER NOT NULL,     -- context size at save (n_saved)
+  bytes          INTEGER NOT NULL,     -- n_written
+  prefix_digest  TEXT NOT NULL,        -- §5.2 gate
+  build_tag      TEXT NOT NULL,        -- llama version string at save
+  config_digest  TEXT NOT NULL,        -- launch-config digest (§6)
+  state          TEXT NOT NULL,        -- saving | ready | stale | restoring
+  saved_at       INTEGER NOT NULL,
+  last_used_at   INTEGER NOT NULL,     -- LRU key for pruning
+  restore_count  INTEGER DEFAULT 0,
+  miss_count     INTEGER DEFAULT 0     -- post-restore confirmed-miss count (breaker)
+);
+```
+
+- One row per chat; a new save replaces the old file (unlink after success).
+- **Filename discipline:** generated server-side as `<chatId>-<nonce>.bin`. Never
+  derived from user-controllable text (path injection).
+- Startup sweep marks `saving`/`restoring` rows `stale` (a crash mid-operation leaves
+  an unusable file at best).
+
+### 5.2 The stable-prefix digest
+
+Restore is only sane if the prefix llama.cpp will compare against hasn't moved.
+`prefix_digest` = hash over exactly the inputs that constitute the frozen prefix:
+
+```
+system prompt bytes ⊕ tool-surface digest ⊕ persona/version marker
+⊕ loaded-by-scope block descriptions ⊕ skill set ⊕ compaction epoch counter
+```
+
+- Computed at save; re-computed cheaply at restore-gate time (all these parts are
+  already materialized in the prompt-building path; see `digestPromptPayload` for the
+  serialization approach).
+- Mismatch → row is `stale`, restore skipped, re-parked at end of turn. This makes
+  persona regeneration, memory promotion rewrites, extraction-prompt edits, and skill
+  toggles self-healing without eager invalidation from each source (D4).
+- Correctness never depends on the digest (§2.7); it is purely a wasted-work gate.
+  Conservative is fine.
+
+### 5.3 Save (end-of-turn)
+
+Hooked in the turn-completion path where the lease releases (HTTP: `chat.ts`
+completion block; headless: the equivalent in `chat-turn-runner.ts` after D2). Runs
+**after** the SSE `done` event and response flush — the triggering turn never pays for
+parking. Policy (all must hold):
+
+| Gate | Rule (all values config, §8) |
+|---|---|
+| Enablement | feature on; chat's model is served by a parking-capable managed server |
+| Pinning | turn held a lease (slot known and still mapped to this chat) |
+| Eligibility | final iteration's `usage.prompt_tokens ≥ kvSnapshotMinTokens` — below this, re-prefill is cheaper than save+restore; the break-even is low (spike: 134k tokens re-prefilled in ~355 s vs ~7 s round-trip) |
+| Freshness | last save for this chat is older than `kvSnapshotSaveDebounceMs`, **or** context grew by more than `kvSnapshotMinGrowthTokens` since it — rapid-fire tool turns stay in tier 1; the last turn before an idle gap is what gets parked |
+| Queue | per-`poolKey:slot` serialized job queue; a queued save is dropped (not deferred forever) if the same chat's turn restarts first |
+| Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio |
+
+Save = one `POST action=save`; on response, record `n_saved`, `n_written`,
+`timings.save_ms`, digests, state → `ready`. Any error/timeout (budgeted,
+`kvSnapshotOpTimeoutMs`) → row `stale`, log, move on.
+
+### 5.4 Restore (pre-send, iteration 1 only)
+
+Hooked in the pre-send path (HTTP: `chat.ts` before the first `runAgentLoop`;
+headless: `chat-turn-runner.ts` — same lease the iteration path will use):
+
+1. Row exists, `state = ready`, `build_tag`/`config_digest` match the live server
+   (compare against supervisor-observed values), `prefix_digest` matches (§5.2).
+2. Residency says **not confirmed-warm** (`status ∈ {stale, unknown}`, or no record).
+   If tier 1 has it, tier 2 must not touch it.
+3. `POST action=restore`, budgeted by `kvSnapshotOpTimeoutMs`; row briefly
+   `restoring`. Success → `ready`, bump `restore_count`, stamp `last_used_at`.
+4. Continue with the normal request; the existing `body.id_slot` pin routes it to the
+   restored slot.
+5. **Validation:** iteration-1 usage (`cached_tokens ≈ prompt_tokens`) confirms the
+   park actually paid. A confirmed miss bumps `miss_count`; `miss_count ≥ 2` within the
+   snapshot's life → `stale` + circuit-break that chat's *restores* (still saves)
+   until a successful re-save resets it. Worst case is bounded: restore time + normal
+   cold prefill.
+
+Restore is **not** retried within a turn, and a turn never sees more than one restore.
+
+### 5.5 Budget, TTL, pruning
+
+- Directory: `kv-cache/` under `APP_DATA_DIR`, constant lives in `services/paths.ts`.
+- Global cap `kvSnapshotMaxBytes` per `poolKey` (per model-server, not global — D6);
+  eviction is LRU by `last_used_at`, then TTL `kvSnapshotTtlHours` on the survivors.
+- Pre-save headroom check: free ≥ `kvSnapshotMinFreeDiskBytes` + estimate.
+- Orphan sweeps (startup + hourly): file without row → unlink; row without file →
+  `stale`. Chat deletion, chat model switch (poolKey change), and lease reassignment
+  all remove files eagerly via `chat-deletion.ts` / lease eviction hooks.
+- Server **restart**: files remain valid (restore-across-restart is the upside of a
+  disk tier, D5); server **binary/launch-config change** invalidates rows lazily at
+  the §5.4 step-1 check, files unlinked by the sweeper.
+
+### 5.6 Observability
+
+- Structured `[kv-snapshot]` log lines (consistent with the existing `[kv-cache]`
+  divergence logs) for save/restore/prune with `ms`/`bytes`/`state` transitions.
+- Registry doubles as the metrics table (`timings` persisted per row; rolling stats
+  via `restore_count`/`miss_count`).
+- Residency records already surface slot bindings and hit confidence — parking adds
+  "parked (n tokens, size, when)" to that status surface on the Inference Servers
+  panel rather than inventing a parallel UI.
+
+## 6. Server configuration coupling
+
+- The `--slot-save-path <APP_DATA_DIR>/kv-cache/` for the **inference slot** is
+  derived at render time by `renderServiceExecStart` (`llama-service-config.ts`) —
+  emitted **unconditionally**, never stored in `extraArgs`. Landed refinement: the
+  flag is inert without parking, so gating it on the setting would force a unit
+  rewrite + restart on every toggle; `parseManagedServiceConfig` drops manual or
+  stale occurrences (canonicalization) and the re-render re-derives the canonical
+  path — one source of truth, and a "Reset managed override" can never strand the
+  API. The trailing separator (§2.1) is guaranteed by `kvCacheFlagPath()` in
+  `services/paths.ts`; the directory itself is created import-time, alongside the
+  data-dir migrations, by `ensureKvCacheDir()`.
+- Phase 3 records the rendered launch config into a `config_digest` (ctx-size,
+  parallel, cache-type-k/v, flash-attn, slot-save-path, mmproj, build tag) for
+  snapshot invalidation (§5.4).
+- `llama-supervisor.ts` restart/stop actions for a parking-enabled unit should flush
+  eligible parked chats first where cheap; otherwise the restart simply invalidates
+  residency, not snapshots (files stay restorable — §5.5).
+- Minimum-build gate: the feature's server probe (models route pattern) checks version
+  ≥ the build containing #26640; older servers ⇒ parking disabled with a visible
+  reason on the panel, no silent degradation.
+
+## 7. Explicit deltas
+
+Decisions D1–D8; settings keys are enumerated in §8.
+
+Every behavioral decision, named — reviewable without reading the code:
+
+| # | Decision | Chosen | Rejected because |
+|---|---|---|---|
+| **D1** | Who orchestrates parking | Porrima-side policy; stock llama.cpp only | A fork's `--slot-save-auto` couples our durability story to a rebased third-party branch; the gate + leases already give us the same scheduling (revisit if write-amp ever hurts) |
+| **D2** | Headless coverage | Lease acquisition added to `chat-turn-runner.ts` as a **prerequisite**, not optional | Automations/system turns are the motivating cold-return victims; without pins, restore would race tier-1 slot selection and the whole feature is HTTP-only |
+| **D3** | Save placement | After `done` event, per-slot queue, drop-if-restarted | Saving inside the turn adds I/O latency to the user-visible tail; "defer forever" queues pile up saves for chats that went idle anyway |
+| **D4** | Staleness detection | Lazy digest comparison at restore-gate | Eager invalidation from every prefix-mutating subsystem (persona, extraction, skills) is more call sites, more drift, same outcome |
+| **D5** | Files across restarts | Keep; invalidate only on `(build, config)` digest change | Wiping on restart throws away the cross-restart win that RAM tiering can never offer |
+| **D6** | Budget scope | Per-`poolKey` caps | A global cap lets one server's big chats starve another's; pools are the natural KV namespace |
+| **D7** | Eligibility metric | `usage.prompt_tokens` of the last iteration (wire-truth) | Estimators (chars/4, refined) re-open the estimator-asymmetry class of bugs turn-engine just closed; the usage number is the same quantity the cache actually matched |
+| **D8** | Feature default | **Off** until Phase 3 validation ships | It writes tens-of-GB files; opt-in per host with visible stats first is the honest rollout |
+
+## 8. Settings surface (Phase 4 UI, keys defined Phase 1)
+
+Stored in the existing settings blob (`routes/settings.ts` pattern):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `kvSnapshotEnabled` | `false` | master switch (per-host opt-in) |
+| `kvSnapshotMinTokens` | `65536` | eligibility threshold; break-even is host-dependent but low — tune from panel stats |
+| `kvSnapshotSaveDebounceMs` | `90000` | minimum interval between saves of one chat |
+| `kvSnapshotMinGrowthTokens` | `2048` | context growth that overrides the debounce |
+| `kvSnapshotMaxBytesPerPool` | `274877906944` (256 GiB) | LRU cap per model-server |
+| `kvSnapshotTtlHours` | `72` | hard expiry after TTL even under cap |
+| `kvSnapshotMinFreeDiskBytes` | `68719476736` (64 GiB) | absolute disk floor respected by saves |
+| `kvSnapshotOpTimeoutMs` | `60000` | per-save/per-restore budget |
+
+## 9. Failure model (summary table)
+
+| Failure | Effect | Recovery |
+|---|---|---|
+| Save error/timeout, crash mid-save | row `stale`; partial file unlinked by sweeper | next eligible end-of-turn re-parks |
+| Restore error/timeout | pre-send proceeds immediately; turn pays normal cold prefill | automatic |
+| Restore succeeds but prefix diverged | wasted restore seconds; LCP reuse degrades gracefully | digest gate tightens on next save; `miss_count` breaker caps repeats |
+| Disk full / headroom | save refused pre-flight (estimate), stale rows pruned | budget policy; log + panel status |
+| Server swap (build/config) | digest mismatch → restores skipped | lazy invalidation; files pruned |
+| Lease reassigned / slot evicted by tier 1 | `slot_id` in row is history, not truth — re-park on next save with current lease | save always records the *current* slot |
+
+In every row: no data corruption is possible (llama.cpp validates token identity on
+reuse; §2.7), and the turn's output correctness is independent of this subsystem.
+
+## 10. Phases
+
+1. **Prereq** *(done 10-11)* — managed service render emits the flag (§6); headless
+   lease acquisition (D2) with its regression pin
+   (`__tests__/chat-turn-runner-lease.test.ts`, six cases: acquire args, streamFn
+   threading, clean/error/non-llamacpp/acquire-failure balance).
+2. **Registry + save + budget/prune** — parking becomes invisible-but-real: rows,
+   files, metrics accrue; no restore path yet. Ships the data to tune thresholds.
+3. **Restore + gates + breaker** — the actual TTFT win; enabled end-to-end behind the
+   setting (D8).
+4. **Surfaces** — settings menu controls (§8), Inference Servers status panel,
+   storage-diagnostics accounting.
+
+## 11. Tests
+
+Unit (`server/src/__tests__/kv-snapshot.test.ts`): state-machine transitions
+(saving→ready→stale incl. startup sweep); all §5.3 gates independent; digest gate
+match/mismatch; breaker trips and resets; LRU/TTL/prune under synthetic budget;
+orphan sweep idempotence.
+
+Integration with a mocked `/slots` API (live-streams' fetch-mock pattern): save on
+eligible end-of-turn, skip when resident, restore pre-send gated by residency, restore
+timeout → normal send, D2 lease balance for headless turns.
+
+Script smoke (`scripts/smoke-kv-snapshot.ts`, matching `smoke-request-log`): against a
+parking-capable managed server with a synthetic prompt — asserts `n_saved == n_restored`
+and iteration-1 `cached_tokens` hit, then cleans up. Run manually per release; not in
+CI (needs a GPU host).

@@ -475,6 +475,17 @@ export interface Settings {
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
   // id_slot based on app-managed leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Keys are
+  // defined in Phase 1; the save/restore paths consume them in Phases 2-3.
+  // Defaults live next to the policy code, not in the wire type.
+  kvSnapshotEnabled?: boolean;
+  kvSnapshotMinTokens?: number;
+  kvSnapshotSaveDebounceMs?: number;
+  kvSnapshotMinGrowthTokens?: number;
+  kvSnapshotMaxBytesPerPool?: number;
+  kvSnapshotTtlHours?: number;
+  kvSnapshotMinFreeDiskBytes?: number;
+  kvSnapshotOpTimeoutMs?: number;
   // Vision image size cap preset — total-pixel budget applied before images are
   // sent to llama.cpp (chat attachments and tool-result images share it).
   // "standard" (default, 1280 tokens / ~1 MP) is safe at any context size;

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, renameSync } from "fs";
-import { join } from "path";
+import { join, sep } from "path";
 import { homedir } from "os";
 
 export const APP_DATA_DIR_NAME = ".porrima";
@@ -38,3 +38,33 @@ migrateLegacyDataFiles();
 export function appDataPath(...parts: string[]): string {
   return join(APP_DATA_DIR, ...parts);
 }
+
+/**
+ * Directory holding llama.cpp KV snapshot files written by the
+ * `/slots/{id}?action=save` API (see docs/design/kv-snapshot-parking.md).
+ * llama.cpp concatenates `--slot-save-path` with the requested filename
+ * WITHOUT inserting a separator, so flag rendering must always use
+ * `kvCacheFlagPath()` — passing the bare dir produces sibling files next
+ * to it (or a not-found error) instead of paths inside it.
+ */
+export const KV_CACHE_DIR = join(APP_DATA_DIR, "kv-cache");
+
+/** The `--slot-save-path` value: KV_CACHE_DIR with a trailing separator. */
+export function kvCacheFlagPath(): string {
+  return KV_CACHE_DIR.endsWith(sep) ? KV_CACHE_DIR : `${KV_CACHE_DIR}${sep}`;
+}
+
+/** Idempotent; called before rendering a launch config that references it. */
+export function ensureKvCacheDir(): void {
+  try {
+    mkdirSync(KV_CACHE_DIR, { recursive: true });
+  } catch (error: any) {
+    console.warn(`[paths] Failed to create KV cache dir: ${error?.message || error}`);
+  }
+}
+
+// Same import-time guarantee as the legacy migrations above: any process that
+// loads path data has the snapshot dir ready before a managed unit can
+// reference it. llama-server only needs the directory to exist at save time,
+// but creating it eagerly also lets `/slots ?action=save` work by hand.
+ensureKvCacheDir();
