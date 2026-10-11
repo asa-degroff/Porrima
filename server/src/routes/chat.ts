@@ -12,6 +12,7 @@ import { createTimeMarkerState } from "../services/time-marker.js";
 import { splitNextUserContext } from "../services/pending-user-context.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { digestPiMessages, digestWireShape, getPrefixSnapshot, recordReplaySnapshot } from "../services/kv-prefix-diagnostics.js";
+import { trimMessagesToAskUser } from "../services/pi-message-utils.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
@@ -1907,6 +1908,13 @@ async function handleChatStream(
   // Uses a ref object so TypeScript can track mutations through closures.
   const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
 
+  // Bridge to the live agent context's message array for the outer catch
+  // block, which is outside the try where `context` is declared. Kept pointed
+  // at the current array — including after a mid-turn compaction swaps in the
+  // compacted resume context — so the ask_user error path saves post-
+  // compaction history instead of the stale pre-loop `contextMessages` param.
+  let liveAgentMessages: Message[] = contextMessages;
+
   // SSE keepalive interval — prevents client timeout during gaps in SSE output
   // (model loading, long tool execution, between tool results and next LLM call).
   // Any real SSE event (text_delta, tool_status, etc.) also resets the client timer,
@@ -2172,10 +2180,15 @@ async function handleChatStream(
     // Build agent context. The system prompt travels through
     // createAgentLoopConfig's convertToLlm wrapper (pi-agent-core 1.0 carries
     // it as the transcript's leading system message).
-    const context: AgentContext = {
+    // `let` because mid-turn compaction swaps this binding to the compacted
+    // resume context — every downstream reader (ask_user pause save, crash
+    // checkpoints, passive-recall mirroring) must see the live post-compaction
+    // history, not the stale pre-compaction array.
+    let context: AgentContext = {
       messages: [...contextMessages],
       tools: agentTools,
     };
+    liveAgentMessages = context.messages;
     const passiveRecall = new PassiveMemoryRecallController(chat.id, {
       // Post-turn injection: when the agent stops without tool use,
       // the search runs in the background and injects after the turn ends.
@@ -3636,6 +3649,13 @@ async function handleChatStream(
         messages: resumeMessages,
         tools: agentTools,
       };
+      // Swap the live context binding: the pre-compaction `context` is now
+      // stale (it still holds every message the compaction marked
+      // out-of-context). Without this, the ask_user pause handler below would
+      // persist the stale array as the resume context — resurrecting the
+      // compacted history on the next request and blowing the KV cache.
+      context = resumeContext;
+      liveAgentMessages = resumeContext.messages;
       const resumeAbortController = new AbortController();
       if (connectionAbortController.signal.aborted) {
         resumeAbortController.abort();
@@ -3706,6 +3726,19 @@ async function handleChatStream(
             const msg = event.message as AssistantMessage;
             const sr = msg.stopReason || "stop";
             flushThinkingTimer();
+
+            // Mirror the completed turn into the live context (same as the
+            // main loop's turn_end) so the ask_user pause handler and crash
+            // checkpoints see this turn's messages — including the assistant
+            // message carrying the ask_user tool call that the pause trim
+            // scans for.
+            context.messages.push(msg);
+            if (event.toolResults?.length) {
+              for (const tr of event.toolResults) {
+                context.messages.push(tr);
+              }
+            }
+
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
@@ -3723,6 +3756,9 @@ async function handleChatStream(
               try {
                 await saveChat(chat);
                 savedResumeProgress = true;
+                // Refresh the crash-recovery snapshot too — the last main-loop
+                // save still holds the pre-compaction agentMessages.
+                await persistActivePendingState();
                 res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedResumeMsg, continues: true })}\n\n`);
               } catch (saveErr) {
                 console.error(`[chat] resume save failed:`, saveErr);
@@ -4112,28 +4148,36 @@ async function handleChatStream(
     if (askUserRef.current) {
       waitingForInput = true;
 
-      // Save pending state for resume. Trim context.messages to keep
+      // Save pending state for resume. Trim the live context to keep
       // everything through the assistant message with ask_user, but drop
       // the placeholder tool result and any aborted assistant message.
-      const savedMessages = [...context.messages];
-      let foundAskUser = false;
-      while (savedMessages.length > 0) {
-        const last = savedMessages[savedMessages.length - 1] as any;
-        if (
-          last.role === "assistant" &&
-          last.content?.some?.((c: any) => c.type === "toolCall" && c.name === "ask_user")
-        ) {
-          foundAskUser = true;
-          break; // Keep this assistant message
-        }
-        savedMessages.pop();
-      }
+      let { trimmed: savedMessages, found: foundAskUser } = trimMessagesToAskUser(context.messages);
 
-      // Safety: if no ask_user message was found, keep the original context
-      // to avoid losing all conversation history due to malformed message structure
-      if (!foundAskUser && context.messages.length > 0) {
-        console.warn(`[chat] ask_user message not found in context, preserving full context (${context.messages.length} messages)`);
-        savedMessages.push(...context.messages);
+      // The ask_user boundary is missing from the live context. Preserving the
+      // untrimmed array is NOT safe: it may predate a mid-turn compaction and
+      // would resurrect out-of-context history on resume (a 237-message stale
+      // array once produced a 225k-token resume prompt and an 11-minute cold
+      // prefill). Rebuild from persisted rows instead — replay skips
+      // _outOfContext rows, so compaction is honored — and re-trim.
+      if (!foundAskUser) {
+        console.warn(`[chat] ask_user message not found in live context (${context.messages.length} messages), rebuilding from persisted rows`);
+        try {
+          const rebuilt = await chatMessagesToHydratedPiMessages(
+            chat.messages,
+            chat.modelId,
+            activeAssistantIdentity,
+          );
+          const retry = trimMessagesToAskUser(rebuilt);
+          if (retry.found) {
+            savedMessages = retry.trimmed;
+          } else {
+            console.warn(`[chat] ask_user message still not found after rebuild (${rebuilt.length} messages), preserving rebuilt context`);
+            savedMessages = rebuilt;
+          }
+        } catch (rebuildErr) {
+          console.error(`[chat] failed to rebuild ask_user context from persisted rows:`, rebuildErr);
+          savedMessages = [...context.messages];
+        }
       }
 
       await savePendingState(chat.id, {
@@ -4353,9 +4397,14 @@ async function handleChatStream(
 
       // Best-effort save of pending state
       try {
-        const savedMessages = [...(contextMessages as any[])];
-        // On error path, context may not have been fully populated.
-        // Save what we have — the assistant message with ask_user should be present.
+        // Use the live context (post-compaction if a mid-turn cycle ran),
+        // trimmed through the ask_user assistant message like the normal
+        // pause path. The pre-loop `contextMessages` param is stale here.
+        const { trimmed, found } = trimMessagesToAskUser(liveAgentMessages);
+        if (!found) {
+          console.warn(`[chat] error path: ask_user message not found in live context (${liveAgentMessages.length} messages), preserving full live context`);
+        }
+        const savedMessages = ((found ? trimmed : liveAgentMessages) as any[]);
         await savePendingState(chat.id, {
           agentMessages: savedMessages,
           systemPrompt,

@@ -221,3 +221,29 @@ export function sanitizeProviderText(text: string): string {
     .replace(PROVIDER_UNSAFE_CONTROL_CHARS, "")
     .replace(PROVIDER_MEDIA_MARKERS, "");
 }
+
+/**
+ * Trim a pi-message array so it ends at the assistant message carrying the
+ * ask_user tool call, dropping any trailing placeholder tool result or aborted
+ * assistant message. Returns found=false (and an empty trimmed array) when no
+ * ask_user assistant message exists — callers must NOT fall back to the
+ * untrimmed array blindly: after a mid-turn compaction it may contain
+ * out-of-context history that the compaction removed (which once produced a
+ * 225k-token resume prompt and a KV-cache-missing prefill).
+ */
+export function trimMessagesToAskUser(messages: Message[]): { trimmed: Message[]; found: boolean } {
+  const trimmed = [...messages];
+  let found = false;
+  while (trimmed.length > 0) {
+    const last = trimmed[trimmed.length - 1] as any;
+    if (
+      last.role === "assistant" &&
+      last.content?.some?.((c: any) => c.type === "toolCall" && c.name === "ask_user")
+    ) {
+      found = true;
+      break; // Keep this assistant message
+    }
+    trimmed.pop();
+  }
+  return { trimmed, found };
+}
