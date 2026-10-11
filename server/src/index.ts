@@ -43,6 +43,7 @@ import { startScheduler } from "./services/scheduler.js";
 import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
 import { initializeExtractionPrompt } from "./services/extraction-prompt-store.js";
+import { initializeKvSnapshotStore } from "./services/kv-snapshot.js";
 import { createSystemChat } from "./services/system-chat.js";
 import { ensureAutomationDefaults, sweepOrphanedAutomationRuns } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
@@ -131,6 +132,9 @@ await ensureSetupTokenForFirstRun();
 // Initialize persona system on startup
 await initializePersona();
 await initializeExtractionPrompt();
+// KV snapshot parking registry: create schema + sweep in-flight rows at boot
+// (docs/design/kv-snapshot-parking.md §5.1). Inert until kvSnapshotEnabled.
+initializeKvSnapshotStore();
 
 // Create system chat for synthesis/reflection
 await createSystemChat();

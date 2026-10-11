@@ -6,6 +6,7 @@ import { normalizeRouterModelId } from "./llama-router-client.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
 import { isSystemPauseActive } from "./system-pause.js";
 import { sweepExpired } from "./tool-output-store.js";
+import { pruneKvSnapshots } from "./kv-snapshot.js";
 
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const TOOL_OUTPUT_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -248,5 +249,16 @@ export function startScheduler(): void {
   sweepToolOutput();
   setInterval(sweepToolOutput, TOOL_OUTPUT_SWEEP_INTERVAL_MS);
 
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min, tool-output sweep every 1h)");
+  // KV snapshot parking budget/TTL/orphan prune
+  // (docs/design/kv-snapshot-parking.md §5.5): startup + hourly, same shape
+  // as the tool-output sweep.
+  const pruneKv = () => {
+    void pruneKvSnapshots().catch((error) => {
+      console.warn("[scheduler] kv-snapshot prune failed:", error);
+    });
+  };
+  pruneKv();
+  setInterval(pruneKv, TOOL_OUTPUT_SWEEP_INTERVAL_MS);
+
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min, tool-output sweep every 1h, kv-snapshot prune every 1h)");
 }

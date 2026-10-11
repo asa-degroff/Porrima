@@ -2387,6 +2387,17 @@ export async function truncateChatHistory(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
+  // The message spine just changed: any parked KV snapshot no longer matches
+  // what the rebuilt history replays, so drop row + file
+  // (docs/design/kv-snapshot-parking.md §5.5). Dynamic import keeps the
+  // compaction -> storage dependency graph unchanged.
+  try {
+    const { invalidateKvSnapshot } = await import("./kv-snapshot.js");
+    await invalidateKvSnapshot(chat.id, "compaction");
+  } catch (error: any) {
+    console.warn("[compaction] kv-snapshot invalidate failed:", error?.message || error);
+  }
+
   return {
     truncated: true,
     // Count the split (if any) as 1 compacted unit so user-facing messaging

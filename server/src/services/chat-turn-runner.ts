@@ -21,6 +21,7 @@ import {
 import { partialToolText, type SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "./llama-slot-leases.js";
+import { maybeParkChatAfterTurn } from "./kv-snapshot.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
@@ -1051,6 +1052,10 @@ export async function runHeadlessChatTurn(
     } catch (err) {
       console.warn(`[${logPrefix}] llama slot lease release failed:`, err instanceof Error ? err.message : err);
     }
+    // KV snapshot parking (docs/design/kv-snapshot-parking.md §5.3): the
+    // headless path is the motivating victim (automations return to cold
+    // slots); enqueue is gated, budgeted, and never throws.
+    void maybeParkChatAfterTurn({ chatId: chat.id, lease: llamaSlotLease });
   }
 
   const state = currentState();

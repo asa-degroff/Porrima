@@ -6,6 +6,7 @@ import * as messageQueue from "./message-queue.js";
 import { resetMemoryContext } from "./memory-context.js";
 import { cleanupChat } from "./tool-output-store.js";
 import { clearLlmRequests } from "./request-log.js";
+import { invalidateKvSnapshot } from "./kv-snapshot.js";
 import { disposeKernel } from "./python-kernel.js";
 
 /**
@@ -32,4 +33,6 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   await disposeKernel(chatId, { removeState: true }).catch(() => {});
   // porrima.db side of the ledger: drop this chat's recorded LLM requests.
   clearLlmRequests(chatId);
+  // ...and its parked KV snapshot + file (docs/design/kv-snapshot-parking.md).
+  await invalidateKvSnapshot(chatId, "chat-deleted").catch(() => {});
 }

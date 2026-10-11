@@ -163,6 +163,7 @@ porrima/
 │   │   ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
 │   │   ├── reranker-stats.ts        # Reranker sampling (porrima.db)
 │   │   ├── request-log.ts           # Wire-level per-request recorder (llm_requests + blob dedup, porrima.db)
+│   │   ├── kv-snapshot.ts           # KV snapshot parking: registry, save policy, budget/prune (docs/design/kv-snapshot-parking.md)
 │   │   ├── cache-warm.ts            # llama.cpp prompt-cache warming
 │   │   ├── cache-warm-queue.ts      # Warm queue with position tracking
 │   │   ├── llama-cache-residency.ts # Observed prompt-cache residency

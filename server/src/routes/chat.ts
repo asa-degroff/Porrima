@@ -62,6 +62,7 @@ import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/
 import { recordModelStats } from "../services/model-stats.js";
 import { PassiveMemoryRecallController } from "../services/passive-memory-recall.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
+import { maybeParkChatAfterTurn } from "../services/kv-snapshot.js";
 import type { ModelProgressEvent } from "../services/model-progress.js";
 import {
   clearLlamaCacheResidencyTarget,
@@ -4458,6 +4459,9 @@ async function handleChatStream(
     } catch (err) {
       console.warn("[llama-slot] release failed:", err instanceof Error ? err.message : err);
     }
+    // KV snapshot parking (docs/design/kv-snapshot-parking.md §5.3): enqueued
+    // after the done event and lease release; never blocks or rejects.
+    void maybeParkChatAfterTurn({ chatId: chat.id, lease: llamaSlotLease });
     // Chat-keyed bookkeeping is ownership-scoped: a superseded turn's late
     // finally must not mark the newer turn's cache residency finished, so the
     // stream check gates it. The active-chat entry is token-scoped instead —

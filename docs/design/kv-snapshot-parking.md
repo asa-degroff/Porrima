@@ -1,6 +1,6 @@
 # KV Snapshot Parking — a disk tier for idle slot KV
 
-**Status:** Design. **Phase 1 (parking flag + headless slot leases) implemented 10-11.** Spike validated 10-11 on a live agent server (stock llama.cpp ≥ #26004 build): cold prefill → save → eviction → restore → repinned replay, end to end.
+**Status:** Design. **Phases 1–2 (parking flag, headless slot leases, registry + save + pruning) implemented 10-11.** Spike validated 10-11 on a live agent server (stock llama.cpp ≥ #26004 build): cold prefill → save → eviction → restore → repinned replay, end to end.
 **Author:** Qwen 3.8 Flash
 **Date**: 2026-10-11
 
@@ -316,8 +316,11 @@ reuse; §2.7), and the turn's output correctness is independent of this subsyste
    lease acquisition (D2) with its regression pin
    (`__tests__/chat-turn-runner-lease.test.ts`, six cases: acquire args, streamFn
    threading, clean/error/non-llamacpp/acquire-failure balance).
-2. **Registry + save + budget/prune** — parking becomes invisible-but-real: rows,
-   files, metrics accrue; no restore path yet. Ships the data to tune thresholds.
+2. **Registry + save + budget/prune** *(done 10-11)* — parking becomes
+   invisible-but-real: rows, files, metrics accrue; no restore path yet.
+   `kv-snapshot.ts` + `kv_snapshots` (porrima.db), end-of-turn save enqueue in both
+   finalize paths, per-pool LRU + TTL + orphan sweeps. Ships the data to tune
+   thresholds.
 3. **Restore + gates + breaker** — the actual TTFT win; enabled end-to-end behind the
    setting (D8).
 4. **Surfaces** — settings menu controls (§8), Inference Servers status panel,
