@@ -1,7 +1,7 @@
 import puppeteer, { type Browser, type ConnectionTransport, type Page, type ElementHandle } from "puppeteer-core";
 import sharp from "sharp";
 import WebSocket from "ws";
-import { discoverDevToolsTarget, findChromePath } from "./chrome.js";
+import { discoverDevToolsTargets, findChromePath } from "./chrome.js";
 import { clearBrowserFrames, frameSummary, latestBrowserFrame } from "./browser-frames.js";
 import type { BrowserSessionSnapshot } from "../types.js";
 
@@ -253,17 +253,30 @@ async function openBrowserSession(chatId: string): Promise<BrowserSession> {
     }
   }
   if (process.env.PORRIMA_BROWSER_ATTACH !== "0") {
-    const target = await discoverDevToolsTarget().catch(() => null);
-    if (target) {
+    // Newest DevToolsActivePort first (a running Chrome rewrites the file at
+    // browser start). Try each candidate in order: a dead endpoint refuses
+    // the connection fast and the loop falls through; a live one connects
+    // (consent already granted) or parks on the native prompt until the
+    // user answers. Only when every candidate fails do we launch private.
+    const candidates = await discoverDevToolsTargets().catch(() => []);
+    for (let i = 0; i < candidates.length; i++) {
+      const { target, mtimeMs } = candidates[i];
       const endpoint = `ws://127.0.0.1:${target.port}${target.webSocketPath}`;
       const consentTimeoutMs = Number(process.env.PORRIMA_BROWSER_CONSENT_TIMEOUT_MS) || DEFAULT_CONSENT_TIMEOUT_MS;
+      console.log(
+        `[browser] devtools candidate ${i + 1}/${candidates.length}: ${target.userDataDir} (file mtime ${new Date(mtimeMs).toISOString()}) → ${endpoint}`,
+      );
       console.log(`[browser] attaching to user Chrome at ${endpoint} (up to ${consentTimeoutMs}ms for remote-debugging consent)`);
       try {
         const session = await attachSession(chatId, endpoint, consentTimeoutMs);
         console.log(`[browser] attached to user Chrome (port ${target.port}) — chat ${chatId}`);
         return session;
       } catch (err) {
-        console.warn(`[browser] attach to Chrome at ${endpoint} failed: ${(err as Error).message} — falling back to a private browser. To use your Chrome: enable the toggle at chrome://inspect/#remote-debugging and approve the "allow remote debugging" prompt when it appears.`);
+        const next =
+          i + 1 < candidates.length
+            ? "trying next candidate"
+            : "falling back to a private browser. To use your Chrome: enable the toggle at chrome://inspect/#remote-debugging and approve the \"allow remote debugging\" prompt when it appears.";
+        console.warn(`[browser] attach to Chrome at ${endpoint} failed: ${(err as Error).message} — ${next}`);
       }
     }
   }

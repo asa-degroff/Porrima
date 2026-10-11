@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { delimiter, join } from "path";
 
@@ -100,10 +100,47 @@ export function readDevToolsActivePort(userDataDir: string): DevToolsActiveTarge
  * waits for the user to approve. Stale files that survive a crash are
  * handled by that same fast failure.
  */
-export async function discoverDevToolsTarget(): Promise<DevToolsActiveTarget | null> {
+export interface DevToolsTargetCandidate {
+  target: DevToolsActiveTarget;
+  /** mtime of the DevToolsActivePort file — a running Chrome rewrites it at browser start. */
+  mtimeMs: number;
+}
+
+/**
+ * All parseable DevToolsActivePort targets, sorted newest-first by file mtime.
+ *
+ * A running Chrome rewrites DevToolsActivePort at browser start, so the
+ * newest file belongs to a live instance. Stale files (from a Chrome that
+ * exited or crashed) lose the race instead of shadowing a live endpoint.
+ * The old single-target "first parseable wins" ordering bit us in the
+ * 10-10 field tour: the env override listed a dead agent profile first, its
+ * 21-day-old file (port 33411) was returned, and every attach since then
+ * failed fast to a silent private-browser fallback while the user's live
+ * Chrome sat unprobed on port 9222.
+ *
+ * Liveness is still established by the connect attempt itself (the
+ * openBrowserSession fall-through loop): a dead candidate refuses the
+ * connection fast and the loop moves to the next.
+ */
+export async function discoverDevToolsTargets(): Promise<DevToolsTargetCandidate[]> {
+  const candidates: DevToolsTargetCandidate[] = [];
   for (const dir of chromeUserDataDirs()) {
     const target = readDevToolsActivePort(dir);
-    if (target) return target;
+    if (!target) continue;
+    let mtimeMs = 0;
+    try {
+      mtimeMs = statSync(join(dir, "DevToolsActivePort")).mtimeMs;
+    } catch {
+      // File vanished between read and stat — treat as oldest.
+    }
+    candidates.push({ target, mtimeMs });
   }
-  return null;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates;
+}
+
+/** First (newest) parseable target, if any. Kept for compatibility. */
+export async function discoverDevToolsTarget(): Promise<DevToolsActiveTarget | null> {
+  const [first] = await discoverDevToolsTargets();
+  return first ? first.target : null;
 }

@@ -2,12 +2,13 @@
 // no browser process involved.
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   chromeUserDataDirs,
   discoverDevToolsTarget,
+  discoverDevToolsTargets,
   parseDevToolsActivePort,
   readDevToolsActivePort,
 } from "./chrome.js";
@@ -126,5 +127,29 @@ describe("discoverDevToolsTarget", () => {
   it("returns null when no user-data dir has a parseable DevToolsActivePort", async () => {
     process.env[ENV_KEY] = makeUserDataDir();
     expect(await discoverDevToolsTarget()).toBeNull();
+  });
+});
+
+describe("discoverDevToolsTargets", () => {
+  it("sorts candidates newest-first by DevToolsActivePort mtime — a stale file loses the race", async () => {
+    const stale = makeUserDataDir();
+    const live = makeUserDataDir();
+    writeFileSync(join(stale, "DevToolsActivePort"), "33411\n/devtools/browser/stale\n");
+    writeFileSync(join(live, "DevToolsActivePort"), "9222\n/devtools/browser/live\n");
+    // Backdate the stale file (a Chrome that exited days ago).
+    const past = new Date(Date.now() - 24 * 3600 * 1000);
+    utimesSync(join(stale, "DevToolsActivePort"), past, past);
+    // Deliberately stale-first in the env list: mtime must dominate order.
+    process.env[ENV_KEY] = `${stale}:${live}`;
+
+    const candidates = await discoverDevToolsTargets();
+    expect(candidates.map((c) => c.target.port)).toEqual([9222, 33411]);
+    expect(candidates[0].target.userDataDir).toBe(live);
+    expect(candidates[1].target.userDataDir).toBe(stale);
+  });
+
+  it("returns an empty list when no profile has a parseable file", async () => {
+    process.env[ENV_KEY] = makeUserDataDir();
+    expect(await discoverDevToolsTargets()).toEqual([]);
   });
 });
