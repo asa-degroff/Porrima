@@ -1,6 +1,6 @@
 # KV Snapshot Parking — a disk tier for idle slot KV
 
-**Status:** **Phases 1–3 implemented 10-11, plus the 10-11 review fixes (slot probe, binary build tag, wire-failure strikes, min-build gate, slot-identity save guard, estimate ordering).** Smoke script validated live 10-11 against b11552: cold prefill → save → erase → restore → repinned replay, `n_saved == n_restored`, replay cached 2798/2802. Phase 4 (surfaces) pending.
+**Status:** **Phases 1–3 implemented 10-11, plus the 10-11 review fixes (slot probe, binary build tag, wire-failure strikes, min-build gate, slot-identity save guard, estimate ordering) and the fine-print fixes (stderr version banner, /slots capacity discovery — f89b1885).** Smoke script validated live 10-11 against b11552: cold prefill → save → erase → restore → repinned replay, `n_saved == n_restored`, replay cached 2798/2802. **First production park landed 10-11 13:44** (chat 21f67f84, 91,930 tokens, 16.3 GB, save 15.1 s, build-tagged, `ready`). Phase 4 (surfaces) pending.
 **Author:** Qwen 3.8 Flash
 **Date**: 2026-10-11
 
@@ -78,7 +78,11 @@ deliberately, not by accident:
    (cmdline carries `--port <port>`), read `/proc/<pid>/exe`, run
    `<bin> --version` → `version: 0.6.0-dev (build 11552, commit 23b0202a1)`
    (implemented in `services/llama-build-probe.ts`). An HTTP `/server_info`
-   fallback is kept for builds that expose it.
+   fallback is kept for builds that expose it. **The version banner is printed
+   to stderr** (the ggml log channel) — the probe concatenates stdout+stderr.
+   10-11 production fix (f89b1885): a stdout-only capture returned `""` for
+   every park, so the restore build-gate passed vacuously; the first
+   production row's empty `build_tag` is what caught it.
 5. **`id_slot` on OpenAI-compat requests.** Parsed in the shared completion handler;
    pinning works through `/v1/chat/completions`. Porrima **already does this**:
    `buildOpenAICompatChatBody` sets `body.id_slot` from the llama slot lease whenever
@@ -269,6 +273,18 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 - Global cap `kvSnapshotMaxBytes` per `poolKey` (per model-server, not global — D6);
   eviction is LRU by `last_used_at`, then TTL `kvSnapshotTtlHours` on the survivors.
 - Pre-save headroom check: free ≥ `kvSnapshotMinFreeDiskBytes` + estimate.
+- **Measured bytes/token (10-11, first production park):** 16.3 GB / 91,930
+  tokens ≈ **176 KiB/token** on b11552 (the smoke run measured 265 KiB/token;
+  the earlier spike measured 46 KiB/token on b11020 — likely pre-#26004,
+  i.e. before the checkpoint appendix). Working hypothesis: the #26004
+  context-checkpoint appendix (up to 32 checkpoints × tgt/dft/spec blobs)
+  rides along with the seq KV and dominates file size. Consequences: the
+  fallback estimate (96 KiB/token) **under-estimates** for fresh chats; the
+  learned own-row/peer ratio corrects from the second park onward, and
+  `kvSnapshotMinFreeDiskBytes` is the backstop. Size `kvSnapshotMaxBytesPerPool`
+  for the Phase 4 UI against ~176 KiB/token, not the spike number. (Falsifier:
+  a save on b11552 with `--ctx-checkpoints` disabled should drop back toward
+  ~48 KiB/token.)
 - Orphan sweeps (startup + hourly): file without row → unlink; row without file →
   `stale`. Chat deletion, chat model switch (poolKey change), and lease reassignment
   all remove files eagerly via `chat-deletion.ts` / lease eviction hooks.
@@ -371,6 +387,13 @@ reuse; §2.9), and the turn's output correctness is independent of this subsyste
    lease acquisition (D2) with its regression pin
    (`__tests__/chat-turn-runner-lease.test.ts`, six cases: acquire args, streamFn
    threading, clean/error/non-llamacpp/acquire-failure balance).
+   **Slot-capacity discovery** *(fixed 10-11, f89b1885)*: discovery read
+   `max_instances` from `/props` — a key current llama.cpp never exposed (old
+   fork convention) — so every chat was serialized onto slot 0 with
+   LRU-steal churn. Discovery now counts `GET /slots` entries (ground truth,
+   array-per-slot on current builds), keeping `/props` as a legacy fallback;
+   `__tests__/llama-slot-leases.test.ts` pins discovery, fallback,
+   inactive-peer LRU eviction, and the no-steal-while-active decline.
 2. **Registry + save + budget/prune** *(done 10-11)* — parking becomes
    invisible-but-real: rows, files, metrics accrue; no restore path yet.
    `kv-snapshot.ts` + `kv_snapshots` (porrima.db), end-of-turn save enqueue in both
