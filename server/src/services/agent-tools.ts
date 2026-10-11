@@ -82,7 +82,7 @@ const LIST_FILES_TOOL: Tool = {
 
 const BASH_TOOL: Tool = {
   name: "bash",
-  description: "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, installing packages, running scripts, etc.",
+  description: "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, running scripts, etc. For Python, use run_python instead.",
   parameters: Type.Object({
     command: Type.String({ description: "The bash command to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
@@ -91,7 +91,7 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root for project chats. Falls back to stateless on remote machines.",
+  description: "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30 foreground / 3600 background; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
