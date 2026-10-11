@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getCacheResidency, type CacheResidency } from "../api/client";
+import { getCacheResidency, type CacheResidency, getKvSnapshotSummary, type KvSnapshotSummary } from "../api/client";
 
 /** Check if we're in a layout wide enough for side-by-side model cards. */
 function useIsDesktop(): boolean {
@@ -867,6 +867,7 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
   const [loading, setLoading] = useState(false);
   const [cacheResidency, setCacheResidency] = useState<CacheResidency[]>([]);
   const [cacheLoading, setCacheLoading] = useState(false);
+  const [kvSummary, setKvSummary] = useState<KvSnapshotSummary | null>(null);
   const [rerankerData, setRerankerData] = useState<RerankerStatsData | null>(null);
   const [rerankerLoading, setRerankerLoading] = useState(false);
 
@@ -921,6 +922,14 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
     }
   }, []);
 
+  const fetchKvSnapshots = useCallback(async () => {
+    try {
+      setKvSummary(await getKvSnapshotSummary());
+    } catch {
+      setKvSummary(null);
+    }
+  }, []);
+
   const fetchRerankerStats = useCallback(async () => {
     setRerankerLoading(true);
     try {
@@ -944,6 +953,7 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
     if (isOpen) {
       fetchActiveModels();
       fetchCacheResidency();
+      fetchKvSnapshots();
       fetchRerankerStats();
       setMainExpanded(false);
       setExtExpanded(false);
@@ -952,7 +962,7 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
       // silent fetch.
       lastStatsVersionRef.current = null;
     }
-  }, [isOpen, fetchActiveModels, fetchCacheResidency, fetchRerankerStats]);
+  }, [isOpen, fetchActiveModels, fetchCacheResidency, fetchKvSnapshots, fetchRerankerStats]);
 
   // Live tracking: the server records model stats per-iteration, and
   // useChat bumps statsVersion on each completed model call. While open,
@@ -971,7 +981,8 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
     // Cache residency tracks the same runs — refresh it alongside so the
     // two views never disagree mid-turn.
     fetchCacheResidency();
-  }, [statsVersion, isOpen, fetchActiveModels, fetchCacheResidency]);
+    fetchKvSnapshots();
+  }, [statsVersion, isOpen, fetchActiveModels, fetchCacheResidency, fetchKvSnapshots]);
 
   if (!isOpen) return null;
 
@@ -1097,6 +1108,87 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+          </section>
+
+          {/* Disk Residency — KV snapshot parking (docs/design/kv-snapshot-parking.md) */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-2">Disk Residency</div>
+            {!kvSummary ? (
+              <div className="bg-white/5 rounded-lg p-4 border border-white/5 text-center text-white/30 text-sm">
+                Parking status unavailable.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px]">
+                  <span className={kvSummary.enabled ? "text-emerald-300/80" : "text-white/40"}>
+                    {kvSummary.enabled ? "Parking enabled" : "Parking disabled"}
+                  </span>
+                  {kvSummary.pools.map((p) => (
+                    <span key={p.poolKey} className="text-white/40">
+                      {truncateModelId(p.modelId)}: {p.count} parked · {(p.bytes / 1073741824).toFixed(1)} GiB
+                    </span>
+                  ))}
+                  {kvSummary.freeDiskBytes !== null && (
+                    <span className="text-white/30">{(kvSummary.freeDiskBytes / 1073741824).toFixed(0)} GiB free</span>
+                  )}
+                  {!kvSummary.enabled && kvSummary.snapshots.length > 0 && (
+                    <span className="text-white/30">Rows below are the last parked state; new turns will not park or restore.</span>
+                  )}
+                </div>
+                {kvSummary.snapshots.length === 0 ? (
+                  <div className="bg-white/5 rounded-lg p-4 border border-white/5 text-center text-white/30 text-sm">
+                    Nothing parked yet. Chats over {Math.round(kvSummary.policy.minTokens / 1024)}k tokens park at end of turn.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="text-white/30 text-left">
+                          <th className="pb-2 pr-4 font-normal">Chat</th>
+                          <th className="pb-2 pr-3 font-normal">Slot</th>
+                          <th className="pb-2 pr-3 font-normal">Tokens</th>
+                          <th className="pb-2 pr-3 font-normal">Size</th>
+                          <th className="pb-2 pr-3 font-normal">Saved</th>
+                          <th className="pb-2 pr-3 font-normal">Restore / Miss</th>
+                          <th className="pb-2 font-normal">State</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {kvSummary.snapshots.map((s) => (
+                          <tr key={s.chatId} className="border-t border-white/5">
+                            <td className="py-1.5 pr-4 max-w-[220px]">
+                              {s.chatTitle ? (
+                                <span className="block truncate text-white/70" title={s.chatId}>{s.chatTitle}</span>
+                              ) : (
+                                <span className="text-white/70 font-mono" title={s.chatId}>{`${s.chatId.slice(0, 8)}...`}</span>
+                              )}
+                            </td>
+                            <td className="py-1.5 pr-3 text-amber-300/90 font-mono">slot {s.slotId}</td>
+                            <td className="py-1.5 pr-3 text-white/60 font-mono">{(s.nTokens / 1000).toFixed(1)}k</td>
+                            <td className="py-1.5 pr-3 text-white/60 font-mono">{(s.bytes / 1073741824).toFixed(1)} GiB</td>
+                            <td className="py-1.5 pr-3 text-white/40">{formatTimeAgo(s.savedAt)}</td>
+                            <td className="py-1.5 pr-3 font-mono">
+                              <span className="text-emerald-300/80">{s.restoreCount}</span>
+                              <span className="text-white/25">/</span>
+                              <span className={s.missCount >= 2 ? "text-amber-400" : s.missCount > 0 ? "text-amber-300/70" : "text-white/40"}>
+                                {s.missCount}
+                                {s.missCount >= 2 ? " ⚠" : ""}
+                              </span>
+                            </td>
+                            <td className="py-1.5">
+                              <span className="inline-flex items-center gap-1">
+                                <span className={`w-1.5 h-1.5 rounded-full ${s.state === "ready" ? "bg-emerald-400/90" : s.state === "saving" ? "bg-amber-400/90" : "bg-white/30"}`} />
+                                <span className="text-white/50">{s.state}</span>
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </section>

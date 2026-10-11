@@ -404,8 +404,19 @@ reuse; §2.9), and the turn's output correctness is independent of this subsyste
    one-per-turn, pool/digest/build/slot-probe/breaker checks — see §5.4) +
    usage-confirmed `miss_count` breaker via request-log events; park stamps the
    observed wire-head digest and resets the breaker.
-4. **Surfaces** — settings menu controls (§8), Inference Servers status panel,
-   storage-diagnostics accounting.
+4. **Surfaces** *(done 10-11)* — settings menu controls (§8), Inference Servers
+   status panel, disk accounting. Landed shape:
+   - `GET /api/settings/kv-snapshots` — `getKvSnapshotSummary()`: policy,
+     per-`poolKey` totals, live free-disk, registry rows with chat titles
+     resolved at read time (mirrors `/cache-residency`). `storage-diagnostics`
+     stays migration-integrity-only; disk accounting lives here.
+   - Settings → Inference Servers → inference slot → Configuration: "KV
+     snapshot parking" group (enable toggle + park-above-tokens, pool cap
+     GiB, TTL hours). Unexposed keys persist through the settings merge.
+   - ModelStatsModal: "Disk Residency" section beside Cache Residency —
+     enabled badge, pool totals + free disk, per-chat rows (slot, tokens,
+     size, saved-ago, restore/miss counts, state dot, breaker warning).
+     Refreshes on open and on the same statsVersion live-tracking tick.
 
 ## 11. Tests
 

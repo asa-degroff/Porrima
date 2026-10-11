@@ -603,6 +603,32 @@ describe("kv-snapshot restore gate (Phase 3)", () => {
   });
 });
 
+describe("kv-snapshot summary surface (Phase 4)", () => {
+  it("aggregates pool totals, policy, and free disk for the status panel", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [
+        { chatId: "p1", bytes: 4_000, nTokens: 50_000, lastUsedAt: BASE_TIME },
+        {
+          chatId: "p2", bytes: 7_000, nTokens: 90_000, lastUsedAt: BASE_TIME,
+          poolKey: "other-pool", baseUrl: "http://localhost:9090", modelId: "other-model",
+        },
+      ],
+    });
+
+    const summary = await h.kv.getKvSnapshotSummary();
+
+    expect(summary.enabled).toBe(true);
+    expect(summary.policy.minTokens).toBe(1_000);
+    expect(summary.snapshots).toHaveLength(2);
+    expect(summary.pools).toHaveLength(2);
+    const primary = summary.pools.find((p) => p.poolKey === lease.poolKey);
+    expect(primary?.count).toBe(1);
+    expect(primary?.bytes).toBe(4_000);
+    expect(summary.freeDiskBytes).toBe(1_073_741_824 * 1024);
+    h.db.close();
+  });
+});
+
 describe("kv-snapshot usage-confirmed breaker", () => {
   async function restoreThenVerify(h: Harness, turnId: string, usage: { input: number; cacheRead: number }) {
     await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId, iteration: 1 });

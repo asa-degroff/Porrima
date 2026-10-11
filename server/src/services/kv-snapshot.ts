@@ -854,6 +854,52 @@ async function freeDiskBytes(): Promise<number | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Surfaces (Phase 4): summary for the status panel / settings display
+// ---------------------------------------------------------------------------
+
+export interface KvSnapshotPoolTotals {
+  poolKey: string;
+  baseUrl: string;
+  modelId: string;
+  count: number;
+  bytes: number;
+}
+
+export interface KvSnapshotSummary {
+  enabled: boolean;
+  policy: KvSnapshotSettings;
+  snapshots: KvSnapshotRow[];
+  pools: KvSnapshotPoolTotals[];
+  freeDiskBytes: number | null;
+}
+
+export async function getKvSnapshotSummary(): Promise<KvSnapshotSummary> {
+  const settings = await readSettings();
+  const policy = resolveKvSnapshotSettings(settings);
+  const snapshots = listKvSnapshots();
+  const byPool = new Map<string, KvSnapshotPoolTotals>();
+  for (const row of snapshots) {
+    const totals = byPool.get(row.poolKey) ?? {
+      poolKey: row.poolKey,
+      baseUrl: row.baseUrl,
+      modelId: row.modelId,
+      count: 0,
+      bytes: 0,
+    };
+    totals.count += 1;
+    totals.bytes += row.bytes;
+    byPool.set(row.poolKey, totals);
+  }
+  return {
+    enabled: policy.enabled,
+    policy,
+    snapshots,
+    pools: [...byPool.values()],
+    freeDiskBytes: await freeDiskBytes(),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Pruning (doc §5.5): TTL, stale expiry, pool cap, orphan files
 // ---------------------------------------------------------------------------
 

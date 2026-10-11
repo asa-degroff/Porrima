@@ -541,6 +541,17 @@ export interface Settings {
   // "auto" lets llama.cpp select physical slots and restore prompt cache;
   // "enforced" sends app-managed id_slot leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Disk tier for
+  // idle slot KV; restore fires on cold returns. Default off.
+  kvSnapshotEnabled?: boolean;
+  kvSnapshotMinTokens?: number;
+  kvSnapshotSaveDebounceMs?: number;
+  kvSnapshotMinGrowthTokens?: number;
+  kvSnapshotMaxBytesPerPool?: number;
+  kvSnapshotTtlHours?: number;
+  kvSnapshotMinFreeDiskBytes?: number;
+  kvSnapshotOpTimeoutMs?: number;
+  kvSnapshotMinBuild?: number;
   // Vision image size cap preset (total-pixel budget before images reach
   // llama.cpp). "standard" (default) / "detailed" / "maximum".
   imageCapPreset?: "standard" | "detailed" | "maximum";

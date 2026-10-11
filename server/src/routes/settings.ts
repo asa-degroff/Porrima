@@ -265,6 +265,23 @@ router.get("/cache-residency", async (_req, res) => {
   }
 });
 
+// GET /api/settings/kv-snapshots - Disk-tier KV snapshot parking status
+// (docs/design/kv-snapshot-parking.md §10 Phase 4). Registry rows come back
+// with chat titles resolved at read time, mirroring /cache-residency.
+router.get("/kv-snapshots", async (_req, res) => {
+  try {
+    const { getKvSnapshotSummary } = await import("../services/kv-snapshot.js");
+    const summary = await getKvSnapshotSummary();
+    const snapshots = summary.snapshots.map((s) => ({
+      ...s,
+      chatTitle: getChatTitle(s.chatId) ?? undefined,
+    }));
+    res.json({ ...summary, snapshots });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Header Image ---
 
 // POST /api/settings/header-image — Upload/replace the header image (multipart/form-data)

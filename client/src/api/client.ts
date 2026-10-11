@@ -1645,6 +1645,61 @@ export async function getCacheResidency(): Promise<CacheResidency[]> {
   return res.json();
 }
 
+// --- Disk-tier KV Snapshot Parking ---
+
+export type KvSnapshotState = "saving" | "ready" | "stale" | "restoring";
+
+export interface KvSnapshotEntry {
+  chatId: string;
+  chatTitle?: string;
+  poolKey: string;
+  baseUrl: string;
+  modelId: string;
+  slotId: number;
+  filename: string;
+  nTokens: number;
+  bytes: number;
+  prefixDigest: string;
+  buildTag: string;
+  state: KvSnapshotState;
+  savedAt: number;
+  lastUsedAt: number;
+  restoreCount: number;
+  missCount: number;
+}
+
+export interface KvSnapshotPoolTotals {
+  poolKey: string;
+  baseUrl: string;
+  modelId: string;
+  count: number;
+  bytes: number;
+}
+
+export interface KvSnapshotSummary {
+  enabled: boolean;
+  policy: {
+    enabled: boolean;
+    minTokens: number;
+    saveDebounceMs: number;
+    minGrowthTokens: number;
+    maxBytesPerPool: number;
+    ttlHours: number;
+    minFreeDiskBytes: number;
+    opTimeoutMs: number;
+    minBuild: number;
+  };
+  snapshots: KvSnapshotEntry[];
+  pools: KvSnapshotPoolTotals[];
+  freeDiskBytes: number | null;
+}
+
+export async function getKvSnapshotSummary(): Promise<KvSnapshotSummary> {
+  const res = await apiFetch(`${BASE}/settings/kv-snapshots`);
+  if (!res.ok) throw new Error("Failed to fetch kv snapshot summary");
+  return res.json();
+}
+
 // --- Llama.cpp Server Supervisor ---
 
 export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding" | "title-generation";

@@ -634,6 +634,15 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
+  // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Only the
+  // three keys with UI are sent; the rest persist server-side via the
+  // settings merge (fields a client omits are preserved).
+  const [kvSnapshotEnabled, setKvSnapshotEnabled] = useState(settings.kvSnapshotEnabled ?? false);
+  const [kvSnapshotMinTokens, setKvSnapshotMinTokens] = useState(String(settings.kvSnapshotMinTokens ?? 65536));
+  const [kvSnapshotMaxGib, setKvSnapshotMaxGib] = useState(
+    String(Math.round((settings.kvSnapshotMaxBytesPerPool ?? 274877906944) / 1073741824)),
+  );
+  const [kvSnapshotTtlHours, setKvSnapshotTtlHours] = useState(String(settings.kvSnapshotTtlHours ?? 72));
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction runtime and request settings
   const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? DEFAULT_EXTRACTION_CTX_SIZE);
@@ -2162,6 +2171,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSlotBindingMode,
+      kvSnapshotEnabled,
+      kvSnapshotMinTokens: parseInt(kvSnapshotMinTokens, 10) > 0 ? parseInt(kvSnapshotMinTokens, 10) : undefined,
+      kvSnapshotMaxBytesPerPool: parseInt(kvSnapshotMaxGib, 10) > 0 ? parseInt(kvSnapshotMaxGib, 10) * 1073741824 : undefined,
+      kvSnapshotTtlHours: parseInt(kvSnapshotTtlHours, 10) > 0 ? parseInt(kvSnapshotTtlHours, 10) : undefined,
       extractionCtxSize: savedExtractionCtxSize,
       extractionMaxTokens: savedExtractionMaxTokens,
       extractionTimeoutMs: savedExtractionTimeoutMs,
@@ -3639,6 +3652,31 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                      ))}
 	                                    </Dropdown>
 	                                    <span className="text-xs text-white/30">Auto lets llama.cpp restore prompt cache.</span>
+	                                  </div>
+	                                  <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-2">
+	                                    <div className="flex items-center justify-between gap-3">
+	                                      <div className="min-w-0">
+	                                        <p className="text-xs font-medium text-white/70">KV snapshot parking</p>
+	                                        <p className="text-[11px] text-white/35">Parks big chats' KV to NVMe at end of turn and restores it on cold returns — seconds instead of full re-prefill. Needs Slots = Enforced.</p>
+	                                      </div>
+	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" />
+	                                    </div>
+	                                    {kvSnapshotEnabled && (
+	                                      <div className="grid grid-cols-3 gap-2">
+	                                        <label className="block">
+	                                          <span className="block text-[10px] text-white/40 mb-1">Park above (tokens)</span>
+	                                          <input type="number" min={1024} step={1024} value={kvSnapshotMinTokens} onChange={(e) => setKvSnapshotMinTokens(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono" />
+	                                        </label>
+	                                        <label className="block">
+	                                          <span className="block text-[10px] text-white/40 mb-1">Pool cap (GiB)</span>
+	                                          <input type="number" min={1} step={16} value={kvSnapshotMaxGib} onChange={(e) => setKvSnapshotMaxGib(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono" />
+	                                        </label>
+	                                        <label className="block">
+	                                          <span className="block text-[10px] text-white/40 mb-1">TTL (hours)</span>
+	                                          <input type="number" min={1} step={12} value={kvSnapshotTtlHours} onChange={(e) => setKvSnapshotTtlHours(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono" />
+	                                        </label>
+	                                      </div>
+	                                    )}
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Binary</label>
