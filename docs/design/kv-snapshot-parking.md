@@ -1,6 +1,6 @@
 # KV Snapshot Parking — a disk tier for idle slot KV
 
-**Status:** Design. **Phases 1–2 (parking flag, headless slot leases, registry + save + pruning) implemented 10-11.** Spike validated 10-11 on a live agent server (stock llama.cpp ≥ #26004 build): cold prefill → save → eviction → restore → repinned replay, end to end.
+**Status:** **Phases 1–3 implemented 10-11, plus the 10-11 review fixes (slot probe, binary build tag, wire-failure strikes, min-build gate, slot-identity save guard, estimate ordering).** Smoke script validated live 10-11 against b11552: cold prefill → save → erase → restore → repinned replay, `n_saved == n_restored`, replay cached 2798/2802. Phase 4 (surfaces) pending.
 **Author:** Qwen 3.8 Flash
 **Date**: 2026-10-11
 
@@ -68,6 +68,17 @@ deliberately, not by accident:
    threads show `{"prompt": …}` — wrong on current builds). Responses carry
    `n_saved`/`n_restored`, `n_written`/`n_read`, and `timings.{save_ms,restore_ms}` —
    free metrics (§5.6).
+3. **Slot state is readable.** `GET /slots` reports per-slot `n_prompt_tokens`
+   (verified live on b11552; idle slots omit the field). This is the tier-1
+   witness the restore gate uses (§5.4 step 2) — the server's own view of what its
+   slot holds.
+4. **Build identity is not on a stable HTTP endpoint.** `/server_info` does not
+   exist on b11552 (the request 404s into the static-file handler). The running
+   binary is the authoritative source instead: find the server process
+   (cmdline carries `--port <port>`), read `/proc/<pid>/exe`, run
+   `<bin> --version` → `version: 0.6.0-dev (build 11552, commit 23b0202a1)`
+   (implemented in `services/llama-build-probe.ts`). An HTTP `/server_info`
+   fallback is kept for builds that expose it.
 3. **`id_slot` on OpenAI-compat requests.** Parsed in the shared completion handler;
    pinning works through `/v1/chat/completions`. Porrima **already does this**:
    `buildOpenAICompatChatBody` sets `body.id_slot` from the llama slot lease whenever
@@ -78,7 +89,9 @@ deliberately, not by accident:
    exists. Slot save/restore is safe on servers launched with `--mmproj`.
 5. **Checkpoint appendix** since #26004: save files embed a versioned context-checkpoint
    appendix (`SLOT_CKPT_MAGIC/VERSION`). Treat files as valid only for the exact
-   `(llama build, launch config digest)` that wrote them.
+   `(llama build, launch config digest)` that wrote them. (10-11 correction:
+   `/server_info` is not a stable identity endpoint — build tags come from the
+   running binary, §5.4 step 1.)
 6. **Deferred slot tasks.** A save/restore targeting a processing slot is *deferred*,
    not rejected. Our global turn gate (§4) makes overlap rare, but the queue still
    serializes per slot (D3).
@@ -180,7 +193,7 @@ about-to-dispatch body's head against it.
 - Mismatch → restore skipped **without invalidating**: the parked file is still
   valid for its own stored prefix, and a prefix that flips back (a skill
   toggled off) can hit again. The next park re-stamps the new digest.
-- Correctness never depends on the digest (§2.7); it is purely a wasted-work
+- Correctness never depends on the digest (§2.8); it is purely a wasted-work
   gate. Conservative is fine.
 
 ### 5.3 Save (end-of-turn)
@@ -193,15 +206,23 @@ parking. Policy (all must hold):
 | Gate | Rule (all values config, §8) |
 |---|---|
 | Enablement | feature on; chat's model is served by a parking-capable managed server |
+| Build | live build tag (running binary, §2.4) unknown **or** ≥ `kvSnapshotMinBuild` — a known build below the minimum (saves lack #26640/#26004 support) skips with a visible log line and touches no registry row |
 | Pinning | turn held a lease (slot known and still mapped to this chat) |
 | Eligibility | final iteration's `usage.prompt_tokens ≥ kvSnapshotMinTokens` — below this, re-prefill is cheaper than save+restore; the break-even is low (spike: 134k tokens re-prefilled in ~355 s vs ~7 s round-trip) |
 | Freshness | last save for this chat is older than `kvSnapshotSaveDebounceMs`, **or** context grew by more than `kvSnapshotMinGrowthTokens` since it — rapid-fire tool turns stay in tier 1; the last turn before an idle gap is what gets parked |
 | Queue | per-`poolKey:slot` serialized job queue; a queued save is dropped (not deferred forever) if the same chat's turn restarts first |
-| Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio |
+| Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio — read from the row **before** the `saving` upsert (the upsert rewrites `n_tokens` in place; reading after computes `prior.bytes / lastUsage`, an under-estimate whenever the context grew) |
 
 Save = one `POST action=save`; on response, record `n_saved`, `n_written`,
 `timings.save_ms`, digests, state → `ready`. Any error/timeout (budgeted,
 `kvSnapshotOpTimeoutMs`) → row `stale`, log, move on.
+
+**Slot-identity guard (10-11 review fix):** the save fires *after* this chat's
+lease released, so a new turn can acquire the same slot and start filling it
+before the write lands. The slot can never hold fewer tokens than the finished
+turn's prompt — if `n_saved < lastUsage`, the file captured someone else's
+state: the new file is unlinked, the prior snapshot is restored, and the row
+never points at the bad file.
 
 ### 5.4 Restore (pre-send, iteration 1 only)
 
@@ -213,21 +234,32 @@ the route/runner pre-send paths, but only the provider has the *final wire body*
 turn routes flow through this one site, so HTTP and headless share the gate:
 
 1. Row exists, `state = ready`, same `pool_key` as the lease, `build_tag` matches
-   the live server (cached `/server_info` probe, 60 s TTL; unknown-on-either-side
-   passes vacuously — the file's own version checks are the backstop),
-   `prefix_digest` matches (§5.2).
-2. Residency says **not confirmed-warm** (`status ∈ {stale, unknown}`, or no record).
-   If tier 1 has it, tier 2 must not touch it.
+   the live server (build tag from the running binary — `llama-build-probe`,
+   60 s TTL; unknown-on-either-side passes vacuously — the file's own version
+   checks are the backstop), `prefix_digest` matches (§5.2).
+2. **The pinned slot is cold.** `GET /slots` for the lease's slot: if
+   `n_prompt_tokens ≥ 50%` of the row's `n_tokens`, tier 1 still holds most of
+   the parked prefix and will serve the turn — tier 2 must not pay the restore.
+   (10-11 review fix: the earlier residency check is unreliable — the app-side
+   record keeps `warm` for 12 h while llama.cpp evicts idle slot KV in minutes,
+   so a mid-gap return would read "warm" and skip exactly the restore it needs;
+   the slot is the only pre-send signal that is ground truth. The residency
+   record remains the UI surface, not this gate's input.) Probe failure is a
+   skip, never a guess — the turn proceeds with normal prefill, no state change.
 3. `POST action=restore`, budgeted by `kvSnapshotOpTimeoutMs`. Success → bump
    `restore_count`, stamp `last_used_at`, register a usage-validation marker.
 4. Continue with the normal request; the existing `body.id_slot` pin routes it to the
    restored slot.
 5. **Validation:** iteration-1 usage of the turn (`onLlmRequestEvent` end events —
    the same wire-truth channel as D7) confirms the park paid: cached ≥ 50% of
-   prompt → hit (resets `miss_count`), below → `miss_count++`. `miss_count ≥ 2`
+   prompt → hit (resets `miss_count`), below → `miss_count++`. A **wire-level
+   restore failure** (HTTP error, timeout — e.g. a build-incompatible or torn
+   file) also counts a strike, so a persistently bad file stops after two
+   attempts instead of retrying on every cold turn. `miss_count ≥ 2`
    circuit-breaks that chat's *restores* (saves continue) until a successful
-   re-park resets it. Worst case is bounded: one restore's seconds + normal cold
-   prefill, twice.
+   re-park resets it. **Wire-level restore failures** (HTTP error, incompatible
+   file) count as strikes at attempt time for the same reason. Worst case is
+   bounded: two strikes' seconds + normal cold prefill.
 
 Restore is **not** retried within a turn, and a turn never sees more than one restore.
 
@@ -272,9 +304,11 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 - `llama-supervisor.ts` restart/stop actions for a parking-enabled unit should flush
   eligible parked chats first where cheap; otherwise the restart simply invalidates
   residency, not snapshots (files stay restorable — §5.5).
-- Minimum-build gate: the feature's server probe (models route pattern) checks version
-  ≥ the build containing #26640; older servers ⇒ parking disabled with a visible
-  reason on the panel, no silent degradation.
+- Minimum-build gate (`kvSnapshotMinBuild`, default = first end-to-end-verified
+  build): checked at park time via the binary-identity probe BEFORE any registry
+  touch, so an older server produces zero state change and a visible log reason —
+  no silent degradation. The restore gate compares recorded vs live build tags
+  (§5.4 step 1) for the stronger commit-level identity.
 
 ## 7. Explicit deltas
 
@@ -313,14 +347,14 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 | Failure | Effect | Recovery |
 |---|---|---|
 | Save error/timeout, crash mid-save | row `stale`; partial file unlinked by sweeper | next eligible end-of-turn re-parks |
-| Restore error/timeout | pre-send proceeds immediately; turn pays normal cold prefill | automatic |
+| Restore error/timeout | pre-send proceeds immediately; strike counted at attempt time | two strikes close the breaker until a re-park |
 | Restore succeeds but prefix diverged | wasted restore seconds; LCP reuse degrades gracefully | digest gate tightens on next save; `miss_count` breaker caps repeats |
 | Disk full / headroom | save refused pre-flight (estimate), stale rows pruned | budget policy; log + panel status |
 | Server swap (build/config) | digest mismatch → restores skipped | lazy invalidation; files pruned |
 | Lease reassigned / slot evicted by tier 1 | `slot_id` in row is history, not truth — re-park on next save with current lease | save always records the *current* slot |
 
 In every row: no data corruption is possible (llama.cpp validates token identity on
-reuse; §2.7), and the turn's output correctness is independent of this subsystem.
+reuse; §2.8), and the turn's output correctness is independent of this subsystem.
 
 ## 10. Phases
 

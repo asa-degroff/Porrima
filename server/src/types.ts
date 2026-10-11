@@ -486,6 +486,7 @@ export interface Settings {
   kvSnapshotTtlHours?: number;
   kvSnapshotMinFreeDiskBytes?: number;
   kvSnapshotOpTimeoutMs?: number;
+  kvSnapshotMinBuild?: number;
   // Vision image size cap preset — total-pixel budget applied before images are
   // sent to llama.cpp (chat attachments and tool-result images share it).
   // "standard" (default, 1280 tokens / ~1 MP) is safe at any context size;

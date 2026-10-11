@@ -6,8 +6,10 @@ import Database from "better-sqlite3";
 import type { LlamaSlotLease } from "../services/llama-slot-leases.js";
 
 /**
- * Phase 2 tests for KV snapshot parking (docs/design/kv-snapshot-parking.md):
- * registry lifecycle, save-policy gates, supersede/rollback, budget pruning.
+ * Tests for KV snapshot parking (docs/design/kv-snapshot-parking.md):
+ * registry lifecycle, save-policy gates, supersede/rollback, budget pruning,
+ * restore gate, and the 10-11 review fixes (slot probe, wire-failure strikes,
+ * min-build gate, slot-identity save guard, estimate ordering).
  */
 
 const BASE_TIME = Date.parse("2026-10-11T12:00:00Z");
@@ -47,7 +49,9 @@ async function loadHarness(options: {
   seedSnapshots?: Array<Record<string, unknown>>;
   fetchImpl?: (url: string, init: any) => Promise<Response>;
   skipKvInit?: boolean;
-  warm?: boolean;
+  buildTag?: string;
+  slots?: Array<Record<string, unknown>>;
+  slotsFetchError?: boolean;
 } = {}): Promise<Harness> {
   vi.useFakeTimers();
   vi.setSystemTime(BASE_TIME);
@@ -57,8 +61,10 @@ async function loadHarness(options: {
 
   const streamsMap = new Map();
   vi.doMock("../services/live-streams.js", () => ({ liveStreams: streamsMap }));
-  vi.doMock("../services/llama-cache-residency.js", () => ({
-    hasLlamaCacheTargetWarmRecord: vi.fn(() => options.warm === true),
+  // Build identity comes from the running binary (llama-build-probe) — mock
+  // the module seam so the tag is deterministic in any environment.
+  vi.doMock("../services/llama-build-probe.js", () => ({
+    resolveLlamaBuildTag: vi.fn(async () => options.buildTag ?? "b11552"),
   }));
   vi.doMock("../services/chat-storage.js", () => ({
     getSettings: vi.fn(async () => settingsWith(options.settings ?? {})),
@@ -134,19 +140,17 @@ async function loadHarness(options: {
   mkdirSync(join(home, "kv-cache"), { recursive: true });
   const fetchMock = vi.fn(async (url: any, init: any) => {
     if (options.fetchImpl) return options.fetchImpl(String(url), init);
-    if (String(url).includes("/server_info")) {
-      return Response.json({ build_number: 11552 });
-    }
-    if (String(url).includes("action=save")) {
+    const u = String(url);
+    if (u.includes("action=save")) {
       return Response.json({
         id_slot: 2,
         filename: "x.bin",
-        n_saved: 134_050,
+        n_saved: 150_050,
         n_written: 6_398_851_904,
         timings: { save_ms: 4715.1 },
       });
     }
-    if (String(url).includes("action=restore")) {
+    if (u.includes("action=restore")) {
       return Response.json({
         id_slot: 2,
         filename: "x.bin",
@@ -154,6 +158,13 @@ async function loadHarness(options: {
         n_read: 6_398_851_904,
         timings: { restore_ms: 2098.4 },
       });
+    }
+    if (u.endsWith("/slots")) {
+      if (options.slotsFetchError) throw new Error("slots probe failed");
+      // Cold pinned slot by default: tier 1 holds nothing, restore may fire.
+      return Response.json(
+        options.slots ?? [{ id: 2, n_ctx: 262144, is_processing: false, n_prompt_tokens: 0 }],
+      );
     }
     return Response.json({ error: { message: "unexpected url" } }, { status: 404 });
   });
@@ -256,7 +267,7 @@ describe("kv-snapshot save policy", () => {
 
     const row = h.kv.getKvSnapshot(lease.chatId);
     expect(row?.state).toBe("ready");
-    expect(row?.nTokens).toBe(134_050); // n_saved from the wire, not the estimate
+    expect(row?.nTokens).toBe(150_050); // n_saved from the wire, not the estimate
     expect(row?.bytes).toBe(6_398_851_904); // n_written
     expect(row?.buildTag).toBe("b11552");
     expect(row?.poolKey).toBe(lease.poolKey);
@@ -360,6 +371,65 @@ describe("kv-snapshot save policy", () => {
     expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("stale");
     h.db.close();
   });
+
+  it("refuses to park when the live build is below the parking minimum (no row touched)", async () => {
+    const h = await loadHarness({ seedPromptTokens: 150_000, buildTag: "b11000" });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull();
+    h.db.close();
+  });
+
+  it("honours an explicit lower kvSnapshotMinBuild", async () => {
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      buildTag: "b11000",
+      settings: { kvSnapshotMinBuild: 10_000 },
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
+
+  it("discards a save whose n_saved is below the finished turn's prompt (slot reassigned mid-save)", async () => {
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      seedSnapshots: [{ state: "ready", filename: "prior.bin", nTokens: 100_000, bytes: 1_000, savedAt: BASE_TIME - 60 * 60_000 }],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          return Response.json({ n_saved: 4_000, n_written: 2_000_000, timings: { save_ms: 10 } });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.filename).toBe("prior.bin"); // the good snapshot survives
+    expect(row?.nTokens).toBe(100_000);
+    h.db.close();
+  });
+
+  it("estimates from the prior bytes/n_tokens ratio, read before the saving upsert", async () => {
+    // Own prior: 50_000 tokens / 1_000 bytes → 0.02 B/token. New turn at
+    // 150_000 tokens → honest estimate 3_000 bytes. With a 2_500-byte pool
+    // cap the 2_000-byte peer must be LRU-evicted; the corrupted ratio a
+    // post-upsert read would produce (1_000 / 150_000 → 1_000-byte estimate)
+    // would leave the pool over cap.
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      settings: { kvSnapshotMaxBytesPerPool: 2_500 },
+      seedSnapshots: [
+        { chatId: "peer", state: "ready", nTokens: 50_000, bytes: 2_000, lastUsedAt: BASE_TIME - 60_000, savedAt: BASE_TIME - 60_000 },
+        { state: "ready", nTokens: 50_000, bytes: 1_000, savedAt: BASE_TIME - 120_000 },
+      ],
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(h.kv.getKvSnapshot("peer")).toBeNull();
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
 });
 
 describe("kv-snapshot pruning", () => {
@@ -438,10 +508,25 @@ describe("kv-snapshot restore gate (Phase 3)", () => {
     h.db.close();
   });
 
-  it("defers to warm tier-1 residency", async () => {
-    const h = await loadHarness({ seedSnapshots: [parkedSeed], warm: true });
+  it("defers when the pinned slot still holds most of the parked prefix (slot probe)", async () => {
+    // parkedSeed has nTokens 134_050 → warm threshold 67_025. Slot reports
+    // 130_000 prompt tokens: tier 1 will serve this turn, no restore.
+    const h = await loadHarness({
+      seedSnapshots: [parkedSeed],
+      slots: [{ id: 2, is_processing: false, n_prompt_tokens: 130_000 }],
+    });
     await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
     expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
+
+  it("skips (without state change) when the slot probe fails", async () => {
+    const h = await loadHarness({ seedSnapshots: [parkedSeed], slotsFetchError: true });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(0);
     h.db.close();
   });
 
@@ -457,6 +542,30 @@ describe("kv-snapshot restore gate (Phase 3)", () => {
     const h = await loadHarness({ seedSnapshots: [{ ...parkedSeed, missCount: 2 }] });
     await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
     expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+  });
+
+  it("counts wire-level restore failures as breaker strikes", async () => {
+    // A persistently bad file (build-incompatible, torn write) must stop
+    // after two failed attempts instead of retrying on every cold turn.
+    const h = await loadHarness({
+      seedSnapshots: [parkedSeed],
+      fetchImpl: async (url) => {
+        if (url.includes("action=restore")) {
+          return Response.json({ error: { message: "file version mismatch" } }, { status: 500 });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t-w1", iteration: 1 });
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(1);
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t-w2", iteration: 1 });
+    expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(2);
+    // Breaker closed: the third turn makes no attempt at all.
+    const attemptsSoFar = restoreCalls(h.fetchMock).length;
+    expect(attemptsSoFar).toBe(2);
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t-w3", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(2);
     h.db.close();
   });
 
@@ -485,8 +594,9 @@ describe("kv-snapshot restore gate (Phase 3)", () => {
     // A re-park resets a previously tripped breaker.
     h.db.prepare("UPDATE kv_snapshots SET miss_count = 5 WHERE chat_id = ?").run(lease.chatId);
     await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
-    // (debounce skips the second park; force past it with growth)
-    h.db.prepare("UPDATE kv_snapshots SET n_tokens = 100 WHERE chat_id = ?").run(lease.chatId);
+    // (debounce skips the second park; age saved_at past the debounce window —
+    // shrinking n_tokens would corrupt the honest bytes/n_tokens estimate)
+    h.db.prepare("UPDATE kv_snapshots SET saved_at = ? WHERE chat_id = ?").run(BASE_TIME - 100_000, lease.chatId);
     await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
     expect(h.kv.getKvSnapshot(lease.chatId)?.missCount).toBe(0);
     h.db.close();

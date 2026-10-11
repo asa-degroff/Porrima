@@ -5,18 +5,16 @@ import { appDataPath, KV_CACHE_DIR } from "./paths.js";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import { liveStreams } from "./live-streams.js";
 import { onLlmRequestEvent } from "./request-log.js";
-import { hasLlamaCacheTargetWarmRecord } from "./llama-cache-residency.js";
+import { resolveLlamaBuildTag } from "./llama-build-probe.js";
 
 /**
- * KV snapshot parking — Phase 2 (registry + save + budget/prune) of
+ * KV snapshot parking — Phases 1–3 (registry, save policy, restore gate) of
  * docs/design/kv-snapshot-parking.md.
  *
  * At end of turn, chats whose context outgrows llama.cpp's RAM prompt cache are
  * parked to NVMe via `POST /slots/{id}?action=save`, so a later cold return can
- * restore (~seconds) instead of re-prefilling (~minutes at 200 tok/s). This
- * phase is intentionally invisible: rows, files, and metrics accrue behind the
- * `kvSnapshotEnabled` setting (off by default, D8); the restore path lands in
- * Phase 3.
+ * restore (~seconds) instead of re-prefilling (~minutes at 200 tok/s). The
+ * feature sits behind `kvSnapshotEnabled` (off by default, D8).
  *
  * Invariants (doc §2/§9):
  * - Pure optimization. Every failure degrades to today's cold prefill. This
@@ -28,6 +26,14 @@ import { hasLlamaCacheTargetWarmRecord } from "./llama-cache-residency.js";
  *   `(build, config)` — invalidation is by digest/overwrite, never migration.
  * - A save replaces the previous file only after the new save succeeds; a
  *   failed save leaves a prior `ready` snapshot intact.
+ * - Tier-1 warmth is read from the SERVER, not app memory: the pre-send gate
+ *   probes the pinned slot's `n_prompt_tokens` (GET /slots) instead of trusting
+ *   the residency record, whose warm memory outlives llama.cpp's idle-slot
+ *   eviction by orders of magnitude (10-11 review fix).
+ * - Build identity comes from the running binary (`/proc/<pid>/exe` +
+ *   `--version` via llama-build-probe); `/server_info` is not a stable endpoint
+ *   (absent on b11552). Wire-level restore failures count as breaker strikes
+ *   so a persistently bad file stops after two attempts (10-11 review fix).
  */
 
 const DB_PATH = appDataPath("porrima.db");
@@ -46,6 +52,7 @@ export interface KvSnapshotSettings {
   ttlHours: number;
   minFreeDiskBytes: number;
   opTimeoutMs: number;
+  minBuild: number;
 }
 
 const GIB = 1024 * 1024 * 1024;
@@ -59,6 +66,9 @@ export const KV_SNAPSHOT_DEFAULTS = {
   ttlHours: 72,
   minFreeDiskBytes: 64 * GIB,
   opTimeoutMs: 60_000,
+  // Conservative: the first build verified end-to-end for parking (spike
+  // 10-11). Lower it deliberately once #26640/#26004 build numbers are pinned.
+  minBuild: 11_552,
 } as const;
 
 export function resolveKvSnapshotSettings(settings: any): KvSnapshotSettings {
@@ -71,7 +81,14 @@ export function resolveKvSnapshotSettings(settings: any): KvSnapshotSettings {
     ttlHours: positiveOr(settings?.kvSnapshotTtlHours, KV_SNAPSHOT_DEFAULTS.ttlHours),
     minFreeDiskBytes: nonNegativeOr(settings?.kvSnapshotMinFreeDiskBytes, KV_SNAPSHOT_DEFAULTS.minFreeDiskBytes),
     opTimeoutMs: positiveOr(settings?.kvSnapshotOpTimeoutMs, KV_SNAPSHOT_DEFAULTS.opTimeoutMs),
+    minBuild: positiveOr(settings?.kvSnapshotMinBuild, KV_SNAPSHOT_DEFAULTS.minBuild),
   };
+}
+
+/** Extract the numeric build from a tag like `b11552-23b0202a1` or `b11552`. */
+function buildNumberFromTag(tag: string): number | null {
+  const match = /^b(\d+)/.exec(tag);
+  return match ? Number(match[1]) : null;
 }
 
 function positiveOr(value: unknown, fallback: number): number {
@@ -215,7 +232,7 @@ export function listKvSnapshots(): KvSnapshotRow[] {
  * (memory deltas ride at the tail), so it changes exactly when the parked KV
  * stops matching — persona/extract prompt rewrites, tool-surface changes,
  * compaction. It gates WASTED restores only; correctness never depends on it
- * (§2.7: the server validates token identity and re-prefills from the first
+ * (§2.8: the server validates token identity and re-prefills from the first
  * divergence).
  */
 export function computeLlamaPrefixDigest(body: any): string {
@@ -240,7 +257,10 @@ const buildTagCache = new Map<string, { tag: string; at: number }>();
 async function cachedBuildTag(baseUrl: string): Promise<string> {
   const hit = buildTagCache.get(baseUrl);
   if (hit && Date.now() - hit.at < BUILD_TAG_TTL_MS) return hit.tag;
-  const tag = await probeBuildTag(baseUrl);
+  // The running binary is the authoritative source (llama-build-probe):
+  // /proc/<pid>/exe + `<bin> --version`. /server_info is not a stable
+  // endpoint (absent on b11552) and is only a legacy fallback there.
+  const tag = await resolveLlamaBuildTag(baseUrl);
   if (tag) buildTagCache.set(baseUrl, { tag, at: Date.now() });
   return tag;
 }
@@ -288,7 +308,7 @@ export async function observeLlamaRequestBody(input: {
       return;
     }
 
-    // Build gate (§2.5/D5): files are only valid for the build that wrote
+    // Build gate (§2.6/D5): files are only valid for the build that wrote
     // them. A known mismatch invalidates; unknown-on-either-side is allowed
     // through (llama.cpp's own version checks in the save file are the
     // backstop, and a failure there is just a cold turn, as today).
@@ -301,20 +321,36 @@ export async function observeLlamaRequestBody(input: {
       return;
     }
 
-    // Residency gate (§5.4 step 2): if tier 1 (RAM prompt cache) has this
-    // chat's prefix confirmed-warm, tier 2 must not touch it.
-    if (hasLlamaCacheTargetWarmRecord({
-      chatId: input.chatId,
-      baseUrl: input.lease.baseUrl,
-      modelId: input.lease.modelId,
-      contextWindow: input.lease.contextWindow,
-    })) {
+    // Tier-1 gate (§5.4 step 2): ask the server what the pinned slot
+    // actually holds. The app-side residency record is memory with a 12h
+    // horizon while llama.cpp evicts idle slot KV in minutes, so it is not
+    // a reliable "warm" witness — the slot is. If the slot still holds most
+    // of the parked prefix, tier 1 will serve the turn; tier 2 must not
+    // pay the restore. Probe failure is a skip (never a guess): the turn
+    // proceeds with normal prefill, no state change.
+    const tier1Tokens = await slotPromptTokens(input.lease);
+    if (tier1Tokens === null) {
+      console.warn(`${LOG} chat=${short(input.chatId)} restore skipped: slot probe failed`);
+      return;
+    }
+    const warmThreshold = Math.ceil(row.nTokens * 0.5);
+    if (tier1Tokens >= warmThreshold) {
       return;
     }
 
     const restore = await callSlotAction(input.lease, "restore", row.filename, policy.opTimeoutMs);
     if (!restore.ok) {
-      console.warn(`${LOG} chat=${short(input.chatId)} restore failed: ${restore.error}`);
+      // A wire-level failure (build/config-incompatible file, torn write,
+      // server error) is evidence the park is not hitting — count it as a
+      // strike so a persistently bad file stops after two attempts instead
+      // of retrying forever. A successful re-park resets the count.
+      const strikes = row.missCount + 1;
+      getDb()
+        .prepare("UPDATE kv_snapshots SET miss_count = ? WHERE chat_id = ?")
+        .run(Math.min(strikes, 99), input.chatId);
+      console.warn(
+        `${LOG} chat=${short(input.chatId)} restore failed (wire): ${restore.error} — strike ${strikes}`,
+      );
       return;
     }
     getDb()
@@ -509,12 +545,31 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
   const filename = `${chatId}-${Date.now()}.bin`;
   const now = Date.now();
 
+  // Build gate (doc §6 minimum-build): run BEFORE touching the registry so
+  // an ineligible server leaves no row changes at all. A known build below
+  // the parking minimum (its saves lack #26640/#26004 support) is skipped
+  // with a visible reason; an unknown build passes (llama.cpp's own file
+  // checks are the backstop).
+  const buildTag = await cachedBuildTag(lease.baseUrl);
+  const liveBuild = buildNumberFromTag(buildTag);
+  if (liveBuild != null && liveBuild < policy.minBuild) {
+    console.warn(
+      `${LOG} chat=${short(chatId)} parking disabled: server build ${buildTag} is below the parking minimum b${policy.minBuild}`,
+    );
+    return;
+  }
+
+  // Budget gate: pool LRU eviction first, then absolute disk headroom. The
+  // estimate reads the chat's own prior bytes/n_tokens ratio — this MUST
+  // happen before upsertSaving, which rewrites n_tokens in place (reading
+  // after would compute prior.bytes / lastUsage, an under-estimate whenever
+  // the context grew).
+  const estimate = estimateBytes(chatId, lease.poolKey, lastUsage);
+
   // Claim the slot row in `saving`; keep the previous filename so a failed
   // save can roll the row back to whatever was actually true on disk.
   upsertSaving(chatId, lease, filename, lastUsage, now, prior);
 
-  // Budget gate: pool LRU eviction first, then absolute disk headroom.
-  const estimate = estimateBytes(chatId, lease.poolKey, lastUsage);
   evictPoolToBudget(lease.poolKey, estimate, chatId, policy);
   const free = await freeDiskBytes();
   if (free === null || free - policy.minFreeDiskBytes < estimate) {
@@ -530,7 +585,6 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     return;
   }
 
-  const buildTag = await probeBuildTag(lease.baseUrl);
   const save = await callSlotAction(lease, "save", filename, policy.opTimeoutMs);
 
   if (pendingTokens.get(chatId) !== token) {
@@ -551,6 +605,21 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     } else {
       setState(chatId, "stale");
     }
+    return;
+  }
+
+  // Slot-identity guard: the save fired AFTER this chat's lease released, so
+  // a new turn may have acquired the same slot and started filling it before
+  // the write landed. The slot can never hold fewer tokens than the finished
+  // turn's prompt — a shortfall means the file captured someone else's
+  // state. Discard it and keep the prior snapshot instead of unlinking a
+  // good file under an alias for a bad one.
+  if (save.nTokens != null && save.nTokens < lastUsage) {
+    await unlinkFile(snapshotPath(filename));
+    rollbackToPrior(chatId, prior);
+    console.warn(
+      `${LOG} chat=${short(chatId)} discarded save: n_saved=${save.nTokens} < finished-turn prompt=${lastUsage} (slot reassigned mid-save)`,
+    );
     return;
   }
 
@@ -689,16 +758,29 @@ async function callSlotAction(
   }
 }
 
-/** Best-effort build tag from the native /server_info endpoint (Phase 3's
- *  invalidation compares this against the live value before restoring). */
-async function probeBuildTag(baseUrl: string): Promise<string> {
+/**
+ * Tier-1 probe: how many prompt tokens the pinned slot currently holds
+ * (doc §5.4 step 2, landed 10-11 review fix). The app-side residency
+ * record is memory with a 12h horizon while llama.cpp evicts idle slot
+ * KV in minutes — the slot itself is the only pre-send signal that is
+ * ground truth. `null` means the probe failed (caller must skip the
+ * restore, not guess); an absent slot or zero count means cold.
+ */
+const SLOT_PROBE_TIMEOUT_MS = 5_000;
+
+async function slotPromptTokens(lease: LlamaSlotLease): Promise<number | null> {
   try {
-    const response = await fetch(`${baseUrl}/server_info`, { signal: AbortSignal.timeout(5_000) });
+    const response = await fetch(`${lease.baseUrl}/slots`, {
+      signal: AbortSignal.timeout(SLOT_PROBE_TIMEOUT_MS),
+    });
     const body: any = await response.json().catch(() => null);
-    if (!response.ok || !body) return "";
-    return String(body.build_number ? `b${body.build_number}` : body.version || "").trim();
+    const slots = Array.isArray(body) ? body : Array.isArray(body?.slots) ? body.slots : null;
+    if (!slots) return null;
+    const slot = slots.find((s: any) => s?.id === lease.slotId);
+    if (!slot) return 0;
+    return typeof slot.n_prompt_tokens === "number" ? slot.n_prompt_tokens : 0;
   } catch {
-    return "";
+    return null;
   }
 }
 
