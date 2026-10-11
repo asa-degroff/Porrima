@@ -286,16 +286,35 @@ class LlamaSlotLeaseStore {
     }
 
     let maxInstances = 1;
+    // Primary: GET /slots — one entry per slot is ground truth on current
+    // builds. (/props exposes only generation defaults + toggled globals;
+    // a `max_instances` key there was a fork convention, never upstream —
+    // reading it left capacity pinned at 1, serializing every chat onto
+    // slot 0 with eviction churn.) Fallback keeps the legacy probe.
     try {
-      const res = await fetch(`${baseUrl}/props`, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(`${baseUrl}/slots`, { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const data = await res.json();
-        if (typeof data?.max_instances === "number" && Number.isFinite(data.max_instances)) {
-          maxInstances = Math.max(1, Math.floor(data.max_instances));
+        const slots = Array.isArray(data) ? data : Array.isArray(data?.slots) ? data.slots : null;
+        if (slots && slots.length > 0) {
+          maxInstances = Math.max(1, Math.floor(slots.length));
         }
       }
     } catch (err) {
-      console.warn("[llama-slot] /props discovery failed:", err instanceof Error ? err.message : err);
+      console.warn("[llama-slot] /slots discovery failed:", err instanceof Error ? err.message : err);
+    }
+    if (maxInstances === 1) {
+      try {
+        const res = await fetch(`${baseUrl}/props`, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const data = await res.json();
+          if (typeof data?.max_instances === "number" && Number.isFinite(data.max_instances)) {
+            maxInstances = Math.max(1, Math.floor(data.max_instances));
+          }
+        }
+      } catch {
+        // keep the /slots-derived (or default 1) value
+      }
     }
 
     this.state.bases[baseUrl] = { maxInstances, discoveredAt: Date.now() };

@@ -51,9 +51,12 @@ async function tagFromRunningBinary(baseUrl: string): Promise<string> {
 
 function execFileAsync(bin: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (error, stdout) => {
+    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(error);
-      else resolve(stdout);
+      // llama.cpp writes its version banner to stderr (the ggml log channel)
+      // and stdout is empty. Concatenate both so the parse survives either
+      // stream layout.
+      else resolve(`${stdout}${stderr}`);
     });
   });
 }
