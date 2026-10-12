@@ -4328,9 +4328,18 @@ async function handleChatStream(
         chat.messages.pop();
         await saveChat(chat);
       }
-      console.error(`[chat] NO CONTENT produced after ${iterations} iterations - model failure or context issue. Not persisting empty message.`);
-      // Clean up stale pending state so the next message doesn't trigger a spurious resume
-      await clearPendingState(chat.id);
+      if (waitingForInput) {
+        // ask_user pause with no visible assistant text — the question lives in
+        // the tool call (often already committed as a fragment row), so an
+        // empty final row is expected, NOT a model failure. The pending state
+        // saved above is what resume and the answer picker restore depend on;
+        // clearing it here would make the picker flash and vanish.
+        console.log(`[chat] finished: iterations=${iterations} waitingForInput=true (ask_user pause, no assistant text)`);
+      } else {
+        console.error(`[chat] NO CONTENT produced after ${iterations} iterations - model failure or context issue. Not persisting empty message.`);
+        // Clean up stale pending state so the next message doesn't trigger a spurious resume
+        await clearPendingState(chat.id);
+      }
     }
 
     // Used by the sleep cycle to measure inactivity from when the assistant
