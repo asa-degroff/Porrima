@@ -633,7 +633,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   // llama.cpp server settings
   const [llamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
-  const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
+  const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "enforced");
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Only the
   // three keys with UI are sent; the rest persist server-side via the
   // settings merge (fields a client omits are preserved).
@@ -3640,28 +3640,31 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <Dropdown
 	                                      state={slotBindingModeDd}
 	                                      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer whitespace-nowrap"
-	                                      trigger={<span>{llamacppSlotBindingMode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}</span>}
+	                                      trigger={<span>{llamacppSlotBindingMode === "auto" ? "Auto" : "Enforced id_slot"}</span>}
 	                                    >
 	                                      {(["auto", "enforced"] as const).map((mode) => (
 	                                        <button key={mode} onClick={() => {
 	                                          slotBindingModeDd.close();
 	                                          setLlamacppSlotBindingMode(mode);
 	                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${mode === llamacppSlotBindingMode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                          {mode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}
+	                                          {mode === "auto" ? "Auto" : "Enforced id_slot"}
 	                                        </button>
 	                                      ))}
 	                                    </Dropdown>
-	                                    <span className="text-xs text-white/30">Auto lets llama.cpp restore prompt cache.</span>
+	                                    <span className="text-xs text-white/30">Enforced pins each chat to a slot (required for KV parking); Auto lets llama.cpp pick slots by prompt similarity.</span>
 	                                  </div>
 	                                  <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-2">
 	                                    <div className="flex items-center justify-between gap-3">
 	                                      <div className="min-w-0">
 	                                        <p className="text-xs font-medium text-white/70">KV snapshot parking</p>
-	                                        <p className="text-[11px] text-white/35">Saves KV caches to NVMe at end of turn if they don't fit in RAM. Requires Slots = Enforced.</p>
+	                                        <p className="text-[11px] text-white/35">Saves KV caches to NVMe at end of turn if they don't fit in RAM.</p>
+	                                        {llamacppSlotBindingMode !== "enforced" && (
+	                                          <p className="text-[11px] text-amber-300/80">Requires Slots = Enforced — switch the Slots setting above to enable parking.</p>
+	                                        )}
 	                                      </div>
-	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" />
+	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" disabled={llamacppSlotBindingMode !== "enforced"} />
 	                                    </div>
-	                                    {kvSnapshotEnabled && (
+	                                    {kvSnapshotEnabled && llamacppSlotBindingMode === "enforced" && (
 	                                      <div className="grid grid-cols-3 gap-2">
 	                                        <label className="block">
 	                                          <span className="block text-[10px] text-white/40 mb-1">Park above (tokens)</span>

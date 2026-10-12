@@ -354,7 +354,7 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `kvSnapshotEnabled` | `false` | master switch (per-host opt-in) |
+| `kvSnapshotEnabled` | `false` | master switch (per-host opt-in); UI-gated on `llamacppSlotBindingMode: "enforced"` (parking cannot pin slots under auto — §7 D2), and the Settings group renders unavailable when auto is selected |
 | `kvSnapshotMinTokens` | `65536` | eligibility threshold; break-even is host-dependent but low — tune from panel stats |
 | `kvSnapshotSaveDebounceMs` | `90000` | minimum interval between saves of one chat |
 | `kvSnapshotMinGrowthTokens` | `2048` | context growth that overrides the debounce |

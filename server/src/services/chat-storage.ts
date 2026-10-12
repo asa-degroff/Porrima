@@ -1357,7 +1357,13 @@ const DEFAULT_SETTINGS: Settings = {
   globalProjectScoreMultiplier: 1.0,
   retrievalDepthProfile: "balanced",
   rerankerTimeoutMs: 25_000,
-  llamacppSlotBindingMode: "auto",
+  // Enforced by default: explicit id_slot pins each chat to a physical slot.
+  // The old "auto (recommended)" preference traced to llama.cpp #24746
+  // (explicit slot requests bypassing prompt-cache restore), fixed upstream
+  // by #24755 (2026-06-19) — production traffic since has shown perfect
+  // in-turn hit chains under enforced. Enforced is also a hard prerequisite
+  // for KV snapshot parking (docs/design/kv-snapshot-parking.md D2).
+  llamacppSlotBindingMode: "enforced",
   llamaBinaryScanDir: `${os.homedir()}/bin`,
 };
 
