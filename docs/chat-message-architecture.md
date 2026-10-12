@@ -73,6 +73,21 @@ Persistence now mirrors that transcript:
 
 The server emits `message_complete` with `continues: true` after each persisted tool-use row. The client finalizes the current raw assistant row, clears streaming accumulators, and creates the next live assistant placeholder with the same `_toolLoopId`.
 
+**Mid-loop drain re-commits replace fragments in place.** A steering/follow-up
+drain can fire while a tool pair is half-committed: the fragment (call, no
+result yet) is persisted, `resetAccumulators()` mints a new `_toolLoopId`, and
+the continuation re-commits the same call WITH its result. Appending that
+re-commit places it after any rows injected between the two versions, so replay
+can no longer reproduce the recorded wire order (call and result adjacent,
+injections after them) — the KV prefix busts at the first such cluster (issue
+#10; observed as `LIVE-VS-REPLAY DIVERGENCE` in `[kv-cache]` logs). Placement
+rules live in `services/assistant-boundary.ts`: when an assistant fragment is
+re-committed with the EXACT same toolCall-id set, it replaces the original
+fragment row in place (identity carried via `carryRowIdentity`, tool results
+unioned so nothing is dropped, re-commit's fields win otherwise). Partial
+overlap still appends, and the replay-side call-id dedup in `agent.ts` remains
+the safety net for historical rows.
+
 ## Replay Semantics
 
 `chatMessagesToPiMessages()` reconstructs persisted rows for the LLM:

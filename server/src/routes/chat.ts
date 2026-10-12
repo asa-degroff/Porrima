@@ -75,6 +75,7 @@ import {
   type LlamaCacheBindingMode,
 } from "../services/llama-cache-residency.js";
 import { orderToolResultsByToolCalls } from "../services/tool-result-ordering.js";
+import { upsertAssistantRow } from "../services/assistant-boundary.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1474,25 +1475,10 @@ async function handleChatStream(
 
   function upsertAssistantMessage(message: ChatMessage, inProgress = false): ChatMessage {
     const row = inProgress ? { ...message, _inProgress: true } : message;
-    let inProgressIdx = -1;
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const candidate = chat.messages[i];
-      if (
-        candidate.role === "assistant" &&
-        candidate._inProgress &&
-        (!message._toolLoopId || !candidate._toolLoopId || candidate._toolLoopId === message._toolLoopId)
-      ) {
-        inProgressIdx = i;
-        break;
-      }
-    }
-    if (inProgressIdx >= 0) {
-      const carried = carryRowIdentity(row, chat.messages[inProgressIdx]);
-      chat.messages[inProgressIdx] = carried;
-      return carried;
-    }
-    chat.messages.push(row);
-    return row;
+    // Placement rules live in services/assistant-boundary.ts: in-flight
+    // refresh, exact-call-set fragment REPLACEMENT (mid-loop drain re-commit —
+    // issue #10 wire-order fix), append.
+    return upsertAssistantRow(chat.messages, row);
   }
 
   function clearPendingAssistantUsageAfterCompaction() {

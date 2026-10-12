@@ -139,6 +139,7 @@ porrima/
 │   │   ├── current-message.ts       # Current-message resolution for turns
 │   │   ├── pi-message-utils.ts      # pi-ai message helpers
 │   │   ├── tool-result-ordering.ts  # Canonical tool-result ordering
+│   │   ├── assistant-boundary.ts    # Mid-loop assistant row placement (fragment re-commit replacement)
 │   │   ├── agent-tools.ts           # Tool registry + execution
 │   │   ├── browser-tools.ts         # Browser tool definitions
 │   │   ├── browser-session.ts       # Remote-debugging Chrome session
