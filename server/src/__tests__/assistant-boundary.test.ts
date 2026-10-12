@@ -118,6 +118,98 @@ describe("upsertAssistantRow", () => {
     expect(out._toolLoopFragment).toBeUndefined();
   });
 
+  it("post-settle drain: the full-batch commit is merged in place by the turn_end re-commit, results + segments preserved", () => {
+    // After the drain settle-wait the committed row carries the FULL call set
+    // with every result and every segment (balanced state).
+    const calls = [
+      { id: "A1", name: "update_artifact", arguments: {} },
+      { id: "B2", name: "save_memory", arguments: {} },
+    ];
+    const results = [
+      { toolCallId: "A1", toolName: "update_artifact", content: "ok", isError: false },
+      { toolCallId: "B2", toolName: "save_memory", content: "saved", isError: false },
+    ];
+    const segments = [
+      { seq: 1, type: "text", content: "working" },
+      { seq: 2, type: "tool_call", toolCall: calls[0] },
+      { seq: 3, type: "tool_result", toolResult: results[0] },
+      { seq: 4, type: "tool_call", toolCall: calls[1] },
+      { seq: 5, type: "tool_result", toolResult: results[1] },
+    ] as ChatMessage["segments"];
+    const messages: ChatMessage[] = [
+      { role: "user", content: "hi", timestamp: 1 },
+      Object.assign(frag("loop-A", "A1"), {
+        timestamp: 105,
+        toolCalls: calls,
+        toolResults: results,
+        segments,
+        _rowId: "row-full",
+        _rowSequence: 1,
+      }),
+      systemInject("[System context - queued message]"),
+    ];
+    // The turn_end re-commit after the drain's reset: the pi message's call
+    // set, but the accumulator is empty — no results, no segments.
+    const out = upsertAssistantRow(messages, {
+      role: "assistant",
+      content: "working",
+      timestamp: 104,
+      toolCalls: calls,
+      _toolLoopId: "loop-B",
+      _toolLoopFragment: true,
+    });
+    // Merged in place — no duplicate row, no orphan; the fragment's results
+    // and segments survive the merge (the re-commit lacks them).
+    expect(messages).toHaveLength(3);
+    expect(out.toolResults?.map((t) => t.toolCallId)).toEqual(["A1", "B2"]);
+    expect(out.segments).toHaveLength(5);
+    expect(out._toolLoopId).toBe("loop-B");
+    expect(out._rowId).toBe("row-full");
+    expect(messages[2].role).toBe("system"); // injection still after the pair
+  });
+
+  it("post-settle drain via _inProgress refresh: the re-commit merges into the refreshed row, not an append", () => {
+    // A self-modifying tool checkpoint left the in-flight scratch row.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "hi", timestamp: 1 },
+      { role: "assistant", content: "partial", timestamp: 2, _inProgress: true, _rowId: "r-flight", _rowSequence: 1 },
+    ];
+    const calls = [{ id: "A1", name: "bash", arguments: { command: "npm run build" } }];
+    const results = [{ toolCallId: "A1", toolName: "bash", content: "ok", isError: false }];
+    const segments = [
+      { seq: 1, type: "text", content: "working" },
+      { seq: 2, type: "tool_call", toolCall: calls[0] },
+      { seq: 3, type: "tool_result", toolResult: results[0] },
+    ] as ChatMessage["segments"];
+    // The drain's finalize commits the full batch — refreshing the scratch
+    // row in place (the _inProgress flag is dropped by the replacement).
+    const full = upsertAssistantRow(messages, {
+      role: "assistant",
+      content: "working",
+      timestamp: 105,
+      toolCalls: calls,
+      toolResults: results,
+      segments,
+      _toolLoopId: "loop-A",
+      _toolLoopFragment: true,
+    });
+    expect(messages).toHaveLength(2);
+    expect(full._inProgress).toBeUndefined();
+    // The turn_end re-commit after the drain's reset (empty accumulator).
+    const out = upsertAssistantRow(messages, {
+      role: "assistant",
+      content: "working",
+      timestamp: 104,
+      toolCalls: calls,
+      _toolLoopId: "loop-B",
+      _toolLoopFragment: true,
+    });
+    expect(messages).toHaveLength(2); // merged in place — not appended
+    expect(out.toolResults?.[0]?.toolCallId).toBe("A1");
+    expect(out.segments).toHaveLength(3);
+    expect(out._rowId).toBe("r-flight");
+  });
+
   it("prefers an _inProgress refresh over fragment replacement", () => {
     const messages: ChatMessage[] = [
       Object.assign(frag("loop-A", "X1"), { _rowId: "r1", _rowSequence: 1 }),

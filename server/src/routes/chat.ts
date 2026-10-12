@@ -940,6 +940,34 @@ async function estimatePostCompactionTokens(
   }
 }
 
+/**
+ * Drain settle-wait (stuck-amber row fix). The mid-loop drain
+ * (getSteeringMessages / getFollowUpMessages) runs on pi's producer side,
+ * concurrently with the SSE consumer's event handling — committing the
+ * uncommitted assistant row while a tool is still in flight captures the
+ * tool_call (its start handler already ran) without the tool_result (its end
+ * handler is still inside buildPersistedToolResult). The committed row then
+ * replays forever in the client's "running" state. Await this before the
+ * drain commits: it resolves once the consumer's in-flight set is empty
+ * (the end handler removes the id only after the result is accumulated).
+ * Bounded: a tool that never settles (pathological hang / lost end event)
+ * degrades to the pre-fix commit — resolve false at the deadline.
+ */
+export const TOOL_SETTLE_TIMEOUT_MS = 360_000; // past the max single-tool budget (300s)
+
+export async function waitForToolSettlement(
+  inFlightCount: () => number,
+  timeoutMs: number,
+  tickMs = 25,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (inFlightCount() === 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, tickMs));
+  }
+  return false;
+}
+
 const router = Router();
 
 // Wire-level request-log events (provider recorder) fan out onto the chat's
@@ -1157,6 +1185,14 @@ async function handleChatStream(
     thinkingText: "",
     allToolCalls: [] as ChatToolCall[],
     allToolResults: [] as ChatToolResult[],
+    // In-flight toolCallIds (consumer side): added on tool_execution_start,
+    // removed at the end of tool_execution_end — i.e. AFTER that result has
+    // been accumulated into state. The mid-loop drain (getSteeringMessages /
+    // getFollowUpMessages) runs on pi's producer side, concurrently with this
+    // consumer; it must wait for this set to be empty before committing the
+    // uncommitted assistant row, or the row captures a tool_call without its
+    // tool_result (the stuck-amber row).
+    inFlightToolIds: new Set<string>(),
     allArtifacts: [] as Artifact[],
     allVisuals: [] as InlineVisual[],
     segments: [] as OutputSegment[],
@@ -1245,6 +1281,7 @@ async function handleChatStream(
     state.thinkingText = "";
     state.allToolCalls = [];
     state.allToolResults = [];
+    state.inFlightToolIds = new Set();
     state.allArtifacts = [];
     state.allVisuals = [];
     state.segments = [];
@@ -2351,6 +2388,16 @@ async function handleChatStream(
         const queued = await messageQueue.drainOne(chat.id);
         if (!queued) return [];
 
+        // Settle-wait: this drain runs on pi's producer side, concurrently
+        // with the consumer's event handling. Committing while a tool is in
+        // flight captures the tool_call without its tool_result (the
+        // stuck-amber row); waiting also makes the batch complete, so the
+        // turn_end re-commit below replaces this row in place (exact call
+        // set) instead of appending an orphan fragment.
+        if (!await waitForToolSettlement(() => state.inFlightToolIds.size, TOOL_SETTLE_TIMEOUT_MS)) {
+          console.warn(`[chat] steering: tool settlement wait timed out after ${TOOL_SETTLE_TIMEOUT_MS}ms — committing current state`);
+        }
+
         // Save any uncommitted assistant row and the steering user message.
         // Tool-use fragments may already have been committed at turn_end.
         const assistantMsg = finalizeUncommittedAssistantMessage();
@@ -2388,6 +2435,12 @@ async function handleChatStream(
       getFollowUpMessages: async () => {
         const queued = await messageQueue.drainOne(chat.id);
         if (!queued) return [];
+
+        // Settle-wait: same race as the steering drain — committing while a
+        // tool is in flight captures the tool_call without its tool_result.
+        if (!await waitForToolSettlement(() => state.inFlightToolIds.size, TOOL_SETTLE_TIMEOUT_MS)) {
+          console.warn(`[chat] follow-up: tool settlement wait timed out after ${TOOL_SETTLE_TIMEOUT_MS}ms — committing current state`);
+        }
 
         // Save any uncommitted assistant row and the queued user message.
         const assistantMsg = finalizeUncommittedAssistantMessage();
@@ -2539,6 +2592,7 @@ async function handleChatStream(
             arguments: event.args,
           };
           state.allToolCalls.push(toolCall);
+          state.inFlightToolIds.add(toolCall.id);
           if (event.toolName !== "ask_user") {
             console.log(`[tool] Executing ${event.toolName}:`, event.args);
             const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
@@ -2633,6 +2687,9 @@ async function handleChatStream(
             })}\n\n`);
             console.log(`[chat] Tool result segment emitted, waiting for next agent turn...`);
           }
+          // LAST synchronous step of the handler — the drain settle-wait may
+          // treat an empty in-flight set as "batch fully accumulated".
+          state.inFlightToolIds.delete(event.toolCallId);
           break;
         }
 
@@ -3101,6 +3158,7 @@ async function handleChatStream(
               arguments: event.args,
             };
             state.allToolCalls.push(toolCall);
+            state.inFlightToolIds.add(toolCall.id);
             if (event.toolName !== "ask_user") {
               const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
               state.segments.push(segment);
@@ -3127,6 +3185,9 @@ async function handleChatStream(
               res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: event.isError ? "error" : "done", result: resultText })}\n\n`);
             }
+            // LAST synchronous step of the handler — the drain settle-wait may
+            // treat an empty in-flight set as "batch fully accumulated".
+            state.inFlightToolIds.delete(event.toolCallId);
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
             const stopReason = msg.stopReason || "stop";
@@ -3241,6 +3302,7 @@ async function handleChatStream(
               arguments: event.args,
             };
             state.allToolCalls.push(toolCall);
+            state.inFlightToolIds.add(toolCall.id);
 
             if (event.toolName !== "ask_user") {
               console.log(`[tool] Executing ${event.toolName}:`, event.args);
@@ -3273,6 +3335,9 @@ async function handleChatStream(
                 result: resultText,
               })}\n\n`);
             }
+            // LAST synchronous step of the handler — the drain settle-wait may
+            // treat an empty in-flight set as "batch fully accumulated".
+            state.inFlightToolIds.delete(event.toolCallId);
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
             const stopReason = msg.stopReason || "stop";
@@ -3652,6 +3717,7 @@ async function handleChatStream(
               arguments: event.args,
             };
             state.allToolCalls.push(toolCall);
+            state.inFlightToolIds.add(toolCall.id);
             if (event.toolName !== "ask_user") {
               const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
               state.segments.push(segment);
@@ -3684,6 +3750,9 @@ async function handleChatStream(
               res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: event.isError ? "error" : "done", result: resultText })}\n\n`);
             }
+            // LAST synchronous step of the handler — the drain settle-wait may
+            // treat an empty in-flight set as "batch fully accumulated".
+            state.inFlightToolIds.delete(event.toolCallId);
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
             const sr = msg.stopReason || "stop";
