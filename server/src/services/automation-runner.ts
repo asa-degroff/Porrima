@@ -214,6 +214,7 @@ async function runPromptAutomation(
   const { getAgentTools } = await import("./agent-tools.js");
   const { estimateContextTokens, truncateBeforeSend, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
+  const { preCompactionFlushHook } = await import("./memory-extraction.js");
   const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, commitMemoryDelta } = await import("./memory-context.js");
   const { resolveCurrentMessageIndex } = await import("./current-message.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
@@ -337,11 +338,16 @@ async function runPromptAutomation(
       chat,
       contextWindow,
       systemPrompt,
-      undefined,
+      // D4 companion: surface the stall to attached viewers of the stream.
+      () => emitter.emitCompacting(),
       undefined,
       tools,
       undefined,
-      undefined,
+      // D4: in-chat reminders and wakes compact USER agent chats — the
+      // flush here continues those chats' live extraction session (the
+      // highest-value D4 site; the substantive filter still self-scopes
+      // system-owned automation chats to near-zero work).
+      preCompactionFlushHook(chat, "automation pre-send flush failed"),
       emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
@@ -471,6 +477,8 @@ async function runPromptAutomation(
       tools,
       signal: emitter.stream.abort.signal,
       triggerRatio: COMPACTION_TRIGGER_RATIO,
+      emitCompacting: () => emitter.emitCompacting(),
+      preFlush: preCompactionFlushHook(chat, "automation end-of-turn flush failed"),
       logPrefix: `[automation:${task.id}]`,
     });
 

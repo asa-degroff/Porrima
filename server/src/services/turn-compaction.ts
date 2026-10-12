@@ -30,8 +30,9 @@
  *     the pre-send's ratio, executed while nobody waits instead of at the
  *     next run's start. The logOnly flag was removed with the flip, per
  *     its own contract.
- *   - D4 (headless pre-compaction flush) remains open — the flush is the
- *     only compaction behavior still missing headless.
+ *   - D4 (headless pre-compaction flush) landed 10-12: every headless site
+ *     passes the shared preCompactionFlushHook (memory-extraction.ts), and
+ *     SynthesisEmitter.emitCompacting() frames the stall for streamed runs.
  */
 
 import type { Chat, ChatMessage } from "../types.js";

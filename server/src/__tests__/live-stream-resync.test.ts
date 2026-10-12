@@ -110,4 +110,29 @@ describe("SynthesisEmitter resync snapshot", () => {
       emitter.end();
     }
   });
+
+  it("emitCompacting frames the stall; resync hydrates it until the next event (D4)", () => {
+    const emitter = new SynthesisEmitter("system");
+    try {
+      const frames: string[] = [];
+      emitter.stream.subscribers.add({
+        write: ((chunk: string) => { frames.push(chunk); return true; }) as any,
+        res: { writableEnded: false, destroyed: false } as any,
+        isPrimary: false,
+      });
+
+      emitter.emitCompacting();
+      // Identical frame to the HTTP route's `event: compacting\ndata: {}\n\n`.
+      expect(frames).toContain("event: compacting\ndata: {}\n\n");
+      // A client attaching mid-stall sees the indicator armed via resync.
+      expect(emitter.stream.buildResync!()?.compacting).toBe(true);
+
+      // Any real event ends the visible stall (client clears bg.compacting
+      // on the next frame) — keep the resync view honest.
+      emitter.emitWarning({ type: "test", message: "next event" });
+      expect(emitter.stream.buildResync!()?.compacting).toBeUndefined();
+    } finally {
+      emitter.end();
+    }
+  });
 });

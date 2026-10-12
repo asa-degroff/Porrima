@@ -943,6 +943,7 @@ export async function runSystemSynthesis(options?: {
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
   const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { preCompactionFlushHook } = await import("./memory-extraction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -1061,11 +1062,14 @@ export async function runSystemSynthesis(options?: {
       chat,
       contextWindow,
       synthesisPrompt,
-      undefined,
+      // D4 companion: surface the stall on the streamed headless turn.
+      () => emitter.emitCompacting(),
       undefined,
       tools,
       undefined,
-      undefined,
+      // D4: flush the removed window through the system chat's extraction
+      // session before archiving (substantive filter self-scopes the work).
+      preCompactionFlushHook(chat, "synthesis pre-send flush failed"),
       emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
@@ -1238,6 +1242,8 @@ export async function runSystemSynthesis(options?: {
       systemPrompt: synthesisPrompt,
       tools,
       signal: emitter.stream.abort.signal,
+      emitCompacting: () => emitter.emitCompacting(),
+      preFlush: preCompactionFlushHook(chat, "synthesis end-of-turn flush failed"),
       logPrefix: "[system-chat]",
     });
 
@@ -1308,6 +1314,7 @@ export async function runWakeCycle(options?: {
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
   const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { preCompactionFlushHook } = await import("./memory-extraction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -1402,11 +1409,14 @@ export async function runWakeCycle(options?: {
       chat,
       contextWindow,
       wakePrompt,
-      undefined,
+      // D4 companion: surface the stall on the streamed headless turn.
+      () => emitter.emitCompacting(),
       undefined,
       tools,
       undefined,
-      undefined,
+      // D4: flush the removed window before archiving (substantive filter
+      // self-scopes — most wake/synthesis rows extract nothing).
+      preCompactionFlushHook(chat, "wake pre-send flush failed"),
       emitter.stream.abort.signal,
     );
     if (compactionResult?.truncated) {
@@ -1475,6 +1485,8 @@ export async function runWakeCycle(options?: {
       systemPrompt: wakePrompt,
       tools,
       signal: emitter.stream.abort.signal,
+      emitCompacting: () => emitter.emitCompacting(),
+      preFlush: preCompactionFlushHook(chat, "wake end-of-turn flush failed"),
       logPrefix: "[system-chat]",
     });
 

@@ -4065,6 +4065,35 @@ export async function preCompactionFlush(
   return promise;
 }
 
+/**
+ * Pre-compaction memory flush as a compaction hook. Runs BEFORE archive/index
+ * generation so it continues the extraction session's cached prompt (index
+ * generation shares the same single slot and would evict the cache). Flush
+ * failures are logged but don't abort the compaction itself.
+ *
+ * Shared across all compaction paths — HTTP (chat.ts) and headless
+ * (system-chat, automation, headless mid-turn; turn-engine D4). Sites pass
+ * the hook into the `onBeforeArchive`/`preFlush` argument of the truncation
+ * funnels; the substantive-row filter inside preCompactionFlush self-scopes
+ * chats whose removed window holds nothing extractable (synthesis rows,
+ * automation boilerplate, system plumbing), so wiring it everywhere is cheap.
+ */
+export function preCompactionFlushHook(
+  chat: { id: string; modelId: string; projectId?: string | null },
+  errorLabel: string,
+): (removedMessages: ChatMessage[], signal?: AbortSignal) => Promise<void> {
+  return async (removed: ChatMessage[], signal?: AbortSignal): Promise<void> => {
+    if (removed.length === 0) return;
+    try {
+      // ?? undefined: the hook accepts structural chats whose projectId may
+      // be null (headless call sites); preCompactionFlush scopes by string.
+      await preCompactionFlush(chat.modelId, chat.id, removed, { projectId: chat.projectId ?? undefined, signal });
+    } catch (err) {
+      console.error(`[compaction] ${errorLabel}:`, err);
+    }
+  };
+}
+
 /** Per-chunk marker overhead reserved when packing pre-compaction continuation chunks. */
 const PRE_COMPACTION_CHUNK_MARKER_CHARS = 200;
 

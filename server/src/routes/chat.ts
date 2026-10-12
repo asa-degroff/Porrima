@@ -15,7 +15,7 @@ import { digestPiMessages, digestWireShape, getPrefixSnapshot, recordReplaySnaps
 import { trimMessagesToAskUser } from "../services/pi-message-utils.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
-import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
+import { enqueueImmediateExtraction, preCompactionFlushHook, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
 import {
   DEFAULT_MID_TURN_EXTRACTION_THRESHOLD,
   DEFAULT_MID_TURN_EXTRACTION_TIMEOUT_MS,
@@ -119,26 +119,6 @@ const artifactAutoRepairAttempts = new Map<string, number>();
 // In-memory only: a server restart empties every slot anyway, which makes the
 // provider's cold-cache auto-detection accurate again.
 const postCompactionPrefillPending = new Set<string>();
-
-/**
- * Pre-compaction memory flush as a compaction hook. Runs BEFORE archive/index
- * generation so it continues the extraction session's cached prompt (index
- * generation shares the same single slot and would evict the cache). Flush
- * failures are logged but don't abort the compaction itself.
- */
-function preCompactionFlushHook(
-  chat: Chat,
-  errorLabel: string,
-): (removed: ChatMessage[], signal?: AbortSignal) => Promise<void> {
-  return async (removed: ChatMessage[], signal?: AbortSignal): Promise<void> => {
-    if (removed.length === 0) return;
-    try {
-      await preCompactionFlush(chat.modelId, chat.id, removed, { projectId: chat.projectId, signal });
-    } catch (err) {
-      console.error(`[compaction] ${errorLabel}:`, err);
-    }
-  };
-}
 
 function isChatDeleted(chatId: string): boolean {
   const row = getDb().prepare("SELECT 1 FROM chats WHERE id = ?").get(chatId);

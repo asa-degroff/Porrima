@@ -103,6 +103,13 @@ export class SynthesisEmitter {
   private keepaliveInterval: NodeJS.Timeout | null = null;
   /** Last emitted iteration event — resync snapshot for the token indicator. */
   private lastIteration: TurnResyncPayload["iteration"] | null = null;
+  /**
+   * True while a compaction stall is in flight (pre-send/mid-turn/end-of-turn).
+   * Mirrors the HTTP route's `compactingActive` so an attaching client's resync
+   * hydrates the indicator; cleared by the next real event (writeEvent), the
+   * same semantics the client uses to drop `bg.compacting`.
+   */
+  private compactingActive = false;
 
   constructor(chatId: string) {
     this.stream = installHeadlessLiveStream(chatId);
@@ -137,6 +144,9 @@ export class SynthesisEmitter {
   }
 
   private writeEvent(event: string, data: unknown): void {
+    // Any real event ends the visible compaction stall (client clears
+    // bg.compacting on the next frame) — keep the resync view in sync.
+    this.compactingActive = false;
     this.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
@@ -295,6 +305,17 @@ export class SynthesisEmitter {
   }
 
   /**
+   * A compaction stall is starting (pre-send / mid-turn / end-of-turn).
+   * Emits the same `compacting` SSE frame the HTTP route uses, so attached
+   * viewers of headless runs see what a compaction costs (turn-engine D4
+   * companion). Bypasses writeEvent — the next real event clears the state.
+   */
+  emitCompacting(): void {
+    this.compactingActive = true;
+    this.write(`event: compacting\ndata: {}\n\n`);
+  }
+
+  /**
    * After all phases complete and the assistant message has been persisted,
    * emit `done` so reconnected clients close their stream cleanly. Matches
    * the regular chat route's terminal event.
@@ -391,6 +412,9 @@ export class SynthesisEmitter {
       message,
       iteration: this.lastIteration ? { ...this.lastIteration } : undefined,
       modelProgress: null,
+      // Compaction in flight — hydrate the attaching client's indicator
+      // (same `compactingActive || undefined` shape as the HTTP route).
+      compacting: this.compactingActive || undefined,
       // Live viewer state: an attaching client restores the browser PiP from
       // the session snapshot instead of waiting for the next action frame.
       browser: getBrowserSessionSnapshot(this.stream.chatId),

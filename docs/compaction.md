@@ -13,17 +13,17 @@ Five compaction paths — end-of-turn, mid-turn, pre-send (backstop), manual `/c
 | Path | Trigger | Threshold | Cycles | Flush? | Blocking? |
 |------|---------|-----------|--------|--------|-----------|
 | End-of-turn, HTTP | After the response completes | **>80%** or `stopReason=length` | — | yes | yes |
-| End-of-turn, synthesis | After the response completes | >80% | — | **no** | yes |
-| End-of-turn, wake | After the response completes | >80% | — | **no** | yes |
-| End-of-turn, automation | After the response completes | **>85%** (D3 verdict, see below) | — | **no** | yes |
+| End-of-turn, synthesis | After the response completes | >80% | — | yes | yes |
+| End-of-turn, wake | After the response completes | >80% | — | yes | yes |
+| End-of-turn, automation | After the response completes | **>85%** (D3 verdict, see below) | — | yes | yes |
 | Mid-turn, HTTP | During tool loop | >85% with a usage anchor; char path only checks >95% | 5 | yes | yes |
-| Mid-turn, headless | During tool loop | same | **3** | **no** | yes |
+| Mid-turn, headless | During tool loop | same | **3** | yes | yes |
 | Pre-send, send *(backstop)* | Before POST to LLM | 3 triggers (below) → 30% target | — | yes | yes |
 | Pre-send, resume *(backstop)* | Before resuming after crash / `ask_user` | same | — | yes | yes |
 | Pre-send, `/edit` *(backstop)* | Before resending an edited message | same | — | yes | yes |
-| Pre-send, synthesis *(backstop)* | System-chat turn start | same | — | **no** | yes |
-| Pre-send, wake *(backstop)* | System-chat turn start | same | — | **no** | yes |
-| Pre-send, automation *(backstop)* | Automation turn start | same | — | **no** | yes |
+| Pre-send, synthesis *(backstop)* | System-chat turn start | same | — | yes | yes |
+| Pre-send, wake *(backstop)* | System-chat turn start | same | — | yes | yes |
+| Pre-send, automation *(backstop)* | Automation turn start | same | — | yes | yes |
 | `/compact` | User-triggered | Forced | — | yes | yes |
 | Hard-cap safety | Inside pre-send, after the primary truncation | see below | — | inherits | yes |
 
@@ -35,7 +35,7 @@ Three numbers are easy to confuse:
 - **0.85** — `COMPACTION_TRIGGER_RATIO`, the normal pre-send trigger, measured against `refinedTokens`: the usage-anchored display estimate when a post-compaction anchor exists, otherwise the char estimate (see *Stale-anchor strip* below).
 - **0.95 / 1.15** — `COMPACTION_HARD_CAP_RATIO` and `CHAR_ESTIMATE_SAFETY_RATIO`. Pre-send actually has **three** independent triggers: the normal 0.85 check, a hard-cap estimate above 0.95 (bounded by the anchor when one exists), and a pure char estimate above **1.15** of the window. The char band is deliberately looser than the hard cap because char estimation is the less trustworthy of the two.
 
-**The memory flush is HTTP-only.** The HTTP chat route passes `preCompactionFlush` as the `onBeforeArchive` hook. Headless paths — synthesis, wake, automation (both pre-send and end-of-turn), and headless mid-turn — pass `undefined` for that argument and therefore **skip the flush entirely**. This is tracked as delta D4 in [design/turn-engine.md](design/turn-engine.md) and is now the only compaction behavior headless still misses: the automation D3 log-only gate was removed when the flip landed (10-12), so every path executes. The skip bites hardest where the headless runner compacts **user agent chats** — in-chat reminders and cross-chat wakes run on the target chat with its own `chatType`, and those chats carry a live extraction session whose flush would continue a warm prefix; there the removed context is lost to memory permanently. On the system chat itself the substantive-row filter (Layer 1) self-scopes the flush to near-zero.
+**The memory flush runs at every compaction path** (D4 landed 10-12 — it used to be HTTP-only). Every site — HTTP (send, resume, `/edit`, mid-turn, end-of-turn, `/compact`) and headless (synthesis/wake/automation pre-send, synthesis/wake/automation end-of-turn, headless mid-turn) — passes the shared `preCompactionFlushHook` (`memory-extraction.ts`) as the `onBeforeArchive`/`preFlush` hook. The work self-scopes via the substantive-row filter (`isSubstantiveForPreCompactionExtraction`): on the system chat, synthesis rows are tagged and automation boilerplate is filtered, so the flush is near-zero-cost there — while the highest-value sites are the headless runs that compact **user agent chats** (in-chat reminders, cross-chat wakes), where the removed context used to vanish without extraction while the chat's live session sat warm. Since headless turns stream with HTTP frame parity, the flush's stall is visible: `SynthesisEmitter.emitCompacting()` emits the same `compacting` SSE frame the HTTP route uses, and the resync snapshot carries the state until the next real event.
 
 ## Compaction Sequence
 
@@ -51,7 +51,7 @@ IN truncateChatHistory() / truncateBeforeSend():
        predecessors so the archive keeps full fidelity for the whole
        out-of-context region (their stored content was stripped)
 
-2. Memory Flush     — await onBeforeArchive(preCompactionFlush)   [HTTP paths only]
+2. Memory Flush     — await onBeforeArchive(preCompactionFlush)   [all paths since D4]
    ├── Continues the chat's live extraction session with the removed
    │   messages (see Layer 1)
    ├── Extracts atomic memories (with subject lines + durability)
@@ -193,9 +193,9 @@ The handoff message gives the resumed agent two things:
 
 This belt-and-suspenders approach ensures continuity even if the semantic retrieval misses something.
 
-The hook is wired unconditionally on the HTTP path, but the removed-window filter in the flush is the effective gate: a chat whose rows are synthesis/automation/system plumbing extracts nothing.
+The hook is wired unconditionally at every compaction site (HTTP and headless alike), but the removed-window filter in the flush is the effective gate: a chat whose rows are synthesis/automation/system plumbing extracts nothing.
 
-**Headless mid-turn is the same skeleton with a leaner handoff.** `chat-turn-runner.ts` caps at 3 cycles, runs `truncateChatHistory` with `onBeforeArchive: undefined` (no flush — D4), and appends a minimal handoff built by `buildMidTurnHandoffText(removedCount)` — no progress summary, no memory fetch. Per turn-engine D6, the mid-turn unification is *shape-only*; content policy stays per-route.
+**Headless mid-turn is the same skeleton with a leaner handoff.** `chat-turn-runner.ts` caps at 3 cycles, flushes via the shared `preCompactionFlushHook` (D4 landed 10-12), and appends a minimal handoff built by `buildMidTurnHandoffText(removedCount)` — no progress summary, no memory fetch. Per turn-engine D6, the mid-turn unification is *shape-only*; content policy stays per-route.
 
 ## Memory Context State Management
 
@@ -271,13 +271,13 @@ Two tools access archived context:
 
 ### Why is pre-send a backstop rather than the primary path?
 
-Pre-send compaction is waiting to compact until the user is at the keyboard, actively waiting for a response — bad UX. The end-of-turn check (0.80, conservative max of raw usage and refined estimate) therefore does the preemptive compaction in all foreseeable cases, while the user reads the response they just got. Pre-send stays at 0.85 purely as the safety net for what end-of-turn can't see: the next user message itself, rows appended after the check (recall deltas, queued follow-ups), skipped checks (`ask_user`, waiting-for-input, `/stop`, mid-turn exhaustion), and turns that never reported usage. Headless paths have no human waiting, so their pre-send stays cheap; D3 (automation end-of-turn) and D2 (synthesis/wake) both execute now, leaving D4 (headless flush) as the only open delta in this area.
+Pre-send compaction is waiting to compact until the user is at the keyboard, actively waiting for a response — bad UX. The end-of-turn check (0.80, conservative max of raw usage and refined estimate) therefore does the preemptive compaction in all foreseeable cases, while the user reads the response they just got. Pre-send stays at 0.85 purely as the safety net for what end-of-turn can't see: the next user message itself, rows appended after the check (recall deltas, queued follow-ups), skipped checks (`ask_user`, waiting-for-input, `/stop`, mid-turn exhaustion), and turns that never reported usage. Headless paths have no keyboard wait, so their pre-send is cheap; D2/D3/D4 have all landed now, so headless compaction matches the HTTP contract end-to-end — threshold placement and handoff content remain the deliberate per-route differences.
 
 ### Why await instead of fire-and-forget?
 
 Previous implementations used `.catch()` (fire-and-forget) for `preCompactionFlush`. This created a race condition: `buildSplitAugmentedPrompt` ran before the flush completed, so freshly extracted memories weren't in the store during retrieval. The system prompt would be rebuilt without the context that was just removed.
 
-On the **HTTP paths**, awaiting the flush guarantees that the rebuilt system prompt includes memories extracted from the removed messages. The headless paths have not adopted this — the `onBeforeArchive` hook is `undefined` there, so the flush is skipped (see [design/turn-engine.md](design/turn-engine.md) delta D4).
+On the **HTTP paths**, awaiting the flush guarantees that the rebuilt system prompt includes memories extracted from the removed messages. The headless paths adopted the same awaiting hook when D4 landed (10-12) — every compaction site, transport or chat type, passes the shared `preCompactionFlushHook` (see [design/turn-engine.md](design/turn-engine.md)).
 
 ### Why indexed summaries instead of narrative summaries?
 

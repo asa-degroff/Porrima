@@ -12,6 +12,7 @@ const captured: {
   resetMemoryContext?: any;
   skillAugmentArgs?: any[];
   eotOptions?: any;
+  preSendArgs?: any[];
 } = {};
 
 // Configurable build result so the delta-delivery test can exercise a
@@ -88,7 +89,10 @@ async function loadModules(homeDir: string) {
   }));
   vi.doMock("../services/compaction.js", () => ({
     estimateContextTokens: vi.fn(() => 42),
-    truncateBeforeSend: vi.fn(async () => null),
+    truncateBeforeSend: vi.fn(async (...args: any[]) => {
+      captured.preSendArgs = args;
+      return null;
+    }),
     // Named export the automation runner destructures for its D3 EOT call
     // (triggerRatio); vitest mocks throw on exports the factory omits.
     COMPACTION_TRIGGER_RATIO: 0.85,
@@ -250,6 +254,17 @@ describe("cross-chat wake turns", () => {
       expect(captured.eotOptions).toBeDefined();
       expect(captured.eotOptions.triggerRatio).toBe(0.85);
       expect(captured.eotOptions).not.toHaveProperty("logOnly");
+
+      // D4 (10-12): headless compaction sites carry the memory flush and the
+      // viewer stall frame. truncateBeforeSend positional args: 3 =
+      // onCompacting, 7 = onBeforeArchive; the EOT options carry preFlush /
+      // emitCompacting. A wake onto an agent chat is the highest-value flush
+      // site — that chat has a live extraction session to continue.
+      expect(captured.preSendArgs).toBeDefined();
+      expect(typeof captured.preSendArgs?.[3]).toBe("function");
+      expect(typeof captured.preSendArgs?.[7]).toBe("function");
+      expect(typeof captured.eotOptions.preFlush).toBe("function");
+      expect(typeof captured.eotOptions.emitCompacting).toBe("function");
 
       // No title refresh, no model rewrite, no trigger row.
       expect(target?.title).toBe("Target Chat");

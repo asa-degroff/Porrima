@@ -23,6 +23,7 @@ import { createSafeStreamFn } from "./llm-stream.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "./llama-slot-leases.js";
 import { maybeParkChatAfterTurn } from "./kv-snapshot.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
+import { preCompactionFlushHook } from "./memory-extraction.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
 import { orderToolResultsByToolCalls } from "./tool-result-ordering.js";
@@ -995,12 +996,18 @@ export async function runHeadlessChatTurn(
           chat,
           options.contextWindow!,
           true,
-          undefined,
+          // Stall visible to attached viewers (D4 companion); the emitter's
+          // own 10s keepalive covers the SSE inactivity timer.
+          () => emitter.emitCompacting(),
           undefined,
           emitter.state.finalUsage?.totalTokens,
           systemPrompt,
           tools,
-          undefined,
+          // Turn-engine D4: headless mid-turn compaction flushes the removed
+          // window through the chat's extraction session BEFORE archiving —
+          // the substantive-row filter self-scopes chats with nothing to
+          // extract (synthesis rows, automation boilerplate).
+          preCompactionFlushHook(chat, "headless mid-turn flush failed"),
           controller.signal,
         );
         if (!compaction?.truncated) {
