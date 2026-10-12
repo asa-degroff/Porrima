@@ -78,7 +78,7 @@ function fmtTokens(n: number | null): string {
 function fmtCacheHit(d: LlmRequestSummary): string {
   if (!d.promptTokens || d.cachedTokens == null) return "—";
   const pct = Math.round((d.cachedTokens / d.promptTokens) * 100);
-  return `${pct}%`;
+  return `${fmtTokens(d.cachedTokens)} cached (${pct}%)`;
 }
 
 const STATUS_STYLES: Record<LlmRequestSummary["status"], string> = {
@@ -718,10 +718,10 @@ export function RequestViewerModal({ isOpen, onClose, chatId, lastRequestLogEven
                         </span>
                         <span className="truncate opacity-50 font-mono text-[10px]">{r.modelId}</span>
                         <span className="ml-auto flex items-center gap-2.5 opacity-60 font-mono text-[10px] shrink-0">
-                          <span title="prompt → completion tokens">
-                            {fmtTokens(r.promptTokens)} → {fmtTokens(r.completionTokens)}
+                          <span title="prompt tokens in · completion tokens out (wire usage)">
+                            {fmtTokens(r.promptTokens)} in · {fmtTokens(r.completionTokens)} out
                           </span>
-                          <span title="cached prompt-token hit ratio">cache {fmtCacheHit(r)}</span>
+                          <span title="cached prompt tokens / hit ratio (wire usage from the provider's usage report)">{`cache ${fmtCacheHit(r)}`}</span>
                           <span title="request duration">{fmtDuration(r.durationMs)}</span>
                           <span title="messages / tools in wire body">
                             {r.messageCount ?? "?"}m/{r.toolCount ?? 0}t

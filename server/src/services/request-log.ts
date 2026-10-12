@@ -436,6 +436,34 @@ function rowToSummary(row: Row): LlmRequestSummary {
   };
 }
 
+/**
+ * Wire-truth usage of the most recent COMPLETED chat request, per chat.
+ * Feeds the cache-residency surface: the prompt-cache HIT a user should see
+ * is `cached_tokens / prompt_tokens` from the provider's own usage report,
+ * not the slot-probe inference (which can lag a turn behind).
+ */
+export function getLatestDoneUsageByChat(
+  chatIds: string[],
+): Map<string, { promptTokens: number | null; cachedTokens: number | null; timestamp: number }> {
+  const out = new Map<string, { promptTokens: number | null; cachedTokens: number | null; timestamp: number }>();
+  const database = getDb();
+  const stmt = database.prepare(
+    `SELECT prompt_tokens, cached_tokens, timestamp FROM llm_requests
+     WHERE chat_id = ? AND purpose = 'chat' AND status = 'done' AND prompt_tokens IS NOT NULL
+     ORDER BY timestamp DESC, iteration DESC LIMIT 1`,
+  );
+  for (const chatId of chatIds) {
+    if (out.has(chatId)) continue;
+    const row = stmt.get(chatId) as
+      | { prompt_tokens: number | null; cached_tokens: number | null; timestamp: number }
+      | undefined;
+    if (row) {
+      out.set(chatId, { promptTokens: row.prompt_tokens, cachedTokens: row.cached_tokens, timestamp: row.timestamp });
+    }
+  }
+  return out;
+}
+
 export function listLlmRequests(chatId: string, limit = MAX_REQUESTS_PER_CHAT): LlmRequestSummary[] {
   const database = getDb();
   const rows = database

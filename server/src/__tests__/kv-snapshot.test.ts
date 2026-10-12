@@ -464,6 +464,24 @@ describe("kv-snapshot pruning", () => {
 // Phase 3: restore gate, digest stamp, usage-confirmed breaker
 // ---------------------------------------------------------------------------
 
+describe("kv-snapshot save budget (scaled)", () => {
+  it("grows with estimated bytes, floors at opTimeoutMs headroom, caps at 5 min", async () => {
+    const h = await loadHarness();
+    const policy = h.kv.resolveKvSnapshotSettings({ kvSnapshotOpTimeoutMs: 60_000 });
+    const MiB = 1024 * 1024;
+
+    // 1 MiB -> ceil(1/512MiB)=1 -> +2 s headroom
+    expect(h.kv.computeSaveBudgetMs(1 * MiB, policy)).toBe(62_000);
+    // The measured case that worked: 18.5 GiB / 24 s actual -> 60 s + 74 s budget
+    expect(h.kv.computeSaveBudgetMs(18.5 * 1024 * MiB, policy)).toBe(134_000);
+    // The case that TIMED OUT (21:48, 203k tokens ~= 35 GiB): 60 s + 140 s
+    expect(h.kv.computeSaveBudgetMs(35 * 1024 * MiB, policy)).toBe(200_000);
+    // Absolute ceiling for anything larger.
+    expect(h.kv.computeSaveBudgetMs(600 * 1024 * MiB, policy)).toBe(300_000);
+    h.db.close();
+  });
+});
+
 const wireBody = {
   messages: [{ role: "system", content: "You are a frozen prefix." }, { role: "user", content: "hi" }],
   tools: [{ type: "function", function: { name: "a" } }],

@@ -218,8 +218,13 @@ parking. Policy (all must hold):
 | Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio — read from the row **before** the `saving` upsert (the upsert rewrites `n_tokens` in place; reading after computes `prior.bytes / lastUsage`, an under-estimate whenever the context grew) |
 
 Save = one `POST action=save`; on response, record `n_saved`, `n_written`,
-`timings.save_ms`, digests, state → `ready`. Any error/timeout (budgeted,
-`kvSnapshotOpTimeoutMs`) → row `stale`, log, move on.
+`timings.save_ms`, digests, state → `ready`. Any error/timeout → row `stale`,
+log, move on. **Save budget scales with the estimate** (10-11): the static
+`kvSnapshotOpTimeoutMs` burned a 203k-token save at 21:48 and left the next
+cold return to a 976 s re-prefill; saves now get
+`opTimeoutMs + 2 s per 512 MiB estimated, capped at 5 min` — they are
+background work. `kvSnapshotOpTimeoutMs` stays the exact budget for
+RESTORE, which sits on the user-visible path.
 
 **Slot-identity guard (10-11 review fix):** the save fires *after* this chat's
 lease released, so a new turn can acquire the same slot and start filling it
@@ -299,8 +304,17 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 - Registry doubles as the metrics table (`timings` persisted per row; rolling stats
   via `restore_count`/`miss_count`).
 - Residency records already surface slot bindings and hit confidence — parking adds
-  "parked (n tokens, size, when)" to that status surface on the Inference Servers
-  panel rather than inventing a parallel UI.
+  a **Disk Residency** block to the ModelStats modal's Cache Residency section
+  (pool totals, free disk, per-chat parked rows with restore/miss counters and a
+  breaker warning) over `GET /api/settings/kv-snapshots`.
+- **Hit displays read the wire, not the inference** (10-11): the residency hit
+  column prefers the chat's most recent COMPLETED request's
+  `cached_tokens / prompt_tokens` from `llm_requests` (enriched server-side),
+  falling back to the inferred slot-observation only when no wire sample
+  exists — the inference lags a turn, which made compaction-era statistics
+  un-readable. The requests modal labels its token chips explicitly
+  (`N in · M out`, `cache X cached (Y%)`) so prompt→completion is never
+  misread as prompt→cached again.
 
 ## 6. Server configuration coupling
 
@@ -361,7 +375,7 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 | `kvSnapshotMaxBytesPerPool` | `274877906944` (256 GiB) | LRU cap per model-server |
 | `kvSnapshotTtlHours` | `72` | hard expiry after TTL even under cap |
 | `kvSnapshotMinFreeDiskBytes` | `68719476736` (64 GiB) | absolute disk floor respected by saves |
-| `kvSnapshotOpTimeoutMs` | `60000` | per-save/per-restore budget |
+| `kvSnapshotOpTimeoutMs` | `60000` | restore budget (user-visible path); saves scale with the estimate: this floor + 2 s per 512 MiB, capped 300 s |
 | `kvSnapshotMinBuild` | `11552` | minimum llama build number for parking (conservative: the first end-to-end-verified build; lower it deliberately once the #26640/#26004 build numbers are pinned) |
 
 ## 9. Failure model (summary table)

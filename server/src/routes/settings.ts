@@ -253,11 +253,19 @@ router.get("/slot-assignments", async (_req, res) => {
 router.get("/cache-residency", async (_req, res) => {
   try {
     const { getQueuePosition } = await import("../services/cache-warm-queue.js");
+    const { getLatestDoneUsageByChat } = await import("../services/request-log.js");
     const records = listLlamaCacheResidency();
+    const wireChatIds = records
+      .filter((r) => r.targetKind !== "new-agent-chat")
+      .map((r) => r.chatId);
+    const wireUsage = getLatestDoneUsageByChat(wireChatIds);
     const enriched = records.map((r) => ({
       ...r,
       queuePosition: getQueuePosition(r.chatId, r.targetKind),
       chatTitle: r.targetKind === "chat" ? getChatTitle(r.chatId) ?? undefined : undefined,
+      wirePromptTokens: wireUsage.get(r.chatId)?.promptTokens ?? null,
+      wireCachedTokens: wireUsage.get(r.chatId)?.cachedTokens ?? null,
+      wireAt: wireUsage.get(r.chatId)?.timestamp,
     }));
     res.json(enriched);
   } catch (e: any) {

@@ -512,7 +512,7 @@ async function readSettings(): Promise<any> {
 function lastDonePromptTokens(chatId: string): number | null {
   const row = getDb()
     .prepare(
-      "SELECT prompt_tokens FROM llm_requests WHERE chat_id = ? AND status = 'done' AND purpose = 'chat' AND prompt_tokens IS NOT NULL ORDER BY timestamp DESC LIMIT 1",
+      "SELECT prompt_tokens FROM llm_requests WHERE chat_id = ? AND status = 'done' AND purpose = 'chat' AND prompt_tokens IS NOT NULL ORDER BY timestamp DESC, iteration DESC LIMIT 1",
     )
     .get(chatId) as { prompt_tokens: number } | undefined;
   return row?.prompt_tokens ?? null;
@@ -585,7 +585,7 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     return;
   }
 
-  const save = await callSlotAction(lease, "save", filename, policy.opTimeoutMs);
+  const save = await callSlotAction(lease, "save", filename, computeSaveBudgetMs(estimate, policy));
 
   if (pendingTokens.get(chatId) !== token) {
     // Superseded mid-write: the file we just wrote may be a torn prefix of a
@@ -789,9 +789,27 @@ async function slotPromptTokens(lease: LlamaSlotLease): Promise<number | null> {
 // ---------------------------------------------------------------------------
 
 /** Fallback bytes-per-token used only until the first real measurement. Kept
- *  deliberately generous: the estimate gates a headroom CHECK, not the write
- *  itself, so overestimating only ever skips a save. */
+ *  deliberately generous: the estimate gates a headroom CHECK and the save
+ *  budget, so overestimating only ever costs a slower background save or skips
+ *  a save. */
 const FALLBACK_BYTES_PER_TOKEN = 96 * 1024;
+
+/** Absolute ceiling on a single background save operation. */
+const SAVE_BUDGET_MAX_MS = 300_000;
+
+/**
+ * Save operations are background work: their budget scales with the state
+ * being written. Measured llama.cpp save throughput on this feature line is
+ * ≤ ~0.8 GiB/s (18.5 GiB / 24 s at 133k tokens), and a 203k-token save blew
+ * the static op budget at 21:48 (10-11) — leaving the next cold return to
+ * re-prefill 200k tokens. Reserve `opTimeoutMs` as the floor and add
+ * headroom at a conservative 0.5 GiB/s with a 2x factor, capped.
+ * RESTORE keeps the plain `opTimeoutMs` — it sits on the user-visible path.
+ */
+export function computeSaveBudgetMs(estimateBytes: number, policy: KvSnapshotSettings): number {
+  const headroomMs = Math.ceil(estimateBytes / (512 * 1024 * 1024)) * 1000 * 2;
+  return Math.min(policy.opTimeoutMs + headroomMs, SAVE_BUDGET_MAX_MS);
+}
 
 function snapshotPath(filename: string): string {
   // Filenames are generated from server-owned UUIDs + timestamps; reject
@@ -920,10 +938,11 @@ export async function pruneKvSnapshots(): Promise<KvSnapshotPruneReport> {
     const ttlMs = policy.ttlHours * 60 * 60 * 1000;
 
     // Jobs that never finalized (crash during save) — rescue rows whose
-    // `saving` claim is older than the op budget.
+    // `saving` claim is older than the largest possible save budget
+    // (scaled budgets reach the 5-minute ceiling for 200k+ token states).
     database
       .prepare("UPDATE kv_snapshots SET state = 'stale' WHERE state IN ('saving', 'restoring') AND saved_at < ?")
-      .run(now - policy.opTimeoutMs * 2);
+      .run(now - (SAVE_BUDGET_MAX_MS + policy.opTimeoutMs));
 
     const rows = database
       .prepare("SELECT chat_id, filename, bytes, state, saved_at FROM kv_snapshots")

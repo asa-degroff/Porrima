@@ -1637,6 +1637,13 @@ export interface CacheResidency {
   iteration?: number;
   /** Queue position: 0 = actively warming, 1+ = queued, -1 = not in queue */
   queuePosition?: number;
+  /** Wire-truth usage of the chat's most recent COMPLETED request
+   *  (llm_requests.cached_tokens / prompt_tokens). Preferred over the
+   *  inferred slot-observation fields for hit display; absent for baseline
+   *  targets or chats with no recorded done request yet. */
+  wirePromptTokens?: number | null;
+  wireCachedTokens?: number | null;
+  wireAt?: number;
 }
 
 export async function getCacheResidency(): Promise<CacheResidency[]> {

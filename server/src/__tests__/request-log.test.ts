@@ -312,6 +312,39 @@ describe("chat scoping + routes", () => {
 });
 
 describe("restart hygiene", () => {
+  it("resolves latest done wire usage per chat for the residency surface", async () => {
+    const CH = "rl-test-wire-usage";
+    rl.recordLlmRequestStart({
+      chatId: CH, requestId: "w:1", turnId: "w", iteration: 1,
+      modelId: "test-model", provider: "llamacpp",
+      body: { model: "test-model", messages: [{ role: "user", content: "a" }] },
+    });
+    rl.recordLlmRequestEnd({
+      chatId: CH, requestId: "w:1", status: "done",
+      output: { usage: { input: 1000, output: 10 } }, cachedTokens: 400,
+    });
+    rl.recordLlmRequestStart({
+      chatId: CH, requestId: "w:2", turnId: "w", iteration: 2,
+      modelId: "test-model", provider: "llamacpp",
+      body: { model: "test-model", messages: [{ role: "user", content: "b" }] },
+    });
+    rl.recordLlmRequestEnd({
+      chatId: CH, requestId: "w:2", status: "done",
+      output: { usage: { input: 1100, output: 12 } }, cachedTokens: 1050,
+    });
+    // A later ABORTED request (no usage) must not shadow the newest done row.
+    rl.recordLlmRequestStart({
+      chatId: CH, requestId: "w:3", turnId: "w", iteration: 3,
+      modelId: "test-model", provider: "llamacpp",
+      body: { model: "test-model", messages: [{ role: "user", content: "c" }] },
+    });
+    rl.recordLlmRequestEnd({ chatId: CH, requestId: "w:3", status: "aborted" });
+
+    const m = rl.getLatestDoneUsageByChat([CH, "rl-no-such-chat"]);
+    expect(m.get(CH)).toMatchObject({ promptTokens: 1100, cachedTokens: 1050 });
+    expect(m.has("rl-no-such-chat")).toBe(false);
+  });
+
   it("marks stale in_progress rows aborted when the schema re-initializes", async () => {
     rl.recordLlmRequestStart({
       chatId: RESTART_CHAT,

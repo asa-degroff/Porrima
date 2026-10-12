@@ -168,6 +168,38 @@ function truncateModelId(id: string): string {
   return basename;
 }
 
+/**
+ * Cache Residency hit cell. Prefers the WIRE-TRUTH usage of the chat's most
+ * recent completed request (cached_tokens / prompt_tokens from the provider's
+ * own report) over the inferred slot-probe fields — the inference can lag by
+ * more than a turn, which made compaction-era statistics misleading. Falls
+ * back to inferred/confidence when no wire sample exists (baseline targets,
+ * chats predating the request log).
+ */
+function ResidencyHitCell({ a }: { a: CacheResidency }) {
+  const wire =
+    a.wirePromptTokens && a.wirePromptTokens > 0 && a.wireCachedTokens != null
+      ? { pct: (a.wireCachedTokens / a.wirePromptTokens) * 100, cached: a.wireCachedTokens, prompt: a.wirePromptTokens }
+      : null;
+  const label = wire
+    ? `${wire.pct.toFixed(1)}% · ${(wire.cached / 1000).toFixed(1)}k`
+    : typeof a.inferredCacheHitRatio === "number"
+      ? `${(a.inferredCacheHitRatio * 100).toFixed(1)}%`
+      : a.confidence;
+  const title = wire
+    ? `wire usage, last completed request: ${wire.cached.toLocaleString()} cached of ${wire.prompt.toLocaleString()} prompt tokens${a.wireAt ? ` · ${formatTimeAgo(a.wireAt)}` : ""}`
+    : "inferred from slot observation — may lag the last request";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 ${a.active ? "text-amber-300/80" : "text-white/40"}`}
+      title={title}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${a.active ? "bg-amber-400/90" : "bg-amber-400/50"}`} />
+      {label}
+    </span>
+  );
+}
+
 function speedColor(tokPerSec: number | null, isDecode = true): string {
   if (tokPerSec === null) return "text-white/30";
   const threshold = isDecode ? 30 : 100;
@@ -1093,12 +1125,7 @@ export function ModelStatsModal({ isOpen, onClose, statsVersion }: Props) {
                             <span className="text-white/50">{truncateModelId(a.modelId)}</span>
                           </td>
                           <td className="py-1.5 pr-4">
-                            <span className={`inline-flex items-center gap-1 ${a.active ? "text-amber-300/80" : "text-white/40"}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${a.active ? "bg-amber-400/90" : "bg-amber-400/50"}`} />
-                              {typeof a.inferredCacheHitRatio === "number"
-                                ? `${(a.inferredCacheHitRatio * 100).toFixed(1)}%`
-                                : a.confidence}
-                            </span>
+                            <ResidencyHitCell a={a} />
                           </td>
                           <td className="py-1.5">
                             <span className="text-white/30">{formatTimeAgo(a.lastUsedAt)}</span>
