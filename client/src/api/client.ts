@@ -373,7 +373,7 @@ export interface StreamCallbacks {
   onArtifact?: (artifact: Artifact) => void;
   onVisual?: (visual: InlineVisual) => void;
   onSegment?: (segment: import("../types").MessageSegment) => void;
-  onAskUser?: (question: string) => void;
+  onAskUser?: (question: string, options?: string[]) => void;
   onIteration?: (info: IterationInfo) => void;
   /** Per-LLM-call wire events from the request-log recorder. Carries ids and
    *  counters only — the request viewer fetches full bodies lazily. */
@@ -615,11 +615,20 @@ export function streamArtifactErrorRepair(
 /**
  * Check whether the server has an in-flight stream for a chat. Used on mount /
  * page reload to decide whether to reconnect to a live stream.
+ *
+ * `pendingAsk` mirrors a stored ask_user pause when no stream is active — the
+ * question and preset answers, so the answer picker survives a refresh.
  */
 export async function getChatStatus(
   chatId: string,
   opts: { includeWindow?: boolean; messageLimit?: number } = {}
-): Promise<{ active: boolean; subscribers: number; reachable: boolean; window?: Chat }> {
+): Promise<{
+  active: boolean;
+  subscribers: number;
+  reachable: boolean;
+  window?: Chat;
+  pendingAsk?: import("../types").PendingAsk;
+}> {
   try {
     const qs = new URLSearchParams();
     if (opts.includeWindow) qs.set("includeWindow", "1");
@@ -637,6 +646,8 @@ export async function getChatStatus(
       // Present only when the server found a live stream and includeWindow
       // was set; the server skips the DB read otherwise.
       window: (data.window as Chat | undefined) ?? undefined,
+      // Present only when the chat is parked on a stored ask_user pause.
+      pendingAsk: (data.pendingAsk as import("../types").PendingAsk | undefined) ?? undefined,
     };
   } catch {
     return { active: false, subscribers: 0, reachable: false };
@@ -797,7 +808,10 @@ function processSSEEvent(
       callbacks.onBrowserFrame?.(data);
       break;
     case "ask_user":
-      callbacks.onAskUser?.(data.question);
+      callbacks.onAskUser?.(
+        data.question,
+        Array.isArray(data.options) && data.options.length > 0 ? data.options : undefined
+      );
       break;
     case "iteration":
       callbacks.onIteration?.(data);

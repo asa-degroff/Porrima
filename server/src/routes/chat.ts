@@ -5,7 +5,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import type { Message, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
-import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, peekPendingAsk, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
 import { resolveMessageLimit } from "../utils/message-window.js";
 import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow } from "../services/current-message.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
@@ -1624,6 +1624,9 @@ async function handleChatStream(
       // (deltas clear modelProgress, so output implies decode).
       modelProgress: hasOutput ? null : lastModelProgressEvent,
       waitingForInput: waitingForInput || !!askUserRef.current || undefined,
+      askUser: askUserRef.current
+        ? { question: askUserRef.current.question, options: askUserRef.current.options }
+        : undefined,
       compacting: compactingActive || undefined,
       thinkingActive: state.thinkingStartTime !== null || undefined,
       // Live browser viewer: session/ring state so an attaching client
@@ -1910,7 +1913,7 @@ async function handleChatStream(
 
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
-  const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
+  const askUserRef: { current: { question: string; toolCallId: string; options?: string[] } | null } = { current: null };
 
   // Bridge to the live agent context's message array for the outer catch
   // block, which is outside the try where `context` is declared. Kept pointed
@@ -1969,8 +1972,8 @@ async function handleChatStream(
       res.write(`event: visual\ndata: ${JSON.stringify(visual)}\n\n`);
     },
 
-    onAskUser: (question, toolCallId) => {
-      askUserRef.current = { question, toolCallId };
+    onAskUser: (question, toolCallId, options) => {
+      askUserRef.current = { question, toolCallId, options };
       turnAbortController.abort(); // Only abort the current turn, not the SSE connection
     },
 
@@ -2229,6 +2232,8 @@ async function handleChatStream(
         agentMessages,
         systemPrompt,
         askToolCallId: askUserRef.current?.toolCallId || "",
+        askQuestion: askUserRef.current?.question,
+        askOptions: askUserRef.current?.options,
         fullText: state.fullText,
         thinkingText: state.thinkingText,
         toolCalls: state.allToolCalls,
@@ -2629,6 +2634,8 @@ async function handleChatStream(
                   agentMessages: context.messages as any[],
                   systemPrompt,
                   askToolCallId: askUserRef.current?.toolCallId || "",
+                  askQuestion: askUserRef.current?.question,
+                  askOptions: askUserRef.current?.options,
                   fullText: state.fullText,
                   thinkingText: state.thinkingText,
                   toolCalls: state.allToolCalls,
@@ -3062,6 +3069,8 @@ async function handleChatStream(
               agentMessages: context.messages as any[],
               systemPrompt,
               askToolCallId: askUserRef.current?.toolCallId || "",
+              askQuestion: askUserRef.current?.question,
+              askOptions: askUserRef.current?.options,
               fullText: state.fullText,
               thinkingText: state.thinkingText,
               toolCalls: state.allToolCalls,
@@ -3373,6 +3382,8 @@ async function handleChatStream(
                 agentMessages: recoveryAgentMessages as any[],
                 systemPrompt,
                 askToolCallId: askUserRef.current?.toolCallId || "",
+                askQuestion: askUserRef.current?.question,
+                askOptions: askUserRef.current?.options,
                 fullText: state.fullText,
                 thinkingText: state.thinkingText,
                 toolCalls: state.allToolCalls,
@@ -4215,9 +4226,11 @@ async function handleChatStream(
         agentMessages: savedMessages,
         systemPrompt,
         askToolCallId: askUserRef.current.toolCallId,
+        askQuestion: askUserRef.current.question,
+        askOptions: askUserRef.current.options,
       });
 
-      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question, options: askUserRef.current.options })}\n\n`);
     }
 
     // Flush any remaining thinking timer before building the final message
@@ -4440,12 +4453,14 @@ async function handleChatStream(
           agentMessages: savedMessages,
           systemPrompt,
           askToolCallId: askUserRef.current.toolCallId,
+          askQuestion: askUserRef.current.question,
+          askOptions: askUserRef.current.options,
         });
       } catch (saveErr) {
         console.error("[ask_user] failed to save pending state:", saveErr);
       }
 
-      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question, options: askUserRef.current.options })}\n\n`);
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
       );
@@ -5658,6 +5673,10 @@ router.post("/stop", async (req, res) => {
 // every probe that finds no live stream, and the client's "recently
 // streaming" marker outlives the turn by RECENTLY_STREAMING_TTL_MS, so that
 // is the common case, not the rare one.
+//
+// When no stream is active, the probe also reports `pendingAsk`: a stored
+// ask_user pause outlives its stream (the turn ended at the pause), so this is
+// how a refreshing client — or a second device — restores the answer picker.
 router.get("/status/:chatId", async (req, res) => {
   const { chatId } = req.params;
   const stream = liveStreams.get(chatId);
@@ -5669,10 +5688,15 @@ router.get("/status/:chatId", async (req, res) => {
     window = await getChatWithWindow(chatId, { limit: resolveMessageLimit(req.query.messageLimit) });
   }
 
+  // Only the not-active case needs the DB read: an attaching client gets the
+  // ask payload in the resync snapshot instead.
+  const pendingAsk = active ? null : await peekPendingAsk(chatId);
+
   res.json({
     active,
     subscribers: stream?.subscribers.size ?? 0,
     ...(window ? { window } : {}),
+    ...(pendingAsk ? { pendingAsk } : {}),
   });
 });
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect, memo } from "react";
-import type { ImageAttachment } from "../types";
+import type { ImageAttachment, PendingAsk } from "../types";
 import { getDraft, setDraft, clearDraft } from "../hooks/useChat";
+import { AskUserPanel } from "./AskUserPanel";
 
 interface Props {
   chatId: string | null;
@@ -9,6 +10,9 @@ interface Props {
   onAbort?: () => void;
   streaming?: boolean;
   waitingForInput?: boolean;
+  /** Pending ask_user pause behind the waitingForInput flag — renders the
+   *  answer picker (question + preset choices) inside the composer surface. */
+  pendingAsk?: PendingAsk | null;
   isOnline?: boolean;
   placeholder?: string;
   onSlashTyping?: (filterText: string, cursorRect?: DOMRect) => void;
@@ -60,7 +64,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills, autoFocusInput, variant = "docked" }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, pendingAsk, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills, autoFocusInput, variant = "docked" }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [hasContent, setHasContent] = useState(false);
@@ -203,6 +207,23 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     if (chatId) clearDraft(chatId);
     updateLayout();
   }, [images, disabled, isOnline, onSend, updateLayout, chatId]);
+
+  /**
+   * Answer a pending ask_user with a preset choice: sends the option text as
+   * the answer directly (draft text/images stay in the composer — a picker
+   * click is its own submission). Guard mirrors handleSubmit.
+   */
+  const handleAnswerSelect = useCallback((option: string) => {
+    if (disabled && !streaming && isOnline) return;
+    onSend(option);
+    if (editorRef.current) editorRef.current.blur();
+  }, [disabled, streaming, isOnline, onSend]);
+
+  /** The "Type your own answer" path: free-form input is always live, so this
+   *  just puts the cursor in the editor. */
+  const handleCustomAnswer = useCallback(() => {
+    editorRef.current?.focus();
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -440,6 +461,14 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
           className="absolute inset-0 rounded-2xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
           aria-hidden="true"
         />
+        {waitingForInput && pendingAsk && (
+          <AskUserPanel
+            ask={pendingAsk}
+            disabled={disabled}
+            onSelect={handleAnswerSelect}
+            onCustomAnswer={handleCustomAnswer}
+          />
+        )}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {images.map((img, i) => (

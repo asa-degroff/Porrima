@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { readdirSync, readFileSync, existsSync, renameSync, unlinkSync } from "fs";
 import os from "os";
 import { join } from "path";
-import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection, ThemePreset } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, PendingAsk, Project, Settings, SshConnection, ThemePreset } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
 import { isPendingNextUserContextMessage } from "./pending-user-context.js";
 import {
@@ -213,6 +213,8 @@ export function getDb(): Database.Database {
       agentMessages JSON NOT NULL,
       systemPrompt TEXT NOT NULL,
       askToolCallId TEXT NOT NULL,
+      askQuestion TEXT,
+      askOptions JSON,
       fullText TEXT,
       thinkingText TEXT,
       toolCalls JSON,
@@ -258,6 +260,14 @@ export function getDb(): Database.Database {
   if (!pendingCols.some((c) => c.name === "lastUserMessage")) {
     db.exec("ALTER TABLE pending_states ADD COLUMN lastUserMessage TEXT");
     console.log("[chat-storage] Added lastUserMessage column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "askQuestion")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN askQuestion TEXT");
+    console.log("[chat-storage] Added askQuestion column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "askOptions")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN askOptions JSON");
+    console.log("[chat-storage] Added askOptions column to pending_states");
   }
 
   // Indexes for common queries
@@ -1579,6 +1589,10 @@ export interface PendingAgentState {
   agentMessages: any[];
   systemPrompt: string;
   askToolCallId: string;
+  /** ask_user question/preset choices — persisted alongside the pause so the
+   *  answer picker survives refresh and reconnect (see peekPendingAsk). */
+  askQuestion?: string;
+  askOptions?: string[];
   // In-flight accumulators for mid-turn resume
   fullText?: string;
   thinkingText?: string;
@@ -1626,14 +1640,17 @@ export async function savePendingState(chatId: string, state: PendingAgentState)
   db.prepare(`
     INSERT OR REPLACE INTO pending_states (
       chatId, agentMessages, systemPrompt, askToolCallId,
+      askQuestion, askOptions,
       fullText, thinkingText, toolCalls, toolResults, iterations, lastUserMessage
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     chatId,
     JSON.stringify(state.agentMessages),
     state.systemPrompt,
     state.askToolCallId,
+    state.askQuestion || null,
+    state.askOptions?.length ? JSON.stringify(state.askOptions) : null,
     state.fullText || null,
     state.thinkingText || null,
     state.toolCalls ? JSON.stringify(state.toolCalls) : null,
@@ -1653,6 +1670,8 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
           agentMessages: string;
           systemPrompt: string;
           askToolCallId: string;
+          askQuestion: string | null;
+          askOptions: string | null;
           fullText: string | null;
           thinkingText: string | null;
           toolCalls: string | null;
@@ -1671,6 +1690,8 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
       agentMessages: JSON.parse(row.agentMessages),
       systemPrompt: row.systemPrompt,
       askToolCallId: row.askToolCallId,
+      askQuestion: row.askQuestion || undefined,
+      askOptions: parseAskOptions(row.askOptions),
       fullText: row.fullText || undefined,
       thinkingText: row.thinkingText || undefined,
       toolCalls: row.toolCalls ? JSON.parse(row.toolCalls) : undefined,
@@ -1681,6 +1702,35 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
   });
 
   return txn();
+}
+
+function parseAskOptions(raw: string | null): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((o): o is string => typeof o === "string") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Non-destructive read of the pending ask_user pause for a chat — the
+ * question plus preset answers. Used by /chat/status so a refreshing client
+ * (or a second device) can restore the answer picker after the stream has
+ * already ended. Returns null unless a genuine ask_user pause is stored
+ * (mid-turn crash-recovery rows carry an empty askToolCallId).
+ */
+export async function peekPendingAsk(chatId: string): Promise<PendingAsk | null> {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT askToolCallId, askQuestion, askOptions FROM pending_states WHERE chatId = ?"
+  ).get(chatId) as { askToolCallId: string; askQuestion: string | null; askOptions: string | null } | undefined;
+  if (!row || !row.askToolCallId) return null;
+  return {
+    question: row.askQuestion || "The agent is waiting for your answer.",
+    options: parseAskOptions(row.askOptions),
+  };
 }
 
 export async function clearPendingState(chatId: string): Promise<void> {

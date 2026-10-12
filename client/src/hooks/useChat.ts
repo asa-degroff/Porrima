@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair, SSE_NO_RESPONSE_ERROR_MESSAGE } from "../api/client";
 import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, BrowserFrameEvent, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
+import type { Artifact, BrowserFrameEvent, ChatMessage, ImageAttachment, InferenceActivityPhase, InlineVisual, MessageSegment, MessageUsage, ModelProgress, PendingAsk } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -43,6 +43,10 @@ interface BackgroundStream {
   messages: ChatMessage[];
   streaming: boolean;
   waitingForInput: boolean;
+  /** Pending ask_user pause (question + preset choices) backing the answer
+   *  picker. Lives beside waitingForInput: set by the ask_user event, the
+   *  resync snapshot, or an /status probe when the pause outlives the stream. */
+  pendingAsk: PendingAsk | null;
   error: string | null;
   warning: StreamWarning | null;
   compacting: boolean;
@@ -135,6 +139,7 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     messages: [],
     streaming: true,
     waitingForInput: false,
+    pendingAsk: null,
     error: null,
     warning: null,
     compacting: false,
@@ -311,6 +316,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   const [activeTools, setActiveTools] = useState<ToolStatus[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [waitingForInput, setWaitingForInput] = useState(false);
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [compacting, setCompacting] = useState(false);
@@ -404,6 +410,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       setActiveTools([...bg.tools]);
       setArtifacts([...bg.artifacts]);
       setWaitingForInput(bg.waitingForInput);
+      setPendingAsk(bg.pendingAsk);
       setError(bg.error);
       setWarning(bg.warning);
       setCompacting(bg.compacting);
@@ -437,6 +444,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       setActiveTools([]);
       setArtifacts([]);
         setWaitingForInput(false);
+        setPendingAsk(null);
       setError(null);
       setWarning(null);
       setCompacting(false);
@@ -958,12 +966,17 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
       },
-      onAskUser: (_question) => {
+      onAskUser: (question, options) => {
+        const ask: PendingAsk = { question, options };
         const bg = bgStreams.get(streamChatId);
-        if (bg) bg.waitingForInput = true;
+        if (bg) {
+          bg.waitingForInput = true;
+          bg.pendingAsk = ask;
+        }
 
         if (activeChatIdRef.current === streamChatId) {
           setWaitingForInput(true);
+          setPendingAsk(ask);
         }
       },
       onArtifact: (artifact) => {
@@ -1106,6 +1119,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         // event would otherwise keep the indicator stuck).
         bg.compacting = !!payload?.compacting;
         bg.waitingForInput = !!payload?.waitingForInput;
+        bg.pendingAsk = payload?.waitingForInput ? (payload?.askUser ?? null) : null;
         bg.queueInfo = payload?.queue ?? null;
         // Live browser viewer: the ring's newest frame is authoritative on
         // attach (reconnect mid-turn restores the PiP); no frame clears back
@@ -1170,6 +1184,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           setInferenceActivityPhase(bg.inferenceActivityPhase);
           setCompacting(bg.compacting);
           setWaitingForInput(bg.waitingForInput);
+          setPendingAsk(bg.pendingAsk);
           setTurnQueueInfo(bg.queueInfo);
           setLiveBrowserFrame(bg.browserFrame);
           const lastIdx = bg.segments.length - 1;
@@ -1695,6 +1710,13 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
                   setCompaction(null);
                 }
                 bgStreams.delete(streamChatId);
+                // The turn may have ended at an ask_user pause — restore the
+                // answer picker from the probe instead of leaving a silent
+                // composer.
+                if (status.pendingAsk && activeChatIdRef.current === streamChatId) {
+                  setWaitingForInput(true);
+                  setPendingAsk(status.pendingAsk);
+                }
                 return;
               }
               // Reconnect to the live server stream
@@ -1829,6 +1851,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     setActiveTools([]);
     setArtifacts([]);
     setWaitingForInput(false);
+    setPendingAsk(null);
     setError(null);
     setWarning(null);
     setCompaction(null);
@@ -1860,7 +1883,16 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       messageLimit: MESSAGE_PAGE_SIZE,
     });
     if (cancelled) return;
-    if (!status.active) return;
+    if (!status.active) {
+      // No live stream — but the chat may be parked on an ask_user pause whose
+      // stream ended at the pause (refresh, second device/tab). The /status
+      // probe carries the stored question + options so the picker survives.
+      if (status.pendingAsk && chatIdToConnect === activeChatIdRef.current && !bgStreams.has(chatIdToConnect)) {
+        setWaitingForInput(true);
+        setPendingAsk(status.pendingAsk);
+      }
+      return;
+    }
     // Chat may have switched away during the async check.
     if (chatIdToConnect !== activeChatIdRef.current) return;
     if (bgStreams.has(chatIdToConnect)) return;
@@ -1980,7 +2012,24 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       if (bgStreams.has(chatId)) return;
       getChatStatus(chatId)
         .then((status) => {
-          if (!status.active) return;
+          if (!status.active) {
+            // Reconcile the answer picker with the server while idle on the
+            // viewed chat: restore a pause this client missed (event lost,
+            // paused from another device/tab) or clear a stale one that was
+            // answered elsewhere. Guards re-checked after the await — the
+            // chat may have switched or a stream may have attached meanwhile.
+            if (document.visibilityState !== "visible") return;
+            if (activeChatIdRef.current !== chatId) return;
+            if (bgStreams.has(chatId)) return;
+            if (status.pendingAsk) {
+              setWaitingForInput(true);
+              setPendingAsk(status.pendingAsk);
+            } else {
+              setWaitingForInput(false);
+              setPendingAsk(null);
+            }
+            return;
+          }
           if (document.visibilityState !== "visible") return;
           if (activeChatIdRef.current !== chatId) return;
           if (bgStreams.has(chatId)) return;
@@ -2030,6 +2079,10 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       if (!chatId) return;
       const targetChatId = chatId;
       setTurnQueueInfo(null);
+      // Any send resolves a pending ask (typed answer, picker click, offline
+      // enqueue, or steering) — clear the picker with it.
+      setWaitingForInput(false);
+      setPendingAsk(null);
 
       const userMsg: ChatMessage = {
         role: "user",
@@ -2386,6 +2439,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
     activeTools,
     artifacts,
     waitingForInput,
+    pendingAsk,
     totalUsage,
     isUsageEstimated,
     compacting,

@@ -357,6 +357,9 @@ interface Props {
   modelContextWindow: number;
   hasContextWindowOverride: boolean;
   waitingForInput: boolean;
+  /** Pending ask_user pause (question + preset answers) while waitingForInput
+   *  is set — drives the composer's answer picker. */
+  pendingAsk?: import("../types").PendingAsk | null;
   onOpenSidebar: () => void;
   isOnline?: boolean;
   queueProcessing?: boolean;
@@ -421,6 +424,7 @@ export function ChatView({
   modelContextWindow,
   hasContextWindowOverride,
   waitingForInput,
+  pendingAsk,
   onOpenSidebar,
   isOnline = true,
   queueProcessing = false,
@@ -697,6 +701,7 @@ export function ChatView({
       onAbort={onAbort}
       streaming={streaming}
       waitingForInput={waitingForInput}
+      pendingAsk={pendingAsk}
       isOnline={isOnline}
       onSlashTyping={handleSlashTyping}
       onSlashDeleted={closeSkillSelector}

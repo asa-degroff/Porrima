@@ -66,7 +66,7 @@ Three live databases. The owning service determines the handle: `chat-storage.ts
 - `context_archives_fts` — FTS5 virtual table over archived context. This is what makes compaction cross-chat searchable
 - `projects` — project metadata
 - `settings` — key-value settings (single `settings` key)
-- `pending_states` — `ask_user` tool-loop state for resume after server restart, including `fullText` for mid-turn recovery
+- `pending_states` — `ask_user` tool-loop state for resume after server restart, including `fullText` for mid-turn recovery and `askQuestion`/`askOptions` for restoring the answer picker after refresh
 - `storage_migrations` — one-shot migration ledger (`name`, `appliedAt`)
 - `user_ui_state` — persisted client UI state (`key`, `value` JSON, `updatedAt`)
 - `ssh_connections` — remote workspace connections: `name`, `host`, `port`, `username`, `identityFile`, `knownHostsMode`, `enabled`, and the per-connection permission flags `allowBash`, `allowFileWrite`, `allowAbsolutePaths`

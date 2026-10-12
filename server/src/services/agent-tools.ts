@@ -178,9 +178,20 @@ const UPDATE_ARTIFACT_TOOL: Tool = {
 
 const ASK_USER_TOOL: Tool = {
   name: "ask_user",
-  description: "Ask the user a question and wait for their response. Use when you need clarification, a decision, or confirmation before proceeding.",
+  description:
+    "Ask the user a question and wait for their response. Use when you need clarification, a decision, or confirmation before proceeding. " +
+    "Provide `options` whenever the answers are enumerable (e.g. yes/no, pick-one-of-N) — the UI renders them as selectable choices. " +
+    "Keep each option short (a few words of exact answer text), put the recommended choice first, and do NOT add an 'Other'/free-input catch-all: the user can always type a custom answer. " +
+    "The user's reply arrives as this tool's result — either one of your option strings or free-form text they typed.",
   parameters: Type.Object({
     question: Type.String({ description: "The question to ask the user" }),
+    options: Type.Optional(
+      Type.Array(Type.String({ description: "Exact answer text sent back when this option is chosen" }), {
+        description: "Optional preset answer choices. Selection never blocks free-form input — a typed custom answer is always possible.",
+        minItems: 2,
+        maxItems: 6,
+      }),
+    ),
   }),
 };
 
@@ -189,7 +200,7 @@ const ASK_USER_TOOL: Tool = {
 export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onVisual: (visual: InlineVisual) => void;
-  onAskUser: (question: string, toolCallId: string) => void;
+  onAskUser: (question: string, toolCallId: string, options?: string[]) => void;
   /**
    * Live-only browser action frame (Phase 2 viewer). Optional: only the SSE
    * transports wire it. Frames never touch tool-result content — they ride
@@ -1180,7 +1191,19 @@ URL: ${result.url}${warningText}`, {
     execute: async (toolCallId, params) => {
       const args = params as Record<string, any>;
       const question = args.question || "What would you like me to do?";
-      effects.onAskUser(question, toolCallId);
+      // Normalize preset answers: strings only, trimmed, deduped, bounded.
+      // Empty/absent keeps the plain free-form ask.
+      let options: string[] | undefined;
+      if (Array.isArray(args.options)) {
+        const cleaned = [...new Set(
+          args.options
+            .filter((o: unknown): o is string => typeof o === "string")
+            .map((o: string) => o.trim())
+            .filter((o: string) => o.length > 0)
+        )].slice(0, 6);
+        if (cleaned.length >= 2) options = cleaned;
+      }
+      effects.onAskUser(question, toolCallId, options);
       return { content: [{ type: "text", text: "Waiting for user response..." }], details: {} };
     },
   });

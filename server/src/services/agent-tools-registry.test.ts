@@ -53,6 +53,29 @@ describe("agent tool registry", () => {
     expect(byName.get("web_search")?.executionMode).toBeUndefined();
   });
 
+  it("normalizes ask_user preset answers before notifying the route", async () => {
+    const onAskUser = vi.fn();
+    const tools = getAgentTools("chat-1", { onArtifact: () => {}, onVisual: () => {}, onAskUser });
+    const ask = tools.find((t) => t.name === "ask_user")!;
+
+    // Trim, dedupe, drop non-strings/empties, cap at 6.
+    await ask.execute("a1", {
+      question: "Which name?",
+      options: ["  Ann ", "Ann", "", "Ben", 42, "Cleo", "Dee", "Eve", "Fay", "Gus"],
+    });
+    expect(onAskUser).toHaveBeenCalledWith("Which name?", "a1", ["Ann", "Ben", "Cleo", "Dee", "Eve", "Fay"]);
+
+    // Fewer than two usable options degrades to a plain free-form ask.
+    onAskUser.mockClear();
+    await ask.execute("a2", { question: "Proceed?", options: ["Yes", "", " "] });
+    expect(onAskUser).toHaveBeenCalledWith("Proceed?", "a2", undefined);
+
+    // Options absent keeps the legacy two-arg call shape.
+    onAskUser.mockClear();
+    await ask.execute("a3", { question: "Proceed?" });
+    expect(onAskUser).toHaveBeenCalledWith("Proceed?", "a3", undefined);
+  });
+
   it("resolves run_python timeout defaults by execution path", async () => {
     const { executeInKernel } = await import("./python-kernel.js");
     const spy = executeInKernel as unknown as ReturnType<typeof vi.fn>;

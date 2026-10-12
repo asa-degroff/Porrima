@@ -182,6 +182,17 @@ export interface BrowserSessionSnapshot {
 }
 
 /**
+ * A pending ask_user pause: the question the agent posed plus any preset
+ * answer choices. Carried in the ask_user SSE event, the pending_states row,
+ * and the resync snapshot so the client can render a selectable answer picker
+ * even after a refresh.
+ */
+export interface PendingAsk {
+  question: string;
+  options?: string[];
+}
+
+/**
  * State snapshot sent to a newly attaching client instead of replaying the
  * SSE buffer. Built from the turn's live accumulators, so a reconnecting
  * client hydrates straight from authoritative state instead of reprocessing
@@ -205,6 +216,9 @@ export interface TurnResyncPayload {
   /** Last emitted `model_progress` event (prefill-indicator state). */
   modelProgress?: import("./services/model-progress.js").ModelProgressEvent | null;
   waitingForInput?: boolean;
+  /** Pending ask_user question (with preset answers) when this turn paused on
+   *  the user — lets an attaching client restore the answer picker. */
+  askUser?: PendingAsk;
   compacting?: boolean;
   /** True when the turn is mid-thinking at snapshot time, so the client
    *  restarts its thinking timer instead of freezing the duration. */

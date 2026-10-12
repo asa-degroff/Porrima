@@ -496,6 +496,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     activeTools,
     artifacts,
     waitingForInput,
+    pendingAsk,
     totalUsage,
     isUsageEstimated,
     compacting,
@@ -1697,6 +1698,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         modelContextWindow={modelContextWindow}
         hasContextWindowOverride={activeChat?.contextWindow != null}
         waitingForInput={waitingForInput}
+        pendingAsk={pendingAsk}
         isOnline={isOnline}
         queueProcessing={queueProcessing}
         reconnecting={reconnecting}

@@ -32,7 +32,7 @@ Two chat types: **agent** (memory-augmented) and **system** (synthesis, wake cyc
 
 See [docs/tool-system.md](docs/tool-system.md) for full details.
 
-Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, browser, and web tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
+Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, browser, and web tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state; its optional `options` (preset answers) ride the SSE event, the pending-state row, and `/chat/status` so the client's answer picker survives refresh. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
 
 Tool surface is split across specialists: `browser-tools.ts` drives a user-attached Chrome over the DevTools Protocol (`chrome.ts`) with a consent handshake (`browser-session.ts`), `web-tools.ts` covers fetch/search, `workspace.ts` provides local and remote-SSH filesystem access, and `sandbox.ts` runs Python. `turn-gate.ts` serializes all turns on **one global slot** (not per chat) with foreground-over-background priority and stale-lease recovery.
 

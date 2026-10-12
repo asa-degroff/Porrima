@@ -241,6 +241,17 @@ export interface ChatMessage {
 export type ChatType = "agent" | "system";
 
 /**
+ * A pending ask_user pause: the question plus any preset answer choices.
+ * Mirrors the server type — carried by the ask_user SSE event, the resync
+ * snapshot, and /chat/status (pendingAsk) so the answer picker survives
+ * refresh and reconnect.
+ */
+export interface PendingAsk {
+  question: string;
+  options?: string[];
+}
+
+/**
  * State snapshot delivered in place of an SSE buffer replay when attaching
  * to an in-flight stream (see /api/chat/reconnect). Hydrates the live
  * accumulators from authoritative server state.
@@ -261,6 +272,9 @@ export interface TurnResyncPayload {
   /** Last emitted model_progress event (prefill-indicator state). */
   modelProgress?: ModelProgress | null;
   waitingForInput?: boolean;
+  /** Pending ask_user question (with preset answers) when the turn paused on
+   *  the user — restores the answer picker on attach. */
+  askUser?: PendingAsk;
   compacting?: boolean;
   /** True when the turn is mid-thinking at snapshot time. */
   thinkingActive?: boolean;

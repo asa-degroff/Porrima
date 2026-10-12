@@ -37,7 +37,7 @@ Attached and launched sessions also differ: attached sessions use `defaultViewpo
 - **Automation tools**: `schedule_reminder`, `list_automations`, `update_automation` (interactive agent chats only).
 - **Cross-chat tools**: `schedule_chat_message` — deliver a message to any agent/system chat, optionally waking a turn there, optionally at a future time (delivery semantics in [automations.md](automations.md)); `list_chats` — chat enumeration (`search_conversation` already owns content search).
 - **Skill tools**: `list_skills`, `install_skill`, `remove_skill` (interactive agent chats only).
-- **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
+- **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message). Takes an optional `options` array of preset answers (2-6 normalized strings); the SSE `ask_user` event carries `{question, options}` and the client renders a selectable answer picker in the composer (`AskUserPanel`). Free-form input always stays available — the schema tells the model not to add its own "Other" catch-all. The question/options are also persisted on the pending-state row (`askQuestion`, `askOptions`) and exposed via `GET /api/chat/status/:chatId` (`pendingAsk`, peeked non-destructively), so the picker survives refresh, reconnect (resync snapshot `askUser`), and cross-device answers.
 
 ### Chat-type gating
 
