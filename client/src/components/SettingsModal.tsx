@@ -3657,7 +3657,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    <div className="flex items-center justify-between gap-3">
 	                                      <div className="min-w-0">
 	                                        <p className="text-xs font-medium text-white/70">KV snapshot parking</p>
-	                                        <p className="text-[11px] text-white/35">Parks big chats' KV to NVMe at end of turn and restores it on cold returns — seconds instead of full re-prefill. Needs Slots = Enforced.</p>
+	                                        <p className="text-[11px] text-white/35">Saves KV caches to NVMe at end of turn if they don't fit in RAM. Requires Slots = Enforced.</p>
 	                                      </div>
 	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" />
 	                                    </div>
