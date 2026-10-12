@@ -678,6 +678,20 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         clearToolPreviews(bg);
         const finalSegments = segments || (bg.segments.length > 0 ? bg.segments.map((s) => ({ ...s })) : undefined);
 
+        // Bare-pause defense: a waitingForInput done carrying no payload (a
+        // text-less ask_user pause on a pre-fix server — post-fix, done
+        // carries the committed question row) must not overwrite the last
+        // assistant row, which holds the ask_user tool call the answer
+        // resumes against.
+        const barePauseDone =
+          !!wfi &&
+          !finalContent &&
+          !thinking &&
+          !toolCalls?.length &&
+          !segments?.length &&
+          !doneArtifacts &&
+          !doneVisuals;
+
         // Finalize the last non-steering assistant message with full metadata.
         // When the user steered mid-stream, bg.messages ends with a _steeringPending
         // placeholder for the follow-up response; the pre-steering generation's final
@@ -690,7 +704,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           finalIdx--;
         }
         const last = finalIdx >= 0 ? bg.messages[finalIdx] : undefined;
-        if (last?.role === "assistant") {
+        if (last?.role === "assistant" && !barePauseDone) {
           bg.messages[finalIdx] = {
             ...last,
             content: finalContent,
@@ -734,7 +748,10 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           !thinking &&
           !doneArtifacts &&
           !doneVisuals &&
-          !toolCalls
+          !toolCalls &&
+          // A bare-pause done must not pop the committed question row; only
+          // pop when the trailing row is itself an empty placeholder.
+          !(barePauseDone && (skippedLast.content || skippedLast.toolCalls?.length || skippedLast.segments?.length || skippedLast.thinking))
         ) {
           bg.messages.pop();
         }

@@ -94,7 +94,7 @@ Any image a tool emits is externalized rather than stored inline: the file is wr
 - **Mid-turn overflow detection**: At each `turn_end` with `stopReason === "toolUse"`, checks if token usage > 85% of context. If so, aborts the agent loop and enters compaction cycle.
 - **Multi-cycle compaction** (up to 5): Archives overflow, compacts, injects handoff message (progress summary + tool call log), resumes via `agentLoopContinue`. Each cycle strips all trailing assistant messages before resume.
 - **MAX_ITERATIONS**: the HTTP chat route uses a 500-iteration guard; headless automation tasks use each task's `maxIterations` (agent-created reminders default to 20, range 1–100). System-chat turns are bounded a second time: `MAX_ITERATIONS_PER_PHASE = 12` per synthesis phase, with a distinct per-segment stop reason, both enforced by `evaluateTurnGuards()` in `context-pressure.ts`.
-- `ask_user` is intercepted — sends SSE `ask_user` event and breaks the loop.
+- `ask_user` is intercepted — sends SSE `ask_user` event and breaks the loop. The call gets **no** `tool_call` segment and no `tool_status` (the dedicated event is its live representation), but mid-loop fragment commits still slice it into the row's `toolCalls` — so the client renders it as an "unsegmented" settled card in the segments path (`MessageBubble`), and a text-less pause sends the committed question row (not an empty message) in `done` so clients don't clobber/pop it.
 - SSE events during loop: `text_delta`, `thinking_delta`, `tool_status` (running/done/error), `segment`, `artifact`, `ask_user`, `iteration`, `message_complete`, `compaction`.
 
 ## Message Reconstruction (`server/src/services/agent.ts`, `chatMessagesToPiMessages()`)

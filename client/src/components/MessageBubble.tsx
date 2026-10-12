@@ -441,6 +441,18 @@ export const MessageBubble = memo(function MessageBubble({
 
   // Build output segments - use ordered segments if available, otherwise separate arrays
   const renderSegments = !isUser && message.segments && message.segments.length > 0;
+
+  // Tool calls persisted without a backing segment. The server deliberately
+  // skips the tool_call segment for ask_user (its dedicated ask_user SSE
+  // event is the live representation), but fragment commits still slice the
+  // call into the row's toolCalls — so a row that renders through the
+  // segments path would otherwise hide the question from history entirely.
+  const unsegmentedToolCalls =
+    renderSegments && message.toolCalls?.length
+      ? message.toolCalls.filter(
+          (tc) => !message.segments?.some((s) => s.type === "tool_call" && s.toolCall?.id === tc.id)
+        )
+      : [];
   const showReadAloudButton = canReadAloud;
   const baseUserActionCount = canEditMessage ? 2 : 0;
   const desktopOnlyUserActionCount = isUser && showReadAloudButton ? 1 : 0;
@@ -694,14 +706,25 @@ export const MessageBubble = memo(function MessageBubble({
 
                 {renderSegments ? (
                   // Interleaved segments in chronological order (streaming + persisted)
-                  <MessageSegments
-                    segments={message.segments}
-                    showStreaming={showStreaming}
-                    isThinkingStreaming={isThinkingStreaming}
-                    streamingSegmentIndex={streamingSegmentIndex ?? null}
-                    chatId={chatId}
-                    onArtifactRuntimeError={onArtifactRuntimeError}
-                  />
+                  <>
+                    <MessageSegments
+                      segments={message.segments}
+                      showStreaming={showStreaming}
+                      isThinkingStreaming={isThinkingStreaming}
+                      streamingSegmentIndex={streamingSegmentIndex ?? null}
+                      chatId={chatId}
+                      onArtifactRuntimeError={onArtifactRuntimeError}
+                    />
+                    {unsegmentedToolCalls.length > 0 && (
+                      // Settled like the legacy list: these calls exist only on
+                      // committed rows (the live tail carries segments, not
+                      // toolCalls), so a missing result is terminal, not running.
+                      <ToolCallsList
+                        toolCalls={unsegmentedToolCalls}
+                        toolResults={message.toolResults || []}
+                      />
+                    )}
+                  </>
                 ) : (
                   // Legacy fallback (no segments — old messages or non-agent chats)
                   <>

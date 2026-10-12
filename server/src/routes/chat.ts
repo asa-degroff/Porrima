@@ -4360,8 +4360,24 @@ async function handleChatStream(
         }
       }
     }
-    const doneAssistantMsg =
-      assistantSequence === undefined
+    // Text-less ask_user pause: assistantMsg is empty because the question
+    // row — with its ask_user tool call — was committed earlier by a mid-loop
+    // fragment drain. Send that committed row as the done message so clients
+    // finalize against the real pause row instead of an empty message, which
+    // would blank (and then pop, via the skipped-empty-row cleanup) the row
+    // carrying the question.
+    const trailingRow = chat.messages[chat.messages.length - 1];
+    const pauseRowDone =
+      waitingForInput &&
+      !hasContent &&
+      trailingRow?.role === "assistant" &&
+      !!(trailingRow.toolCalls?.length || trailingRow.content || trailingRow.segments?.length)
+        ? trailingRow
+        : null;
+
+    const doneAssistantMsg = pauseRowDone
+      ? pauseRowDone
+      : assistantSequence === undefined
         ? assistantMsg
         : { ...assistantMsg, _rowSequence: assistantSequence };
 
