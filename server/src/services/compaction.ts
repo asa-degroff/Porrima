@@ -1294,6 +1294,21 @@ export async function truncateBeforeSend(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
+  // The message spine just changed: any parked KV snapshot no longer matches
+  // what the rebuilt history replays, so drop row + file
+  // (docs/design/kv-snapshot-parking.md §5.5). Mirrors the truncateChatHistory
+  // funnel — this entry rewrites the spine on its own archive step without
+  // passing through that function, so the invalidation must happen here too.
+  // (Idempotent: the hardCapSafetyPass below may invalidate again via
+  // truncateChatHistory.) Dynamic import keeps the compaction -> storage
+  // dependency graph unchanged.
+  try {
+    const { invalidateKvSnapshot } = await import("./kv-snapshot.js");
+    await invalidateKvSnapshot(chat.id, "compaction");
+  } catch (error: any) {
+    console.warn("[compaction] kv-snapshot invalidate failed:", error?.message || error);
+  }
+
   // Count the split (if any) as 1 compacted unit so user-facing messaging
   // ("Removed N messages") doesn't report 0 when a partial compaction happened.
   const primaryResult: CompactionResult = {

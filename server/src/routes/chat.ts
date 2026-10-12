@@ -5108,7 +5108,8 @@ router.post("/", async (req, res) => {
       model = undefined; // Skip truncation if providers are unreachable
     }
 
-    // Pre-send context protection: truncate BEFORE sending if >75% of context window.
+    // Pre-send backstop: compact BEFORE sending if the refined estimate crosses
+    // 0.85 of the context window (end-of-turn at 0.80 is the primary path).
     // Initialize SSE stream early so compaction progress events (and the extraction
     // model's 10s keepalive) reach the client while pre-send compaction is running.
     ensureSSEStream(res, req, chat.id);
