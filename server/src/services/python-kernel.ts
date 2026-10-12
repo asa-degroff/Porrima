@@ -13,6 +13,7 @@ import {
   killProcessGroup,
   readProcessStartId,
   spawnSupervised,
+  type SupervisedExit,
   type SupervisedProcess,
 } from "./process-supervisor.js";
 
@@ -896,6 +897,21 @@ function attachReaders(instance: KernelInstance): void {
   });
 }
 
+/** Human-readable classification of a kernel process exit for logs and tool
+ *  results. An external SIGKILL with an empty stderr tail is the OOM-killer
+ *  signature; the supervisor's own kills (dispose, shutdown) mark the instance
+ *  disposed first and never reach the unexpected-exit path. */
+function describeKernelExit(exit: SupervisedExit): string {
+  if (exit.error) return exit.error.message;
+  if (exit.signal === "SIGKILL") return "killed by SIGKILL — likely out-of-memory";
+  if (exit.signal === "SIGSEGV" || exit.signal === "SIGBUS")
+    return `crashed on ${exit.signal} (native extension fault?)`;
+  if (exit.signal === "SIGABRT") return "aborted (SIGABRT)";
+  if (exit.signal) return `terminated by ${exit.signal}`;
+  if (exit.code !== null) return `exit code ${exit.code}`;
+  return "unknown exit reason";
+}
+
 async function spawnKernel(chatId: string, cwd: string, host: KernelHost): Promise<KernelInstance | null> {
   const plan = await host.prepare(chatId, cwd).catch(() => null);
   if (!plan) {
@@ -953,21 +969,45 @@ async function spawnKernel(chatId: string, cwd: string, host: KernelHost): Promi
     const timer = setTimeout(() => resolve(false), READY_TIMEOUT_MS);
     timer.unref?.();
   });
-  const exitedFirst = proc.exited.then(() => false);
+  // Holder object (not a bare let) so the exit recorded by the callback is
+  // observable after the await below without fighting TS closure narrowing.
+  const startupExit: { info?: SupervisedExit } = {};
+  const exitedFirst = proc.exited.then((exit) => {
+    startupExit.info = exit;
+    return false;
+  });
 
   const ok = await Promise.race([ready, readyTimeout, exitedFirst]);
   if (!ok || instance.disposed) {
     void proc.kill({ graceMs: 300 });
+    // A kernel that dies before serving any cell surfaces as a bare
+    // "unavailable; ran stateless" notice to the agent; log the real cause
+    // (OOM, boot fault) server-side. Only when it died on its own — a
+    // ready-timeout kill is our own SIGTERM.
+    if (startupExit.info && !instance.disposed) {
+      const tail = instance.stderrTail.trim().slice(-400);
+      console.warn(
+        `[kernel] chat=${shortId(chatId)} exited before ready (${describeKernelExit(startupExit.info)}${
+          tail ? `; stderr: ${tail}` : ""
+        })`,
+      );
+    }
     return null;
   }
 
-  instance.proc.exited.then(() => {
+  instance.proc.exited.then((exit) => {
     if (instance.disposed) return;
     instance.disposed = true;
     if (kernels.get(chatId) === instance) kernels.delete(chatId);
     instance.readyResolve?.(false);
+    const detail = describeKernelExit(exit);
+    // protocolFailure() already logs the cause and kills the kernel; don't
+    // double-report it as an unexpected exit.
+    if (!brokenChats.has(chatId)) {
+      console.warn(`[kernel] chat=${shortId(chatId)} exited unexpectedly (${detail})`);
+    }
     for (const pending of [...instance.pending.values()]) {
-      failPending(instance, pending, "Python kernel exited unexpectedly.");
+      failPending(instance, pending, `Python kernel exited unexpectedly (${detail}).`);
     }
   });
 
