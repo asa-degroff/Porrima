@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
@@ -8,23 +8,38 @@ import { ImageLightbox } from "./ImageLightbox";
 import { ToolIcon, type ToolIconName } from "./ToolIcons";
 import { Beats } from "./Beats";
 
+// "settled" is the terminal state for a committed row whose tool_call never
+// received a matching tool_result (e.g. a row split mid-batch by the
+// pre-fix mid-loop drain). "running" is only a live-streaming assumption —
+// a persisted row can never still be running, so the client settles it
+// instead of pulsing forever.
+type ToolChipStatus = "running" | "done" | "error" | "settled";
+
 // Split so the depth host carries the border (the beveled edge) while the
 // inner clipper carries the fill — the host must stay overflow-visible or
 // the depth ring is clipped away (see the CLIP RULE in glass.css).
-const statusBorders = {
+const statusBorders: Record<ToolChipStatus, string> = {
   running: "border-yellow-400/20",
   done: "border-emerald-400/20",
   error: "border-red-400/20",
+  settled: "border-white/10",
 };
 
-const statusBgs = {
+const statusBgs: Record<ToolChipStatus, string> = {
   running: "bg-yellow-500/5",
   done: "bg-emerald-500/5",
   error: "bg-red-500/5",
+  settled: "bg-white/[0.02]",
 };
 
-const statusIcons = {
+const statusIcons: Record<ToolChipStatus, ReactNode> = {
   running: <Beats />,
+  settled: (
+    <span
+      className="shrink-0 h-1.5 w-1.5 rounded-full bg-white/25"
+      title="tool call settled — no result recorded"
+    />
+  ),
   done: (
     <svg className="shrink-0 text-emerald-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12" />
@@ -57,9 +72,13 @@ interface Props {
   isPreview?: boolean;
   /** Accumulated raw JSON argument string for a preview. */
   previewRaw?: string;
+  /** This call's row is committed (not the live streaming tail). A missing
+   *  result then renders "settled" (neutral) instead of "running" — a
+   *  persisted row can never still be executing. */
+  settled?: boolean;
 }
 
-export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText, isPreview, previewRaw }: Props) {
+export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText, isPreview, previewRaw, settled }: Props) {
   const [expanded, setExpanded] = useState(false);
   // Lightbox for tool-returned images (screenshots, generated art…).
   // Self-owned so every ToolCallDisplay usage site gets the viewer without
@@ -79,10 +98,15 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText,
     showCallChoice ??
     (name === "edit_file" && toolCall?.arguments?.old_string != null);
   // toolResult (persisted) takes priority over liveStatus (streaming-only) —
-  // once the result is available the tool is definitively done/error.
-  const status = toolResult
+  // once the result is available the tool is definitively done/error. On a
+  // committed row (settled) a missing result can never mean "running" — the
+  // stream that would settle it is over, so render the neutral terminal
+  // state instead of pulsing the amber border forever.
+  const status: ToolChipStatus = toolResult
     ? (toolResult.isError ? "error" : "done")
-    : (liveStatus?.status || "running");
+    : settled
+      ? "settled"
+      : (liveStatus?.status || "running");
   const result = toolResult?.content || liveStatus?.result;
 
   // Format arguments for display

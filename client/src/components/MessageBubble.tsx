@@ -1082,11 +1082,14 @@ function ToolCallsList({
   const renderToolCalls = () =>
     (toolCalls || []).map((tc, i) => {
       const tr = toolResults?.find((r) => r.toolCallId === tc.id);
+      // Legacy path only renders committed (segment-less) rows — never live —
+      // so a missing result is always the settled/neutral state.
       return (
         <ToolCallDisplay
           key={tc.id}
           toolCall={tc}
           toolResult={tr}
+          settled
         />
       );
     });
@@ -1202,6 +1205,7 @@ function SegmentRenderer({
           partialText={segment.partialText}
           isPreview={segment._preview || undefined}
           previewRaw={segment.previewRaw}
+          settled={!showStreaming}
         />
       ) : null;
     }
