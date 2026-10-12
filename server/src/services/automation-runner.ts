@@ -212,7 +212,7 @@ async function runPromptAutomation(
   const { getChat, saveChat } = await import("./chat-storage.js");
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
-  const { estimateContextTokens, truncateBeforeSend } = await import("./compaction.js");
+  const { estimateContextTokens, truncateBeforeSend, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, commitMemoryDelta } = await import("./memory-context.js");
   const { resolveCurrentMessageIndex } = await import("./current-message.js");
@@ -449,13 +449,16 @@ async function runPromptAutomation(
 
     emitter.end();
 
-    // End-of-turn compaction (D3, 09-03): a NEW check for the automation
-    // path — none existed before (pre-send was the only backstop, and it
-    // runs at 0.85 after the next run has already started). Ships behind
-    // the log-only gate for its first week: the decision is computed and
-    // logged (fire AND no-fire paths) but not executed; the log lines
-    // settle the 0.80 vs 0.85 trigger question before the flip removes
-    // the flag. Runs on both the success and failure paths — a failed run
+    // End-of-turn compaction (D3, flipped 10-12): executes now. The gate
+    // week applied the decision rule defined up front (turn-engine §9.1):
+    // 25 sampled turns, 8 fires — 5 (20%) inside the (0.80, 0.85] band,
+    // over the 10% "choose 0.85" bar, and two past 0.90 (94.1%, plus a
+    // 104.3% overflow that sat computed-not-executed until the next
+    // run's pre-send caught it). So automations keep the pre-send's own
+    // ratio: the 0.85 trigger point, just executed while nobody waits
+    // instead of at the next run's start. (Synthesis/wake run at the
+    // canonical 0.80 — D2.)
+    // Runs on both the success and failure paths — a failed run
     // can leave the row hot for the next scheduled run (the Aug 23
     // system-chat lesson).
     await runEndOfTurnCompaction({
@@ -467,7 +470,7 @@ async function runPromptAutomation(
       systemPrompt,
       tools,
       signal: emitter.stream.abort.signal,
-      logOnly: true,
+      triggerRatio: COMPACTION_TRIGGER_RATIO,
       logPrefix: `[automation:${task.id}]`,
     });
 

@@ -11,6 +11,7 @@ const captured: {
   commitMemoryDelta?: any;
   resetMemoryContext?: any;
   skillAugmentArgs?: any[];
+  eotOptions?: any;
 } = {};
 
 // Configurable build result so the delta-delivery test can exercise a
@@ -88,9 +89,14 @@ async function loadModules(homeDir: string) {
   vi.doMock("../services/compaction.js", () => ({
     estimateContextTokens: vi.fn(() => 42),
     truncateBeforeSend: vi.fn(async () => null),
+    // Named export the automation runner destructures for its D3 EOT call
+    // (triggerRatio); vitest mocks throw on exports the factory omits.
+    COMPACTION_TRIGGER_RATIO: 0.85,
   }));
   vi.doMock("../services/turn-compaction.js", () => ({
-    runEndOfTurnCompaction: vi.fn(async () => {}),
+    runEndOfTurnCompaction: vi.fn(async (opts: any) => {
+      captured.eotOptions = opts;
+    }),
   }));
   vi.doMock("../services/memory-context.js", () => {
     const commitMemoryDelta = vi.fn();
@@ -237,6 +243,13 @@ describe("cross-chat wake turns", () => {
       // Follow-up semantics: the run keeps the target's memory context intact —
       // no hard reset (the build hydrates and retains the frozen section).
       expect(captured.resetMemoryContext).not.toHaveBeenCalled();
+
+      // D3 flip (10-12): the end-of-turn check EXECUTES at the gate-week
+      // verdict ratio (0.85, the pre-send's own trigger) — no logOnly gate
+      // survives on the automation call site.
+      expect(captured.eotOptions).toBeDefined();
+      expect(captured.eotOptions.triggerRatio).toBe(0.85);
+      expect(captured.eotOptions).not.toHaveProperty("logOnly");
 
       // No title refresh, no model rewrite, no trigger row.
       expect(target?.title).toBe("Target Chat");

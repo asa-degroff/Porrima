@@ -447,7 +447,7 @@ Each is a named change with a verification gate. None are silent.
 |---|---|---|---|---|
 | D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip — **Done 09-03** (verdict above; `midTurnPressureDecision` owns the mapping, shadow retired) |
 | D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week — **Done 09-03** (synthesis + wake adopt `runEndOfTurnCompaction` with the usage anchor; the negative-path log now covers headless) |
-| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip) |
+| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip); **flipped 10-12: executes at 0.85** (§9 Q1 verdict applied to the gate-week data; the `logOnly` flag was removed with the flip) |
 | D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference — **NOT LANDED**. Headless paths still pass `undefined` for `onBeforeArchive`, so the flush is skipped entirely |
 | D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats — **NOT LANDED**. Still `MAX_MID_TURN_COMPACTION_CYCLES = 3` in `chat-turn-runner.ts` (the HTTP path is already 5) |
 | D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B — **NOT LANDED**. No `persistMidTurnHandoff()` exists; the row is still written inline at `chat.ts:3609` and `chat-turn-runner.ts:984` with duplicate logic, and `turn-compaction.ts` contains only `runEndOfTurnCompaction` |
@@ -558,6 +558,16 @@ shape.
    exceeds 0.90 (headroom exists; the earlier check just does the same work
    cheaper). **Choose 0.85** if ≥10% sit in the band — at hourly cadence the
    pre-send backstop is close enough that the extra compactions buy little.
+   **Resolved (10-12): 0.85, and the check executes.** Gate week (Sep 20 –
+   Oct 11) logged 25 decision lines — past the sample floor — with 8 fires
+   (80.5, 81.9, 82.5, 82.9, 83.1, 85.2, 94.1, 104.3). Band share 5/25 = 20%
+   ≥ 10% → the rule chooses 0.85; the 0.80 branch was also disqualified by
+   the two >0.90 fires. Note both >0.90 cases (94.1%, and the 104.3%
+   overflow that sat computed-not-executed until the next run's pre-send)
+   fire at 0.85 too — executing is what moves them from *next run's wait*
+   to *this run's quiet tail*, which was the point of the check. Call site
+   passes `triggerRatio: COMPACTION_TRIGGER_RATIO`; synthesis/wake keep the
+   0.80 default (D2).
 2. Where does the memory section of the headless mid-turn handoff come from,
    if system-chat ever wants one? `getMemoriesFromChat` is HTTP-route-shaped;
    system-chat's memory model is the frozen prefix. Leaning: leave it out for
