@@ -32,7 +32,7 @@ import {
   triggerCompaction,
   hasStrandedToolCall,
 } from "../services/compaction.js";
-import { runEndOfTurnCompaction } from "../services/turn-compaction.js";
+import { runEndOfTurnCompaction, persistMidTurnHandoff } from "../services/turn-compaction.js";
 import {
   evaluateTurnGuards,
   estimateContextPressure,
@@ -3554,16 +3554,11 @@ async function handleChatStream(
       // the same token sequence that llama.cpp caches during this continuation.
       // Without this, future replay lacks the transient handoff at this
       // boundary, breaking KV cache prefix matching on the next turn.
-      chat.messages.splice(resumeEndIndex, 0, {
-        role: "user",
-        content: handoffText,
-        timestamp: Date.now(),
-        _isSystemMessage: true,
-        _isMidTurnCompaction: true,
-        _compactionRemovedCount: compaction?.removedCount,
-        _compactionCycle: compactionCycle,
-      });
-      await saveChat(chat);
+      // D6: row shape owned by persistMidTurnHandoff (shared with headless).
+      await persistMidTurnHandoff(chat, handoffText, {
+        removedCount: compaction?.removedCount,
+        cycle: compactionCycle,
+      }, resumeEndIndex);
       // Delivery receipt — the handoff row carrying the delta is now durable.
       commitMemoryDelta(chat.id, midTurnMemoriesDeltaIds);
 

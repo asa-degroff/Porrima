@@ -205,3 +205,49 @@ export async function runEndOfTurnCompaction(
 
   return { triggered: true, truncated, drivingTokens, ratio: usageRatio };
 }
+
+/**
+ * Mid-turn handoff row writer — turn-engine D6, the shape-only unification.
+ *
+ * Both routes append the same hidden user row at the tail and persist it,
+ * so future replays reconstruct the exact token sequence the resumed
+ * continuation saw (and KV prefix matching keeps working on the next
+ * turn). ONE writer now owns the row shape: content policy stays per-route
+ * — the caller passes the finished handoff body (HTTP: progress summary +
+ * delivered memory delta + top-10 memories; headless: the minimal
+ * continuation text from buildMidTurnHandoffText). Any future content
+ * change stays gated on the D6 A/B rule; any shape change happens here,
+ * never in the routes.
+ *
+ * The caller orders this AFTER truncate (rows marked out-of-context) and
+ * before resuming the loop; the save is what the memory-delta delivery
+ * receipt (HTTP: commitMemoryDelta) is sequenced against.
+ *
+ * `at` preserves each route's historical placement semantics byte-exact
+ * (D6 is shape-only): the HTTP route splices at the index captured before
+ * its hydration await (so a concurrent append cannot strand the handoff
+ * behind it mid-turn), while headless appends at the tail (push). Omitting
+ * `at` pushes.
+ */
+export async function persistMidTurnHandoff(
+  chat: Chat,
+  handoffText: string,
+  meta: { removedCount?: number; cycle: number },
+  at?: number,
+): Promise<void> {
+  const row: ChatMessage = {
+    role: "user",
+    content: handoffText,
+    timestamp: Date.now(),
+    _isSystemMessage: true,
+    _isMidTurnCompaction: true,
+    _compactionRemovedCount: meta.removedCount,
+    _compactionCycle: meta.cycle,
+  };
+  if (at !== undefined) {
+    chat.messages.splice(at, 0, row);
+  } else {
+    chat.messages.push(row);
+  }
+  await saveChat(chat);
+}

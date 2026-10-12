@@ -8,7 +8,7 @@ The compaction system uses an **indexed summary** approach — full messages are
 
 ## Trigger Paths
 
-Five compaction paths — end-of-turn, mid-turn, pre-send (backstop), manual `/compact`, and the hard-cap safety net — and they differ on three axes: **trigger**, **mid-turn cycle cap**, and **whether the memory flush runs**.
+Five compaction paths — end-of-turn, mid-turn, pre-send (backstop), manual `/compact`, and the hard-cap safety net. Since the turn-engine deltas landed, the former axes of divergence have largely unified: the memory flush runs everywhere (D4) and both mid-turn routes cap at 5 cycles (D5); what still differs per path is the **trigger/threshold** and the **blocking/UX posture** — plus the per-route handoff *content* policy (D6 unified the row *shape* only).
 
 | Path | Trigger | Threshold | Cycles | Flush? | Blocking? |
 |------|---------|-----------|--------|--------|-----------|
@@ -17,7 +17,7 @@ Five compaction paths — end-of-turn, mid-turn, pre-send (backstop), manual `/c
 | End-of-turn, wake | After the response completes | >80% | — | yes | yes |
 | End-of-turn, automation | After the response completes | **>85%** (D3 verdict, see below) | — | yes | yes |
 | Mid-turn, HTTP | During tool loop | >85% with a usage anchor; char path only checks >95% | 5 | yes | yes |
-| Mid-turn, headless | During tool loop | same | **3** | yes | yes |
+| Mid-turn, headless | During tool loop | same | 5 (D5 unified 10-12) | yes | yes |
 | Pre-send, send *(backstop)* | Before POST to LLM | 3 triggers (below) → 30% target | — | yes | yes |
 | Pre-send, resume *(backstop)* | Before resuming after crash / `ask_user` | same | — | yes | yes |
 | Pre-send, `/edit` *(backstop)* | Before resending an edited message | same | — | yes | yes |
@@ -184,7 +184,7 @@ Mid-turn compaction has additional complexity because the agent is in the middle
 2. **Archive & flush** — standard compaction sequence (awaited); in-flight mid-turn extraction pulses are settled first so their cursor is final
 3. **Rebuild system prompt** — `softResetMemoryContext()` retains the frozen section byte-exact; the recall delta is returned alongside it (see the delta-delivery note above)
 4. **Fetch chat memories** — `getMemoriesFromChat(chatId, 10)` after flush, so newly extracted memories are included
-5. **Assemble handoff message** — combines progress summary + memory delta + top-10 memories + "continue from where you left off"; persisted as a hidden `_isMidTurnCompaction` row so future replays see the exact token sequence the resumed call saw
+5. **Assemble handoff message** — combines progress summary + memory delta + top-10 memories + "continue from where you left off"; persisted through the shared `persistMidTurnHandoff` (D6 — hidden `_isMidTurnCompaction` row, spliced at the index captured before the hydration await) so future replays see the exact token sequence the resumed call saw
 6. **Resume via `agentLoopContinue`** — the handoff message is appended as a user message
 
 The handoff message gives the resumed agent two things:
@@ -195,7 +195,7 @@ This belt-and-suspenders approach ensures continuity even if the semantic retrie
 
 The hook is wired unconditionally at every compaction site (HTTP and headless alike), but the removed-window filter in the flush is the effective gate: a chat whose rows are synthesis/automation/system plumbing extracts nothing.
 
-**Headless mid-turn is the same skeleton with a leaner handoff.** `chat-turn-runner.ts` caps at 3 cycles, flushes via the shared `preCompactionFlushHook` (D4 landed 10-12), and appends a minimal handoff built by `buildMidTurnHandoffText(removedCount)` — no progress summary, no memory fetch. Per turn-engine D6, the mid-turn unification is *shape-only*; content policy stays per-route.
+**Headless mid-turn is the same skeleton with its own handoff content.** `chat-turn-runner.ts` now caps at the same 5 cycles (D5 landed 10-12; hitting the cap warns — it was silently breaking, and unobservable caps can't inform cap decisions). It flushes via the shared `preCompactionFlushHook` like every other path (D4), and its handoff is built by `buildMidTurnHandoffText`: tail-5000 progress text plus the last 15 tool calls with result previews — **no memory section** (turn-engine §9 Q2, resolved with D6: the system-chat prefix already carries stable memories, so memories/deltas wait for the next run's build). Both routes now write the row through the shared `persistMidTurnHandoff` (D6 — shape-only unification; placement semantics preserved: HTTP splices at its captured index, headless pushes at the tail).
 
 ## Memory Context State Management
 

@@ -13,7 +13,7 @@
  * under test must run the production decision, not a mirror.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runEndOfTurnCompaction } from "../services/turn-compaction.js";
+import { runEndOfTurnCompaction, persistMidTurnHandoff } from "../services/turn-compaction.js";
 import type { Chat, ChatMessage } from "../types.js";
 
 interface TruncateCall {
@@ -357,6 +357,57 @@ describe("runEndOfTurnCompaction — phase 2a move (doc §4.4, exit criteria §7
     });
     expect(r).toEqual({ triggered: true, truncated: true, drivingTokens: 90_000, ratio: 0.9 });
     expect(h.truncateCalls).toHaveLength(1);
+    expect(h.saveChatCalls).toHaveLength(1);
+  });
+});
+
+/**
+ * Turn-engine D6 (landed 10-12): the mid-turn handoff row writer is shared.
+ * Shape is owned here — identical for both routes by construction (that is
+ * the exit criterion: one writer, per-route content). Placement semantics
+ * are preserved exactly: headless pushes at the tail, HTTP splices at its
+ * captured index (rebase-safe against a concurrent append during the
+ * hydration await).
+ */
+describe("persistMidTurnHandoff — shared row writer (D6)", () => {
+  beforeEach(() => {
+    h.order.length = 0;
+    h.saveChatCalls.length = 0;
+  });
+
+  it("owns the row shape and the save both routes depend on", async () => {
+    const chat = makeChat();
+    const before = chat.messages.length;
+    await persistMidTurnHandoff(chat, "HANDOFF BODY", { removedCount: 7, cycle: 2 });
+
+    expect(chat.messages).toHaveLength(before + 1);
+    expect(chat.messages[before]).toMatchObject({
+      role: "user",
+      content: "HANDOFF BODY",
+      _isSystemMessage: true,
+      _isMidTurnCompaction: true,
+      _compactionRemovedCount: 7,
+      _compactionCycle: 2,
+    });
+    expect(chat.messages[before].timestamp).toBeGreaterThan(0);
+    // Tail placement (headless semantics) + the save the HTTP delivery
+    // receipt sequences its commitMemoryDelta against.
+    expect(h.saveChatCalls).toHaveLength(1);
+  });
+
+  it("splices at the captured index when given one (HTTP placement preserved)", async () => {
+    const chat = makeChat();
+    const captureIdx = chat.messages.length;
+    // A concurrent append past the capture point must NOT strand the
+    // handoff behind it — the old inline splice inserted at the capture.
+    chat.messages.push({ role: "user", content: "concurrent append", timestamp: 1 } as unknown as ChatMessage);
+    await persistMidTurnHandoff(chat, "SPLICE BODY", { removedCount: undefined, cycle: 3 }, captureIdx);
+
+    expect(chat.messages[captureIdx]).toMatchObject({
+      _isMidTurnCompaction: true,
+      content: "SPLICE BODY",
+    });
+    expect(chat.messages[captureIdx + 1]?.content).toBe("concurrent append");
     expect(h.saveChatCalls).toHaveLength(1);
   });
 });

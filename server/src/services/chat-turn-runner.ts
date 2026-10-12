@@ -24,6 +24,7 @@ import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } fro
 import { maybeParkChatAfterTurn } from "./kv-snapshot.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { preCompactionFlushHook } from "./memory-extraction.js";
+import { persistMidTurnHandoff } from "./turn-compaction.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
 import { orderToolResultsByToolCalls } from "./tool-result-ordering.js";
@@ -830,7 +831,15 @@ export async function runHeadlessChatTurn(
     },
   });
 
-  const MAX_MID_TURN_COMPACTION_CYCLES = 3;
+  // Turn-engine D5 (landed 10-12): aligned with the HTTP route's 5. The
+  // gate data (journal Aug 25 – Oct 11): headless cycle distribution
+  // 116/12/6 — a geometric tail, with 6 runs REACHING the old cap of 3;
+  // the "removed nothing — ending turn" bail never fired (every cycle made
+  // real progress), and HTTP's own tail shows 4th/5th cycles doing rescue
+  // work (162/30/6/3/3, a single max-exhaustion in 7 weeks). Bounded cost:
+  // at most two extra compact+flush cycles under the global lease on tail
+  // runs — visible in synthesis durations, the §8.4 watch.
+  const MAX_MID_TURN_COMPACTION_CYCLES = 5;
   let compactionCycle = 0;
   let activeContext = context;
 
@@ -976,12 +985,19 @@ export async function runHeadlessChatTurn(
         },
       });
 
-      if (
-        !needsMidTurnCompaction ||
-        timedOut ||
-        controller.signal.aborted ||
-        compactionCycle >= MAX_MID_TURN_COMPACTION_CYCLES
-      ) break;
+      if (!needsMidTurnCompaction || timedOut || controller.signal.aborted) break;
+      if (compactionCycle >= MAX_MID_TURN_COMPACTION_CYCLES) {
+        // Same break as before (behavior unchanged) — but no longer silent.
+        // HTTP warns on exhaustion ("stopping to prevent infinite loop");
+        // headless continues the turn, so the next line of defense is the
+        // end-of-turn check. Unobservable caps can't inform D5-style calls
+        // (the 14-day 0-fire lesson, structural this time).
+        console.warn(
+          `[${logPrefix}] hit max mid-turn compaction cycles (${MAX_MID_TURN_COMPACTION_CYCLES}) — ` +
+            `continuing with hot context; end-of-turn is the next line of defense`,
+        );
+        break;
+      }
       compactionCycle++;
       console.log(
         `[${logPrefix}] mid-turn compaction cycle ${compactionCycle}: persisting progress and compacting`,
@@ -1022,17 +1038,14 @@ export async function runHeadlessChatTurn(
         );
 
         // Persist the handoff so future replays reconstruct the same token
-        // sequence the resumed call sees (mirrors the HTTP route's pattern).
-        chat.messages.push({
-          role: "user",
-          content: buildMidTurnHandoffText(compaction.removedCount),
-          timestamp: Date.now(),
-          _isSystemMessage: true,
-          _isMidTurnCompaction: true,
-          _compactionRemovedCount: compaction.removedCount,
-          _compactionCycle: compactionCycle,
-        });
-        await saveChat(chat);
+        // sequence the resumed call sees. D6: the shared writer owns the row
+        // shape — identical on both routes; content stays minimal here per
+        // the D6 content policy (no progress summary, no memory fetch).
+        await persistMidTurnHandoff(
+          chat,
+          buildMidTurnHandoffText(compaction.removedCount),
+          { removedCount: compaction.removedCount, cycle: compactionCycle },
+        );
 
         midTurnCompactionOccurred = true;
         activeContext = {

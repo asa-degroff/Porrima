@@ -1,6 +1,6 @@
 # Turn Engine — Unifying the Context-Pressure Path
 
-**Status**: Design. **§3 ("Current state") is a historical snapshot as of Aug 23 and is not the current file layout.** Deltas D1–D4 shipped (D4 landed 10-12); **D5–D7 have not landed** — see the table below.
+**Status**: Design. **§3 ("Current state") is a historical snapshot as of Aug 23 and is not the current file layout.** Deltas D1–D6 shipped (D3 flipped and D4–D6 landed 10-12); **D7 is parked by design** and Phase 4 stays deferred per §4.7 — see the table below.
 **pi 1.0 note**: `shouldStopAfterTurn` references below describe the pre-1.0 hook; it is implemented today via pi-agent-core's `finishTurn` (see [pi-1.0-migration.md](pi-1.0-migration.md) §5.3).
 **Author**: quje
 **Date**: 2026-08-23
@@ -399,6 +399,8 @@ unified that only one of which needs to be. The KV-critical part is the *row
 shape* — `_isSystemMessage / _isMidTurnCompaction / _compactionRemovedCount /
 _compactionCycle` — and `persistMidTurnHandoff` unifies that: one function
 writes the row, so the routes can't drift on what the resumed KV prefix sees.
+(Landed 10-12 as described — the writer lives in `turn-compaction.ts`, both
+routes call it, and both content policies below shipped unchanged.)
 The *content policy* (which progress text and which tool calls go into the
 handoff message body) is a genuine per-route choice and **is not unified**:
 `buildHandoff` stays a first-class per-route callback. Head framing carries
@@ -449,9 +451,9 @@ Each is a named change with a verification gate. None are silent.
 | D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week — **Done 09-03** (synthesis + wake adopt `runEndOfTurnCompaction` with the usage anchor; the negative-path log now covers headless) |
 | D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip); **flipped 10-12: executes at 0.85** (§9 Q1 verdict applied to the gate-week data; the `logOnly` flag was removed with the flip) |
 | D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference — **LANDED 10-12**: the hook moved from `chat.ts` to `memory-extraction.ts` as the shared `preCompactionFlushHook` and is wired at every headless compaction site (synthesis/wake/automation pre-send + end-of-turn, headless mid-turn in `chat-turn-runner`). Scoping (applied same day, post system-chat redesign): the axis that matters is the **type of the chat being compacted, not the transport**. In-chat reminders and cross-chat wakes run through the headless runner on the *target's agent chat* (`automation-runner.ts` passes `chatType: liveChat.type`) — those chats carry a live, KV-warm extraction session, so the flush there continues a warm prefix and closes a genuine memory hole. On the system chat itself, `isSubstantiveForPreCompactionExtraction` self-scopes the flush near-zero (synthesis rows tagged, automation boilerplate filtered) — except user rows typed into the system chat and assistant-side automation findings, which ARE substantive. Costs the doc predated, both handled: the flush runs while **holding the global turn-gate lease** (§5 D3 note — watch item stays live), and headless turns stream with HTTP frame parity (10-05 `2e0314dc`), so `SynthesisEmitter.emitCompacting()` now emits the same `compacting` SSE frame the HTTP route uses (resync mirrors the state until the next real event) |
-| D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats — **NOT LANDED**. Still `MAX_MID_TURN_COMPACTION_CYCLES = 3` in `chat-turn-runner.ts` (the HTTP path is already 5) |
-| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B — **NOT LANDED**. No `persistMidTurnHandoff()` exists; the row is still written inline at `chat.ts:3609` and `chat-turn-runner.ts:984` with duplicate logic, and `turn-compaction.ts` contains only `runEndOfTurnCompaction` |
-| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | off by default; system-chat decides — **NOT LANDED**. Risk framing is stale in the safer direction (10-12): since `6593feea` the retained-frozen-prefix + Case-3-delta model IS the system-chat invariant across cycles ("like any other follow-up message"), and the automation runner already delivers rebuild deltas through the hidden-row + `commitMemoryDelta` pattern. A D7 rebuild would therefore be a soft reset + delta on the existing contract, not a prefix-semantics change. |
+| D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats — **LANDED 10-12** at 5. Gate data (journal Aug 25 – Oct 11): headless cycle distribution 116/12/6 — geometric tail, 6 runs REACHED the old cap; the "removed nothing — ending turn" bail never fired (every cycle made real progress); HTTP's own tail shows the extra cycles doing rescue work (162/30/6/3/3, a single max-exhaustion in 7 weeks). Bounded cost: ≤2 extra compact+flush cycles under the global lease on tail runs. Cap-hit is no longer silent headless (warns like HTTP's exhaustion log, with the EOT next-line-of-defense framing) so the next cap question is answerable from logs |
+| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B — **LANDED 10-12**. `persistMidTurnHandoff()` in `turn-compaction.ts` now owns the row shape and its save; `chat.ts` and `chat-turn-runner.ts` both call it. Placement semantics preserved exactly (headless pushes at the tail; HTTP passes its captured index for the rebase-safe splice), and content remains each route's own handoff body — the row writer takes finished text, so `buildHandoff`-style per-route content policy is untouched and any future change still rides the A/B gate. Full loop merger (`runMidTurnCompactionCycles`) deliberately NOT extracted with it — see the Phase 3 note below |
+| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | **PARKED by design** (was "off by default; system-chat decides" — the decision to keep it unlanded is the design's own: value is bounded, see below). Risk framing is stale in the safer direction (10-12): since `6593feea` the retained-frozen-prefix + Case-3-delta model IS the system-chat invariant across cycles ("like any other follow-up message"), and the automation runner already delivers rebuild deltas through the hidden-row + `commitMemoryDelta` pattern. A D7 rebuild would therefore be a soft reset + delta on the existing contract, not a prefix-semantics change — cheap to add IF a long single phase ever shows mid-run staleness; D4's landed flush makes extracted memories from mid-turn compaction sit undelivered until the next run's build, which is the concrete scenario to watch for. |
 
 D7's value is deliberately bounded: each synthesis or wake run rebuilds before
 its phases (a retrieval-skipped rebuild that retains the chat's existing frozen
@@ -496,6 +498,16 @@ ships as shape-only unification — row writer shared, content policy per-route
 and unchanged. Exit criteria: handoff row bytes identical on *both* routes
 (shared shape + each route's existing content), cycle logs unchanged in
 shape.
+**Landed 10-12, scoped**: D5 and D6 shipped, and the exit criteria hold —
+the row is now produced by exactly one function, so shape drift is
+structurally impossible. `runMidTurnCompactionCycles` (the full loop
+skeleton) was deliberately NOT extracted: with D4/D6 landed, the remaining
+loop duplication is transport mechanics (SSE reconnect/`ask_user`/crash
+state vs headless persist modes and `getFollowUpMessages`), not compaction
+semantics — merging it would recreate the Phase-4 `TurnState` risk profile
+(§4.7) with no correctness payoff. The cycle LOG shapes already match
+(`<prefix> mid-turn compaction cycle N`); the cap and the handoff row — the
+two things the design named as deltas — are unified.
 
 **Phase 4 — TurnState.** Deferred per §4.7.
 
@@ -581,3 +593,10 @@ shape.
    system-chat's memory model is the frozen prefix. Leaning: leave it out for
    system-chat (the prefix already carries stable memories; the handoff
    carries turn progress), and `buildHandoff` stays the seam if that changes.
+   **Resolved with D6 (10-12): left out.** The shared writer takes finished
+   text, so the seam is intact by construction — the content decision stays
+   per-route and any change rides the D6 ≥3-long-turn A/B gate. (D4 changes
+   the calculus slightly: mid-turn flush memories now wait for the next
+   run's build rather than riding the handoff — the concrete trigger for
+   revisiting is that gap biting in a long phase, which is also D7's watch
+   scenario.)
