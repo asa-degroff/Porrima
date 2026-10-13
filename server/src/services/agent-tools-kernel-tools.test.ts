@@ -173,3 +173,102 @@ describe("kernel tool dispatch through the registry (slice 1)", () => {
     expect(fake.bashCalls[0].args).toEqual({ command: "sleepy", timeout: 90 });
   }, 30_000);
 });
+
+// Slice 2 adds the web + memory read routes and the gated run_python
+// capability line. Those executors are the real agent-tools graph, but the
+// network/DB behind them are not — stub the executors, keep the tool defs.
+const execStubs = vi.hoisted(() => ({
+  web: [] as Array<{ name: string; args: Record<string, unknown> }>,
+  memory: [] as Array<{ name: string; chatId: string; args: Record<string, unknown> }>,
+}));
+
+vi.mock("./web-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./web-tools.js")>();
+  return {
+    ...actual,
+    executeWebTool: vi.fn(async (toolCall: { name: string; arguments: Record<string, unknown> }) => {
+      execStubs.web.push({ name: toolCall.name, args: toolCall.arguments });
+      return {
+        content: toolCall.name === "web_search" ? `search:${toolCall.arguments.query}` : `fetched:${toolCall.arguments.url}`,
+        isError: false,
+      };
+    }),
+  };
+});
+
+vi.mock("./memory-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./memory-tools.js")>();
+  return {
+    ...actual,
+    executeMemoryTool: vi.fn(async (toolCall: { name: string; arguments: Record<string, unknown> }, chatId: string) => {
+      execStubs.memory.push({ name: toolCall.name, chatId, args: toolCall.arguments });
+      return { content: `mem:${toolCall.name}:${chatId}`, isError: false };
+    }),
+  };
+});
+
+describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
+  beforeEach(() => {
+    execStubs.web.length = 0;
+    execStubs.memory.length = 0;
+  });
+
+  it("routes web_search/web_fetch through the web executor", async () => {
+    const { agentTools } = await setup();
+    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const result = await runPython.execute(
+      "call-w1",
+      { code: 's = await tools.web_search(query="porrima")\nf = await tools.web_fetch(url="https://example.test")\nprint(s)\nprint(f)', timeout: 60 },
+      new AbortController().signal,
+    );
+    const text = resultText(result);
+    expect(text).toContain("search:porrima");
+    expect(text).toContain("fetched:https://example.test");
+    expect(execStubs.web.map((c) => c.name)).toEqual(["web_search", "web_fetch"]);
+  }, 30_000);
+
+  it("routes memory reads through the memory executor with chat scope", async () => {
+    const { agentTools } = await setup();
+    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const result = await runPython.execute(
+      "call-m1",
+      { code: 'print(await tools.search_memory(query="q"))', timeout: 60 },
+      new AbortController().signal,
+    );
+    expect(resultText(result)).toContain(`mem:search_memory:${CHAT}`);
+    expect(execStubs.memory[0]?.chatId).toBe(CHAT);
+  }, 30_000);
+
+  it("exposes the full tier-1 surface in the driver namespace", async () => {
+    const { agentTools } = await setup();
+    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const result = await runPython.execute(
+      "call-m2",
+      { code: 'import asyncio\nnames = sorted(n for n in dir(tools) if not n.startswith("_") and n != "list")\nprint(",".join(names))', timeout: 60 },
+      new AbortController().signal,
+    );
+    const listed = resultText(result).split("\n").find((l) => l.includes(","));
+    const names = (listed ?? "").split(",").filter(Boolean);
+    expect(names).toEqual([
+      "bash",
+      "list_files",
+      "list_memory_blocks",
+      "read_archived_context",
+      "read_file",
+      "read_memory_block",
+      "read_pdf",
+      "search_conversation",
+      "search_memory",
+      "web_fetch",
+      "web_search",
+    ]);
+  }, 30_000);
+
+  it("advertises tools.* in the run_python description only when the flag is on", async () => {
+    const { agentTools } = await setup();
+    const defs = agentTools.getAgentToolDefinitions();
+    const desc = defs.find((d) => d.name === "run_python")!.description!;
+    expect(desc).toContain("await tools.<name>(**kwargs)");
+    expect(desc).toContain("help(tools)");
+  }, 30_000);
+});

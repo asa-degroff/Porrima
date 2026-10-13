@@ -1,5 +1,16 @@
 import type { Chat, ChatMessage } from "../types.js";
 import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, withChatWriteLock, type ContextArchive, updateChatTitle } from "./chat-storage.js";
+
+/**
+ * §4.6 (docs/design/kernel-codemode.md): the kernel namespace survives
+ * compaction, but Porrima stayed silent — the model re-queries live state it
+ * already has. One deterministic line rides every post-compaction artifact
+ * (the archive summary via archiveAndIndex, the mid-turn handoff row via
+ * persistMidTurnHandoff), so both compaction dialects share one source of
+ * truth and replay stays byte-stable (no wall-clock, no route drift).
+ */
+export const KERNEL_STATE_COMPACT_NOTICE =
+  "\n\nKernel note: if this thread used run_python, the kernel namespace survives compaction — variables, imports, and background jobs (checkable via python_jobs) are still live.";
 import { regenerateTitle } from "./title-generation.js";
 import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";
@@ -1876,6 +1887,9 @@ async function archiveAndIndex(
   console.log(`[compaction] Archived ${archives.length} blocks for chat ${chatId} (mode=${mode})`);
 
   const archiveIds = archives.map((a) => a.id);
+  // §4.6 kernel-state notice: appended at the one shared summary choke point
+  // (both compaction paths return through here). Empty summaries (nothing
+  // actually archived) stay empty — no notice on a no-op compaction.
   const summaryText = buildSummaryText(archives);
 
   if (mode === "deferred") {
@@ -1883,7 +1897,7 @@ async function archiveAndIndex(
     void enrichArchiveDescriptions(chatId, archiveIds, modelId);
   }
 
-  return { summaryText, archiveIds };
+  return { summaryText: summaryText ? `${summaryText}${KERNEL_STATE_COMPACT_NOTICE}` : summaryText, archiveIds };
 }
 
 /**

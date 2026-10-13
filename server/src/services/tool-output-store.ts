@@ -23,9 +23,9 @@ export const DEFAULT_SPILL_MAX_BYTES = 64 * 1024 * 1024;
 export const SPILL_RETENTION_COUNT = 64;
 export const SPILL_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type SpillTool = "bash" | "py";
+export type SpillTool = "bash" | "py" | "kernel";
 
-const TOOL_EXTENSIONS: Record<SpillTool, string> = { bash: ".log", py: ".txt" };
+const TOOL_EXTENSIONS: Record<SpillTool, string> = { bash: ".log", py: ".txt", kernel: ".txt" };
 
 /** Root override exists for tests; production always uses the data dir. */
 export function toolOutputRoot(): string {

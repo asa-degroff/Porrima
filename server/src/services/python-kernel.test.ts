@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "fs";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "fs/promises";
 import { spawn } from "child_process";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
@@ -56,6 +56,7 @@ afterEach(async () => {
   delete process.env.PORRIMA_KERNEL_WEDGE_GRACE_MS;
   delete process.env.PORRIMA_KERNEL_TOOLS;
   delete process.env.PORRIMA_KERNEL_TOOL_CALLS_MAX;
+  delete process.env.PORRIMA_TOOL_OUTPUT_DIR;
   await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -68,6 +69,7 @@ function run(
     onUpdate?: (text: string) => void;
     background?: boolean;
     toolDispatcher?: KernelToolDispatcher;
+    host?: KernelHost;
   } = {},
 ): Promise<KernelRunOutcome> {
   return executeInKernel({
@@ -79,6 +81,7 @@ function run(
     onUpdate: opts.onUpdate,
     background: opts.background,
     toolDispatcher: opts.toolDispatcher,
+    host: opts.host,
   });
 }
 
@@ -957,5 +960,126 @@ describe("kernel tools (protocol v2)", () => {
     await disposeKernel("ktools-h", { force: true });
     const outcome = kernel(await pending);
     expect(outcome.isError).toBe(true);
+  });
+
+  it("spills oversize results to the tool-output store and hands the cell a reference", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output");
+    const big = "A".repeat(1_200_000); // over the spill threshold, under the inline cap
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["web_fetch"],
+      call: async (): Promise<KernelToolCallResult> => ({ ok: true, value: big }),
+    };
+    const code = [
+      'r = await tools.web_fetch(url="https://example.test")',
+      'print(type(r).__name__, r["spilled"], r["total_chars"])',
+      'd = open(r["path"]).read()',
+      'print("file", len(d), d == "A" * 1200000)',
+      'print("head", len(r["head"]))',
+    ].join("\n");
+    const outcome = kernel(await run("ktools-spill", code, { toolDispatcher: dispatcher }));
+    expect(outcome.isError).toBe(false);
+    expect(outcome.content).toContain("dict True 1200000");
+    expect(outcome.content).toContain("file 1200000 True");
+    expect(outcome.content).toContain("head 4096");
+    // The spill file lives in the shared store (retention inherits the
+    // 64-per-chat / 24 h sweep rules).
+    expect(existsSync(join(root, "tool-output", "ktools-spill"))).toBe(true);
+  });
+
+  it("keeps remote results inline-capped with the truncation marker — §4.9 carve-out", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-ssh");
+    const driver = localDriverInfo();
+    if (!driver) throw new Error("driver unavailable");
+    // Fake transport: kind says remote, but the process is the local driver —
+    // only the manager's spill decision keys on host.kind (§4.9).
+    const host: KernelHost = {
+      kind: "ssh:test",
+      failureReason: "transport",
+      async prepare(chatId: string, cwd: string) {
+        const stateDir = join(root, "ssh-state", chatId);
+        await mkdir(stateDir, { recursive: true, mode: 0o700 }).catch(() => {});
+        return {
+          command: process.env.PORRIMA_PYTHON || "python3",
+          args: ["-u", driver.path],
+          cwd,
+          env: { ...process.env, PORRIMA_KERNEL_DIR: stateDir, PYTHONDONTWRITEBYTECODE: "1" },
+          stateDir,
+          driverHash: driver.hash,
+        };
+      },
+      async readSnapshotManifest() {
+        return null;
+      },
+      async statMtime() {
+        return null;
+      },
+      async removeState() {},
+    };
+    const huge = "B".repeat(2_200_000);
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["web_fetch"],
+      call: async (): Promise<KernelToolCallResult> => ({ ok: true, value: huge }),
+    };
+    const outcome = kernel(
+      await run("ktools-ssh", 'r = await tools.web_fetch(url="x")\nprint(type(r).__name__)\nprint(r[-60:])', {
+        toolDispatcher: dispatcher,
+        host,
+      }),
+    );
+    expect(outcome.isError).toBe(false);
+    expect(outcome.content).toContain("str"); // never a spill dict on remote
+    expect(outcome.content).toContain("[truncated: 2000000 of 2200000 chars]");
+    const dir = join(root, "tool-output-ssh", "ktools-ssh");
+    const names = existsSync(dir) ? await readdir(dir) : [];
+    expect(names.filter((n) => n.startsWith("kernel-"))).toEqual([]);
+  });
+
+  it("delivers background job output to a remote host that owns delivery (P4b path)", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-ssh");
+    const driver = localDriverInfo();
+    if (!driver) throw new Error("driver unavailable");
+    let delivered: { jobId: string; content: string } | null = null;
+    const host: KernelHost = {
+      kind: "ssh:test",
+      failureReason: "transport",
+      async prepare(chatId: string, cwd: string) {
+        const stateDir = join(root, "ssh-state", chatId);
+        await mkdir(stateDir, { recursive: true, mode: 0o700 }).catch(() => {});
+        return {
+          command: process.env.PORRIMA_PYTHON || "python3",
+          args: ["-u", driver.path],
+          cwd,
+          env: { ...process.env, PORRIMA_KERNEL_DIR: stateDir, PYTHONDONTWRITEBYTECODE: "1" },
+          stateDir,
+          driverHash: driver.hash,
+        };
+      },
+      async readSnapshotManifest() {
+        return null;
+      },
+      async statMtime() {
+        return null;
+      },
+      async removeState() {},
+      // P4b host with delivery capability: oversize job output lands on the
+      // (here: local) "workspace" as a workspace-relative path.
+      async deliverJobOutput(chatId: string, jobId: string, content: string) {
+        delivered = { jobId, content };
+        return `.porrima-tool-output/py-${jobId.slice(0, 8)}.txt`;
+      },
+    };
+    const ack = kernel(await run("ktools-ssh-job", 'print("B" * 1_500_000)', { background: true, host }));
+    expect(ack.jobId).toBeTruthy();
+    await waitForJob("ktools-ssh-job", (jobs) => jobs.some((j) => j.status !== "running"), 20_000);
+    expect(delivered).toBeTruthy();
+    expect(delivered!.jobId).toBe(ack.jobId);
+    expect(delivered!.content).toContain("BBBBB");
+    // The view carries the workspace-relative delivered path, never the
+    // server-local spill (§4.6).
+    const jobs = listKernelJobs("ktools-ssh-job");
+    expect(jobs[0]?.spillPath).toBe(`.porrima-tool-output/py-${ack.jobId!.slice(0, 8)}.txt`);
   });
 });

@@ -1,12 +1,16 @@
 import { existsSync, readFileSync } from "fs";
-import { mkdir, readFile, readdir, rm, stat, truncate } from "fs/promises";
+import { mkdir, readFile, readdir, rm, stat, truncate, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
 import { createHash, randomUUID } from "crypto";
 import { appDataPath } from "./paths.js";
 import { createOutputCapture, type OutputCapture } from "./output-capture.js";
-import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js";
+import {
+  DEFAULT_SPILL_MAX_BYTES,
+  createSpillPath,
+  ensureToolOutputDir,
+} from "./tool-output-store.js";
 import { getStoredSystemPauseState } from "./system-pause.js";
 import {
   isGroupAlive,
@@ -73,11 +77,19 @@ const DISPLAY_MAX_IMAGES = 4;
 const KERNEL_TOOL_CALLS_MAX_DEFAULT = 64;
 const KERNEL_TOOL_TIMEOUT_MS_DEFAULT = 120_000;
 const KERNEL_TOOL_VALUE_MAX_CHARS = 2_000_000;
+// Spill references (§4.9 result shaping): oversize values on a LOCAL kernel
+// keep a full copy in the shared tool-output store and hand the cell a
+// (path, head) reference instead of truncating. Remote kernels cannot open a
+// server-local path, so they keep the inline cap + truncation marker — the
+// P4b lesson applied per-call.
+const KERNEL_TOOL_SPILL_CHARS = 1_048_576;
+const KERNEL_TOOL_SPILL_HEAD_CHARS = 4096;
 // Per-tool timeout overrides: the generic cap guards the FIFO against
 // wedged dispatches, but tools with legitimate longer ceilings keep their
 // own bound (model-level bash allows 300 s).
 const KERNEL_TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   bash: 300_000,
+  read_pdf: 300_000,
 };
 
 function kernelToolCallsMax(): number {
@@ -893,9 +905,11 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
           // The job's cell identity is the driver-minted jobId (§4.8): re-key
           // the dispatcher onto it so arriving tool_call frames find it.
           if (pending.toolDispatcher) {
-            instance.toolDispatchers.delete(pending.id);
             instance.toolDispatchers.set(jobId, pending.toolDispatcher);
           }
+          // The driver mints the jobId: the request-id dispatcher entry is
+          // dead from here on — drop it unconditionally, not just on re-key.
+          instance.toolDispatchers.delete(pending.id);
           pending.resolve({
             mode: "kernel",
             isError: false,
@@ -1022,6 +1036,26 @@ async function dispatchKernelTool(
           ? ""
           : JSON.stringify(outcome.value);
     const total = raw.length;
+    if (total > KERNEL_TOOL_SPILL_CHARS && instance.host.kind === "local") {
+      // §4.9: full copy to the shared store, the cell gets a reference. A
+      // spill failure degrades to truncation with the marker — never a lost
+      // result and never a silent cut.
+      try {
+        await ensureToolOutputDir(instance.chatId);
+        const spillPath = createSpillPath(instance.chatId, "kernel", callId.slice(0, 8));
+        await writeFile(spillPath, raw, "utf8");
+        respond({
+          ok: true,
+          value: raw.slice(0, KERNEL_TOOL_SPILL_HEAD_CHARS),
+          spill_path: spillPath,
+          spilled: true,
+          total_chars: total,
+        });
+        return;
+      } catch {
+        /* fall through to truncation */
+      }
+    }
     const truncated = total > KERNEL_TOOL_VALUE_MAX_CHARS;
     respond({
       ok: true,

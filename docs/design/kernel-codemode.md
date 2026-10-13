@@ -1,6 +1,6 @@
 # In-Kernel Tool Composition — codemode for the session kernel
 
-**Status:** Revised draft (10-13 review). Research rounds 1–3 complete (prior art §2–3, structural navigation §2.5). **Phase A slices 0–1 landed dark 10-13** — protocol v2 + dispatch + `read_file`/`bash` round-trips incl. the §4.9 lock-rule proof (§4.10); flag off by default (`PORRIMA_KERNEL_TOOLS=1`).
+**Status:** Revised draft (10-13 review). Research rounds 1–3 complete (prior art §2–3, structural navigation §2.5). **Phase A complete and flagged ON 10-13** — protocol v2 + full Tier 1 dispatch + spill references + §4.6 notice + gated capability line (§4.10); live behind `PORRIMA_KERNEL_TOOLS=1`.
 **Date:** 2026-10-12
 **Reviewed**: 10-13 — present-tense claims verified against shipped code (`python-kernel.ts`, `porrima_kernel.py`, `agent-tools.ts`, `turn-gate.ts`); the §4.1 protocol claim was false and §4.1's permission claim hides a deadlock. Revisions rework §4.1/§4.3/§4.4/§4.7, add §4.8 (protocol v2) and §4.9 (dispatch mechanics), and are summarized in §9.
 **Reviewed (2nd pass, 10-13, quje)**: post-revision verification against source. Line citations confirmed against `server/python/porrima_kernel.py` (1750 lines) — note `server/dist/python/porrima_kernel.py` is a stale 948-line pre-`_driver_hash` build with different line numbers; verify against source, not the dist copy. One citation corrected: the §4.8 interrupt-path range `:1606-1667` (the stdin request dispatcher) → `:443-516` (`_request_interrupt`/`_schedule_escalation`, where the `call_soon_threadsafe` cancel pattern actually lives). The "parent §2.1" `host_request` citation confirmed: the parent documents prime-agent's event set (`ready, stdout/stderr, result, display, host_request, error, done`) and the exact-match handshake rule it cites (§4.3). The §4.9 claims (`getAgentTools` `:553`, `ToolSideEffects` `:200`, `withMutationLock` `:28-41` + `:917/:927/:946/:965`, `SEQUENTIAL_TOOL_NAMES` `:457-463`, `SYSTEM_CHAT_EXCLUDED_TOOLS` `:453`) all verified against `agent-tools.ts`.
@@ -358,6 +358,12 @@ Prime Agent emits an explicit notice after compaction that **the kernel state su
 model may re-query state that is still alive in the kernel. One-line feature, Phase A:
 append a short kernel-state-persistence notice to the compaction summary.
 
+**Shipped (slice 2, §4.10):** one concat at `archiveAndIndex` — the single choke point
+both compaction paths (pre-send and turn-end) return their summary through — so the two
+dialects cannot drift and the mid-turn path gets it via the summary row it inserts
+anyway. The handoff-row writer (`persistMidTurnHandoff`) stays content-pure: D6's
+contract (route owns content, writer owns shape) is untouched.
+
 ### 4.7 Guardrails
 
 - **Untrusted data.** Web and browser content is data, not instructions (opencode's
@@ -472,7 +478,7 @@ Server side (`python-kernel.ts`):
   Putting the full API in the system prompt would spend permanent prefix bytes on the
   thing Phase D exists to earn back.
 
-### 4.10 Phase A implementation notes — slices 0–1 (10-13)
+### 4.10 Phase A implementation notes — slices 0–2 (10-13)
 
 What landed when slice 0 shipped, including the two places implementation refined
 the design:
@@ -494,8 +500,11 @@ the design:
   `_SNAPSHOT_ALWAYS_SKIP` like `emit`.
 - **Gate**: `PORRIMA_KERNEL_TOOLS=1` (server env) → `kernelToolsEnabled()`; when
   off, the namespace is never sent and arriving `tool_call` frames find no live
-  dispatcher and are refused. Slice 0 ships dark; the `run_python` description line
-  (§5) is deliberately NOT shipped yet — zero schema bytes until flag-on.
+  dispatcher and are refused. The `run_python` description's capability line
+  (§5 Phase A's one schema-bust item) is **shipped but gated identically**
+  (slice 2): constant built at import with `kernelToolsEnabled()` appended, so
+  flag-off servers carry the original bytes and the bust happens exactly once,
+  at the flip deploy.
 - **Budget knobs** (env): `PORRIMA_KERNEL_TOOL_CALLS_MAX=64` per (chat, cell|job);
   `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` — when set explicitly it wins for every tool,
   otherwise per-tool defaults apply (`bash: 300 s` matching the model-level ceiling,
@@ -532,6 +541,29 @@ Not yet (slice 2+): spill references on the response frame, budget placement in 
 settings, `code_search` (§4.3 row / §7 Q9 — a model-level tool that does not exist
 yet; dispatching it from the kernel is only possible once it does), nested-call
 partial streaming (§4.9), and the tier-2 provenance seam (Phase B).
+
+- **Slice 2 (tier-1 completion + flag-on):** the full §4.3 Tier 1 surface now
+  dispatches — `list_files` (adapter), `web_search`/`web_fetch` (`executeWebTool`),
+  `search_memory`/`search_conversation`/`read_archived_context`/`list_memory_blocks`/
+  `read_memory_block` (`executeMemoryTool` with the chat's scope), `read_pdf`
+  (`executeReadPdf` + figure shaping below). All are projections onto the executors
+  the model-level tools already use; allowlist = the dispatcher's `tools` list (§4.3's
+  hard-allowlist as mechanism, proven by `AttributeError` on tier-2 names).
+  **Spill references shipped:** values over 1 Mi on a local kernel write the full text
+  to the shared tool-output store (`kernel-<call8>.txt`, 64/chat + 24 h retention
+  inherited) and the cell receives a dict `{'path', 'head', 'total_chars', 'spilled'}`
+  to stream from; remote kernels keep the inline 2 M cap + marker (§4.9 carve-out),
+  the P4b job-delivery path is covered for hosts that own delivery.
+  **`read_pdf` figures:** base64 image parts never ride the wire — they land in the
+  tool-result-images store and the value lists on-disk paths (`shapeReadPdfKernelResult`).
+  **§4.6 notice:** appended at the `archiveAndIndex` choke point (both summary
+  dialects; mid-turn inherits via the summary row `truncateChatHistory` inserts).
+  **Capability line:** gated on `kernelToolsEnabled()` at import — ships with the
+  flag; the description bust rides the flip deploy exactly once.
+  Slice-2 tests: local spill round-trip (dict + full file + 4096 head), remote
+  inline-capped marker (no spill written), remote job delivery view, full-surface
+  `dir(tools)` enumeration, web/memory routing incl. chat-scope threading, gated
+  description assertion.
 
 ## 5. Staging
 

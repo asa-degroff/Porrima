@@ -19,9 +19,11 @@ import {
   listKernelJobs,
   tailKernelJob,
   type KernelFallbackReason,
+  type KernelToolCallResult,
   type KernelToolDispatcher,
 } from "./python-kernel.js";
 import { v4 as uuid } from "uuid";
+import { getToolResultImageDir, saveToolResultImage } from "./tool-result-image-storage.js";
 import type { Artifact, BrowserFrameEvent, InlineVisual, Project } from "../types.js";
 
 const MAX_AUTOMATIC_ARTIFACT_REVIEW_UPDATES = 2;
@@ -93,7 +95,15 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root.",
+  description:
+    "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root." +
+    // Capability line ships only when the kernel-tools flag is on (and rides
+    // the same server restart as the flip — one intentional prefix bust,
+    // docs/design/kernel-codemode.md §4.9). Gated identically for model and
+    // headless builds so schema bytes stay uniform per server process.
+    (kernelToolsEnabled()
+      ? " The kernel also exposes awaitable host tools — `await tools.<name>(**kwargs)` runs the real tool (permissions, budgets, and spill included) with results staying in kernel memory, not context; `help(tools)` in a cell lists what is exposed."
+      : ""),
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30 foreground / 3600 background; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
@@ -487,12 +497,67 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
  * here (the registry side of the seam); the kernel manager never imports this
  * module, the dispatcher rides in as a per-execute injection.
  *
- * Phase A surface: `read_file` + `bash` (the §4.9 lock-rule case). The
+ * Phase A surface: the full Tier 1 (§4.3) — workhorse reads + `bash` (the
+ * §4.9 lock-rule case). Tier 2 waits on the provenance seam (Phase B). The
  * per-kernel dispatch FIFO already serializes whatever else is added.
  */
+const KERNEL_MEMORY_READ_TOOLS = new Set([
+  "search_memory",
+  "search_conversation",
+  "read_archived_context",
+  "list_memory_blocks",
+  "read_memory_block",
+]);
+
+/**
+ * read_pdf can return multipart content (text + base64 image parts when
+ * extractImages=true). Base64 must not ride a strict-JSON frame (the driver's
+ * repr/payload caps exist for exactly that reason — §4.9): figures land in the
+ * shared tool-result-images store and the value lists their on-disk paths.
+ * A local kernel opens/emit()s them directly; on remote the store paths are
+ * server-local (§4.9's remote carve-out covers the data-plane caveat).
+ */
+export async function shapeReadPdfKernelResult(result: {
+  content: string | any[];
+  isError: boolean;
+}): Promise<KernelToolCallResult> {
+  if (typeof result.content === "string") {
+    return result.isError ? { ok: false, error: result.content || "read failed" } : { ok: true, value: result.content };
+  }
+  const texts: string[] = [];
+  const figures: string[] = [];
+  for (const part of result.content) {
+    if (part?.type === "text" && typeof part.text === "string") {
+      texts.push(part.text);
+    } else if (part?.type === "image" && typeof part.data === "string") {
+      try {
+        const id = uuid();
+        const mimeType = typeof part.mimeType === "string" ? part.mimeType : "image/png";
+        const record = await saveToolResultImage(id, Buffer.from(part.data, "base64"), mimeType, "kernel-figure");
+        figures.push(join(getToolResultImageDir(id), record.url.slice(record.url.lastIndexOf("/") + 1)));
+      } catch {
+        texts.push("[figure dropped: image store write failed]");
+      }
+    }
+  }
+  const body = texts.join("\n");
+  const value = figures.length
+    ? `${body}\n\n[figures saved — open() or emit() these paths]\n${figures.map((f) => `- ${f}`).join("\n")}`
+    : body;
+  return result.isError ? { ok: false, error: value || "read failed" } : { ok: true, value };
+}
+
 function createKernelToolDispatcher(workspace: WorkspaceAdapter, chatId: string): KernelToolDispatcher {
   return {
-    tools: ["read_file", "bash"],
+    tools: [
+      "read_file",
+      "bash",
+      "list_files",
+      "web_search",
+      "web_fetch",
+      "read_pdf",
+      ...KERNEL_MEMORY_READ_TOOLS,
+    ],
     call: async (tool, args, signal) => {
       if (tool === "read_file") {
         const settings = await getSettings().catch(() => undefined);
@@ -525,6 +590,27 @@ function createKernelToolDispatcher(workspace: WorkspaceAdapter, chatId: string)
         return result.isError
           ? { ok: false, error: result.content || "command failed" }
           : { ok: true, value: result.content };
+      }
+      if (tool === "list_files") {
+        const result = await workspace.listFiles(args as Record<string, any>, signal);
+        return result.isError
+          ? { ok: false, error: result.content || "list failed" }
+          : { ok: true, value: result.content };
+      }
+      // Web + memory reads are pure projections back onto the executors the
+      // model-level tools already use — same auth, same retrieval scoping,
+      // same providers. No truncation: memory results ride as full strings.
+      if (tool === "web_search" || tool === "web_fetch") {
+        const result = await executeWebTool(makeToolCall("kernel-tool", tool, args as Record<string, any>), signal);
+        return result.isError ? { ok: false, error: result.content || "web call failed" } : { ok: true, value: result.content };
+      }
+      if (KERNEL_MEMORY_READ_TOOLS.has(tool)) {
+        const result = await executeMemoryTool(makeToolCall("kernel-tool", tool, args as Record<string, any>), chatId);
+        return result.isError ? { ok: false, error: result.content || "memory call failed" } : { ok: true, value: result.content };
+      }
+      if (tool === "read_pdf") {
+        const result = await executeReadPdf(args as Record<string, any>, workspace, signal);
+        return await shapeReadPdfKernelResult(result);
       }
       return { ok: false, error: `tool "${tool}" is not dispatchable` };
     },
