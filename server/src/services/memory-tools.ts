@@ -28,12 +28,12 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "save_memory",
     description:
-      "Save an important fact. Use whenever you want to remember something. " +
-      "If the fact corrects or updates an existing memory, pass supersedeMemoryId — " +
+      "Save a standalone memory. Use whenever you want to remember something. " +
+      "If the memory corrects or updates an existing memory, pass supersedeMemoryId — " +
       "the old memory is kept but marked superseded, preserving lineage instead of " +
-      "leaving two conflicting facts in circulation.",
+      "leaving two conflicting memories in circulation.",
     parameters: Type.Object({
-      text: Type.String({ description: "The fact to remember" }),
+      text: Type.String({ description: "The memory content" }),
       category: StringEnum(
         VALID_MEMORY_CATEGORIES as unknown as readonly [string, ...string[]],
         { description: "Category of the memory" }
@@ -56,7 +56,7 @@ export const MEMORY_TOOLS: Tool[] = [
           description:
             "ID of an existing memory that this new memory replaces (it is stale or wrong). " +
             "The old memory is kept but marked superseded, not deleted. " +
-            "Find IDs via search_memory. Omit when the fact is genuinely new.",
+            "Find IDs via search_memory. Omit when the memory is new.",
         })
       ),
     }),
@@ -99,7 +99,7 @@ export const MEMORY_TOOLS: Tool[] = [
     parameters: Type.Object({
       archive_id: Type.String({ description: "Archive block ID (e.g. archive:abc12345:001)" }),
       include_thinking: Type.Optional(
-        Type.Boolean({ description: "Include reasoning traces (thinking blocks). Default false — thinking is verbose and rarely needed to recover facts or conclusions." }),
+        Type.Boolean({ description: "Include reasoning traces (thinking blocks). Default false — thinking is verbose." }),
       ),
       offset: Type.Optional(
         Type.Number({ description: "0-based index of the first message to render. Use with limit to page through large archives.", minimum: 0 }),
@@ -112,11 +112,11 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "create_memory_block",
     description:
-      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable. Scope: 'global' (default — loaded into every chat), 'project' (loaded into the chats of one project; omit project_id to bind it to this chat's project), or 'archived' (out of active context but still searchable and readable).",
+      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this for imformation you will want to revisit many times in the next few weeks. Blocks are indexed and searchable. Scope: 'global' (default — loaded into every chat), 'project' (loaded into the chats of one project; omit project_id to bind it to this chat's project), or 'archived' (out of active context but still searchable and readable).",
     parameters: Type.Object({
-      name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
+      name: Type.String({ description: "Block name" }),
       description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
-      content: Type.String({ description: "Full block content — structured text, up to the configured limit" }),
+      content: Type.String({ description: "Full block content — free-form text, up to the configured limit" }),
       scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Scope: 'global' (all chats, no project association), 'project' (one project's chats — omit project_id to use the current chat's project), or 'archived' (out of active context, still searchable/readable). Default: global" })),
       project_id: Type.Optional(Type.String({ description: "Project for scope='project': a project ID, name, or path — or 'current' for this chat's project. Omit to use the current chat's project. Must not be combined with scope='global'." })),
       supersedes_block_id: Type.Optional(
@@ -133,7 +133,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "update_memory_block",
     description:
-      "Update an existing memory block's content, description, name, or scope. Use this to refine, expand, correct, rename, or move knowledge between scopes: scope='project' moves a block into a project (the current chat's project unless project_id is given), scope='global' makes it apply to every chat and clears its project association, and scope='archived' retires it out of active context while keeping its project association. Updates exceeding the configured character limit are rejected with the exact overage — split into multiple blocks if the content is too large (supersede the old block via create_memory_block's supersedes_block_id when replacing it wholesale).",
+      "Update an existing memory block's content, description, name, or scope. Use this to refine, expand, correct, rename, or move knowledge: scope='project' moves a block into a project (the current chat's project unless project_id is given), scope='global' makes it apply to every chat and clears its project association, and scope='archived' retires it out of active context while keeping it searchable. Updates exceeding the configured character limit are rejected with the exact overage.",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
@@ -157,7 +157,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "list_memory_blocks",
     description:
-      "List available memory blocks by scope. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated active blocks. Use scope='archived' to see archived blocks (moved out of active context but still readable), or scope='global'/'project' to restrict. Use query for direct substring filtering; for semantic search across all blocks, use search_memory.",
+      "List available memory blocks by scope. Use this to discover what memory blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated active blocks. Use scope='archived' to see archived blocks (moved out of active context but still readable), or scope='global'/'project' to restrict. Use query for direct substring filtering; for semantic search across all blocks, use search_memory.",
     parameters: Type.Object({
       scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope. Default excludes archived blocks — use scope='archived' to see them." })),
       project_id: Type.Optional(Type.String({ description: "Filter to one project: a project ID, name, or path (project-scoped blocks across all projects are shown when omitted)." })),
@@ -172,7 +172,7 @@ export const MEMORY_TOOLS: Tool[] = [
       "Write a notebook entry — a narrative reflection, daily synthesis, or longer-form note in your own voice. " +
       "Notebook entries are preserved verbatim (no character cap), remain fully searchable via search_memory and " +
       "list_memory_blocks, and are excluded from active context so they don't crowd the system prompt. " +
-      "Use this when writing prose — save_memory is for atomic facts, notebook entries are for narrative.",
+      "Use this when writing prose — save_memory is for atomic memories, notebook entries are for narrative.",
     parameters: Type.Object({
       content: Type.String({
         description: "The full notebook entry content (markdown allowed, no length cap)",
