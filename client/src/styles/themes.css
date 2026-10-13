@@ -757,12 +757,15 @@
 }
 
 /* Opaque bubbles — override bubble color variables with solid surfaces.
-   User bubbles clamp oklch lightness (0.6, keeps white text readable on
-   bright accents) and chroma (0.12, keeps colors from popping against
-   the background); darker/duller accents pass through unchanged. */
+   The user fill is the theme's own base surface tinted toward the accent
+   (26%), never the accent alone: large surfaces read better carrying the
+   theme than wearing the small-detail highlight hue at full strength.
+   The border matches the fill (the hairline added nothing against the
+   flat surface). Mixing toward the dark --theme-bg-flat keeps light text
+   readable without oklch clamps — even pastel accents land around L 0.4. */
 [data-opaque-bubbles] {
   --bubble-agent-bg: var(--theme-bg-flat);
   --bubble-agent-border: rgba(255, 255, 255, 0.12);
-  --bubble-user-bg: oklch(from rgb(var(--theme-accent)) min(l, 0.4) min(c, 0.08) h);
-  --bubble-user-border: oklch(from rgb(var(--theme-accent)) min(l, 0.4) min(c, 0.08) h);
+  --bubble-user-bg: color-mix(in oklab, rgb(var(--theme-accent)) 26%, var(--theme-bg-flat));
+  --bubble-user-border: var(--bubble-user-bg);
 }
