@@ -490,7 +490,7 @@ export interface ConversationSearchResult {
   rank: number;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "custom";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "catppuccin" | "tokyo-night" | "nord" | "gruvbox" | "rose-pine" | "dracula" | "solarized" | "kanagawa" | "monokai" | "synthwave" | "night-owl" | "everforest" | "ayu" | "custom";
 export interface CustomTheme {
   /** Dark base color used to derive the page background gradient. */
   background: string;

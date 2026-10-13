@@ -432,7 +432,7 @@ export interface InferenceModel {
   provider: InferenceProvider;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "custom";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust" | "catppuccin" | "tokyo-night" | "nord" | "gruvbox" | "rose-pine" | "dracula" | "solarized" | "kanagawa" | "monokai" | "synthwave" | "night-owl" | "everforest" | "ayu" | "custom";
 export interface CustomTheme {
   background: string;
   accent: string;

@@ -605,6 +605,19 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         'oxidized-copper': '#051210',
         iron: '#121214',
         rust: '#1a0e06',
+        catppuccin: '#11111b',
+        'tokyo-night': '#131420',
+        nord: '#242933',
+        gruvbox: '#1d2021',
+        'rose-pine': '#120f1c',
+        dracula: '#191a21',
+        solarized: '#001c24',
+        kanagawa: '#16161e',
+        monokai: '#1e1f1c',
+        synthwave: '#1e1a29',
+        'night-owl': '#010e1a',
+        everforest: '#23292e',
+        ayu: '#08090d',
       };
       const customBackground = settings.customTheme?.background;
       const themeColor = theme === "custom" && customBackground && isCustomThemeBackgroundDark(customBackground)

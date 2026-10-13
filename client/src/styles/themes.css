@@ -321,6 +321,351 @@
   --theme-glow: rgba(210, 130, 50, 0.15);
 }
 
+/* The palettes below are ports of well-known community color schemes, adapted
+   from opencode's theme assets (https://github.com/sst/opencode, MIT): each
+   keeps the source palette's primary/secondary/accent triad and maps its
+   background stack onto the symmetric 135° gradient (darkest surface at the
+   edges, base color at the center). Dark variants only — Porrima's light-text
+   contract can't accommodate the source palettes' light modes. */
+
+[data-theme="catppuccin"] {
+  /* Catppuccin Mocha — pastel blue/mauve/pink on deep navy */
+  --theme-primary: 137, 180, 250;       /* blue */
+  --theme-primary-muted: 137, 180, 250, 0.2;
+  --theme-primary-border: 137, 180, 250, 0.3;
+  --theme-primary-text: 180, 190, 254;  /* lavender */
+
+  --theme-accent: 245, 194, 231;        /* pink */
+  --theme-accent-muted: 245, 194, 231, 0.15;
+  --theme-accent-border: 245, 194, 231, 0.2;
+  --theme-accent-text: 245, 194, 231, 0.85;
+
+  --theme-secondary: 203, 166, 247;     /* mauve */
+  --theme-secondary-muted: 203, 166, 247, 0.2;
+  --theme-secondary-border: 203, 166, 247, 0.25;
+  --theme-secondary-text: 203, 166, 247, 0.9;
+
+  --theme-grid: 137, 180, 250;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #11111b 0%, #181825 25%, #1b1b2b 38%, #1e1e2e 50%, #1b1b2b 62%, #181825 75%, #11111b 100%);
+  --theme-bg-top: #11111b;
+  --theme-bg-flat: #1e1e2e;
+  --theme-glow: rgba(137, 180, 250, 0.15);
+}
+
+[data-theme="tokyo-night"] {
+  /* Tokyo Night — luminous blue and purple with warm coral accent */
+  --theme-primary: 130, 170, 255;       /* blue */
+  --theme-primary-muted: 130, 170, 255, 0.2;
+  --theme-primary-border: 130, 170, 255, 0.3;
+  --theme-primary-text: 130, 170, 255, 0.9;
+
+  --theme-accent: 255, 150, 108;        /* coral orange */
+  --theme-accent-muted: 255, 150, 108, 0.15;
+  --theme-accent-border: 255, 150, 108, 0.2;
+  --theme-accent-text: 255, 150, 108, 0.85;
+
+  --theme-secondary: 192, 153, 255;     /* purple */
+  --theme-secondary-muted: 192, 153, 255, 0.2;
+  --theme-secondary-border: 192, 153, 255, 0.25;
+  --theme-secondary-text: 192, 153, 255, 0.9;
+
+  --theme-grid: 130, 170, 255;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #131420 0%, #161722 25%, #181925 38%, #1a1b26 50%, #181925 62%, #161722 75%, #131420 100%);
+  --theme-bg-top: #131420;
+  --theme-bg-flat: #1a1b26;
+  --theme-glow: rgba(130, 170, 255, 0.15);
+}
+
+[data-theme="nord"] {
+  /* Nord — muted arctic frost on polar night blue-gray */
+  --theme-primary: 136, 192, 208;       /* frost cyan */
+  --theme-primary-muted: 136, 192, 208, 0.2;
+  --theme-primary-border: 136, 192, 208, 0.3;
+  --theme-primary-text: 136, 192, 208, 0.9;
+
+  --theme-accent: 143, 188, 187;        /* frost teal */
+  --theme-accent-muted: 143, 188, 187, 0.15;
+  --theme-accent-border: 143, 188, 187, 0.2;
+  --theme-accent-text: 143, 188, 187, 0.85;
+
+  --theme-secondary: 129, 161, 193;     /* polar blue */
+  --theme-secondary-muted: 129, 161, 193, 0.2;
+  --theme-secondary-border: 129, 161, 193, 0.25;
+  --theme-secondary-text: 129, 161, 193, 0.9;
+
+  --theme-grid: 136, 192, 208;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #242933 0%, #282d38 25%, #2b303c 38%, #2e3440 50%, #2b303c 62%, #282d38 75%, #242933 100%);
+  --theme-bg-top: #242933;
+  --theme-bg-flat: #2e3440;
+  --theme-glow: rgba(136, 192, 208, 0.12);
+}
+
+[data-theme="gruvbox"] {
+  /* Gruvbox — retro warm gray with muted mineral accents */
+  --theme-primary: 131, 165, 152;       /* bright blue */
+  --theme-primary-muted: 131, 165, 152, 0.2;
+  --theme-primary-border: 131, 165, 152, 0.3;
+  --theme-primary-text: 131, 165, 152, 0.9;
+
+  --theme-accent: 142, 192, 124;        /* bright aqua */
+  --theme-accent-muted: 142, 192, 124, 0.15;
+  --theme-accent-border: 142, 192, 124, 0.2;
+  --theme-accent-text: 142, 192, 124, 0.85;
+
+  --theme-secondary: 211, 134, 155;     /* bright purple */
+  --theme-secondary-muted: 211, 134, 155, 0.2;
+  --theme-secondary-border: 211, 134, 155, 0.25;
+  --theme-secondary-text: 211, 134, 155, 0.9;
+
+  --theme-grid: 131, 165, 152;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #1d2021 0%, #212324 25%, #252626 38%, #282828 50%, #252626 62%, #212324 75%, #1d2021 100%);
+  --theme-bg-top: #1d2021;
+  --theme-bg-flat: #282828;
+  --theme-glow: rgba(131, 165, 152, 0.12);
+}
+
+[data-theme="rose-pine"] {
+  /* Rosé Pine — dim plum with foam, iris, and dusty rose */
+  --theme-primary: 156, 207, 216;       /* foam */
+  --theme-primary-muted: 156, 207, 216, 0.2;
+  --theme-primary-border: 156, 207, 216, 0.3;
+  --theme-primary-text: 156, 207, 216, 0.9;
+
+  --theme-accent: 235, 188, 186;        /* rose */
+  --theme-accent-muted: 235, 188, 186, 0.15;
+  --theme-accent-border: 235, 188, 186, 0.2;
+  --theme-accent-text: 235, 188, 186, 0.85;
+
+  --theme-secondary: 196, 167, 231;     /* iris */
+  --theme-secondary-muted: 196, 167, 231, 0.2;
+  --theme-secondary-border: 196, 167, 231, 0.25;
+  --theme-secondary-text: 196, 167, 231, 0.9;
+
+  --theme-grid: 156, 207, 216;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #120f1c 0%, #15121f 25%, #171522 38%, #191724 50%, #171522 62%, #15121f 75%, #120f1c 100%);
+  --theme-bg-top: #120f1c;
+  --theme-bg-flat: #191724;
+  --theme-glow: rgba(156, 207, 216, 0.15);
+}
+
+[data-theme="dracula"] {
+  /* Dracula — vivid purple/pink/cyan vampire classic */
+  --theme-primary: 189, 147, 249;       /* purple */
+  --theme-primary-muted: 189, 147, 249, 0.2;
+  --theme-primary-border: 189, 147, 249, 0.3;
+  --theme-primary-text: 189, 147, 249, 0.9;
+
+  --theme-accent: 139, 233, 253;        /* cyan */
+  --theme-accent-muted: 139, 233, 253, 0.15;
+  --theme-accent-border: 139, 233, 253, 0.2;
+  --theme-accent-text: 139, 233, 253, 0.85;
+
+  --theme-secondary: 255, 121, 198;     /* pink */
+  --theme-secondary-muted: 255, 121, 198, 0.2;
+  --theme-secondary-border: 255, 121, 198, 0.25;
+  --theme-secondary-text: 255, 121, 198, 0.9;
+
+  --theme-grid: 189, 147, 249;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #191a21 0%, #1f2029 25%, #242530 38%, #282a36 50%, #242530 62%, #1f2029 75%, #191a21 100%);
+  --theme-bg-top: #191a21;
+  --theme-bg-flat: #282a36;
+  --theme-glow: rgba(189, 147, 249, 0.15);
+}
+
+[data-theme="solarized"] {
+  /* Solarized Dark — teal ink with scientific blue and violet */
+  --theme-primary: 38, 139, 210;        /* blue */
+  --theme-primary-muted: 38, 139, 210, 0.2;
+  --theme-primary-border: 38, 139, 210, 0.3;
+  --theme-primary-text: 114, 180, 226;  /* light blue tint */
+
+  --theme-accent: 42, 161, 152;         /* cyan */
+  --theme-accent-muted: 42, 161, 152, 0.15;
+  --theme-accent-border: 42, 161, 152, 0.2;
+  --theme-accent-text: 106, 189, 183;   /* light cyan tint */
+
+  --theme-secondary: 108, 113, 196;     /* violet */
+  --theme-secondary-muted: 108, 113, 196, 0.2;
+  --theme-secondary-border: 108, 113, 196, 0.25;
+  --theme-secondary-text: 159, 163, 217; /* light violet tint */
+
+  --theme-grid: 38, 139, 210;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #001c24 0%, #00222b 25%, #002731 38%, #002b36 50%, #002731 62%, #00222b 75%, #001c24 100%);
+  --theme-bg-top: #001c24;
+  --theme-bg-flat: #002b36;
+  --theme-glow: rgba(38, 139, 210, 0.15);
+}
+
+[data-theme="kanagawa"] {
+  /* Kanagawa — sumi-ink dark with crystal blue and sakura pink */
+  --theme-primary: 126, 156, 216;       /* crystal blue */
+  --theme-primary-muted: 126, 156, 216, 0.2;
+  --theme-primary-border: 126, 156, 216, 0.3;
+  --theme-primary-text: 165, 186, 228;  /* light crystal blue */
+
+  --theme-accent: 210, 126, 153;        /* sakura pink */
+  --theme-accent-muted: 210, 126, 153, 0.15;
+  --theme-accent-border: 210, 126, 153, 0.2;
+  --theme-accent-text: 210, 126, 153, 0.85;
+
+  --theme-secondary: 149, 127, 184;     /* oni violet */
+  --theme-secondary-muted: 149, 127, 184, 0.2;
+  --theme-secondary-border: 149, 127, 184, 0.25;
+  --theme-secondary-text: 149, 127, 184, 0.9;
+
+  --theme-grid: 126, 156, 216;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #16161e 0%, #1a1a22 25%, #1c1c25 38%, #1f1f28 50%, #1c1c25 62%, #1a1a22 75%, #16161e 100%);
+  --theme-bg-top: #16161e;
+  --theme-bg-flat: #1f1f28;
+  --theme-glow: rgba(126, 156, 216, 0.15);
+}
+
+[data-theme="monokai"] {
+  /* Monokai — the editorial classic: cyan/purple/lime on warm charcoal */
+  --theme-primary: 102, 217, 239;       /* cyan */
+  --theme-primary-muted: 102, 217, 239, 0.2;
+  --theme-primary-border: 102, 217, 239, 0.3;
+  --theme-primary-text: 102, 217, 239, 0.9;
+
+  --theme-accent: 166, 226, 46;         /* green */
+  --theme-accent-muted: 166, 226, 46, 0.15;
+  --theme-accent-border: 166, 226, 46, 0.2;
+  --theme-accent-text: 166, 226, 46, 0.85;
+
+  --theme-secondary: 174, 129, 255;     /* purple */
+  --theme-secondary-muted: 174, 129, 255, 0.2;
+  --theme-secondary-border: 174, 129, 255, 0.25;
+  --theme-secondary-text: 174, 129, 255, 0.9;
+
+  --theme-grid: 102, 217, 239;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #1e1f1c 0%, #22231e 25%, #242520 38%, #272822 50%, #242520 62%, #22231e 75%, #1e1f1c 100%);
+  --theme-bg-top: #1e1f1c;
+  --theme-bg-flat: #272822;
+  --theme-glow: rgba(102, 217, 239, 0.15);
+}
+
+[data-theme="synthwave"] {
+  /* Synthwave '84 — neon cyan and magenta on twilight purple */
+  --theme-primary: 54, 249, 246;        /* neon cyan */
+  --theme-primary-muted: 54, 249, 246, 0.2;
+  --theme-primary-border: 54, 249, 246, 0.3;
+  --theme-primary-text: 54, 249, 246, 0.9;
+
+  --theme-accent: 176, 132, 235;        /* purple */
+  --theme-accent-muted: 176, 132, 235, 0.15;
+  --theme-accent-border: 176, 132, 235, 0.2;
+  --theme-accent-text: 176, 132, 235, 0.9;
+
+  --theme-secondary: 255, 126, 219;     /* neon pink */
+  --theme-secondary-muted: 255, 126, 219, 0.2;
+  --theme-secondary-border: 255, 126, 219, 0.25;
+  --theme-secondary-text: 255, 126, 219, 0.9;
+
+  --theme-grid: 54, 249, 246;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #1e1a29 0%, #211e2e 25%, #242031 38%, #262335 50%, #242031 62%, #211e2e 75%, #1e1a29 100%);
+  --theme-bg-top: #1e1a29;
+  --theme-bg-flat: #262335;
+  --theme-glow: rgba(255, 126, 219, 0.2);
+}
+
+[data-theme="night-owl"] {
+  /* Night Owl — deep abyss blue with calm teal and lilac */
+  --theme-primary: 130, 170, 255;       /* blue */
+  --theme-primary-muted: 130, 170, 255, 0.2;
+  --theme-primary-border: 130, 170, 255, 0.3;
+  --theme-primary-text: 130, 170, 255, 0.9;
+
+  --theme-accent: 199, 146, 234;        /* purple */
+  --theme-accent-muted: 199, 146, 234, 0.15;
+  --theme-accent-border: 199, 146, 234, 0.2;
+  --theme-accent-text: 199, 146, 234, 0.85;
+
+  --theme-secondary: 127, 219, 202;     /* teal */
+  --theme-secondary-muted: 127, 219, 202, 0.2;
+  --theme-secondary-border: 127, 219, 202, 0.25;
+  --theme-secondary-text: 127, 219, 202, 0.9;
+
+  --theme-grid: 130, 170, 255;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #010e1a 0%, #01111f 25%, #011423 38%, #011627 50%, #011423 62%, #01111f 75%, #010e1a 100%);
+  --theme-bg-top: #010e1a;
+  --theme-bg-flat: #011627;
+  --theme-glow: rgba(130, 170, 255, 0.15);
+}
+
+[data-theme="everforest"] {
+  /* Everforest — soft sage green on cool bark gray-green */
+  --theme-primary: 167, 192, 128;       /* sage */
+  --theme-primary-muted: 167, 192, 128, 0.2;
+  --theme-primary-border: 167, 192, 128, 0.3;
+  --theme-primary-text: 167, 192, 128, 0.9;
+
+  --theme-accent: 214, 153, 182;        /* pink */
+  --theme-accent-muted: 214, 153, 182, 0.15;
+  --theme-accent-border: 214, 153, 182, 0.2;
+  --theme-accent-text: 214, 153, 182, 0.85;
+
+  --theme-secondary: 127, 187, 179;     /* aqua */
+  --theme-secondary-muted: 127, 187, 179, 0.2;
+  --theme-secondary-border: 127, 187, 179, 0.25;
+  --theme-secondary-text: 127, 187, 179, 0.9;
+
+  --theme-grid: 167, 192, 128;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #23292e 0%, #272e33 25%, #2a3137 38%, #2d353b 50%, #2a3137 62%, #272e33 75%, #23292e 100%);
+  --theme-bg-top: #23292e;
+  --theme-bg-flat: #2d353b;
+  --theme-glow: rgba(167, 192, 128, 0.12);
+}
+
+[data-theme="ayu"] {
+  /* Ayu Dark — electric entity blue and lilac with gold on obsidian */
+  --theme-primary: 89, 194, 255;        /* entity blue */
+  --theme-primary-muted: 89, 194, 255, 0.2;
+  --theme-primary-border: 89, 194, 255, 0.3;
+  --theme-primary-text: 89, 194, 255, 0.9;
+
+  --theme-accent: 230, 180, 80;         /* gold */
+  --theme-accent-muted: 230, 180, 80, 0.15;
+  --theme-accent-border: 230, 180, 80, 0.2;
+  --theme-accent-text: 230, 180, 80, 0.85;
+
+  --theme-secondary: 210, 166, 255;     /* constant lilac */
+  --theme-secondary-muted: 210, 166, 255, 0.2;
+  --theme-secondary-border: 210, 166, 255, 0.25;
+  --theme-secondary-text: 210, 166, 255, 0.9;
+
+  --theme-grid: 89, 194, 255;
+  --theme-grid-opacity: 0.12;
+
+  --theme-bg-gradient: linear-gradient(135deg, #08090d 0%, #090b10 25%, #0a0d12 38%, #0b0e14 50%, #0a0d12 62%, #090b10 75%, #08090d 100%);
+  --theme-bg-top: #08090d;
+  --theme-bg-flat: #0b0e14;
+  --theme-glow: rgba(89, 194, 255, 0.15);
+}
+
 [data-theme="custom"] {
   /* Custom themes keep the existing token contract while deriving their
      palette from the two user-selected colors supplied by the client. */

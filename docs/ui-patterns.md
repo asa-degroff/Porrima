@@ -67,7 +67,7 @@ Desktop-only right-hand column (`PinnedPanel.tsx` + `PinnedItemContext.tsx`). "P
 
 ### Theming
 
-`ThemePicker.tsx` offers 13 themes: Lapis (`default`), Ocean, Forest, Crimson, Asphalt (`mono`), Strawberry, Coffee, Emerald, Copper, Verdigris (`oxidized-copper`), Iron, Rust, and **Custom**.
+`ThemePicker.tsx` offers 26 themes: Lapis (`default`), Ocean, Forest, Crimson, Asphalt (`mono`), Strawberry, Coffee, Emerald, Copper, Verdigris (`oxidized-copper`), Iron, Rust; community palette ports adapted from opencode's theme collection — Catppuccin, Tokyo Night, Nord, Gruvbox, Rosé Pine, Dracula, Solarized, Kanagawa, Monokai, Synthwave '84, Night Owl, Everforest, Ayu; and **Custom**.
 
 Custom mode takes a background and accent color directly, subject to a luminance gate (`CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE = 0.183` in `utils/custom-theme.ts`) so a light background cannot be saved, and derives accent text color from WCAG contrast. It expands into ~9 CSS custom properties including three gradient stops. Custom color sets can be saved as named presets — names are unique case-insensitively, capped at 32 characters, and re-saving an existing preset edits it in place (renaming and recoloring both preserve the id). `chat-storage.ts` owns the authoritative `normalizeThemePresetName` rules that the client mirrors. `App.tsx` also rewrites `<meta name="theme-color">` per theme.
 

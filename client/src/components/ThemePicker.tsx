@@ -15,6 +15,20 @@ export const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string
   { value: "oxidized-copper", label: "Verdigris", preview: "from-teal-900" },
   { value: "iron", label: "Iron", preview: "from-gray-800" },
   { value: "rust", label: "Rust", preview: "from-orange-950" },
+  // Community palette ports from opencode's theme collection
+  { value: "catppuccin", label: "Catppuccin", preview: "from-indigo-900" },
+  { value: "tokyo-night", label: "Tokyo Night", preview: "from-blue-950" },
+  { value: "nord", label: "Nord", preview: "from-slate-800" },
+  { value: "gruvbox", label: "Gruvbox", preview: "from-stone-800" },
+  { value: "rose-pine", label: "Rosé Pine", preview: "from-purple-950" },
+  { value: "dracula", label: "Dracula", preview: "from-violet-900" },
+  { value: "solarized", label: "Solarized", preview: "from-cyan-950" },
+  { value: "kanagawa", label: "Kanagawa", preview: "from-slate-900" },
+  { value: "monokai", label: "Monokai", preview: "from-yellow-900" },
+  { value: "synthwave", label: "Synthwave '84", preview: "from-fuchsia-900" },
+  { value: "night-owl", label: "Night Owl", preview: "from-sky-950" },
+  { value: "everforest", label: "Everforest", preview: "from-emerald-950" },
+  { value: "ayu", label: "Ayu", preview: "from-yellow-950" },
   { value: "custom", label: "Custom", preview: "from-white/20" },
 ];
 
