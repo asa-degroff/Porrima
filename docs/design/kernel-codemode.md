@@ -1,9 +1,10 @@
 # In-Kernel Tool Composition — codemode for the session kernel
 
-**Status:** Revised draft (10-13 review). Research rounds 1–2 complete (prior art, §2–3). **Phase A slice 0 landed dark 10-13** — protocol v2 + dispatch + `read_file` round-trip (§4.10); flag off by default (`PORRIMA_KERNEL_TOOLS=1`).
+**Status:** Revised draft (10-13 review). Research rounds 1–3 complete (prior art §2–3, structural navigation §2.5). **Phase A slice 0 landed dark 10-13** — protocol v2 + dispatch + `read_file` round-trip (§4.10); flag off by default (`PORRIMA_KERNEL_TOOLS=1`).
 **Date:** 2026-10-12
 **Reviewed**: 10-13 — present-tense claims verified against shipped code (`python-kernel.ts`, `porrima_kernel.py`, `agent-tools.ts`, `turn-gate.ts`); the §4.1 protocol claim was false and §4.1's permission claim hides a deadlock. Revisions rework §4.1/§4.3/§4.4/§4.7, add §4.8 (protocol v2) and §4.9 (dispatch mechanics), and are summarized in §9.
 **Reviewed (2nd pass, 10-13, quje)**: post-revision verification against source. Line citations confirmed against `server/python/porrima_kernel.py` (1750 lines) — note `server/dist/python/porrima_kernel.py` is a stale 948-line pre-`_driver_hash` build with different line numbers; verify against source, not the dist copy. One citation corrected: the §4.8 interrupt-path range `:1606-1667` (the stdin request dispatcher) → `:443-516` (`_request_interrupt`/`_schedule_escalation`, where the `call_soon_threadsafe` cancel pattern actually lives). The "parent §2.1" `host_request` citation confirmed: the parent documents prime-agent's event set (`ready, stdout/stderr, result, display, host_request, error, done`) and the exact-match handshake rule it cites (§4.3). The §4.9 claims (`getAgentTools` `:553`, `ToolSideEffects` `:200`, `withMutationLock` `:28-41` + `:917/:927/:946/:965`, `SEQUENTIAL_TOOL_NAMES` `:457-463`, `SYSTEM_CHAT_EXCLUDED_TOOLS` `:453`) all verified against `agent-tools.ts`.
+**Reviewed (3rd pass, 10-13, quje)**: post-slice-0 refresh + research round 3 folded in. Slice 0 grew the driver 1750 → 1909 lines and shifted every anchor: §4.8's `_read_requests` `:1670` → `:1829`, `_serve` `:1686-1713` → `:1845-1874`, the §4.1 v1-claim citation `:1686` → `:1845`, interrupt block `:443-516` → `:589-664` (all re-verified against source). The stale-dist note is now structurally moot — the build `rm -rf dist/python` before copying (ac614204, §4.10). Round 3: structural-navigation research (§2.5), the Tier 1 `code_search` row (§4.3), §7 Q9, §8 sources; no architecture change.
 
 ## 1. Problem
 
@@ -50,11 +51,12 @@ and only the final result crosses the wire. Asa's acceptance bar: it should be a
   child agents callable from code) is out of scope; the seam is noted where it would
   land (§4.7) but not built.
 
-## 2. Prior art (research rounds 1–2, 10-12)
+## 2. Prior art (research rounds 1–3)
 
-Two survey rounds covered five lineages. Full detail with sources lives in the project
-memory blocks "Codemode Prior Art — Lineages" and "Codemode Prior Art — Round 2"; this
-section is the design-relevant distillation.
+Rounds 1–2 covered five lineages; round 3 (§2.5) covered structural navigation — a fourth
+axis the codemode survey missed. Full detail with sources lives in the archived project
+memory blocks ("Codemode Prior Art — Lineages", "Round 2" — out of active context since
+10-13, still searchable) and §8; this section is the design-relevant distillation.
 
 **"Codemode" conflates two separable ideas** — (A) in-language *tool composition*
 (pipe outputs to inputs without round-tripping through model context) and (B) *persistent
@@ -113,6 +115,58 @@ discipline. Its surface contract ("tools exposed to the model: `bash`, `edit`,
 `python_repl`") is the strongest endorsement in the survey for the minimal-surface
 end-state.
 
+### 2.5 Structural navigation — ast-grep and the repository-map lineage (round 3, 10-13)
+
+Round 3 covered a fourth axis the codemode survey never touched: **structural code
+navigation** — tools that understand code structure rather than match text. None of the
+five lineages exposed it as a first-class tool; they all ride on ripgrep/read + shell.
+
+**ast-grep** (ast-grep.github.io, read) — Rust, tree-sitter-based "a hybrid of grep,
+eslint and codemod." Patterns are code-as-pattern (`console.log($$)`,
+`fn $NAME($$)`), composable into YAML relational rules (`all`/`any`/`inside`/`has`/
+`precedes`/`follows`, `stopBy: end`); 30+ languages via tree-sitter grammars; file
+traversal on ripgrep's `ignore` crate; a measured six-rule scan of TypeScript's `src`
+in ~1 s wall. Three details matter here:
+
+- The author **rewrote tree-sitter's C core in Rust** and scoped the fork deliberately:
+  it dropped incremental old-tree reuse (an editor-only concern) because "AI coding
+  agents analyze complete file snapshots" — a fresh parse is the agent workload's
+  normal operation (blog: tree-sitter-rust-rewrite, read). Parser throughput +30%,
+  end-to-end ~22% faster; a TypeScript stress corpus that once peaked above 1 GiB now
+  peaks at 91 MiB. The parser stack is now tuned for exactly our regime.
+- **`sg outline`**: a first-class orientation command — top-level symbols, imports,
+  exports, members; views (`names`/`signatures`/`digest`/`expanded`); filters
+  (`--match` regex, `--type`, `--items`); JSON with line ranges, byte offsets,
+  LSP-compatible symbol types; NDJSON stream mode (reference/cli/outline, read).
+- The **official AI surface** (advanced/prompting, read): a Claude Code skill for rule
+  authoring; an AGENTS.md prompt pattern ("default to ast-grep for syntax-aware search,
+  avoid text-only search unless requested"); `llms-full.txt` (the whole docs for model
+  context); and an experimental official MCP (ast-grep-mcp, read) with four tools —
+  `find_code`, `find_code_by_rule`, `test_match_code_rule`, `dump_syntax_tree` — text
+  output ~75% fewer tokens than JSON, organized around an iterative rule-development
+  loop (break down the query → sub-rules → combine → test against a snippet → dump the
+  AST when it fails).
+
+**The repository-map lineage** (aider origin; agentpatterns.ai distillation,
+corroborated): tree-sitter parse → symbol/signature extraction → file graph → PageRank
+with personalization (files being edited get boosted) → binary-search fit into a token
+budget (default ~1024 tokens). Aider's SWE-bench Lite result (26.3% resolve, 70.3%
+correct file identification) credits the full stack, not an ablation. The pattern's own
+backfire conditions: fast-changing repos (stale index), heavy metaprogramming
+(AST ≠ runtime structure), small repos. The counterpoint: **Claude Code deliberately
+doesn't index** — on-demand agentic search (Glob/Grep/Read) beat its RAG experiments
+(corroborated). The field splits into *fresh agentic queries* vs *precomputed structural
+indices*; ast-grep's fork sits squarely on the fresh side.
+
+**Design mapping** (inferred; lands in §4.3, §7 Q9): the kernel makes ast-grep strictly
+more useful than its own MCP — the MCP exists to give the model a test loop for rule
+authoring, and every iteration costs context; in the kernel the same loop is free in
+variables (the codemode thesis in a concrete place). A model-level `code_search`
+wrapper over the CLI is separable from protocol v2 and earns Tier 1 on every §4.2
+criterion. `sg outline` opens a project-context orientation seam (outline entry →
+range-read by byte offset → transform, without full file reads). Structural rewriting
+lands in Tier 2 by construction (file mutation → provenance gate).
+
 ## 3. Design axes, and where Porrima sits
 
 | Axis | CF | opencode | Codex | prime-agent | smolagents | **Porrima (today)** |
@@ -136,7 +190,7 @@ host tool from the server's tool registry, invoked over a **reverse RPC channel 
 kernel-initiated request answered by a server-initiated response**. (10-13 review: the
 first draft said "the existing kernel↔server request/response protocol", which is false —
 v1 is strictly server-initiated: every line on the kernel's stdin is a request consumed
-serially by `_serve` (`porrima_kernel.py:1686`), every stdout line is an event correlated
+serially by `_serve` (`porrima_kernel.py:1845`), every stdout line is an event correlated
 to a server request id, and `host_request` appears nowhere in the shipped driver or
 manager. This direction is new mechanism on both sides; §4.8 is its spec, and it is
 Phase A's real design object, not an aside.) Message shapes, roughly:
@@ -226,6 +280,7 @@ identity weight and need provenance rather than exclusion.
 |---|---|
 | `bash` | Asa's acceptance bar; codex nests `shell_command`, prime-agent keeps it model-level but full-host |
 | `read_file`, `list_files` | pagination loops; output spilling already handled |
+| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out |
 | `web_search`, `web_fetch` | the flagship token-piping case |
 | `read_pdf` | heavy payloads, in-code processing; Phase A (10-13 review: pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
 | `search_memory`, `search_conversation`, `read_archived_context` | research pipelines; non-destructive |
@@ -336,11 +391,11 @@ Kernel side (`porrima_kernel.py`):
   writes one `tool_call` frame onto the event stream, and awaits an asyncio future
   resolved by the matching response. The await is a suspension point, so L1/L2 interrupt
   semantics carry over unchanged.
-- A **demux in the stdin reader** (`_read_requests`, `:1670`): server→kernel lines are
+- A **demux in the stdin reader** (`_read_requests`, `:1829`): server→kernel lines are
   requests *or* responses. Responses (`tool_result` for a `call_id` in the pending table)
-  must **not** join the request queue — `_serve` is serial (`:1686-1713`) and a cell
+  must **not** join the request queue — `_serve` is serial (`:1845-1874`) and a cell
   awaiting its own response would deadlock behind it. They resolve futures via
-  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:443-516`).
+  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:589-664`).
 - **Cancellation:** L1/L2 settle a cell that is awaiting a call — the pending future
   fails locally, and the server must abort the in-flight execution (§4.8 server side) or
   a stopped cell leaves a `bash` or `write_file` running with nobody waiting: a side
@@ -546,6 +601,19 @@ in Phase C.)
    rolling window and 50 KB spill exist to protect *model context*; kernel callers
    bypass that by construction, so copying the model path's constraints would cargo-cult
    the wrong layer's reason.
+ 9. **Structural navigation (round 3)** — does a model-level `code_search` wrapper
+    (ast-grep CLI) ship as an additive tool independent of the Phase A slices (it
+    doesn't touch protocol v2), and when does the in-kernel projection follow (the
+    exposure list, §4.10)? One tool or two (`code_search` vs `code_outline`)? Is `sg`
+    a dependency in the onboarding profiles (remote hosts = the Phase C shape)? Pattern-
+    syntax education via a kernel-loadable reference file — the §4.9 "API documentation
+    lives kernel-side" principle applied to `llms-full.txt` (on demand, zero prompt
+    bytes)? And is `sg outline` a per-project context-orientation feature (a different
+    seam — noted here, designed separately)?
+    → Lean (10-13): ship the model-level wrapper first — cheap, separable, and it
+    shrinks the model's rg→read loops immediately; the in-kernel projection follows as
+    a Tier 1 row on the existing exposure list; `code_outline`/project-orientation
+    deferred as its own feature.
 
 ## 8. Sources
 
@@ -571,6 +639,14 @@ Prior art (rounds 1–2, all read at primary source except where noted):
   deepwiki.com/cline/cline/8.2 (terminal modes — corroborated via source trace);
   github.com/anthropics/claude-code/issues/9881 (no official interactive shell);
   github.com/knot0-com/repl-scratchpad (tmux-backed Python REPL skill, print contract)
+- ast-grep (round 3): ast-grep.github.io (introduction; advanced/prompting — official
+  AI-usage guide; reference/cli/outline; blog: optimize-ast-grep, tree-sitter-rust-
+  rewrite — all read); github.com/ast-grep/ast-grep-mcp (official experimental MCP, read)
+- Repository-map lineage (round 3): aider.chat 2023-10-22 repomap post + aider.chat
+  /docs/repomap.html; agentpatterns.ai/context-engineering/repository-map-pattern
+  (distillation, corroborated); vadim.blog "Claude Code Doesn't Index Your Codebase"
+  (corroborated); LlamaIndex CodeNodeParser (tree-sitter RAG chunking — corroborated,
+  not read)
 
 Porrima: [session-python-kernel.md](session-python-kernel.md),
 [remote-python-kernel.md](remote-python-kernel.md),
@@ -618,4 +694,9 @@ not "one new message type."
 per-kernel FIFO dispatcher, server-enforced budgets, and the `read_file` round-trip
 ship dark behind `PORRIMA_KERNEL_TOOLS=1`; the implementation refinements (§4.10)
 are recorded. Slice 1 (`bash` + lock-rule proof) is next.
+
+**Round 3 (10-13, quje): structural navigation.** ast-grep + repository-map research
+folded in as §2.5, with a Tier 1 `code_search` row (§4.3), §7 Q9 (model-level-first
+lean), and §8 sources. No architecture change; the only interaction with slice 0 is the
+exposure-list mechanism (§4.10) the in-kernel projection would ride.
 
