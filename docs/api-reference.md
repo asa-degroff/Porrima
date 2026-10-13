@@ -2,7 +2,7 @@
 
 Server runs on port 3001. All `/api/*` routes except `/api/auth/*` and `/api/app/*` are behind `requireAuth` (`server/src/middleware/auth.ts`). JSON responses are compressed unless the route is an SSE stream (`server/src/middleware/compression.ts`).
 
-**Endpoint count: 185.** Tables are grouped by domain. Paths are the full mounted paths (mount prefix + router path), derived from `server/src/index.ts` and `server/src/routes/*.ts`.
+**Endpoint count: 198.** Tables are grouped by domain. Paths are the full mounted paths (mount prefix + router path), derived from `server/src/index.ts` and `server/src/routes/*.ts`.
 
 ---
 
@@ -150,6 +150,15 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | GET | `/api/reranker-stats` | Reranker usage and latency stats |
 | POST | `/api/reranker-stats/clear` | Reset reranker stats |
 
+## Browser (`routes/browser.ts`)
+
+Live browser observability (browser-observability Phases 1–2). Frames are observability bytes, not conversation content — bounded per chat, cleared when the browser session closes, never on disk.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/browser/frame/:chatId/:frameId` | Serve one auto-captured browser action frame (PNG) from the in-memory ring. Immutable per `frameId` (fresh uuid per capture). **404** when not found or expired |
+| GET | `/api/browser/status/:chatId` | Browser-session snapshot for the live viewer: attached/launched mode, active page URL, remote-debugging consent wait, and the newest frame in the ring |
+
 ## Settings (`routes/settings.ts`)
 
 | Method | Endpoint | Description |
@@ -163,6 +172,7 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | GET | `/api/settings/llama-binaries` | Discover available llama.cpp binaries |
 | GET | `/api/settings/slot-assignments` | Enforced-slot lease view |
 | GET | `/api/settings/cache-residency` | Observed prompt-cache residency, enriched with warm-queue position |
+| GET | `/api/settings/kv-snapshots` | Disk-tier KV snapshot parking status (kv-snapshot-parking §10 Phase 4): parking summary plus registry rows, with chat titles resolved at read time (mirrors `/cache-residency`) |
 | GET | `/api/settings/ssh-connections` | List remote SSH connections |
 | POST | `/api/settings/ssh-connections` | Create an SSH connection |
 | PATCH | `/api/settings/ssh-connections/:id` | Update an SSH connection |
@@ -274,6 +284,20 @@ Markdown images in message content that point at a local filesystem path (`/tmp/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/local-images?path=...` | Serve a local image referenced by markdown |
+
+## Text-to-speech (`routes/tts.ts`)
+
+TTS with three backends — Kokoro, Qwen3-TTS, Supertonic-3 — generator-based streaming over a Python worker pool. `?backend=kokoro\|qwen3-tts\|supertonic-3` selects a backend where applicable (default `kokoro`).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/tts/voices` | Available voices grouped by category. `?backend=` |
+| GET | `/api/tts/settings` | Current TTS settings |
+| POST | `/api/tts/settings` | Update TTS settings (`voice`, `speed`, `pitch`, `enabled`, `autoReadEnabled`, `ttsTextMode`, …) |
+| POST | `/api/tts/generate` | Generate TTS audio from text (single JSON response with the cached audio reference) |
+| POST | `/api/tts/generate-stream` | Generate TTS audio as independently playable chunks (SSE). `streamMode: "data"` inlines base64 audio; default sends `audioUrl` references |
+| GET | `/api/tts/audio/:cacheKey.wav` | Serve a cached audio file. 64-hex cache key, **400** when malformed; checked across all backends |
+| GET | `/api/tts/status` | TTS service availability for a backend (`?backend=`), including install checks |
 
 ## Push notifications (`routes/push.ts`)
 
