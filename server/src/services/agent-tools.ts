@@ -14,10 +14,12 @@ import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
 import {
   executeInKernel,
+  kernelToolsEnabled,
   killKernelJob,
   listKernelJobs,
   tailKernelJob,
   type KernelFallbackReason,
+  type KernelToolDispatcher,
 } from "./python-kernel.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, BrowserFrameEvent, InlineVisual, Project } from "../types.js";
@@ -474,6 +476,48 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
   return allTools
     .filter((tool) => toolIsAvailable(tool.name, chatType))
     .map((t) => ({ name: t.name, description: t.description, parameters: (t as { parameters?: unknown }).parameters }));
+}
+
+/**
+ * Kernel tool surface for in-kernel composition (docs/design/kernel-codemode.md
+ * §4.9): the same adapter call and settings-driven limits as the model-level
+ * tool, minus the turn-bound machinery — no `wrapResult` context-budget
+ * truncation (kernel results never enter model context), no side-effect
+ * callbacks, an AbortSignal owned by the kernel manager. Construction lives
+ * here (the registry side of the seam); the kernel manager never imports this
+ * module, the dispatcher rides in as a per-execute injection.
+ *
+ * Phase A vertical slice: `read_file` only. The `bash` case (which exercises
+ * the §4.9 lock rule against the run_python mutation hold) lands next; the
+ * per-kernel dispatch FIFO already serializes whatever is added.
+ */
+function createKernelToolDispatcher(workspace: WorkspaceAdapter): KernelToolDispatcher {
+  return {
+    tools: ["read_file"],
+    call: async (tool, args, signal) => {
+      if (tool !== "read_file") return { ok: false, error: `tool "${tool}" is not dispatchable` };
+      const settings = await getSettings().catch(() => undefined);
+      // The configured cap, NOT getReadFileMaxBytes: that clamp exists to fit
+      // one result inside the model's context budget (wrapResult's contract),
+      // and kernel results never enter context (§4.1 "Results are raw, not
+      // context-budgeted"). The dispatcher's own frame cap bounds the wire.
+      const result = await workspace.readFile(
+        args as Record<string, any>,
+        {
+          defaultLines: settings?.readFileDefaultLines,
+          maxBytes: settings?.readFileMaxBytes ?? 256 * 1024,
+        },
+        signal,
+      );
+      const text =
+        typeof result.content === "string"
+          ? result.content
+          : (Array.isArray(result.content) ? result.content : [])
+              .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+              .join("\n");
+      return result.isError ? { ok: false, error: text || "read failed" } : { ok: true, value: text };
+    },
+  };
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
@@ -991,6 +1035,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
             signal,
             background,
             host: kernelHost ?? undefined,
+            // Kernel tools ride the same per-execute seam; the manager gates
+            // on its env flag and registers this for the cell/job lifetime.
+            toolDispatcher: kernelToolsEnabled() ? createKernelToolDispatcher(workspace) : undefined,
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,

@@ -28,7 +28,7 @@ import {
 // sweep of child journals left by a crashed server.
 // ---------------------------------------------------------------------------
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAX_PROTOCOL_LINE_BYTES = 32 * 1024 * 1024;
 const READY_TIMEOUT_MS = 30_000;
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
@@ -63,6 +63,33 @@ const SNAPSHOT_MAX_BYTES_DEFAULT = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_VARIABLE_BYTES_DEFAULT = 16 * 1024 * 1024;
 const KERNEL_STATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const DISPLAY_MAX_IMAGES = 4;
+
+// In-kernel tool composition (docs/design/kernel-codemode.md §4.8/§4.9).
+// Phase A ships the reverse RPC channel with server-enforced budgets: a
+// per-cell/per-job call cap and a per-call timeout. Budgets live here, not in
+// the kernel — a wedged or buggy loop cannot be trusted to count itself (§4.1).
+// Values ride inline up to a cap (truncation marker at the boundary); spill
+// references are later scope.
+const KERNEL_TOOL_CALLS_MAX_DEFAULT = 64;
+const KERNEL_TOOL_TIMEOUT_MS_DEFAULT = 120_000;
+const KERNEL_TOOL_VALUE_MAX_CHARS = 2_000_000;
+
+function kernelToolCallsMax(): number {
+  return readPositiveIntEnv("PORRIMA_KERNEL_TOOL_CALLS_MAX", KERNEL_TOOL_CALLS_MAX_DEFAULT);
+}
+
+function kernelToolTimeoutMs(): number {
+  return readPositiveIntEnv("PORRIMA_KERNEL_TOOL_TIMEOUT_MS", KERNEL_TOOL_TIMEOUT_MS_DEFAULT);
+}
+
+/**
+ * Dark-launch gate: when off, execute requests carry no `tools` field, the
+ * driver never builds the namespace, and any arriving `tool_call` frame is
+ * refused by the dispatcher lookup (no live dispatcher is registered).
+ */
+export function kernelToolsEnabled(): boolean {
+  return process.env.PORRIMA_KERNEL_TOOLS === "1";
+}
 
 function snapshotMaxBytes(): number {
   return readPositiveIntEnv("PORRIMA_KERNEL_SNAPSHOT_MAX_BYTES", SNAPSHOT_MAX_BYTES_DEFAULT);
@@ -152,6 +179,31 @@ export interface KernelRunOptions {
   /** Transport/state host (§4.1). Defaults to localKernelHost — every
    *  pre-P4 caller keeps working unchanged. */
   host?: KernelHost;
+  /** Kernel-originated tool dispatch surface (§4.9). Only consulted when
+   *  `kernelToolsEnabled()`; the manager registers it for the cell's (or
+   *  job's) lifetime and refuses calls otherwise. */
+  toolDispatcher?: KernelToolDispatcher;
+}
+
+export interface KernelToolCallResult {
+  ok: boolean;
+  /** JSON-safe value returned into the kernel. Phase A: strings. */
+  value?: string;
+  error?: string;
+}
+
+/**
+ * A turn-independent tool execution surface, injected by the caller that
+ * starts the cell (agent-tools.ts owns construction — the kernel manager must
+ * never import the turn-scoped registry). `call` must respect the
+ * AbortSignal: the manager aborts it on cell settle, `tool_cancel`, the
+ * per-call timeout, and kernel exit, so a stopped cell can never leave a
+ * server-side execution running (§4.8 cancellation).
+ */
+export interface KernelToolDispatcher {
+  /** The exposed names — this list IS the kernel namespace authority. */
+  tools: string[];
+  call(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<KernelToolCallResult>;
 }
 
 interface KernelErrorEvent {
@@ -183,6 +235,9 @@ interface PendingExecution {
   /** Background acks resolve with the started message, not cell output. */
   background?: boolean;
   notice?: string | null;
+  /** Dispatcher handed to the cell this pending tracks (§4.9); background
+   *  pending re-keys it onto the jobId when the ack lands. */
+  toolDispatcher?: KernelToolDispatcher;
   resolve: (outcome: KernelRunOutcome) => void;
 }
 
@@ -216,6 +271,14 @@ interface KernelInstance {
   jobOrder: string[];
   /** Control-request (snapshot/restore) resolvers keyed by request id. */
   control: Map<string, (event: Record<string, any>) => void>;
+  /** Kernel-originated tool dispatch (§4.9): live dispatcher keyed by cell/job
+   *  id, one serial FIFO for all kernel calls (the SEQUENTIAL equivalent that
+   *  never re-enters the global workspace-label lock queue), per-cell budget
+   *  counters, and call_id → in-flight AbortControllers for cancellation. */
+  toolDispatchers: Map<string, KernelToolDispatcher>;
+  toolQueue: Promise<void>;
+  toolBudget: Map<string, number>;
+  toolCalls: Map<string, { cellId: string; controller: AbortController }>;
   pythonVersion: string;
   firstNotice: string | null;
   restoreIncomplete: boolean;
@@ -463,6 +526,7 @@ async function finishJob(instance: KernelInstance, event: Record<string, any>): 
   job.status = event.status === "ok" ? "done" : "error";
   job.timedOut = event.timed_out === true;
   job.finishedAt = Date.now();
+  if (jobId) cleanupKernelToolCell(instance, jobId);
   const result = await job.capture.finish().catch(() => null);
   if (result?.spillPath) {
     if (job.remoteSpill && instance.host.deliverJobOutput) {
@@ -660,6 +724,7 @@ function settlePending(
   instance.pending.delete(pending.id);
   instance.busy = false;
   instance.lastUsedAt = Date.now();
+  cleanupKernelToolCell(instance, pending.id);
 
   const output = outputView(instance, pending);
   const parts: string[] = [];
@@ -703,6 +768,7 @@ function failPending(instance: KernelInstance, pending: PendingExecution, messag
   pending.signal?.removeEventListener("abort", pending.onAbort!);
   instance.pending.delete(pending.id);
   instance.busy = false;
+  cleanupKernelToolCell(instance, pending.id);
   const tail = instance.stderrTail.trim();
   pending.resolve({
     mode: "kernel",
@@ -721,6 +787,7 @@ function wedgePending(instance: KernelInstance, pending: PendingExecution): void
   instance.busy = false;
   instance.wedged = true;
   instance.wedgedAt = Date.now();
+  cleanupKernelToolCell(instance, pending.id);
   console.warn(`[kernel] chat=${shortId(instance.chatId)} wedged: cell did not settle after interrupt`);
   pending.resolve({
     mode: "kernel",
@@ -738,10 +805,15 @@ function protocolFailure(instance: KernelInstance, reason: string): void {
   for (const pending of [...instance.pending.values()]) {
     failPending(instance, pending, "Python kernel protocol failure; the kernel was stopped.");
   }
+  abortAllKernelToolCalls(instance);
   void instance.proc.kill({ graceMs: 300 });
 }
 
 function handleEvent(instance: KernelInstance, event: Record<string, any>): void {
+  if (event.event === "tool_call" || event.event === "tool_cancel") {
+    handleKernelToolEvent(instance, event);
+    return;
+  }
   if (event.event === "job_done") {
     void finishJob(instance, event);
     return;
@@ -810,6 +882,12 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
         if (jobId && event.status === "ok") {
           instance.jobs.set(jobId, createJob(instance, jobId));
           instance.jobOrder.push(jobId);
+          // The job's cell identity is the driver-minted jobId (§4.8): re-key
+          // the dispatcher onto it so arriving tool_call frames find it.
+          if (pending.toolDispatcher) {
+            instance.toolDispatchers.delete(pending.id);
+            instance.toolDispatchers.set(jobId, pending.toolDispatcher);
+          }
           pending.resolve({
             mode: "kernel",
             isError: false,
@@ -817,6 +895,7 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
             content: `${pending.notice ? `${pending.notice}\n` : ""}Started background job ${jobId}. It runs without holding the turn; end your turn and check python_jobs on a later turn.`,
           });
         } else {
+          cleanupKernelToolCell(instance, pending.id);
           pending.resolve({
             mode: "kernel",
             isError: true,
@@ -835,6 +914,138 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
       // Unknown events are tolerated for forward compatibility (display, …).
       return;
   }
+}
+
+// ---------------------------------------------------------------------------
+// In-kernel tool composition — the reverse RPC dispatch (§4.8/§4.9).
+//
+// Kernel-originated calls execute against the caller-provided dispatcher on
+// one serial FIFO per kernel. That queue is the serialization the model loop
+// gets from SEQUENTIAL_TOOL_NAMES and the workspace mutation lock: kernel
+// dispatch must NEVER enter the global `workspace:<label>` queue, because a
+// foreground run_python already holds it for its whole call — a nested bash
+// would queue behind its own holder and deadlock (§4.9 lock semantics).
+// Budgets and timeouts are enforced here, not in the kernel.
+// ---------------------------------------------------------------------------
+
+function handleKernelToolEvent(instance: KernelInstance, event: Record<string, any>): void {
+  const callId = typeof event.call_id === "string" ? event.call_id : "";
+  if (!callId) return;
+  if (event.event === "tool_cancel") {
+    // The cell died mid-await; drop the in-flight execution. A late response
+    // is ignored by the driver's pending table, so nothing else to do.
+    const entry = instance.toolCalls.get(callId);
+    if (entry) {
+      entry.controller.abort();
+      instance.toolCalls.delete(callId);
+    }
+    return;
+  }
+  instance.toolQueue = instance.toolQueue
+    .then(() => dispatchKernelTool(instance, callId, event))
+    .catch(() => {});
+}
+
+async function dispatchKernelTool(
+  instance: KernelInstance,
+  callId: string,
+  event: Record<string, any>,
+): Promise<void> {
+  const cellId = typeof event.cell_id === "string" ? event.cell_id : "";
+  const tool = typeof event.tool === "string" ? event.tool : "";
+  const respond = (result: Record<string, unknown>): void => {
+    sendRequest(instance, { response: "tool_result", call_id: callId, ...result });
+  };
+  const dispatcher = instance.toolDispatchers.get(cellId);
+  if (!dispatcher) {
+    respond({
+      ok: false,
+      error: "no live tool dispatcher for this cell (kernel tools disabled, or the cell already settled)",
+    });
+    return;
+  }
+  const args = event.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    respond({ ok: false, error: "tool_call args must be a JSON object" });
+    return;
+  }
+  if (!dispatcher.tools.includes(tool)) {
+    respond({ ok: false, error: `tool "${tool}" is not exposed by this kernel` });
+    return;
+  }
+  const max = kernelToolCallsMax();
+  const used = instance.toolBudget.get(cellId) ?? 0;
+  if (used >= max) {
+    respond({
+      ok: false,
+      error: `kernel tool call budget exhausted (${max} calls for this execution); split the work across calls/turns or raise PORRIMA_KERNEL_TOOL_CALLS_MAX`,
+    });
+    return;
+  }
+  instance.toolBudget.set(cellId, used + 1);
+
+  const controller = new AbortController();
+  instance.toolCalls.set(callId, { cellId, controller });
+  try {
+    const timer = setTimeout(() => controller.abort(), kernelToolTimeoutMs());
+    timer.unref?.();
+    // Race the dispatcher against the abort signal: a dispatcher that ignores
+    // its signal cannot wedge the per-kernel FIFO (§4.8 cancellation).
+    const outcome = await Promise.race([
+      dispatcher.call(tool, args as Record<string, unknown>, controller.signal),
+      new Promise<KernelToolCallResult>((resolve) => {
+        controller.signal.addEventListener("abort", () => {
+          resolve({
+            ok: false,
+            error: "kernel tool call aborted (per-call timeout, cell death, or cancel)",
+          });
+        });
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!outcome.ok) {
+      respond({ ok: false, error: String(outcome.error ?? "tool call failed") });
+      return;
+    }
+    const raw =
+      typeof outcome.value === "string"
+        ? outcome.value
+        : outcome.value === undefined
+          ? ""
+          : JSON.stringify(outcome.value);
+    const total = raw.length;
+    const truncated = total > KERNEL_TOOL_VALUE_MAX_CHARS;
+    respond({
+      ok: true,
+      value: truncated ? raw.slice(0, KERNEL_TOOL_VALUE_MAX_CHARS) : raw,
+      truncated,
+      total_chars: total,
+    });
+  } catch (error: any) {
+    respond({ ok: false, error: `dispatch failed: ${error?.message ?? String(error)}` });
+  } finally {
+    instance.toolCalls.delete(callId);
+  }
+}
+
+function cleanupKernelToolCell(instance: KernelInstance, cellId: string): void {
+  instance.toolDispatchers.delete(cellId);
+  instance.toolBudget.delete(cellId);
+  for (const [callId, entry] of [...instance.toolCalls]) {
+    if (entry.cellId === cellId) {
+      entry.controller.abort();
+      instance.toolCalls.delete(callId);
+    }
+  }
+}
+
+function abortAllKernelToolCalls(instance: KernelInstance): void {
+  for (const [callId, entry] of [...instance.toolCalls]) {
+    entry.controller.abort();
+    instance.toolCalls.delete(callId);
+  }
+  instance.toolDispatchers.clear();
+  instance.toolBudget.clear();
 }
 
 function handleLine(instance: KernelInstance, line: string): void {
@@ -945,6 +1156,10 @@ async function spawnKernel(chatId: string, cwd: string, host: KernelHost): Promi
     jobs: new Map(),
     jobOrder: [],
     control: new Map(),
+    toolDispatchers: new Map(),
+    toolQueue: Promise.resolve(),
+    toolBudget: new Map(),
+    toolCalls: new Map(),
     pythonVersion: "",
     firstNotice: null,
     restoreIncomplete: false,
@@ -1009,6 +1224,7 @@ async function spawnKernel(chatId: string, cwd: string, host: KernelHost): Promi
     for (const pending of [...instance.pending.values()]) {
       failPending(instance, pending, `Python kernel exited unexpectedly (${detail}).`);
     }
+    abortAllKernelToolCalls(instance);
   });
 
   // Restore a previous snapshot before the kernel serves any cell. A failed
@@ -1150,15 +1366,18 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
     }
     const notice = consumeNotice(instance, acquisition.recreated);
     const id = randomUUID();
+    const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
     return new Promise<KernelRunOutcome>((resolve) => {
       const pending = makePendingBase(id, timeoutMs, signal, undefined, notice);
       pending.background = true;
+      pending.toolDispatcher = dispatcher;
       pending.resolve = resolve;
       // The ack deadline is short: the driver acks before running the job.
       pending.deadline = setTimeout(() => {
         if (pending.settled) return;
         pending.settled = true;
         instance.pending.delete(id);
+        cleanupKernelToolCell(instance, id);
         pending.resolve({
           mode: "kernel",
           isError: true,
@@ -1167,7 +1386,15 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       }, JOB_ACK_TIMEOUT_MS);
       pending.deadline.unref?.();
       instance.pending.set(id, pending);
-      sendRequest(instance, { type: "execute", id, code, timeout_ms: timeoutMs, background: true });
+      if (dispatcher) instance.toolDispatchers.set(id, dispatcher);
+      sendRequest(instance, {
+        type: "execute",
+        id,
+        code,
+        timeout_ms: timeoutMs,
+        background: true,
+        ...(dispatcher ? { tools: dispatcher.tools } : {}),
+      });
     });
   }
 
@@ -1197,8 +1424,10 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
   const notice = consumeNotice(instance, acquisition.recreated);
 
   const id = randomUUID();
+  const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
   return new Promise<KernelRunOutcome>((resolve) => {
     const pending = makePendingBase(id, timeoutMs, signal, opts.onUpdate, notice);
+    pending.toolDispatcher = dispatcher;
     pending.resolve = (outcome) => {
       if (notice && outcome.mode === "kernel") {
         resolve({ ...outcome, content: `${notice}\n${outcome.content}` });
@@ -1226,7 +1455,14 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
 
     instance.pending.set(id, pending);
     instance.busy = true;
-    sendRequest(instance, { type: "execute", id, code, timeout_ms: timeoutMs });
+    if (dispatcher) instance.toolDispatchers.set(id, dispatcher);
+    sendRequest(instance, {
+      type: "execute",
+      id,
+      code,
+      timeout_ms: timeoutMs,
+      ...(dispatcher ? { tools: dispatcher.tools } : {}),
+    });
   });
 }
 
@@ -1277,6 +1513,7 @@ export async function disposeKernel(
   for (const pending of [...instance.pending.values()]) {
     failPending(instance, pending, "Python kernel disposed.");
   }
+  abortAllKernelToolCalls(instance);
   for (const job of instance.jobs.values()) {
     if (job.status !== "running") continue;
     job.status = "error";

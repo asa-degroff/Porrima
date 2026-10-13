@@ -19,6 +19,8 @@ import {
   type KernelJobInfo,
   type KernelRunOutcome,
   type KernelSpawnPlan,
+  type KernelToolCallResult,
+  type KernelToolDispatcher,
 } from "./python-kernel.js";
 import { listSupervised } from "./process-supervisor.js";
 
@@ -52,13 +54,21 @@ afterEach(async () => {
   delete process.env.PORRIMA_KERNEL_ROOT;
   delete process.env.PORRIMA_KERNEL_L2_GRACE_MS;
   delete process.env.PORRIMA_KERNEL_WEDGE_GRACE_MS;
+  delete process.env.PORRIMA_KERNEL_TOOLS;
+  delete process.env.PORRIMA_KERNEL_TOOL_CALLS_MAX;
   await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 function run(
   chatId: string,
   code: string,
-  opts: { timeoutMs?: number; signal?: AbortSignal; onUpdate?: (text: string) => void; background?: boolean } = {},
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onUpdate?: (text: string) => void;
+    background?: boolean;
+    toolDispatcher?: KernelToolDispatcher;
+  } = {},
 ): Promise<KernelRunOutcome> {
   return executeInKernel({
     chatId,
@@ -68,6 +78,7 @@ function run(
     signal: opts.signal,
     onUpdate: opts.onUpdate,
     background: opts.background,
+    toolDispatcher: opts.toolDispatcher,
   });
 }
 
@@ -769,5 +780,182 @@ describe("python kernel manager", () => {
       await waitUntil(async () => (await readFile(join(stateDir, "children.jsonl"), "utf8")).length === 0, 5_000, "journal truncate");
       await disposeKernel("r-sweep", { removeState: true });
     }, 60_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// In-kernel tool composition — the protocol v2 reverse RPC channel
+// (docs/design/kernel-codemode.md §4.8/§4.9, Phase A slice 0).
+// ---------------------------------------------------------------------------
+
+describe("kernel tools (protocol v2)", () => {
+  it("round-trips a tool call through the reverse RPC channel", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (tool, args): Promise<KernelToolCallResult> => {
+        calls.push({ tool, args });
+        return { ok: true, value: `content of ${String(args.path)}` };
+      },
+    };
+    const outcome = kernel(
+      await run("ktools-a", 'text = await tools.read_file(path="hello.txt")\nprint(text)', { toolDispatcher: dispatcher }),
+    );
+    expect(outcome.isError).toBe(false);
+    expect(outcome.content).toContain("content of hello.txt");
+    expect(calls).toEqual([{ tool: "read_file", args: { path: "hello.txt" } }]);
+  });
+
+  it("exposes no tools namespace when the flag is off", async () => {
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (): Promise<KernelToolCallResult> => ({ ok: true, value: "x" }),
+    };
+    // PORRIMA_KERNEL_TOOLS unset: the manager never sends the tools field,
+    // the driver builds nothing, the cell hits NameError — dark launch.
+    const outcome = kernel(
+      await run("ktools-b", 'await tools.read_file(path="x")', { toolDispatcher: dispatcher }),
+    );
+    expect(outcome.isError).toBe(true);
+    expect(outcome.content).toContain("NameError");
+  });
+
+  it("raises dispatcher rejections into the calling cell as KernelToolError", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (): Promise<KernelToolCallResult> => ({ ok: false, error: "dispatcher refused: test policy" }),
+    };
+    const outcome = kernel(
+      await run("ktools-c", 'await tools.read_file(path="x")', { toolDispatcher: dispatcher }),
+    );
+    expect(outcome.isError).toBe(true);
+    expect(outcome.content).toContain("KernelToolError");
+    expect(outcome.content).toContain("dispatcher refused: test policy");
+  });
+
+  it("aborts the in-flight dispatch when the cell dies to the interrupt ladder", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    let sawAbort = false;
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: (_tool, _args, signal): Promise<KernelToolCallResult> =>
+        new Promise((resolve) => {
+          signal.addEventListener("abort", () => {
+            sawAbort = true;
+            resolve({ ok: false, error: "aborted" });
+          });
+        }),
+    };
+    const controller = new AbortController();
+    const pending = run("ktools-d", 'await tools.read_file(path="forever")', {
+      signal: controller.signal,
+      timeoutMs: 15_000,
+      toolDispatcher: dispatcher,
+    });
+    setTimeout(() => controller.abort(), 300);
+    const outcome = kernel(await pending);
+    expect(outcome.isError).toBe(true);
+    await waitUntil(() => sawAbort, 8000, "dispatcher signal abort");
+
+    // The namespace survives (same contract as any interrupted cell).
+    const after = kernel(
+      await run("ktools-d", 'x = 7\nprint("alive", x)', { toolDispatcher: dispatcher }),
+    );
+    expect(after.isError).toBe(false);
+    expect(after.content).toContain("alive 7");
+  });
+
+  it("serializes kernel-origin calls on the per-kernel FIFO", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    const events: string[] = [];
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (tool, args): Promise<KernelToolCallResult> => {
+        events.push(`start:${String(args.path)}`);
+        await delay(30);
+        events.push(`end:${String(args.path)}`);
+        return { ok: true, value: "v" };
+      },
+    };
+    const outcome = kernel(
+      await run(
+        "ktools-e",
+        'import asyncio\nawait asyncio.gather(tools.read_file(path="a"), tools.read_file(path="b"), tools.read_file(path="c"))',
+        { toolDispatcher: dispatcher },
+      ),
+    );
+    expect(outcome.isError).toBe(false);
+    // Strict alternation: no two dispatches ever overlap (gather included).
+    expect(events).toEqual(["start:a", "end:a", "start:b", "end:b", "start:c", "end:c"]);
+  });
+
+  it("enforces the per-cell call budget server-side", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    process.env.PORRIMA_KERNEL_TOOL_CALLS_MAX = "3";
+    let dispatched = 0;
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (): Promise<KernelToolCallResult> => {
+        dispatched++;
+        return { ok: true, value: "v" };
+      },
+    };
+    const outcome = kernel(
+      await run(
+        "ktools-f",
+        'for i in range(4):\n    await tools.read_file(path=str(i))\nprint("done")',
+        { toolDispatcher: dispatcher },
+      ),
+    );
+    expect(outcome.isError).toBe(true);
+    expect(dispatched).toBe(3);
+    expect(outcome.content).toContain("budget exhausted");
+  });
+
+  it("dispatches from a background job keyed on the jobId", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      call: async (_tool, args): Promise<KernelToolCallResult> => ({
+        ok: true,
+        value: `job-read:${String(args.path)}`,
+      }),
+    };
+    const ack = kernel(
+      await run(
+        "ktools-g",
+        'r = await tools.read_file(path="late")\nprint(r)',
+        { background: true, toolDispatcher: dispatcher },
+      ),
+    );
+    expect(ack.isError).toBe(false);
+    expect(ack.jobId).toBeTruthy();
+    await waitForJob("ktools-g", (jobs) => jobs.some((j) => j.status !== "running"));
+    const tail = tailKernelJob("ktools-g", ack.jobId!, 40);
+    expect(tail.found).toBe(true);
+    expect(tail.text).toContain("job-read:late");
+  });
+
+  it("fails a kernel exit with outstanding dispatches cleanly (proc.exited cleanup)", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["read_file"],
+      // Never resolves on its own; only the abort branch ends it.
+      call: (_tool, _args, signal): Promise<KernelToolCallResult> =>
+        new Promise((resolve) => {
+          signal.addEventListener("abort", () => resolve({ ok: false, error: "aborted" }));
+        }),
+    };
+    const pending = run("ktools-h", 'await tools.read_file(path="hang")', {
+      timeoutMs: 4_000,
+      toolDispatcher: dispatcher,
+    });
+    // Force the kernel away underneath the awaited call: L3 dispose.
+    await delay(300);
+    await disposeKernel("ktools-h", { force: true });
+    const outcome = kernel(await pending);
+    expect(outcome.isError).toBe(true);
   });
 });
