@@ -172,6 +172,13 @@ criterion. `sg outline` opens a project-context orientation seam (outline entry 
 range-read by byte offset → transform, without full file reads). Structural rewriting
 lands in Tier 2 by construction (file mutation → provenance gate).
 
+**Round 4 (10-13):** the adoption survey — which agent harnesses actually use
+ast-grep and in what shape (prompting layer, skills, MCP, harness-native tools
+in the pi ecosystem / PraisonAI / Gemini CLI / Zed's syntax-enriched grep, and
+the CI ratchet-gate role) — lives in [code-search.md](code-search.md), its
+round-4 section, with the design refinements it validated (pagination,
+parse-error reporting, pattern pre-validation).
+
 ## 3. Design axes, and where Porrima sits
 
 | Axis | CF | opencode | Codex | prime-agent | smolagents | **Porrima (today)** |

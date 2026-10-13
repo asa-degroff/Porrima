@@ -1,6 +1,7 @@
 # Code Search — structural code navigation for Porrima
 
-**Status:** Design draft (10-13). Written for coding-agent review. Extends the
+**Status:** Design draft (10-13). Written for coding-agent review; round-4
+adoption survey folded in 10-13. Extends the
 kernel-codemode doc — it is the concrete design behind the §4.3 Tier 1
 `code_search` row and answers §7 Q9 (model-level wrapper first, in-kernel
 projection second, outline deferred as its own feature).
@@ -89,6 +90,118 @@ behind the codemode Phase B provenance seam (Tier 2 by construction).
 - **The kernel makes it strictly more useful than model-level alone** — the
   rule-authoring loop, the pattern-syntax on-ramp (§3.3, §7).
 
+### Adoption survey: which agent harnesses use ast-grep, and how (round 4, 10-13)
+
+The prior-art survey (rounds 1–3, codemode §2–§2.5) covered the *engine*
+lineages; this round covers *adoption* — which agent harnesses actually put
+ast-grep in front of a model, and in what shape. Five patterns in the field:
+
+**1. The prompting layer** (no new tool). The official guide's simplest
+pattern: a line in AGENTS.md — *"You are operating in an environment where
+`ast-grep` is installed… default to using `ast-grep --lang [lang] -p
+'<pattern>'`… avoid text-only search unless explicitly requested"* (read).
+Field report from a Claude Code user (read, 2025-11): the split that works is
+**MCP for capability, skill for judgment** — "tools give power, skills give
+intelligence" — with a decision tree (code structure → ast-grep; text,
+comments, logs, config → ripgrep) and one line in CLAUDE.md. Claude Code has
+no built-in ast-grep tool; adoption there is entirely prompting/skill/MCP —
+consistent with its no-index stance.
+
+**2. Skills** (progressive disclosure of when/why/how). The official skill
+(repo `ast-grep/claude-skill`, also surfaced as `ast-grep/agent-skill` — read),
+Hermes Agent's optional `ast-grep` skill (v1.0.0, vendored from
+code-yeongyu/ast-grep-skill, read), and community variants. The Hermes skill
+is the most instructive: it ships a Python wrapper that **validates patterns
+offline before invoking `sg`** (regex-shaped patterns get a hint and never
+reach the binary), and documents three internalized pitfalls — (1) ast-grep
+is not regex (`foo|bar` is a bitwise-or; `.*foo` and `\w+` don't parse),
+(2) patterns must be valid code (`def $FN($$):` fails on the trailing
+colon), (3) `--update-all` and `--json` are **silently mutually exclusive** —
+preview-then-apply must be two passes. Its routing rule: "does the answer
+depend on the language's syntax tree, or just on the file's bytes?"
+
+**3. MCP** (capability over the protocol). The official experimental
+`ast-grep-mcp` (four tools, the rule-development loop: decompose → sub-rules
+→ combine → revise → dump AST → test snippet; read) and a community server
+(`thrawn01/mcp-ast-grep`, read). This is the pattern the kernel projection
+replaces — see §2 above.
+
+**4. Harness-native tools** (first-class tools inside the agent) — the
+pattern this doc designs into. Four implementations found:
+- **pi ecosystem — two independent implementations** (both read, from source):
+  - `pi-ast-grep` (code-yeongyu, a faithful port of the oh-my-openagent tool
+    stack, re-licensed MIT for the pi-coding-agent ecosystem): `ast_grep_search`
+    + `ast_grep_replace` (**dry-run by default**), `lang` **required**, 25
+    languages, compact text output (`file` → `line:col` → text), an
+    anti-pattern table that detects regex-shaped patterns and **nods the
+    model toward grep**, and a six-step binary resolver (cached download →
+    `@ast-grep/cli` npm → platform npm packages → PATH → Homebrew → GitHub
+    release auto-download) with an explicit trust-model caveat (no checksum
+    beyond TLS; `PI_OFFLINE=1` for manual install).
+  - `oh-my-pi` (`packages/coding-agent/src/tools/ast-grep.ts`): a single
+    `ast_grep` tool with schema `{pat, path?, skip?}` — **pagination via
+    skip/limit** with a retention heap that keeps the best matches across
+    multiple search targets; runs **in-process through the napi binding**
+    (`@oh-my-pi/pi-natives`), not a subprocess; collects and reports
+    **per-file parse errors separately** (capped, with totals); approval
+    class `read`; `loadMode: discoverable` (lazy tool loading); tool
+    description carried in a separate rendered prompt file with five worked
+    examples; structured details alongside the model-facing text
+    (`matchCount`, `fileCount`, `filesSearched`, `limitReached`,
+    `parseErrors`).
+- **PraisonAI** (Python multi-agent framework; read): `ast_grep_search`
+  (**JSON output by default**), `ast_grep_rewrite` (dry-run default),
+  `ast_grep_scan` (YAML rules); **path confinement** (paths must resolve
+  inside the workspace — rejected before `sg` runs); **10,000-char output
+  cap** with head+tail preview + *"Full output saved to: <path>"* pointer and
+  an env-var override — structurally the same spill-reference pattern as
+  Porrima's tool-output store; graceful fallback when ast-grep isn't
+  installed (returns install instructions, never crashes); 60 s/120 s
+  timeouts.
+- **Gemini CLI** (community extension, stevenAthompson/ast-grep-extension;
+  read): four tools — `ast_read` (**structural read of one node** — inspect a
+  class or function without reading the file; outline-adjacent),
+  `ast_write`, `ast_grep_search`, `ast_grep_rewrite`; "one of a handful of
+  extensions that Gemini CLI actually asked me to build… it uses it frequently
+  as the builtin 'Replace' command seems to be pretty primitive"; an async
+  mode that detaches long searches, writes output to a project `tmp/` file,
+  and notifies via **tmux injection** (a harness-environment hack); tips
+  insist on explicit `lang`.
+- **Zed** (editor agent; read): the contrasting architecture — Zed does not
+  add a structural-search tool. Instead (PR #29601, merged 2025-04-29) it
+  **enriches the existing agent `grep` tool with syntax information**: match
+  context is expanded to the parent syntax node's range, and match headers
+  carry **symbol breadcrumbs** (`### impl GitRepository for RealGitRepository
+  › fn compare_checkpoints › L1278-1284`) so the model gathers structure
+  before reading files. Reported eval impact: better diffs, fewer tool
+  failures, reduced total turns. Stated future work: an "elision" output mode
+  combining per-file matches while keeping symbol declaration lines.
+
+**5. CI / rule-system role** (non-agentic). The `harness-engineering` repo's
+`ast-grep-setup` skill (read): ast-grep as a **repository rule engine** —
+`sgconfig.yml`, YAML rule files with a validation script, `ast-grep test`
+snapshots, and **ratchet gates** (block new violations while grandfathering
+existing ones), architecture boundaries, a ready-made TypeScript rule
+library (no-floating-promises, no-unsafe-any, …). This is ast-grep as a
+durable project artifact, not an agent tool — out of scope for this doc,
+noted because the same rule syntax serves both roles.
+
+**Convergences the survey validates in this design:** rewrite-dry-run-default
+and the anti-regex guard are universal across implementations (they should be
+first-class, not afterthoughts — §3.2); output bounding with a saved-file
+pointer is PraisonAI's exact spill pattern; in-process napi execution is
+demonstrated in the pi ecosystem (oh-my-pi), not hypothetical; structured
+metadata alongside model-facing text is the oh-my-pi shape; `lang` handling
+splits (required in pi-ast-grep/Gemini CLI vs auto-detect — open question 2).
+**Divergences named, not resolved:** Zed's in-situ enrichment (structure
+injected into the text tool) vs this doc's default-shift (a dedicated
+structural tool); pagination (`skip`/`limit` in oh-my-pi) is absent from this
+design (open question 8); `ast_read`-style single-node structural reads sit
+between search and outline (open question 9). **Not adopting ast-grep
+(anywhere found):** aider (tree-sitter directly in `repomap.py` — the
+precomputed-map lineage), and no built-in surface in Cursor/Copilot/Codex/
+opencode (the ripgrep lineages of codemode §2–3).
+
 ## 3. Design
 
 ### 3.1 One executor, two projections
@@ -154,6 +267,15 @@ plausible but not measured). It is a slice-0 acceptance check, not an
 assumption. If it does not, the executor filters through the same ignore
 logic the adapter uses for `list_files`.
 
+**Parse errors, reported separately.** Unparseable files are a normal
+occurrence (generated code, unusual dialects), and silently dropping them
+makes "0 matches" ambiguous. The oh-my-pi implementation (round 4, read) sets
+the pattern: collect per-file parse errors, cap the list, report the total,
+and surface them *alongside* the matches — never folded into them. The
+executor does the same: `matches` + `parseErrors[]` + `parseErrorsTotal`, with
+the text projection appending a one-line summary ("2 files skipped: parse
+errors — see …" when non-empty).
+
 **Remote workspaces: the carve-out.** The server cannot parse files it cannot
 read locally without N adapter reads. Two options, staged:
 - **(b, first)** adapter-read + in-process parse: read the candidate files
@@ -212,9 +334,20 @@ the failure mode (cost #1) is authoring, not calling. Cheatsheet content
 - `fn $NAME($$$ARGS)` / `function $NAME($ARG)` — structure with metavariables
 - `$VAR = await $CALL()` — single metavariables bind; `$$$NAME` binds *lists*
 - plain text with no metavariables is a **literal** match
-- the classic trap (verified via `--debug-query`): `$$` is *not* a
-  multi-element metavariable — it parses as a bare identifier named `$$`.
+- the classic trap (verified via `--debug-query`): `$` is *not* a
+  multi-element metavariable — it parses as a bare identifier named `$`.
   Three dollars plus a name is the list syntax.
+
+**Pattern pre-validation.** Every serious implementation in the field (round
+4) guards against regex-shaped patterns *before* the call — pi-ast-grep
+detects them and nudges toward grep, the Hermes wrapper validates offline and
+never invokes `sg` on a regex-shaped pattern, the skills carry anti-pattern
+tables. The executor does the cheap half mechanically: the napi `pattern()`
+compile fails on invalid patterns (the error is a tool error carrying
+ast-grep's message), and a small heuristic rejects the classic regex shapes
+(`\w`, `\d`, `.*`, `|`, `[a-z]`) with the hint *"ast-grep patterns are code,
+not regex — for text search use `rg` via bash"* — saving a round-trip and
+pointing the model at the right tool instead of a confusing empty result.
 
 ### 3.3 The kernel projection — Phase 1
 
@@ -378,6 +511,19 @@ list and follows as soon as the executor exists.
 7. **Does the model-level tool need the `metaVariables` in its text
    output?** (e.g. `...:1048 [toolDispatcher]: ...`). Lean: no — bindings are
    a kernel/computation concern; the text index stays one match per line.
+8. **Pagination.** oh-my-pi (round 4) adds `skip` alongside its match limit —
+   page through a 47-match result without re-running the query from zero.
+   Lean: add `skip` to the schema in phase 0; it is three words of executor
+   work and the text projection already carries the total count to make it
+   useful.
+9. **In-situ enrichment / single-node structural reads.** Zed (round 4) does
+   not add a structural tool — it enriches the existing `grep` output with
+   syntax (parent-node context ranges, symbol breadcrumbs). The adjacent
+   moves for Porrima are *read_file* context selection by syntax node range
+   instead of fixed lines, and Gemini CLI's `ast_read`-style single-node
+   structural reads — same territory, tool-side. Named here as a future
+   direction (a `read_file` refinement or the outline primitive of §3.4, not
+   a new tool); not designed in this doc.
 
 ## 9. Sources
 
@@ -394,6 +540,28 @@ list and follows as soon as the executor exists.
   the tree-sitter Rust-rewrite blog post (agent-workload scoping); the
   prompting/AGENTS.md pattern and `llms-full.txt`; the official MCP
   (`ast-grep-mcp`, four tools, ~75% token delta claim).
+- **Read** (round 4, 10-13, adoption survey): the ast-grep prompting guide
+  (the four adoption patterns; the AGENTS.md example attributed to a Kieran
+  Klaassen post); `pi-ast-grep` README (tool set, `lang` required, 25
+  languages, six-step binary resolution, trust-model caveat, anti-pattern
+  table); `oh-my-pi` `packages/coding-agent/src/tools/ast-grep.ts` source
+  (`pat`/`path`/`skip` schema, retention-heap pagination, per-file parse
+  errors, in-process napi via `@oh-my-pi/pi-natives`, `approval: read`,
+  `loadMode: discoverable`, prompt-file description with examples);
+  PraisonAI ast-grep tools docs (JSON default, path confinement, 10k-char
+  cap with saved-file pointer, 60/120 s timeouts, not-installed fallback);
+  Hermes Agent ast-grep skill docs (offline pattern validation, the
+  `--json`/`--update-all` silent mutual exclusivity, the syntax-tree-vs-bytes
+  routing rule); Gemini CLI `ast-grep-extension` README (`ast_read`/
+  `ast_write`/search/rewrite, tmux-injection async mode, "asked me to build"
+  quote); Zed PR #29601 (syntax-enriched agent grep: parent-node context,
+  symbol breadcrumbs, reported eval gains, elision plan);
+  `harness-engineering` ast-grep-setup skill (sgconfig, YAML rule tests,
+  ratchet gates); nohzafk "teaching Claude Code to use ast-grep"
+  (MCP = capability, skill = judgment; the decision tree);
+  `ast-grep/claude-skill` and `ast-grep/agent-skill` repos;
+  `thrawn01/mcp-ast-grep`; aider `repomap.py` + tree-sitter-language-pack
+  (the non-ast-grep contrast).
 - **kernel-codemode.md** (10-13): §2.5 (research round 3 — the full lineage:
   aider/agentpatterns/LlamaIndex, the fresh-vs-precomputed split, the kernel
   insight), §4.3 (Tier 1 `code_search` row), §7 Q9 (the open questions this
