@@ -271,6 +271,12 @@ _KNOWN_TOOL_DOCS = {
         "  await tools.read_file(path=str, offset?:int, limit?:int) -> str\n"
         "      Workspace file contents, same limits as the model-level tool."
     ),
+    "bash": (
+        "  await tools.bash(command=str, timeout?:int) -> str\n"
+        "      Runs on the chat workspace (local or remote-ssh), same limits as\n"
+        "      the model-level tool; a non-zero exit raises KernelToolError\n"
+        "      carrying the output. Serialized on this kernel's call FIFO."
+    ),
 }
 
 

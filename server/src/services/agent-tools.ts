@@ -487,35 +487,46 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
  * here (the registry side of the seam); the kernel manager never imports this
  * module, the dispatcher rides in as a per-execute injection.
  *
- * Phase A vertical slice: `read_file` only. The `bash` case (which exercises
- * the §4.9 lock rule against the run_python mutation hold) lands next; the
- * per-kernel dispatch FIFO already serializes whatever is added.
+ * Phase A surface: `read_file` + `bash` (the §4.9 lock-rule case). The
+ * per-kernel dispatch FIFO already serializes whatever else is added.
  */
-function createKernelToolDispatcher(workspace: WorkspaceAdapter): KernelToolDispatcher {
+function createKernelToolDispatcher(workspace: WorkspaceAdapter, chatId: string): KernelToolDispatcher {
   return {
-    tools: ["read_file"],
+    tools: ["read_file", "bash"],
     call: async (tool, args, signal) => {
-      if (tool !== "read_file") return { ok: false, error: `tool "${tool}" is not dispatchable` };
-      const settings = await getSettings().catch(() => undefined);
-      // The configured cap, NOT getReadFileMaxBytes: that clamp exists to fit
-      // one result inside the model's context budget (wrapResult's contract),
-      // and kernel results never enter context (§4.1 "Results are raw, not
-      // context-budgeted"). The dispatcher's own frame cap bounds the wire.
-      const result = await workspace.readFile(
-        args as Record<string, any>,
-        {
-          defaultLines: settings?.readFileDefaultLines,
-          maxBytes: settings?.readFileMaxBytes ?? 256 * 1024,
-        },
-        signal,
-      );
-      const text =
-        typeof result.content === "string"
-          ? result.content
-          : (Array.isArray(result.content) ? result.content : [])
-              .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
-              .join("\n");
-      return result.isError ? { ok: false, error: text || "read failed" } : { ok: true, value: text };
+      if (tool === "read_file") {
+        const settings = await getSettings().catch(() => undefined);
+        // The configured cap, NOT getReadFileMaxBytes: that clamp exists to fit
+        // one result inside the model's context budget (wrapResult's contract),
+        // and kernel results never enter context (§4.1 "Results are raw, not
+        // context-budgeted"). The dispatcher's own frame cap bounds the wire.
+        const result = await workspace.readFile(
+          args as Record<string, any>,
+          {
+            defaultLines: settings?.readFileDefaultLines,
+            maxBytes: settings?.readFileMaxBytes ?? 256 * 1024,
+          },
+          signal,
+        );
+        return result.isError
+          ? { ok: false, error: result.content || "read failed" }
+          : { ok: true, value: result.content };
+      }
+      if (tool === "bash") {
+        // No withMutationLock here, by design (kernel-codemode.md §4.9): a
+        // foreground run_python already holds `workspace:<label>` for its whole
+        // call, so a kernel-origin bash re-entering that queue would deadlock
+        // behind its own holder; background jobs are the accepted workspace
+        // peers (session-python-kernel.md §4.7). The manager's per-kernel FIFO
+        // provides this chat's serialization instead. chatId opts into the
+        // shared spill store: oversize output keeps a reachable full copy
+        // (local kernels can open the path; the footer rides in the value).
+        const result = await workspace.bash(args as Record<string, any>, signal, { chatId });
+        return result.isError
+          ? { ok: false, error: result.content || "command failed" }
+          : { ok: true, value: result.content };
+      }
+      return { ok: false, error: `tool "${tool}" is not dispatchable` };
     },
   };
 }
@@ -1037,7 +1048,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
             host: kernelHost ?? undefined,
             // Kernel tools ride the same per-execute seam; the manager gates
             // on its env flag and registers this for the cell/job lifetime.
-            toolDispatcher: kernelToolsEnabled() ? createKernelToolDispatcher(workspace) : undefined,
+            toolDispatcher: kernelToolsEnabled() ? createKernelToolDispatcher(workspace, chatId) : undefined,
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,

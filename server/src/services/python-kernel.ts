@@ -73,13 +73,21 @@ const DISPLAY_MAX_IMAGES = 4;
 const KERNEL_TOOL_CALLS_MAX_DEFAULT = 64;
 const KERNEL_TOOL_TIMEOUT_MS_DEFAULT = 120_000;
 const KERNEL_TOOL_VALUE_MAX_CHARS = 2_000_000;
+// Per-tool timeout overrides: the generic cap guards the FIFO against
+// wedged dispatches, but tools with legitimate longer ceilings keep their
+// own bound (model-level bash allows 300 s).
+const KERNEL_TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
+  bash: 300_000,
+};
 
 function kernelToolCallsMax(): number {
   return readPositiveIntEnv("PORRIMA_KERNEL_TOOL_CALLS_MAX", KERNEL_TOOL_CALLS_MAX_DEFAULT);
 }
 
-function kernelToolTimeoutMs(): number {
-  return readPositiveIntEnv("PORRIMA_KERNEL_TOOL_TIMEOUT_MS", KERNEL_TOOL_TIMEOUT_MS_DEFAULT);
+function kernelToolTimeoutMs(tool: string): number {
+  const configured = Number(process.env.PORRIMA_KERNEL_TOOL_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured > 0) return Math.floor(configured);
+  return KERNEL_TOOL_TIMEOUT_OVERRIDES[tool] ?? KERNEL_TOOL_TIMEOUT_MS_DEFAULT;
 }
 
 /**
@@ -987,7 +995,7 @@ async function dispatchKernelTool(
   const controller = new AbortController();
   instance.toolCalls.set(callId, { cellId, controller });
   try {
-    const timer = setTimeout(() => controller.abort(), kernelToolTimeoutMs());
+    const timer = setTimeout(() => controller.abort(), kernelToolTimeoutMs(tool));
     timer.unref?.();
     // Race the dispatcher against the abort signal: a dispatcher that ignores
     // its signal cannot wedge the per-kernel FIFO (§4.8 cancellation).
