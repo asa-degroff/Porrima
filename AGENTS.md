@@ -288,7 +288,8 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (design; P4a in implementation)
 - [Browser Observability](docs/design/browser-observability.md) — Live screenshot PiP viewer (P1 client-only, P2 auto-capture)
 - [KV Snapshot Parking](docs/design/kv-snapshot-parking.md) — Disk tier for idle slot KV: app-side save/restore orchestration around llama.cpp's `/slots` API
-- [Kernel Codemode](docs/design/kernel-codemode.md) — In-kernel tool composition: projection-based tools API over the session kernel (design draft, 10-12, in external review)
+- [Kernel Codemode](docs/design/kernel-codemode.md) — In-kernel tool composition: projection-based tools API over the session kernel (Phase A live 10-13; design doc carries implementation notes through slice 2)
+- [Code Search](docs/design/code-search.md) — Structural code navigation (ast-grep): model-level tool + kernel projection (design draft, 10-13, pending review)
 
 Release and onboarding:
 

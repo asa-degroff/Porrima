@@ -285,7 +285,7 @@ identity weight and need provenance rather than exclusion.
 |---|---|
 | `bash` | Asa's acceptance bar; codex nests `shell_command`, prime-agent keeps it model-level but full-host |
 | `read_file`, `list_files` | pagination loops; output spilling already handled |
-| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out |
+| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) (10-13 draft, pending review)** |
 | `web_search`, `web_fetch` | the flagship token-piping case |
 | `read_pdf` | heavy payloads, in-code processing; Phase A (10-13 review: pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
 | `search_memory`, `search_conversation`, `read_archived_context` | research pipelines; non-destructive |
@@ -562,10 +562,11 @@ the design:
   `dir(tools)` enumeration, web/memory routing incl. chat-scope threading, gated
   description assertion.
 - **Remaining after the flip (slice 3+):** budget placement in UI settings (env
-  knobs live meanwhile), `code_search` (§4.3 row / §7 Q9 — a model-level tool
-  that does not exist yet; dispatching it from the kernel is only possible once
-  it does), nested-call partial streaming (§4.9), remote per-call spill delivery
-  (Phase C), and the tier-2 provenance seam (Phase B).
+  knobs live meanwhile), `code_search` (§4.3 row / §7 Q9 — designed in
+  [code-search.md](code-search.md), 10-13 draft pending review: model-level
+  phase 0 gated, kernel projection phase 1), nested-call partial streaming
+  (§4.9), remote per-call spill delivery (Phase C), and the tier-2 provenance
+  seam (Phase B).
 
 ## 5. Staging
 
@@ -667,6 +668,12 @@ in Phase C.)
     shrinks the model's rg→read loops immediately; the in-kernel projection follows as
     a Tier 1 row on the existing exposure list; `code_outline`/project-orientation
     deferred as its own feature.
+    → Designed (10-13): answered in [code-search.md](code-search.md) — the
+    two-projection staging (model-level phase 0 gated on its own flag, kernel
+    projection phase 1), outline deferred kernel-first (§3.4 there),
+    `@ast-grep/napi` as the dependency with the CLI fallback (note the `sg`
+    name collision on Enceladus — §5 there), and the default-shift framing for
+    the tool-set fit question (§4 there).
 
 ## 8. Sources
 
