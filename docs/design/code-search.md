@@ -1,7 +1,21 @@
 # Code Search — structural code navigation for Porrima
 
 **Status:** Design draft (10-13). Written for coding-agent review; round-4
-adoption survey folded in 10-13. Extends the
+adoption survey folded in 10-13, corrected by a **review pass 10-13** (the
+pi-ecosystem claims re-verified against READMEs + oh-my-pi source — three
+survey claims corrected, two pi packages added; `@ast-grep/napi` slice-0 probes
+run, §3.1's open question resolved; ordering/rendering/zero-match rules and the
+OQ7 flip added). **Verified (quje, 10-13):** the review pass's napi probes
+re-run in a scratch dir — `Lang` empty at runtime, string language compiles,
+no `path` on nodes (`getRoot().filename()` routes the file), `findInFiles`
+resolves to a file count, root scans honor `.gitignore` (6 of 7 probes
+independently confirmed; the explicit-path-override control probe rests on
+the ignore-crate semantics); the oh-my-pi `pi-natives` correction confirmed at
+primary source (`crates/pi-natives/Cargo.toml`: `ast-grep-core.workspace = true`
+— a direct crate dependency, not the published napi package); both pi.dev
+package listings confirmed, `@juvio15/pi-ast-grep@0.4.2` matching the claimed
+version.
+Extends the
 kernel-codemode doc — it is the concrete design behind the §4.3 Tier 1
 `code_search` row and answers §7 Q9 (model-level wrapper first, in-kernel
 projection second, outline deferred as its own feature).
@@ -76,7 +90,12 @@ behind the codemode Phase B provenance seam (Tier 2 by construction).
   context tokens. In the kernel the identical loop is free in variables. The
   MCP's tools map one-to-one onto what a kernel program can already do; the
   kernel projection makes the MCP redundant for us, and it is the strongest
-  concrete instance of the codemode thesis yet.
+  concrete instance of the codemode thesis yet. Round-4 note: the field has
+  started shipping the MCP's shape at model level — `@juvio15/pi-ast-grep`
+  (§2, pattern 4) is roughly the MCP's four tools plus outline and a language catalog.
+  Phase 0 is the deliberately narrower version of that bet — one tool, not six
+  — and the kernel row is the argument the other five don't need to exist as
+  schema once the loop lives in variables.
 - **Speed, honestly measured (verified, 10-13, this machine).** On
   `server/src` (~200 TS files), a pattern scan: `ast-grep` **0.050 s wall /
   0.362 s user** vs `rg` **0.010 s wall / 0.004 s user** for the same query.
@@ -127,8 +146,9 @@ depend on the language's syntax tree, or just on the file's bytes?"
 replaces — see §2 above.
 
 **4. Harness-native tools** (first-class tools inside the agent) — the
-pattern this doc designs into. Four implementations found:
-- **pi ecosystem — two independent implementations** (both read, from source):
+pattern this doc designs into. Four stacks, seven implementations:
+- **pi ecosystem — four independent implementations** (review pass 10-13;
+  READMEs and source):
   - `pi-ast-grep` (code-yeongyu, a faithful port of the oh-my-openagent tool
     stack, re-licensed MIT for the pi-coding-agent ecosystem): `ast_grep_search`
     + `ast_grep_replace` (**dry-run by default**), `lang` **required**, 25
@@ -138,17 +158,47 @@ pattern this doc designs into. Four implementations found:
     `@ast-grep/cli` npm → platform npm packages → PATH → Homebrew → GitHub
     release auto-download) with an explicit trust-model caveat (no checksum
     beyond TLS; `PI_OFFLINE=1` for manual install).
-  - `oh-my-pi` (`packages/coding-agent/src/tools/ast-grep.ts`): a single
-    `ast_grep` tool with schema `{pat, path?, skip?}` — **pagination via
-    skip/limit** with a retention heap that keeps the best matches across
-    multiple search targets; runs **in-process through the napi binding**
-    (`@oh-my-pi/pi-natives`), not a subprocess; collects and reports
-    **per-file parse errors separately** (capped, with totals); approval
-    class `read`; `loadMode: discoverable` (lazy tool loading); tool
-    description carried in a separate rendered prompt file with five worked
-    examples; structured details alongside the model-facing text
-    (`matchCount`, `fileCount`, `filesSearched`, `limitReached`,
-    `parseErrors`).
+  - `oh-my-pi` (`packages/coding-agent/src/tools/ast-grep.ts`; review pass,
+    re-read from source 10-13): a single `ast_grep` tool with schema
+    `{pat, path?, lang?, skip?}` — `skip` is the only pagination parameter and
+    the limit is a hardcoded `DEFAULT_AST_LIMIT = 50` (converges with this
+    doc's `maxMatches` default); a bounded retention buffer keeps the best
+    matches across multiple search targets **in a pinned order** (path → line
+    → column → byte — the comparator is what makes paging deterministic; §3.2
+    adopts the same rule). Runs **in-process, but not through
+    `@ast-grep/napi`** — its `pi-natives` Rust addon links `ast-grep-core`
+    directly (50+ grammars, runtime provisioning via `ensureGrammar`/
+    `rerunWithGrammars`/`missingGrammars`). `lang?` is an **optional override
+    over auto-detect** ("cpp for ambiguous .h files") — the open question 2 lean, shipped
+    in the field. Collects and reports **per-file parse errors separately**
+    (capped, with totals); when parse errors exist its zero-match text is a
+    **qualified absence** ("the query may be mis-scoped; narrow `path` before
+    concluding absence") and the empty result is marked `useless()` so
+    compaction can drop it; the model text carries `meta: NAME=value` lines
+    for matches with bindings (open question 7 evidence). Approval class `read`;
+    `loadMode: discoverable` (lazy tool loading); tool description carried in
+    a separate rendered prompt file with five worked examples; structured
+    details alongside the model-facing text (`matchCount`, `fileCount`,
+    `filesSearched`, `limitReached`, `parseErrors`).
+  - `@juvio15/pi-ast-grep` (pi.dev v0.4.2, Apache-2.0, extension+skill;
+    read): six tools over a CLI subprocess — `ast_grep_run` (**pattern *or*
+    kind**, plus a `code=` snippet mode that runs the §3.3 snippet-testing
+    case at *model* level), `ast_grep_scan` (YAML rules), `ast_grep_rewrite`
+    (preview default, `apply` opt-in), **`ast_grep_outline` shipped live**
+    ("map a file before you read it" — §3.4's counter-evidence),
+    `ast_grep_debug_query` (Risk 1's mitigation as a tool),
+    `ast_grep_languages` (a language catalog *is* a tool). Injects a bounded
+    "promotion" guidance block into the system prompt only while its tools
+    are active — a dynamic version of §4's one-line default-shift; `AST_GREP_BIN`
+    override, version floor with footer warnings, `/ast-grep-check` smoke
+    command, and `/ast-grep-rules` (a saved-rule library in-session: pattern
+    5's CI-rule role leaking into the agent).
+  - `pi-ast-grep` (fadouse, pi.dev v0.1.0; read): a single read-only
+    `ast_grep` tool, `command: "run" | "scan"`, `pattern` or `kind`; invokes
+    the binary with **argument arrays, not shell strings** — the same
+    no-quoting-surface argument §3.1 makes for napi, reached independently by
+    a CLI wrapper author; strips accidental leading `@` from path inputs to
+    match pi's file-reference convention.
 - **PraisonAI** (Python multi-agent framework; read): `ast_grep_search`
   (**JSON output by default**), `ast_grep_rewrite` (dry-run default),
   `ast_grep_scan` (YAML rules); **path confinement** (paths must resolve
@@ -189,15 +239,23 @@ noted because the same rule syntax serves both roles.
 **Convergences the survey validates in this design:** rewrite-dry-run-default
 and the anti-regex guard are universal across implementations (they should be
 first-class, not afterthoughts — §3.2); output bounding with a saved-file
-pointer is PraisonAI's exact spill pattern; in-process napi execution is
-demonstrated in the pi ecosystem (oh-my-pi), not hypothetical; structured
-metadata alongside model-facing text is the oh-my-pi shape; `lang` handling
-splits (required in pi-ast-grep/Gemini CLI vs auto-detect — open question 2).
+pointer is PraisonAI's exact spill pattern; in-process execution (no
+subprocess) is demonstrated in the pi ecosystem — **but not via
+`@ast-grep/napi`**: oh-my-pi links `ast-grep-core` into its own Rust addon, so
+the pinned-prebuild choice in §3.1/§5 is the one move no surveyed harness has
+made (a strength — no resolver chain, no auto-download trust hole, no host
+`sg` collision — and an honest novelty note, §5); a 50-match page is what
+oh-my-pi hardcodes internally, converging with `maxMatches = 50`; structured
+metadata alongside model-facing text is the oh-my-pi shape. `lang` handling
+splits: required (pi-ast-grep, Gemini CLI) vs auto-detect-with-override
+(oh-my-pi, matching the CLI default — the open question 2 lean's field
+support; under napi it lands as the §3.1 string-language mapping).
 **Divergences named, not resolved:** Zed's in-situ enrichment (structure
 injected into the text tool) vs this doc's default-shift (a dedicated
-structural tool); pagination (`skip`/`limit` in oh-my-pi) is absent from this
-design (open question 8); `ast_read`-style single-node structural reads sit
-between search and outline (open question 9). **Not adopting ast-grep
+structural tool); pagination — oh-my-pi ships `skip` (its limit is internal,
+not a parameter) and this doc leans to match in phase 0, with the §3.2
+ordering contract as the precondition (open question 8); `ast_read`-style
+single-node structural reads sit between search and outline (open question 9). **Not adopting ast-grep
 (anywhere found):** aider (tree-sitter directly in `repomap.py` — the
 precomputed-map lineage), and no built-in surface in Cursor/Copilot/Codex/
 opencode (the ripgrep lineages of codemode §2–3).
@@ -231,16 +289,32 @@ export async function runCodeSearch(params, workspace, signal): Promise<CodeSear
 
 **Local workspaces: in-process via `@ast-grep/napi`** — no subprocess, no
 shell-quoting surface, version-pinned to the server's package.json. The 0.50.0
-surface (verified from the package's `types/api.d.ts`): `pattern(lang,
-pattern)` compiles a pattern into a matcher config; `findInFiles(lang,
-config, callback)` "discovers and parses multiple files in Rust" and delivers
-matched `SgNode`s; `parseFiles`/`parseAsync` for the snippet-testing case
-(kernel rule loop). Note: this is the *new* napi API — the older
+surface (verified from the package's `types/api.d.ts` **and runtime probes,
+10-13, this machine**): `pattern(lang, pattern)` compiles a pattern into a
+matcher `NapiConfig`; `findInFiles(lang, config, callback)` "discovers and
+parses multiple files in Rust" and delivers matched `SgNode`s per file,
+`config` shape verified as `{paths: string[], matcher: NapiConfig,
+languageGlobs?: string[]}`; `parseFiles`/`parseAsync` for the snippet-testing
+case (kernel rule loop). Note: this is the *new* napi API — the older
 `matchSourceCode`/`matchRuleSourceCode` names do not exist in 0.50.0 (verified:
-exports are `Lang, kind, parse, pattern, parseAsync, findInFiles,
-registerDynamicLanguage, parseFiles, tsx, jsx, html, ts, css, js, SgNode,
-SgRoot`). Signatures beyond the top-level ones get pinned during
-implementation, not assumed here.
+runtime exports are `Lang, kind, parse, pattern, parseAsync, findInFiles,
+registerDynamicLanguage, parseFiles, tsx, jsx, html, ts, css, js`; `SgNode`/
+`SgRoot` are types, not runtime values). Four probe findings shape the
+executor — each one was an assumption until today: (1) `sg.Lang` is a
+compile-side enum, **empty at runtime**; language args are strings (`'ts'`
+works; `Lang.Ts` is `undefined` and fails as a Rust `StringExpected` throw) —
+the executor keeps an explicit name table; (2) match nodes do **not** carry
+the file path — it lives one hop away at `node.getRoot().filename()`,
+populated only on the `findInFiles` discovery path (per its own declaration
+comment); `CodeSearchMatch.file` routes through `getRoot()`; (3) `FindConfig`
+has **no include/exclude globs** — `languageGlobs` maps extensions to a
+language, it is not a filter — so the `globs` param below is necessarily
+executor-side filtering over discovered paths, never a napi feature; (4) the
+`findInFiles` promise resolves to a file count (probes could not distinguish
+*scanned* from *files-with-matches*), and nothing at this boundary reports
+files searched — the §3.2 summary line counts callback invocations (files
+with matches, per probe) and must not claim a `filesSearched` the binding
+cannot supply.
 
 **The match JSON, exactly as ast-grep emits it (verified, 0.50.0):**
 
@@ -260,12 +334,15 @@ The executor normalizes this to `CodeSearchMatch` (dropping `lines`/
 `charCount` at the boundary — context lines are a text-projection concern, not
 a structural one).
 
-**File discovery/ignore semantics:** one claim deliberately left unverified
-here — whether `findInFiles` honors `.gitignore`-style ignores the way the CLI
-does (the CLI rides ripgrep's `ignore` crate; the napi discovery path is
-plausible but not measured). It is a slice-0 acceptance check, not an
-assumption. If it does not, the executor filters through the same ignore
-logic the adapter uses for `list_files`.
+**File discovery/ignore semantics: resolved by probes, 10-13.** `findInFiles`
+**does** honor `.gitignore` the way the CLI does (probe: a git repo with an
+`ignored/` dir holding a matching file; a root scan skipped it — napi rides the
+same `ignore` crate). The control probe surfaced the precedence rule `globs`
+must inherit: passing that ignored path **explicitly** in `config.paths` *does*
+match it — ripgrep's ignore-crate semantics, explicit arguments override
+ignores. So: scans descend ignore-clean; requested paths are honored as asked.
+The executor documents the rule and applies its `globs` filtering after
+discovery (napi's filter surface is ignores + languageGlobs, nothing else).
 
 **Parse errors, reported separately.** Unparseable files are a normal
 occurrence (generated code, unusual dialects), and silently dropping them
@@ -302,15 +379,37 @@ summary. JSON would spend context bytes on delimiters the model must not
 parse:
 
 ```
-47 matches in 12 files (showing 50)
+47 matches in 12 files
 server/src/services/agent-tools.ts:1048: toolDispatcher: kernelToolsEnabled() ? ...
 server/src/services/agent-tools.ts:1106: return withMutationLock(`workspace:${...
+server/src/services/memory-tools.ts:315 [MSG=`value: ${msg}`]: console.log(`value: ${msg}`)
+server/src/services/memory-extraction.ts:88: async function extractMemories(...) … +14 lines
 ```
+(The last two lines preview the review-pass rendering rules below — inline
+single bind, multi-line collapse.)
 
-**No matches is a clean value, not an error** — `0 matches in N files`. This
-fixes cost #3 at the surface: the expected outcome stops being a failure.
-Invalid patterns are tool errors carrying ast-grep's message verbatim
-(including its suggestion when one is printed).
+**No matches is a clean value, not an error** — `no matches` (+ the scope that
+was searched). This fixes cost #3 at the surface: the expected outcome stops
+being a failure. One refinement the review pass steals from oh-my-pi: when the
+scan produced **parse errors**, zero matches is a *qualified* absence — the
+summary appends "skipped files may mean the query is mis-scoped; narrow `path`
+before concluding absence." Absence-with-unparsed-corpus is exactly where the
+model over-concludes. (oh-my-pi additionally marks empty results `useless()` so
+compaction drops them; the Porrima analogue: a zero-match tool row is
+retention-fodder, never signal.) Invalid patterns are tool errors carrying
+ast-grep's message verbatim (including its suggestion when one is printed).
+
+**Ordering and rendering (review-pass additions).** Matches sort by
+`(file, start.line, start.column, byteOffset)` before truncation — a pinned
+comparator (oh-my-pi's `compareAstFindMatch` is the reference shape). Fresh
+parse per call means no index, so pagination (`skip`, open question 8) is only coherent
+with a deterministic order; without it, "next page" under a churning tree is
+undefined. Multi-line node text renders as the first line plus an `… +N lines`
+marker — the model-level text is an index, not a payload; full node text stays
+in the kernel projection. Metavariable bindings: single binds render inline on
+the match line (`file:1048 [NAME=binding]: …`), multi binds (`$$$`) compress to
+one capped line — open question 7 flipped to yes-compactly on this evidence; the kernel
+JSON remains the structural source.
 
 **Budgets, server-side** (the §4.9 principle — the caller cannot be trusted to
 count itself): `maxMatches` default 50; output char cap default ~20 KB
@@ -371,7 +470,11 @@ model-level tool, both deliberate:
   Write rule → test → inspect → revise, all in variables, nothing crossing the
   wire until the final result. The MCP's ~75%-tokens text output buys for
   context what the kernel gets for free — this is the codemode thesis in the
-  concrete place §2.5 named.
+  concrete place §2.5 named. Honest cost (review pass): every iteration is a
+  fresh parse of the scoped tree (§1's regime) — the loop is free in *context*,
+  not in CPU. At measured cost (~0.05 s over all of `server/src` on this box)
+  a ten-iteration refine pass stays well under a second; scoping is what keeps
+  it there.
 - **Snippet testing without the filesystem** (the `parseFiles`/`pattern`
   napi path): a kernel program can test a pattern against a string it built,
   not just files — the `test_match_code_rule` MCP tool, in-kernel.
@@ -390,7 +493,14 @@ opens the project-context orientation seam noted in codemode §2.5
 reads). It is **kernel-first** (zero schema bytes; on-demand mid-session
 orientation is a kernel activity, and `list_files` covers the directory-tree
 case at model level) and gets its own design section when it ships. This doc
-names it so the review can reject the boundary if it is wrong.
+names it so the review can reject the boundary if it is wrong. Review-pass
+note: the field disagrees with the *deferral*, not the seam —
+`@juvio15/pi-ast-grep` ships `ast_grep_outline` live at model level ("map a
+file before you read it") and Gemini CLI's `ast_read` sits in the same
+territory (§2, pattern 4). The kernel-first lean therefore rests on the
+economics (§3.2
+budgets make orientation free mid-kernel; `list_files` covers the tree case),
+not on uncertainty about whether orientation is a distinct job. It is.
 
 ### 3.5 Guardrails
 
@@ -443,6 +553,17 @@ list and follows as soon as the executor exists.
   matrix** — the fallback for those hosts is the `@ast-grep/cli` binary via
   the onboarding profiles, which is exactly why the CLI remains a supported
   execution path even where napi is not.
+- **Field position (review pass).** No surveyed harness uses `@ast-grep/napi`:
+  the pi-ecosystem wrappers shell to the CLI (and pay for it — pi-ast-grep's
+  six-step resolver chain, TLS-only auto-download, and the `sg` name collision
+  are exactly what a pinned dependency makes impossible), while oh-my-pi
+  compiles `ast-grep-core` into its own Rust addon, sidestepping the prebuild
+  matrix entirely and carrying 50+ grammars with runtime provisioning. That
+  addon route is demonstrated insurance if Risk 3 ever bites, and its grammar
+  reach is the honest ceiling-comparison against our bundled set
+  (`registerDynamicLanguage` is the napi-side analogue — named, not used in
+  v1). The pinned prebuild stays the right v1: version-pinned in
+  package.json, no download path, no host-PATH surface.
 - **Name collision (verified on this box):** `/usr/bin/sg` on Enceladus is
   **util-linux's set-group**, not ast-grep. ast-grep is not installed here.
   Every reference in this design — code, docs, onboarding — uses
@@ -456,7 +577,7 @@ list and follows as soon as the executor exists.
 
 | phase | scope | gates |
 |---|---|---|
-| **0** | model-level `code_search`: executor (napi, local), tool definition, budgets, gating, tests (incl. the `findInFiles` ignore-semantics acceptance check, invalid-pattern error shape, 0-match clean value, budget stops) | dark; `PORRIMA_CODE_SEARCH=1` to flip |
+| **0** | model-level `code_search`: executor (napi, local), tool definition, budgets, gating, tests (napi ignore semantics **resolved 10-13, §3.1** — keep as a regression case; remaining pins: `findInFiles` return-count semantics, napi lang-string name table, `globs` post-discovery filtering + explicit-path precedence, the `(file, line, col, byte)` ordering comparator, multi-line rendering, invalid-pattern error shape, qualified 0-match value, budget stops) | dark; `PORRIMA_CODE_SEARCH=1` to flip |
 | **1** | kernel dispatcher row + JSON projection + snippet-testing path (`pattern`/`parseFiles`) | rides the live kernel flag; one exposure-list line |
 | **2** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern) |
 | **3** | `code_outline` — its own design section, kernel-first | deferred; boundary named in §3.4 |
@@ -468,7 +589,9 @@ list and follows as soon as the executor exists.
    `$$$ARGS` trap is not hypothetical — it is what a correct-looking pattern
    silently does (verified via `--debug-query`, 10-13). Mitigations: the
    cheatsheet in the tool description (§3.2), ast-grep's own
-   `--debug-query` as the in-tool debugger, and the kernel rule loop (§3.3)
+   `--debug-query` as the in-tool debugger (shipped as a *model-level tool* by
+   `@juvio15/pi-ast-grep` — if authoring friction shows up in usage, that is
+   the proven fallback shape), and the kernel rule loop (§3.3)
    where syntax errors are cheap to find. Residual: the model will still
    author bad patterns; the clean error surface keeps that recoverable.
 2. **Fresh-parse cost on large repos (measured: startup-dominated below
@@ -477,13 +600,18 @@ list and follows as soon as the executor exists.
    and honest docs that this tool buys precision, not speed.
 3. **napi platform matrix gaps (musl/arm64 Linux, verified absent in 0.50.0).**
    Mitigation: the CLI fallback path (§5); remote hosts sidestep both via
-   phase 2 (b) until (a) is earned.
+   phase 2 (b) until (a) is earned. Insurance with field precedent: oh-my-pi
+   compiles `ast-grep-core` into its own native addon and never touches the
+   prebuild matrix (§5) — building our own binding is the proven way out if
+   this ever bites.
 4. **Output-volume blowout** (one query, 10k matches). Mitigation:
    `maxMatches` + char cap enforced server-side, summary line always present.
 5. **API drift** (the napi surface changed underfoot — 0.50.0 has no
    `matchSourceCode`). Mitigation: version-pinned, executor isolated in one
-   module, top-level signatures verified today and the rest pinned in
-   slice 0.
+   module, top-level signatures and config shapes verified 10-13 — the runtime
+   probes caught two d.ts-vs-runtime traps on day one (empty `Lang` at runtime;
+   no path on the match node; §3.1), which is why "pinned, not assumed" is not
+   ceremony. The rest pinned in slice 0.
 6. **Staleness: none by design** — fresh parse per call. The risk is the
    inverse (someone later adding a cache); the design brief says the cache is
    how this feature goes wrong.
@@ -493,11 +621,16 @@ list and follows as soon as the executor exists.
 1. **Defaults:** `maxMatches` 50? context lines 1? output cap 20 KB?
 2. **`lang` semantics:** auto-detect from file extensions (CLI default) vs
    require explicit when `path` is a single file. Lean: auto-detect, explicit
-   override.
+   override — **oh-my-pi ships exactly this** (optional `lang?` override for
+   ambiguous extensions; the round-4 bullet omitted it). Under napi the choice
+   also carries the §3.1 string-language name table.
 3. **`-k/--kind` selector mode** (match by node kind without a pattern — the
    CLI supports it): expose in v1 or defer. Lean: defer — pattern-only is the
    90% case, and kind selection is a power feature that costs description
-   bytes.
+   bytes. Review-pass note: both newer pi packages ship it (`pattern` *or*
+   `kind`, mutually exclusive) — evidence accumulating, argument holds; a
+   kind-only rule is a one-line addition in the napi rule object when usage
+   asks.
 4. **Remote carve-out order** (§3.1): (b) read-then-parse first vs (a) host
    binary first. Lean: (b) — zero new dependencies wins until measured otherwise.
 5. **Budget knobs:** ride the existing implementation-settings surface or get
@@ -509,13 +642,21 @@ list and follows as soon as the executor exists.
    description now; the full reference kernel-side on demand once the
    cheatsheet is proven insufficient by usage.
 7. **Does the model-level tool need the `metaVariables` in its text
-   output?** (e.g. `...:1048 [toolDispatcher]: ...`). Lean: no — bindings are
-   a kernel/computation concern; the text index stays one match per line.
-8. **Pagination.** oh-my-pi (round 4) adds `skip` alongside its match limit —
-   page through a 47-match result without re-running the query from zero.
+   output?** Review pass **flips the lean: yes, compactly** — oh-my-pi emits
+   `meta:` lines in its model text and pi-ast-grep's whole docs lean is
+   bindings-as-answer ("what are the arguments here?"); a binding-free line
+   can't show the pattern matched what the model meant. The §3.2 rendering
+   rule is the compromise: single binds inline on the match line, multi binds
+   compressed and capped, full structure kernel-only. The text index stays one
+   match per line.
+8. **Pagination.** oh-my-pi (round 4) ships `skip` — page through a 47-match
+   result without re-running the query from zero; its limit is internal
+   (hardcoded 50), not a parameter, so this doc's caller-adjustable
+   `maxMatches` budget is the superset.
    Lean: add `skip` to the schema in phase 0; it is three words of executor
    work and the text projection already carries the total count to make it
-   useful.
+   useful. **Precondition (review pass): the §3.2 ordering contract** —
+   pages are only stable under fresh parses with a deterministic comparator.
 9. **In-situ enrichment / single-node structural reads.** Zed (round 4) does
    not add a structural tool — it enriches the existing `grep` output with
    syntax (parent-node context ranges, symbol breadcrumbs). The adjacent
@@ -533,9 +674,16 @@ list and follows as soon as the executor exists.
   1 = no matches); the `$$`-is-an-identifier trap via `--debug-query=pattern`;
   speed measurement on `server/src` (0.050 s wall / 0.362 s user vs rg 0.010 s
   wall / 0.004 s user); napi exports and `pattern`/`findInFiles` signatures
-  (`types/api.d.ts`); platform support matrix (package README); `/usr/bin/sg`
-  = util-linux set-group on Enceladus; ast-grep not installed; rg 15.1.0
-  present.
+  (`types/api.d.ts`); **runtime napi probes 10-13** (`@ast-grep/napi@0.50.0`,
+  scratch dir): `FindConfig` = `{paths, matcher, languageGlobs?}` and
+  `pattern()`→matcher wiring; `findInFiles` honors `.gitignore` on a root scan
+  *and* matches an explicitly-passed ignored path (control probe — ignore-crate
+  precedence); file path via `node.getRoot().filename()` (nothing on the node
+  itself); `sg.Lang` empty at runtime — `Lang.Ts` is `undefined`, a Rust
+  `StringExpected` throw, `'ts'` works; `findInFiles` resolves to a file count
+  (scanned-vs-with-matches indistinguishable in my probe); platform support
+  matrix (package README); `/usr/bin/sg` = util-linux set-group on Enceladus;
+  ast-grep not installed; rg 15.1.0 present.
 - **Read** (primary docs, ast-grep.github.io): `run`/`outline` reference;
   the tree-sitter Rust-rewrite blog post (agent-workload scoping); the
   prompting/AGENTS.md pattern and `llms-full.txt`; the official MCP
@@ -544,10 +692,14 @@ list and follows as soon as the executor exists.
   (the four adoption patterns; the AGENTS.md example attributed to a Kieran
   Klaassen post); `pi-ast-grep` README (tool set, `lang` required, 25
   languages, six-step binary resolution, trust-model caveat, anti-pattern
-  table); `oh-my-pi` `packages/coding-agent/src/tools/ast-grep.ts` source
-  (`pat`/`path`/`skip` schema, retention-heap pagination, per-file parse
-  errors, in-process napi via `@oh-my-pi/pi-natives`, `approval: read`,
-  `loadMode: discoverable`, prompt-file description with examples);
+  table) — every pi-ast-grep claim stands; `oh-my-pi`
+  `packages/coding-agent/src/tools/ast-grep.ts` source (re-read, review pass:
+  `pat`/`path`/`lang?`/`skip` schema, `skip` paging against a hardcoded
+  internal limit, bounded-retention ordering comparator, per-file parse
+  errors, qualified zero-match + `useless()` marking, `meta:` lines in model
+  text, in-process via its own Rust `pi-natives` addon linking `ast-grep-core`
+  — *not* `@ast-grep/napi` — `approval: read`, `loadMode: discoverable`,
+  prompt-file description with examples);
   PraisonAI ast-grep tools docs (JSON default, path confinement, 10k-char
   cap with saved-file pointer, 60/120 s timeouts, not-installed fallback);
   Hermes Agent ast-grep skill docs (offline pattern validation, the
@@ -561,7 +713,17 @@ list and follows as soon as the executor exists.
   (MCP = capability, skill = judgment; the decision tree);
   `ast-grep/claude-skill` and `ast-grep/agent-skill` repos;
   `thrawn01/mcp-ast-grep`; aider `repomap.py` + tree-sitter-language-pack
-  (the non-ast-grep contrast).
+  (the non-ast-grep contrast). Review-pass additions: `@juvio15/pi-ast-grep`
+  pi.dev README (six tools over the CLI, `code=` snippet mode, conditional
+  "promotion" prompt block, `AST_GREP_BIN` + version floor, `/ast-grep-check`,
+  `/ast-grep-rules` rule library, extension+skill packaging); `pi-ast-grep`
+  (fadouse) pi.dev listing (`command: run|scan`, `kind`, argument-array
+  exec); oh-my-pi README (the `pi-ast` crate links `ast-grep-core`; 50+
+  grammars; native `ast_grep`/`ast_edit` tool family).
+  **Survey corrections recorded (review pass):** the round-4 oh-my-pi entry
+  omitted `lang?` from its schema, described an internal hardcoded limit as a
+  schema limit, and credited in-process execution to "napi bindings" that are
+  not `@ast-grep/napi`; the pi ecosystem counts four implementations, not two.
 - **kernel-codemode.md** (10-13): §2.5 (research round 3 — the full lineage:
   aider/agentpatterns/LlamaIndex, the fresh-vs-precomputed split, the kernel
   insight), §4.3 (Tier 1 `code_search` row), §7 Q9 (the open questions this
