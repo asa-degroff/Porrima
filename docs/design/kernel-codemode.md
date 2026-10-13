@@ -3,6 +3,7 @@
 **Status:** Revised draft (10-13 review). Research rounds 1–2 complete (prior art, §2–3). Nothing implemented.
 **Date:** 2026-10-12
 **Reviewed**: 10-13 — present-tense claims verified against shipped code (`python-kernel.ts`, `porrima_kernel.py`, `agent-tools.ts`, `turn-gate.ts`); the §4.1 protocol claim was false and §4.1's permission claim hides a deadlock. Revisions rework §4.1/§4.3/§4.4/§4.7, add §4.8 (protocol v2) and §4.9 (dispatch mechanics), and are summarized in §9.
+**Reviewed (2nd pass, 10-13, quje)**: post-revision verification against source. Line citations confirmed against `server/python/porrima_kernel.py` (1750 lines) — note `server/dist/python/porrima_kernel.py` is a stale 948-line pre-`_driver_hash` build with different line numbers; verify against source, not the dist copy. One citation corrected: the §4.8 interrupt-path range `:1606-1667` (the stdin request dispatcher) → `:443-516` (`_request_interrupt`/`_schedule_escalation`, where the `call_soon_threadsafe` cancel pattern actually lives). The "parent §2.1" `host_request` citation confirmed: the parent documents prime-agent's event set (`ready, stdout/stderr, result, display, host_request, error, done`) and the exact-match handshake rule it cites (§4.3). The §4.9 claims (`getAgentTools` `:553`, `ToolSideEffects` `:200`, `withMutationLock` `:28-41` + `:917/:927/:946/:965`, `SEQUENTIAL_TOOL_NAMES` `:457-463`, `SYSTEM_CHAT_EXCLUDED_TOOLS` `:453`) all verified against `agent-tools.ts`.
 
 ## 1. Problem
 
@@ -339,7 +340,7 @@ Kernel side (`porrima_kernel.py`):
   requests *or* responses. Responses (`tool_result` for a `call_id` in the pending table)
   must **not** join the request queue — `_serve` is serial (`:1686-1713`) and a cell
   awaiting its own response would deadlock behind it. They resolve futures via
-  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:1606-1667`).
+  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:443-516`).
 - **Cancellation:** L1/L2 settle a cell that is awaiting a call — the pending future
   fails locally, and the server must abort the in-flight execution (§4.8 server side) or
   a stopped cell leaves a `bash` or `write_file` running with nobody waiting: a side
