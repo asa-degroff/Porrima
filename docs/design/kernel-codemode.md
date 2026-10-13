@@ -8,6 +8,7 @@
 **Reviewed (4th pass, 10-13, quje): implementation verification of slice 0 (d51eb847).** Every §4.8/§4.9/§4.10 claim verified at line level against driver + manager + agent-tools: pending-call table + owners (driver `:189-253`), reader demux via `call_soon_threadsafe` that never joins the serial queue (`:1748-1753`), strict-JSON args with the 8 MiB cap raising `KernelToolError` in-cell, `tool_cancel` on cell death + finally-block reaps (job `:888`, execute `:959`), namespace rebuilt per execute with `__doc__` + `tools.list()`, `tools` in the snapshot skip-list; manager side: injected `KernelToolDispatcher` seam (manager never imports the registry — dependency stays acyclic, as §4.10 claims), the exposure list riding the execute request (`:1369/:1427`, registered `:1389/:1458`), one serial per-kernel FIFO that never enters the `workspace:<label>` queue (rule named in code, test-proven under `asyncio.gather`), server-side per-cell budgets (env, 64 default) + 120 s per-call timeout racing an `AbortController` (a signal-ignoring dispatcher cannot wedge the FIFO), 2M-char inline cap with `truncated` + `total_chars` on the frame, background ack re-key onto the driver-minted jobId (`:886-891`), teardown on settle/protocol-failure/exit/dispose, and the `read_file`-only dispatcher using the configured 256 KiB cap, not the context-scaled clamp (§4.1, as specified). Referee: `python-kernel.test.ts` 43/43 (kernel tools 8/8) + `tsc --noEmit` clean. No discrepancies.
 **Reviewed (5th pass, 10-13, agent): slice 1 (bash dispatch) landed; citations refreshed.** The `bash` docstring entry inserted mid-table in the driver shifts every later driver anchor **+6** (`_serve` `:1845`→`:1851`, `_read_requests` `:1829`→`:1835`, serial region `:1845-1874`→`:1851-1880`, interrupt path `:589-664`→`:595-670`, reader-demux region `:1748-1753`→`:1754-1759`, finally-block reaps job `:888`→`:894` / execute `:959`→`:965`); the manager's timeout constants shift later anchors **+8** (dispatcher consts `:1369/:1427`→`:1377/:1435`, registrations `:1389/:1458`→`:1397/:1466`, ack re-key `:886-891`→`:894-899`); the agent-tools dispatcher insert shifts registry anchors (`getAgentTools` `:553`→`:608`, `ToolSideEffects` `:200`→`:202`, `withMutationLock` `:28-41`→`:30-43`, lock keys `:917/:927/:946/:965`→`:972/:982/:1001/:1020`, `SEQUENTIAL` `:457-463`→`:459-465`, `SYSTEM_CHAT_EXCLUDED` `:453`→`:455`). Superseding notes on the 4th pass: the dispatcher is now **`read_file` + `bash`** (the "read_file-only" wording is historical), `bash` dispatch deliberately skips `withMutationLock` — the §4.9 rule pinned as an e2e regression (`agent-tools-kernel-tools.test.ts`: real kernel + real `run_python` lock, fake adapter), and per-call timeouts became per-tool (`bash: 300 s` model-level ceiling, generic `120 s`; explicit `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` wins for all). `code_search` (§4.3 row) remains a model-level tool that does not exist yet — nothing to dispatch. Referee: slice-1 5/5, kernel-tools 8/8, full server suite 119 files green.
 **Reviewed (6th pass, 10-13, quje): implementation verification of slice 1 (546546ba).** Dispatcher's bash path verified at line level: routes to `workspace.bash(args, signal, { chatId })` (shared spill store) and deliberately skips `withMutationLock` with the rule named at the skip site; the read_file branch simplified to the adapter's string `content` (type-safe — the adapter contract is `{content: string}`, the old array-join was dead code). Per-tool timeouts verified: `kernelToolTimeoutMs(tool)` — explicit `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` wins for every tool, otherwise bash 300 s / generic 120 s. The deadlock proof is a genuine e2e: `agent-tools-kernel-tools.test.ts` fakes only the workspace adapter, runs the real manager + the real `run_python` mutation lock; the proof test resolves `tools.bash` while the calling execute holds `workspace:<label>`, and the file header pins the regression property (re-entering that queue deadlocks and fails loud). The other four cases verified: non-zero exit → `KernelToolError` carrying the output with the namespace intact, tier-2 names absent (AttributeError, not discouraged), args passed through untouched, chatId spill opt-in asserted. Every 5th-pass anchor citation re-verified against source (driver 1915 lines; manager and agent-tools anchors as stated). Referee: 48/48 across both kernel test files + `tsc --noEmit` clean. No discrepancies. Still dark; zero schema bytes (no description change in the commit).
+**Reviewed (7th pass, 10-13, agent): slice 2 landed; Phase A feature-complete, flag-on ready.** Tier 1 dispatch is complete (`list_files`, `web_search`/`web_fetch`, the five memory reads, `read_pdf` + figure→path shaping — all projections onto the executors the model-level tools use); spill references ship (local kernels: >1 Mi values to the tool-output store with `{path, head, total_chars, spilled}` dicts — full-file byte-equality proven; remote: inline-capped marker, no spill written — proven); the §4.6 notice rides `archiveAndIndex`'s return (both summary dialects through one choke point; `persistMidTurnHandoff` verified content-pure, D6 intact); the `run_python` capability line is import-gated on `kernelToolsEnabled()` — flag-off servers carry the original description bytes, flag-on busts exactly once at the flip deploy. Slice-1-era citations re-measured against source (driver 1915→1966 lines; agent-tools 1641; manager 1705) and the body updated in place — `_serve` `:1902-1931`, interrupt path `:646-721`, registry keys `:1058/:1068/:1087/:1106`, `getAgentTools` `:694`, manager ack region `:910-915`. Slice-2 tests: 7 new cases across `python-kernel.test.ts` (spill round-trip with byte-equality, remote inline cap + no-spill, remote job-delivery view) and `agent-tools-kernel-tools.test.ts` (web routing, memory routing with chat scope, full `dir(tools)` enumeration, gated promo line). Referee: 120 files, 1045 tests green; tsc clean; dist driver in sync (1966).
 
 ## 1. Problem
 
@@ -193,7 +194,7 @@ host tool from the server's tool registry, invoked over a **reverse RPC channel 
 kernel-initiated request answered by a server-initiated response**. (10-13 review: the
 first draft said "the existing kernel↔server request/response protocol", which is false —
 v1 is strictly server-initiated: every line on the kernel's stdin is a request consumed
-serially by `_serve` (`porrima_kernel.py:1851`), every stdout line is an event correlated
+serially by `_serve` (`porrima_kernel.py:1902`), every stdout line is an event correlated
 to a server request id, and `host_request` appears nowhere in the shipped driver or
 manager. This direction is new mechanism on both sides; §4.8 is its spec, and it is
 Phase A's real design object, not an aside.) Message shapes, roughly:
@@ -235,11 +236,11 @@ Properties:
 - **Serialized dispatch; the workspace lock is never re-entered** (§4.9). Kernel-originated
   calls execute on one per-kernel FIFO on the server. Without this rule the acceptance-bar
   case deadlocks on the design as first written: `run_python`'s execute holds
-  `withMutationLock('workspace:<label>')` for the whole call (`agent-tools.ts:1020`), the
-  lock is a non-reentrant FIFO promise queue (`:30-43`), and nested `bash`/`write_file`/
-  `edit_file` acquire the same key (`:1001`/`:972`/`:982`). The FIFO also supplies, for
+  `withMutationLock('workspace:<label>')` for the whole call (`agent-tools.ts:1106`), the
+  lock is a non-reentrant FIFO promise queue (`:32-45`), and nested `bash`/`write_file`/
+  `edit_file` acquire the same key (`:1087`/`:1058`/`:1068`). The FIFO also supplies, for
   kernel-origin calls, the serialization `SEQUENTIAL_TOOL_NAMES` gives the model loop
-  (`:459-465`) — which a cell's `asyncio.gather` of tool calls otherwise bypasses.
+  (`:469-475`) — which a cell's `asyncio.gather` of tool calls otherwise bypasses.
 - **Budgets.** Caps enforced **in the server-side dispatcher** — a wedged or buggy loop
   cannot be trusted to count itself — scoped per `(chat, cell | job)`, with a global
   in-flight cap and a per-call timeout, all config-driven (implementation settings, same
@@ -250,7 +251,7 @@ Properties:
   would contend with them.
 - **Construction is turn-free** (§4.9). The registry is built per turn today, closing
   over turn callbacks (`ToolSideEffects` — artifact, visual, ask-user, browser-frame —
-  and `onUpdate`, `agent-tools.ts:202, 608`). Kernel dispatch needs a dedicated
+  and `onUpdate`, `agent-tools.ts:212, 694`). Kernel dispatch needs a dedicated
   construction path with side effects explicitly deferred and chat-type gating
   (`SYSTEM_CHAT_EXCLUDED_TOOLS`) applied the same way; a background job runs with no live
   turn to attach to by construction.
@@ -400,11 +401,11 @@ Kernel side (`porrima_kernel.py`):
   writes one `tool_call` frame onto the event stream, and awaits an asyncio future
   resolved by the matching response. The await is a suspension point, so L1/L2 interrupt
   semantics carry over unchanged.
-- A **demux in the stdin reader** (`_read_requests`, `:1835`): server→kernel lines are
+- A **demux in the stdin reader** (`_read_requests`, `:1886`): server→kernel lines are
   requests *or* responses. Responses (`tool_result` for a `call_id` in the pending table)
-  must **not** join the request queue — `_serve` is serial (`:1851-1880`) and a cell
+  must **not** join the request queue — `_serve` is serial (`:1902-1931`) and a cell
   awaiting its own response would deadlock behind it. They resolve futures via
-  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:595-670`).
+  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:646-721`).
 - **Cancellation:** L1/L2 settle a cell that is awaiting a call — the pending future
   fails locally, and the server must abort the in-flight execution (§4.8 server side) or
   a stopped cell leaves a `bash` or `write_file` running with nobody waiting: a side
@@ -435,17 +436,17 @@ Server side (`python-kernel.ts`):
 ### 4.9 Server-side dispatch (the Phase A mechanics under the policy)
 
 - **Construction.** `getAgentTools(chatId, effects, contextWindow, project, chatType,
-  timeMarker)` (`agent-tools.ts:608`) is turn-scoped: closures over `ToolSideEffects`
-  (`:202`) and the loop's `onUpdate`. Kernel dispatch needs a sibling builder —
+  timeMarker)` (`agent-tools.ts:694`) is turn-scoped: closures over `ToolSideEffects`
+  (`:212`) and the loop's `onUpdate`. Kernel dispatch needs a sibling builder —
   `getKernelToolSurface(...)` — drawing the same registry entries with the same
   chat-type gating, side effects deferred, and streaming wired into the calling cell's
   output path (the parent §4.6 constraint holds: partials are live-only, never
   persisted). The §4.3 allowlist is then a name filter applied to that surface — not a
   parallel list that can drift from the registry.
 - **Lock semantics.** The deadlock chain §4.1's bullet names: foreground `run_python`
-  holds `workspace:<label>` (`agent-tools.ts:1020`) while nested `bash`/`write_file`/
-  `edit_file` try to acquire the same key (`:1001`/`:972`/`:982`) through the
-  non-reentrant queue (`:30-43`). Background has the dual: the job already escaped the
+  holds `workspace:<label>` (`agent-tools.ts:1106`) while nested `bash`/`write_file`/
+  `edit_file` try to acquire the same key (`:1087`/`:1058`/`:1068`) through the
+  non-reentrant queue (`:32-45`). Background has the dual: the job already escaped the
   lock by accepted policy (parent §4.7), and a job's nested `bash` queueing behind the
   label lock a same-chat foreground cell holds can strand a cell that is waiting on job
   output. Rule: **kernel-origin dispatch runs on the per-kernel FIFO and never enters
@@ -537,11 +538,6 @@ the design:
   plain `cp -r` nested a stale copy and left dist serving a 948-line v1 driver —
   the second-pass review's trap, now structurally fixed).
 
-Not yet (slice 2+): spill references on the response frame, budget placement in UI
-settings, `code_search` (§4.3 row / §7 Q9 — a model-level tool that does not exist
-yet; dispatching it from the kernel is only possible once it does), nested-call
-partial streaming (§4.9), and the tier-2 provenance seam (Phase B).
-
 - **Slice 2 (tier-1 completion + flag-on):** the full §4.3 Tier 1 surface now
   dispatches — `list_files` (adapter), `web_search`/`web_fetch` (`executeWebTool`),
   `search_memory`/`search_conversation`/`read_archived_context`/`list_memory_blocks`/
@@ -564,6 +560,11 @@ partial streaming (§4.9), and the tier-2 provenance seam (Phase B).
   inline-capped marker (no spill written), remote job delivery view, full-surface
   `dir(tools)` enumeration, web/memory routing incl. chat-scope threading, gated
   description assertion.
+- **Remaining after the flip (slice 3+):** budget placement in UI settings (env
+  knobs live meanwhile), `code_search` (§4.3 row / §7 Q9 — a model-level tool
+  that does not exist yet; dispatching it from the kernel is only possible once
+  it does), nested-call partial streaming (§4.9), remote per-call spill delivery
+  (Phase C), and the tier-2 provenance seam (Phase B).
 
 ## 5. Staging
 
