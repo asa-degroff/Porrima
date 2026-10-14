@@ -23,6 +23,10 @@
  * - The harness system prompt is a fixed minimal coding-agent prompt, NOT
  *   the memory-augmented interactive one: both arms must differ only in the
  *   tool surface, and eval runs must not write memories or touch synthesis.
+ *   It names NO tools on purpose — discovery must come from the tool schema
+ *   alone, which is the exact condition the flip creates (the phase-4
+ *   guidance line is a nudge, not the mechanism). Naming code_search in the
+ *   prompt would inflate adoption above what the flip itself delivers.
  * - Ground truth is recomputed at run time so the battery survives repo
  *   drift. Tasks 1/3/4/5 use rg (an independent oracle); task 2 is
  *   engine-derived (rg cannot express the shape — noted in the report).
@@ -30,6 +34,8 @@
  *   final answer next to its oracle. The one auto-flag is the false-
  *   conclusion probe (task 4): an absence claim while the oracle shows the
  *   code is there.
+ * - Default --reps 1 is a smoke; gate decisions want --reps 3+ (medians
+ *   over single samples are noise, and ties pass the gate by design).
  * - Eval chats persist (the transcripts are the grading artifact);
  *   --purge deletes every chat with the eval title prefix.
  */
@@ -38,17 +44,18 @@ import { execFileSync } from "child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { fileURLToPath } from "url";
 import { codeSearchEnabled, runCodeSearch } from "../services/code-search.js";
 import { LocalWorkspaceAdapter } from "../services/workspace.js";
 import type { Chat, ChatMessage } from "../types.js";
 
 const TITLE_PREFIX = "eval[code-search] ";
-const REPO_ROOT = realpathSync(new URL("../../..", import.meta.url).pathname);
+const REPO_ROOT = realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));
 const DEFAULT_OUT_DIR = join(homedir(), ".porrima", "evals", "code-search");
 const HARNESS_SYSTEM_PROMPT = [
   "You are a code-search agent in a project chat whose workspace is the root of this repository.",
   "Answer EXACTLY what the user asked — counts and file names — in your final message.",
-  "Work from the files themselves using your tools (bash, read_file, run_python, and code_search if available).",
+  "Work from the files themselves using your tools.",
   "Keep searches scoped to the path the question names. Do not modify any file.",
 ].join(" ");
 
@@ -93,8 +100,13 @@ const TASKS: TaskDef[] = [
     label: "one-parameter function defs (engine oracle — rg cannot express this shape)",
     prompt: "In `server/src/services`, which function definitions take EXACTLY one parameter? Report each function's name and file. Cover both plain and async definitions.",
     oracle: async () => {
+      // Complete-node form — WITHOUT `{ $$$ }` the pattern matches only
+      // body-less declarations (overload signatures), not definitions: the
+      // engine's complete-node rule cuts both ways. The plain form covers
+      // async definitions too (verified: the async-specific pattern's
+      // matches are a subset of this one's).
       const ws = new LocalWorkspaceAdapter(REPO_ROOT);
-      const res = await runCodeSearch({ pattern: "function $NAME($ARG)", path: "server/src/services", maxMatches: 200 }, ws);
+      const res = await runCodeSearch({ pattern: "function $NAME($ARG) { $$$ }", path: "server/src/services", maxMatches: 200 }, ws);
       const names = res.matches.map((m) => `${m.metaVariables?.NAME}@${m.file}`);
       return `${names.length} definitions: ${JSON.stringify(names)}`;
     },
@@ -168,16 +180,18 @@ interface RunRow {
   suspectedFalseConclusion: boolean;
 }
 
-const ABSENCE_RE = /\bnone\b|no matches|no (?:call|file|match|occurrence|definition)s?|not found|doesn'?t exist|zero(?:$|\s|\()|there (?:is|are) no\b/i;
+const ABSENCE_RE = /\bnone\b|no matches|no (?:call|file|match|occurrence|definition)s?|not found|doesn'?t exist|zero(?:$|\s|\()|\b0+[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)\b|there (?:is|are) no\b/i;
 /**
- * An answer "claims absence" only when it does NOT commit to a positive
+ * An answer "claims absence" only when it does NOT commit to a NON-ZERO
  * count. Measured on a live run: correct answers qualify with "there are
  * no other candidates" — a local qualifier beside a stated "6 calls", not
- * a conclusion. Flags are recomputed at report time, so this logic can
- * evolve without invalidating stored rows.
+ * a conclusion. The guard is deliberately blind to zero counts ("0 calls"
+ * is an absence claim, not a commitment — `\b0+` above catches it, and
+ * `\b` keeps "10 calls" out of both branches). Flags are recomputed at
+ * report time, so this logic can evolve without invalidating stored rows.
  */
 function answerClaimsAbsence(text: string): boolean {
-  if (/[*]*\d+[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)/i.test(text)) return false;
+  if (/[*]*[1-9]\d*[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)/i.test(text)) return false;
   return ABSENCE_RE.test(text);
 }
 
@@ -270,6 +284,10 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
           saveChat,
         });
         // Metrics from the persisted transcript (single source of truth).
+        // Note: in-kernel `tools.code_search` dispatches ride run_python in
+        // this tally — kernel-side adoption is invisible to the byTool
+        // counts (acceptable while models rarely open a kernel for one
+        // search; revisit if that changes).
         let toolCalls = 0;
         let toolErrors = 0;
         let toolResultChars = 0;
@@ -337,7 +355,8 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
 function median(xs: number[]): number {
   if (xs.length === 0) return NaN;
   const s = [...xs].sort((a, b) => a - b);
-  return s[Math.floor(s.length / 2)];
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
 }
 
 function report(files: string[]): void {
@@ -354,7 +373,7 @@ function report(files: string[]): void {
   }
   const arms = [...new Set(rows.map((r) => r.arm))];
   console.log(`battery report — ${rows.length} runs, arms: ${arms.join(", ")}\n`);
-  const head = ["task", "arm", "n", "turns", "tools", "code_search?", "tool_err", "tokens", "search_out_KB", "fc-flag"];
+  const head = ["task", "arm", "n", "turns", "tools", "code_search?", "tool_err", "tokens", "tool_out_KB", "fc-flag"];
   const table: string[][] = [];
   const byTaskArm = new Map<string, RunRow[]>();
   for (const r of rows) {
@@ -385,9 +404,22 @@ function report(files: string[]): void {
   console.log(widths.map((w) => "-".repeat(w)).join("  "));
   for (const r of table) console.log(line(r));
 
-  // §4.1 gate per task: on-arm wins on turns AND tokens vs off-arm, and the
-  // false-conclusion flag does not increase.
-  console.log("\ngate (per §4.1: on must win turns+tokens, no new false conclusions):");
+  // Oracle drift across runs: rows store the oracle as recomputed at their
+  // run time — if the repo moved between the two arms, the comparison is
+  // against different truths. Arms are meant to run back-to-back.
+  const driftWarnings: string[] = [];
+  for (const t of taskIds) {
+    const variants = new Set(rows.filter((r) => r.task === t).map((r) => r.oracle));
+    if (variants.size > 1) {
+      driftWarnings.push(`  T${t}: ${variants.size} distinct oracle values across runs — the repo drifted between arms; rerun them back-to-back`);
+    }
+  }
+  if (driftWarnings.length > 0) console.log(`\nwarnings:\n${driftWarnings.join("\n")}`);
+
+  // §4.1 gate per task: on must NOT LOSE on turns/tokens (ties pass — at
+  // battery scale parity with the baseline is the bar; wins are the bonus)
+  // and must not add false conclusions.
+  console.log("\ngate (per §4.1: on must not lose turns/tokens, no new false conclusions):");
   for (const t of taskIds) {
     const off = byTaskArm.get(`${t}:off`) ?? [];
     const on = byTaskArm.get(`${t}:on`) ?? [];
