@@ -126,6 +126,7 @@ porrima/
 │   │   ├── agent.ts                 # One-shot LLM calls + message reconstruction
 │   │   ├── agent-loop-runner.ts     # Shared pi-agent loop driver
 │   │   ├── chat-turn-runner.ts      # Headless system/automation turn adapter
+│   │   ├── code-search.ts           # ast-grep executor: model tool + kernel projection
 │   │   ├── turn-gate.ts             # Global single-slot turn lease (FIFO, priority classes)
 │   │   ├── turn-compaction.ts       # Per-turn compaction orchestration
 │   │   ├── llm-stream.ts            # Safe stream wrapper + activity tracking

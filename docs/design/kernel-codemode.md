@@ -292,7 +292,7 @@ identity weight and need provenance rather than exclusion.
 |---|---|
 | `bash` | Asa's acceptance bar; codex nests `shell_command`, prime-agent keeps it model-level but full-host |
 | `read_file`, `list_files` | pagination loops; output spilling already handled |
-| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) (10-13 draft, pending review)** |
+| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) — Phase 0 implemented (dark behind `PORRIMA_CODE_SEARCH=1`); this row is Phase 1** |
 | `web_search`, `web_fetch` | the flagship token-piping case |
 | `read_pdf` | heavy payloads, in-code processing; Phase A (10-13 review: pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
 | `search_memory`, `search_conversation`, `read_archived_context` | research pipelines; non-destructive |
