@@ -770,8 +770,10 @@ AST-native is solid: T5 3/3, T1 2/3, plus a correct coverage-note-routed
 cross-check on T4. **The verdict is model-scoped** — a 27B quant with a
 strong write-your-own-parser prior; the battery reruns as the model floor
 changes. **The kernel projection (§3.3) is untested by this battery** —
-kernel-side adoption rides under `run_python` in the metrics, and the
-density thesis remains open.
+kernel-side adoption rides under `run_python` in transcript metrics; the
+kernel dispatch telemetry (`kernel_tool_stats`, kernel-codemode §4.9)
+records it directly, so future runs can measure the projection's density
+thesis without transcript surgery.
 
 ## 5. Dependency placement
 

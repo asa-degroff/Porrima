@@ -103,6 +103,7 @@ porrima/
 │   │   ├── models.ts                # Model discovery + health probes
 │   │   ├── model-stats.ts           # Per-model token/latency samples
 │   │   ├── reranker-stats.ts        # Reranker usage and latency samples
+│   │   ├── kernel-tool-stats.ts     # Kernel tool dispatch telemetry (Phase D evidence)
 │   │   ├── request-log.ts           # Per-chat LLM request log: list/detail/clear (request viewer)
 │   │   ├── llama-servers.ts         # Managed llama.cpp unit supervision + config
 │   │   ├── settings.ts              # User preferences, SSH connections, header image, storage diagnostics
@@ -164,6 +165,7 @@ porrima/
 │   │   ├── embeddings.ts            # Embedding API wrapper (llama.cpp /v1/embeddings)
 │   │   ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
 │   │   ├── reranker-stats.ts        # Reranker sampling (porrima.db)
+│   │   ├── kernel-tool-stats.ts     # Kernel dispatch outcome samples (kernel_tool_stats, porrima.db)
 │   │   ├── request-log.ts           # Wire-level per-request recorder (llm_requests + blob dedup, porrima.db)
 │   │   ├── kv-snapshot.ts           # KV snapshot parking: registry, save policy, budget/prune (docs/design/kv-snapshot-parking.md)
 │   │   ├── cache-warm.ts            # llama.cpp prompt-cache warming
@@ -259,7 +261,7 @@ porrima/
 
 Architecture and subsystems:
 
-- [API Reference](docs/api-reference.md) — Full endpoint table (185 endpoints)
+- [API Reference](docs/api-reference.md) — Full endpoint table (187 endpoints)
 - [Architecture](docs/architecture.md) — Chat types, provider layer, storage, compaction
 - [Chat Message Architecture](docs/chat-message-architecture.md) — Row canonicalization and replay fidelity
 - [Compaction](docs/compaction.md) — Indexed archival and the five compaction paths

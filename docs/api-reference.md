@@ -132,7 +132,7 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | POST | `/api/automations/:id/reset-prompts` | Restore default prompt steps for a built-in |
 | GET | `/api/automations/:id/runs` | Run history. `?limit=N`, capped at 200 |
 
-## System control & stats (`routes/system.ts`, `routes/system-stats.ts`, `routes/model-stats.ts`, `routes/reranker-stats.ts`, `routes/request-log.ts`)
+## System control & stats (`routes/system.ts`, `routes/system-stats.ts`, `routes/model-stats.ts`, `routes/reranker-stats.ts`, `routes/kernel-tool-stats.ts`, `routes/request-log.ts`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -149,6 +149,8 @@ Atomic memories, memory blocks, and the graph/supersession surface.
 | DELETE | `/api/llm-requests?chatId=` | Clear the recorded request log for a chat |
 | GET | `/api/reranker-stats` | Reranker usage and latency stats |
 | POST | `/api/reranker-stats/clear` | Reset reranker stats |
+| GET | `/api/kernel-tool-stats` | Kernel tool dispatch telemetry: per-tool aggregates + recent samples (Phase D evidence) |
+| POST | `/api/kernel-tool-stats/clear` | Reset kernel tool dispatch stats |
 
 ## Browser (`routes/browser.ts`)
 

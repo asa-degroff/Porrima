@@ -487,6 +487,22 @@ Server side (`python-kernel.ts`):
   Putting the full API in the system prompt would spend permanent prefix bytes on the
   thing Phase D exists to earn back.
 
+**Dispatch telemetry.** Every dispatch terminal records one sample to
+`kernel_tool_stats` (porrima.db, 1000-row cap; `kernel-tool-stats.ts` +
+GET/POST-clear `/api/kernel-tool-stats`): tool, outcome
+(`ok`/`error`/`refused`/`aborted`), duration, value/args chars, and the
+spill/truncation/structured (`value_json`) flags, keyed by chat + cell.
+Refusals are first-class samples — budget exhaustion and not-exposed calls
+are exactly the pressure signals Phase D and §7 Q2's budget tuning need.
+This is the evidence layer the plan otherwise assumes: §5's Phase D gate
+("after kernel-usage telemetry shows which model tools the kernel has made
+redundant"), Q2's "placeholders to tune with usage", and kernel-side
+adoption for tools like `code_search`, whose dispatches are invisible in
+transcript metrics (they ride under `run_python`). Recording is
+fire-and-forget after the wire response — telemetry never fails or slows a
+dispatch — and is disabled under `NODE_ENV=test` so protocol tests never
+pollute the store (`PORRIMA_KERNEL_STATS=1/0` overrides).
+
 ### 4.10 Phase A implementation notes — slices 0–2 (10-13)
 
 What landed when slice 0 shipped, including the two places implementation refined
