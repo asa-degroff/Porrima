@@ -5,6 +5,7 @@ import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
 import { createHash, randomUUID } from "crypto";
 import { appDataPath } from "./paths.js";
+import { recordKernelToolDispatch, type KernelToolOutcome } from "./kernel-tool-stats.js";
 import { createOutputCapture, type OutputCapture } from "./output-capture.js";
 import {
   DEFAULT_SPILL_MAX_BYTES,
@@ -983,8 +984,32 @@ async function dispatchKernelTool(
 ): Promise<void> {
   const cellId = typeof event.cell_id === "string" ? event.cell_id : "";
   const tool = typeof event.tool === "string" ? event.tool : "";
+  const startedAt = Date.now();
   const respond = (result: Record<string, unknown>): void => {
     sendRequest(instance, { response: "tool_result", call_id: callId, ...result });
+  };
+  // Dispatch telemetry (kernel-tool-stats): one outcome sample per terminal
+  // path — the Phase D evidence base and the §7 Q2 tuning data. Recording is
+  // fire-and-forget (the recorder swallows its own errors) and happens after
+  // respond() so the wire never waits on it.
+  let argsChars = 0;
+  const record = (
+    outcome: KernelToolOutcome,
+    extra?: { valueChars?: number; spilled?: boolean; truncated?: boolean; structured?: boolean; detail?: string },
+  ): void => {
+    recordKernelToolDispatch({
+      chatId: instance.chatId,
+      cellId,
+      tool,
+      outcome,
+      durationMs: Date.now() - startedAt,
+      valueChars: extra?.valueChars ?? 0,
+      argsChars,
+      spilled: extra?.spilled ?? false,
+      truncated: extra?.truncated ?? false,
+      structured: extra?.structured ?? false,
+      detail: extra?.detail,
+    });
   };
   const dispatcher = instance.toolDispatchers.get(cellId);
   if (!dispatcher) {
@@ -992,15 +1017,21 @@ async function dispatchKernelTool(
       ok: false,
       error: "no live tool dispatcher for this cell (kernel tools disabled, or the cell already settled)",
     });
+    record("refused", { detail: "no live dispatcher" });
     return;
   }
   const args = event.args;
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     respond({ ok: false, error: "tool_call args must be a JSON object" });
+    record("refused", { detail: "malformed args" });
     return;
   }
+  try {
+    argsChars = JSON.stringify(args)?.length ?? 0;
+  } catch { /* unserializable args — the dispatcher will surface it; size stays 0 */ }
   if (!dispatcher.tools.includes(tool)) {
     respond({ ok: false, error: `tool "${tool}" is not exposed by this kernel` });
+    record("refused", { detail: "not exposed" });
     return;
   }
   const max = kernelToolCallsMax();
@@ -1010,6 +1041,7 @@ async function dispatchKernelTool(
       ok: false,
       error: `kernel tool call budget exhausted (${max} calls for this execution); split the work across calls/turns or raise PORRIMA_KERNEL_TOOL_CALLS_MAX`,
     });
+    record("refused", { detail: "budget exhausted" });
     return;
   }
   instance.toolBudget.set(cellId, used + 1);
@@ -1035,6 +1067,7 @@ async function dispatchKernelTool(
     clearTimeout(timer);
     if (!outcome.ok) {
       respond({ ok: false, error: String(outcome.error ?? "tool call failed") });
+      record(controller.signal.aborted ? "aborted" : "error", { detail: String(outcome.error ?? "tool call failed") });
       return;
     }
     // Structured values (code_search's JSON projection) are stringified for
@@ -1067,6 +1100,7 @@ async function dispatchKernelTool(
           total_chars: total,
           ...(structured ? { value_json: true } : {}),
         });
+        record("ok", { valueChars: total, spilled: true, structured });
         return;
       } catch {
         /* fall through to truncation */
@@ -1080,8 +1114,10 @@ async function dispatchKernelTool(
       total_chars: total,
       ...(structured && !truncated ? { value_json: true } : {}),
     });
+    record("ok", { valueChars: total, truncated, structured: structured && !truncated });
   } catch (error: any) {
     respond({ ok: false, error: `dispatch failed: ${error?.message ?? String(error)}` });
+    record("error", { detail: `dispatch failed: ${error?.message ?? String(error)}` });
   } finally {
     instance.toolCalls.delete(callId);
   }
