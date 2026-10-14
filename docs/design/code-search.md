@@ -520,10 +520,13 @@ on-ramp for pattern syntax lives where the tool is, because the failure mode
 (cost #1) is authoring, not calling. Shipped content:
 
 - `function $NAME($$$ARGS) { $$$ }` — the complete-node form.
-- **Patterns must be complete nodes**: `function $NAME($$$ARGS)` (no body)
-  matches nothing. The **partial prefix** `function $NAME` is the workhorse —
-  it matches every function definition (typed, generic, async), and the
-  matched text is the full node including the body.
+- **Patterns must be complete nodes**: a bodiless parameterized pattern
+  (`function $NAME($$$ARGS)`) matches only bodiless *declarations* (TS
+  overload signatures), never definitions — for an exact parameter count use
+  the body slot (`function $NAME($ARG) { $$$ }`). The **partial prefix**
+  `function $NAME` is the workhorse — it matches every function definition
+  (typed, generic, async), and the matched text is the full node including
+  the body.
 - `await $CALL($$$ARGS)` — single metavariables bind; `$$$NAME` binds lists.
   Statement-level forms (e.g. `$VAR = await $CALL()`) are grammar-dependent;
   prefer the call expression itself.
@@ -677,17 +680,24 @@ concluding absence; (5) a two-count task that decomposes naturally into
 query→refine (the full §3.3 kernel shape earns a dedicated case once kernel
 adoption shows up in the wild). The runner is
 `server/src/scripts/eval-code-search.ts`: it drives real headless turns on
-project chats bound to this repo, recomputes ground truth at run time so the
-battery survives repo drift (rg as an independent oracle; engine-derived only
-for shapes rg cannot express — where the complete-node trap applies to the
-oracle author exactly as to the model), and takes a foreground turn-gate
-lease per run. The harness prompt is fixed and names **no tools**: both arms
+project chats bound to the repo and takes a foreground turn-gate lease per
+run. Ground truth is recomputed at run time so the battery survives repo
+drift; oracles are independent of the engine (rg — multiline-aware where
+calls can wrap, since line-based matching undercounts wrapped calls) except
+for the shape rg cannot express (task 2), where the engine derives the truth
+and the complete-node trap applies to the oracle author exactly as it does to
+the model. Oracle strings are deterministically ordered (rg's parallel walk
+order is not), and the report warns when a task's oracle still differs
+across arms. The harness prompt is fixed and names **no tools**: both arms
 differ only in the tool surface, and discovery must come from the schema
-alone — the exact condition the flip creates. Correctness grading is human by
-design — the report prints every final answer beside its oracle, and warns
-when a task's oracle differs across arms (repo drift between runs) — with
-one auto-flag: an absence claim where truth exists (numeric zeros included;
-only non-zero commitments suppress it).
+alone — the exact condition the flip creates. Turn budgets are sized for
+runs to *finish* on the local model; a run that still does not complete
+(timeout, iteration cap) is **censored** — marked, excluded from gate
+medians, and never false-conclusion-flagged, because its "answer" is
+mid-turn narration, not a conclusion. Correctness grading is human by
+design — the report prints every final answer beside its oracle — with one
+auto-flag: an absence claim where truth exists (numeric zeros included; only
+non-zero commitments suppress it).
 
 **Metrics** — Porrima already records the raw material (request-log,
 model-stats): turns to answer, tokens spent on search calls, tool-error rate,
@@ -767,8 +777,12 @@ measures schema-only discovery in the first place.
 
 1. **Pattern-syntax learning cost.** The `$$` vs `$$$ARGS` trap and the
    complete-node requirement are real authoring failures with silent outcomes
-   (a wrong pattern parses and matches nothing). Mitigations: the cheatsheet
-   in the tool description (§3.2), the advisory regex-shape note on
+   — and the silence is not always a clean zero: a bodiless parameterized
+   pattern (`function $N($A)`) plausibly matches *something* (TS overload
+   signatures), sending the model into a verify-the-contradiction spiral
+   (observed live in the §4.1 shakeout). Mitigations: the cheatsheet
+   in the tool description (§3.2 — including the bodiless-declaration trap),
+   the advisory regex-shape note on
    zero-match results (§3.2 — fires only at absence, so valid-but-
    regex-shaped code patterns are never blocked), ast-grep's `--debug-query`
    as the debugger (shipped as a model-level tool by @juvio15/pi-ast-grep —
