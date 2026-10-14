@@ -28,12 +28,17 @@
  *   guidance line is a nudge, not the mechanism). Naming code_search in the
  *   prompt would inflate adoption above what the flip itself delivers.
  * - Ground truth is recomputed at run time so the battery survives repo
- *   drift. Tasks 1/3/4/5 use rg (an independent oracle); task 2 is
- *   engine-derived (rg cannot express the shape — noted in the report).
+ *   drift. Tasks 1/3/4/5 use rg (an independent oracle; T3 multiline-aware —
+ *   line-based rg undercounts wrapped calls); task 2 is engine-derived (rg
+ *   cannot express the shape — noted in the report). Oracle strings are
+ *   deterministically ordered (rg's walk order is not).
  * - Correctness grading is human by design: the report prints each run's
  *   final answer next to its oracle. The one auto-flag is the false-
  *   conclusion probe (task 4): an absence claim while the oracle shows the
  *   code is there.
+ * - Runs that never completed (turn timeout / iteration cap) are CENSORED:
+ *   their "answer" is mid-turn narration. Censored rows are marked, excluded
+ *   from gate medians, and never carry the fc flag.
  * - Default --reps 1 is a smoke; gate decisions want --reps 3+ (medians
  *   over single samples are noise, and ties pass the gate by design).
  * - Eval chats persist (the transcripts are the grading artifact);
@@ -114,11 +119,15 @@ const TASKS: TaskDef[] = [
   },
   {
     id: 3,
-    label: "template-literal console.log (rg oracle)",
+    label: "template-literal console.log (rg oracle, multiline-aware)",
     prompt: "In `server/src` (TypeScript files), how many `console.log` calls pass a template literal (a backtick string) as their first argument? Report the count and the files with per-file counts.",
     oracle: async () => {
-      const lines = rgLines(["console\\.log\\(`", "server/src", "-g", "*.ts"]);
-      return `${lines.length} template-literal console.log calls: ${JSON.stringify(groupCounts(lines))}`;
+      // Multiline-aware (-U --count-matches): line-based rg undercounts calls
+      // whose backtick starts after whitespace or on a later line (measured
+      // 265 line-based vs 369 multiline — the models were right, the oracle
+      // was wrong). Still an independent (non-engine) oracle.
+      const c = rgCounts(["-U", "--count-matches", "console\\.log\\(\\s*`", "server/src", "-g", "*.ts"]);
+      return `${c.total} template-literal console.log calls: ${JSON.stringify(c.byFile)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
   },
@@ -128,7 +137,8 @@ const TASKS: TaskDef[] = [
     prompt: "Does the directory `server/python` contain any calls to `json.dumps`? If yes, report how many and the files. If genuinely none, answer exactly: none.",
     oracle: async () => {
       const lines = rgLines(["json\\.dumps\\(", "server/python"]);
-      return `${lines.length} json.dumps calls in: ${JSON.stringify([...new Set(lines.map((l) => l.split(":")[0]))])}`;
+      const files = [...new Set(lines.map((l) => l.split(":")[0]))].sort();
+      return `${lines.length} json.dumps calls in: ${JSON.stringify(files)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
   },
@@ -151,7 +161,33 @@ function groupCounts(lines: string[]): Record<string, number> {
     const file = l.split(":")[0];
     out[file] = (out[file] ?? 0) + 1;
   }
-  return out;
+  // Sorted: rg's parallel walk order is nondeterministic, and an unsorted
+  // JSON.stringify makes identical truths compare unequal (false drift
+  // warnings across arms).
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Per-file match counts (`rg --count-matches` output: "file:count" lines). */
+function rgCounts(args: string[]): { total: number; byFile: Record<string, number> } {
+  let out: string;
+  try {
+    out = execFileSync("rg", args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  } catch (e: any) {
+    if (e?.status === 1) return { total: 0, byFile: {} }; // no matches
+    throw e;
+  }
+  const byFile: Record<string, number> = {};
+  let total = 0;
+  for (const l of out.split("\n")) {
+    if (!l.trim()) continue;
+    const i = l.lastIndexOf(":");
+    const n = Number(l.slice(i + 1));
+    if (i > 0 && Number.isFinite(n)) {
+      byFile[l.slice(0, i)] = n;
+      total += n;
+    }
+  }
+  return { total, byFile: Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b))) };
 }
 
 // --- run mode -------------------------------------------------------------
@@ -193,6 +229,18 @@ const ABSENCE_RE = /\bnone\b|no matches|no (?:call|file|match|occurrence|definit
 function answerClaimsAbsence(text: string): boolean {
   if (/[*]*[1-9]\d*[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)/i.test(text)) return false;
   return ABSENCE_RE.test(text);
+}
+
+/**
+ * A run is CENSORED when the turn did not complete (timeout, iteration cap,
+ * error): its "final answer" is mid-turn narration and its turn/token counts
+ * are truncated at the cap. Censored rows are excluded from gate medians and
+ * never carry the false-conclusion flag — the detector judges final answers,
+ * not streams (the shakeout's one fc-flag was "Let me verify none exist" in
+ * a timed-out narration: a detector hit on text that was never an answer).
+ */
+function isCensored(r: RunRow): boolean {
+  return !r.ok || r.stopReason !== "stop";
 }
 
 async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: string; out: string }): Promise<void> {
@@ -277,8 +325,11 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
           tools,
           emitter,
           contextWindow,
-          maxIterations: 12,
-          timeoutMs: 240_000,
+          // Sized for a local 27B on one GPU with cold prompts (~33k chars):
+          // the shakeout's 240 s / 12 iterations censored 4/10 runs mid-
+          // narration — an unfinished turn is not a gradeable answer.
+          maxIterations: 16,
+          timeoutMs: 600_000,
           keepAlive: "5m",
           logPrefix: `eval:${arm}-T${task.id}-r${rep}`,
           saveChat,
@@ -305,8 +356,22 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
             if (r.isError) toolErrors++;
           }
         }
-        const finalAnswer = turn.textSummary ?? "";
-        const absenceClaim = answerClaimsAbsence(finalAnswer);
+        // Final answer = the LAST assistant message (the turn's closing
+        // text), not turn.textSummary — the summary concatenates mid-turn
+        // narration, which pollutes both the grading appendix and the
+        // absence detector ("Let me verify none exist" is narration, not a
+        // conclusion). Censored rows fall back to the summary (there is no
+        // closing message; they are excluded from grading anyway).
+        let finalAnswer = turn.textSummary ?? "";
+        for (let i = chat.messages.length - 1; i >= 0; i--) {
+          const m = chat.messages[i];
+          if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
+            finalAnswer = m.content;
+            break;
+          }
+        }
+        const censored = !turn.success || turn.stopReason !== "stop";
+        const absenceClaim = !censored && answerClaimsAbsence(finalAnswer);
         row = {
           ts: new Date().toISOString(),
           arm,
@@ -343,7 +408,7 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
         try { emitter.end(); } catch { /* already closed */ }
       }
       appendFileSync(opts.out, JSON.stringify(row) + "\n");
-      console.log(`[${arm}] T${task.id} r${rep}: ok=${row.ok} turns=${row.iterations} tools=${row.toolCalls} tokens=${row.totalTokens} fcFlag=${row.suspectedFalseConclusion}${row.error ? ` ERR=${row.error.slice(0, 80)}` : ""}`);
+      console.log(`[${arm}] T${task.id} r${rep}: ok=${row.ok} stop=${row.stopReason}${isCensored(row) ? " CENSORED" : ""} turns=${row.iterations} tools=${row.toolCalls} tokens=${row.totalTokens} fcFlag=${row.suspectedFalseConclusion}${row.error ? ` ERR=${row.error.slice(0, 80)}` : ""}`);
     }
   }
   console.log(`done: ${opts.out}`);
@@ -364,16 +429,18 @@ function report(files: string[]): void {
     readFileSync(f, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as RunRow),
   );
   // Recompute absence flags with current logic (stored rows are data, not
-  // judgments — the detector evolves, the transcripts do not).
+  // judgments — the detector evolves, the transcripts do not). Censored rows
+  // never flag: their "answer" is mid-turn narration, not a conclusion.
   for (const r of rows) {
     const t = TASKS.find((x) => x.id === r.task);
     if (!t) continue;
-    r.absenceClaim = answerClaimsAbsence(r.finalAnswer);
+    r.absenceClaim = !isCensored(r) && answerClaimsAbsence(r.finalAnswer);
     r.suspectedFalseConclusion = r.absenceClaim && t.truthPresent(r.oracle);
   }
   const arms = [...new Set(rows.map((r) => r.arm))];
-  console.log(`battery report — ${rows.length} runs, arms: ${arms.join(", ")}\n`);
-  const head = ["task", "arm", "n", "turns", "tools", "code_search?", "tool_err", "tokens", "tool_out_KB", "fc-flag"];
+  const censoredTotal = rows.filter(isCensored).length;
+  console.log(`battery report — ${rows.length} runs, arms: ${arms.join(", ")}${censoredTotal > 0 ? `, ${censoredTotal} censored (timeout/iteration-cap — excluded from medians and fc flags)` : ""}\n`);
+  const head = ["task", "arm", "n", "done", "turns", "tools", "code_search?", "tool_err", "tokens", "tool_out_KB", "fc-flag"];
   const table: string[][] = [];
   const byTaskArm = new Map<string, RunRow[]>();
   for (const r of rows) {
@@ -385,14 +452,16 @@ function report(files: string[]): void {
     for (const a of arms) {
       const rs = byTaskArm.get(`${t}:${a}`) ?? [];
       if (rs.length === 0) continue;
+      const done = rs.filter((r) => !isCensored(r));
       const usedCS = rs.filter((r) => (r.byTool.code_search ?? 0) > 0).length;
+      const med = (xs: number[]) => (xs.length === 0 ? "-" : String(median(xs)));
       table.push([
-        `T${t}`, a, String(rs.length),
-        String(median(rs.map((r) => r.iterations))),
-        String(median(rs.map((r) => r.toolCalls))),
+        `T${t}`, a, String(rs.length), `${done.length}/${rs.length}`,
+        med(done.map((r) => r.iterations)),
+        med(done.map((r) => r.toolCalls)),
         a === "on" ? `${usedCS}/${rs.length}` : "n/a",
         String(rs.reduce((s, r) => s + r.toolErrors, 0)),
-        String(Math.round(median(rs.map((r) => r.totalTokens)))),
+        med(done.map((r) => r.totalTokens).map(Math.round)),
         (rs.reduce((s, r) => s + r.toolResultChars, 0) / 1024).toFixed(1),
         String(rs.filter((r) => r.suspectedFalseConclusion).length),
       ]);
@@ -418,22 +487,28 @@ function report(files: string[]): void {
 
   // §4.1 gate per task: on must NOT LOSE on turns/tokens (ties pass — at
   // battery scale parity with the baseline is the bar; wins are the bonus)
-  // and must not add false conclusions.
-  console.log("\ngate (per §4.1: on must not lose turns/tokens, no new false conclusions):");
+  // and must not add false conclusions. Medians run over completed rows
+  // only — a censored turn's counts are truncated at the cap, not earned.
+  console.log("\ngate (per §4.1: on must not lose turns/tokens, no new false conclusions; censored rows excluded):");
   for (const t of taskIds) {
     const off = byTaskArm.get(`${t}:off`) ?? [];
     const on = byTaskArm.get(`${t}:on`) ?? [];
-    if (off.length === 0 || on.length === 0) { console.log(`  T${t}: no comparison (${off.length} off / ${on.length} on runs)`); continue; }
-    const turns = median(on.map((r) => r.iterations)) <= median(off.map((r) => r.iterations));
-    const tokens = median(on.map((r) => r.totalTokens)) <= median(off.map((r) => r.totalTokens));
+    const offDone = off.filter((r) => !isCensored(r));
+    const onDone = on.filter((r) => !isCensored(r));
+    if (offDone.length === 0 || onDone.length === 0) {
+      console.log(`  T${t}: no comparison (${offDone.length}/${off.length} off done, ${onDone.length}/${on.length} on done)`);
+      continue;
+    }
+    const turns = median(onDone.map((r) => r.iterations)) <= median(offDone.map((r) => r.iterations));
+    const tokens = median(onDone.map((r) => r.totalTokens)) <= median(offDone.map((r) => r.totalTokens));
     const fc = on.filter((r) => r.suspectedFalseConclusion).length <= off.filter((r) => r.suspectedFalseConclusion).length;
-    console.log(`  T${t}: ${turns && tokens && fc ? "PASS" : "FAIL"} (turns ${turns ? "ok" : "worse"}, tokens ${tokens ? "ok" : "worse"}, false-conclusions ${fc ? "ok" : "worse"})`);
+    console.log(`  T${t}: ${turns && tokens && fc ? "PASS" : "FAIL"} (turns ${turns ? "ok" : "worse"}, tokens ${tokens ? "ok" : "worse"}, false-conclusions ${fc ? "ok" : "worse"}; done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length})`);
   }
 
   // Grading appendix: oracle vs final answer, per run (human judgment).
   console.log("\ngrading appendix (human check — oracle vs answer):");
   for (const r of rows) {
-    console.log(`\n  [${r.arm}] T${r.task} r${r.rep} ${r.title}`);
+    console.log(`\n  [${r.arm}] T${r.task} r${r.rep} ${r.title}${isCensored(r) ? ` (CENSORED stop=${r.stopReason} — "answer" is mid-turn narration, not gradeable)` : ""}`);
     console.log(`    truth : ${r.oracle.slice(0, 400)}`);
     console.log(`    answer: ${r.finalAnswer.replace(/\n/g, " ").slice(0, 400)}`);
     if (r.absenceClaim) console.log(`    NOTE  : absence claim${r.suspectedFalseConclusion ? " — SUSPECTED FALSE CONCLUSION" : ""}`);
