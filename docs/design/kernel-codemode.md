@@ -570,8 +570,8 @@ the design:
   description assertion.
 - **Remaining after the flip (slice 3+):** budget placement in UI settings (env
   knobs live meanwhile), `code_search` (§4.3 row / §7 Q9 — designed in
-  [code-search.md](code-search.md), 10-13 draft pending review: model-level
-  phase 0 gated, kernel projection phase 1), nested-call partial streaming
+  [code-search.md](code-search.md); Phase 0 implemented, dark behind
+  `PORRIMA_CODE_SEARCH=1`, kernel projection phase 1), nested-call partial streaming
   (§4.9), remote per-call spill delivery (Phase C), and the tier-2 provenance
   seam (Phase B).
 
