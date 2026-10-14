@@ -681,7 +681,12 @@ query→refine (the full §3.3 kernel shape earns a dedicated case once kernel
 adoption shows up in the wild). The runner is
 `server/src/scripts/eval-code-search.ts`: it drives real headless turns on
 project chats bound to the repo and takes a foreground turn-gate lease per
-run. Ground truth is recomputed at run time so the battery survives repo
+run. Eval chats carry the `eval[` title prefix, which doubles as the
+delayed-extraction firewall — the scheduler's candidate query skips such
+chats, so transcripts never enter the memory system even with a stray server
+alive (an eval-time misconception extracted into a durable memory would
+steer the very behavior the battery measures); `--purge` removes the chats
+once graded, and the jsonl rows keep the full answers. Ground truth is recomputed at run time so the battery survives repo
 drift; oracles are independent of the engine (rg — multiline-aware where
 calls can wrap, since line-based matching undercounts wrapped calls) except
 for the shape rg cannot express (task 2), where the engine derives the truth

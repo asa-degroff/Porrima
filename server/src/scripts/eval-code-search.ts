@@ -23,6 +23,10 @@
  * - The harness system prompt is a fixed minimal coding-agent prompt, NOT
  *   the memory-augmented interactive one: both arms must differ only in the
  *   tool surface, and eval runs must not write memories or touch synthesis.
+ *   The `eval[` title prefix doubles as the delayed-extraction firewall —
+ *   the scheduler's candidate query skips such chats — so transcripts never
+ *   feed the memory system even with a stray server alive. Purge the chats
+ *   once graded (--purge); the jsonl rows keep the full answers.
  *   It names NO tools on purpose — discovery must come from the tool schema
  *   alone, which is the exact condition the flip creates (the phase-4
  *   guidance line is a nudge, not the mechanism). Naming code_search in the

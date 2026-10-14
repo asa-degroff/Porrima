@@ -23,6 +23,13 @@ const delayedExtractionsInProgress = new Set<string>();
  * Find agent chats that are inactive and need delayed extraction.
  * Criteria:
  * - Chat type is "agent"
+ * - title does not start with `eval[` — eval/battery transcripts (e.g. the
+ *   code-search battery, docs/design/code-search.md §4.1) are measurement
+ *   artifacts, never memory sources. Without this prefix firewall a live
+ *   scheduler extracts eval-time misconceptions (a wrong tool "limitation"
+ *   learned mid-spiral, over-verification habits) into durable memories and
+ *   injects them into future chats — the battery would steer the very
+ *   behavior it measures.
  * - lastModified < now - threshold (inactive for N minutes)
  * - AND (one of):
  *   - lastDelayedExtractionAt IS NULL (never extracted)
@@ -39,6 +46,7 @@ export async function findChatsNeedingDelayedExtraction(thresholdMs: number): Pr
     SELECT id, lastModified, lastDelayedExtractionAt
     FROM chats
     WHERE lastModified < ?
+      AND title NOT LIKE 'eval[%'
       AND (
         lastDelayedExtractionAt IS NULL
         OR lastDelayedExtractionAt < lastModified
