@@ -333,7 +333,7 @@ _KNOWN_TOOL_DOCS = {
         "      to ts) — write rule, test, inspect bindings, revise, all in\n"
         "      variables. Dict: matches[{file,start,end,text,metaVariables}],\n"
         "      totalMatches, filesWithMatches, scannedFiles, unscanned, skipped,\n"
-        "      truncated."
+        "      truncated, hint (regex-shape advisory on a zero-match result)."
     ),
     "search_memory": (
         "  await tools.search_memory(query=str, ...) -> str\n"

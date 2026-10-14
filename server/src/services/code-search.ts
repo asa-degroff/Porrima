@@ -137,6 +137,10 @@ export interface CodeSearchResult {
   scannedFiles: number; // files in scope the engine can visit (census; lower bound when partial)
   text: string; // model-level text projection
   truncated: boolean;
+  /** Advisory regex-shape note, present only on a zero-match (§3.2). The
+   *  structured (kernel) projection has no `text`, so the hint rides as a
+   *  field — absence advice fires identically on both surfaces. */
+  hint?: string;
 }
 
 export class CodeSearchError extends Error {}
@@ -692,6 +696,7 @@ export async function runCodeSearch(
     scannedFiles,
     text,
     truncated,
+    ...(totalMatches === 0 && regexHint ? { hint: regexHint } : {}),
   };
 }
 

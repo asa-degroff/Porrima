@@ -300,6 +300,9 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(res.text).toMatch(/^no matches/);
     expect(res.text).toMatch(/regex-shaped/);
     expect(res.text).toMatch(/rg/);
+    // The structured projection (kernel) carries the same advisory as a
+    // field — the cell has no `text` to read it from.
+    expect(res.hint).toMatch(/regex|rg/);
   });
 
   it("a tight pipe that IS code (bitwise-or) matches — engine referees, no hint on presence", async () => {
@@ -307,6 +310,7 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(regexShapeHint("1|2")).not.toBeNull(); // the detector does trip …
     expect(res.totalMatches).toBeGreaterThanOrEqual(1); // … but the pattern is valid code
     expect(res.text).not.toMatch(/regex-shaped/);
+    expect(res.hint).toBeUndefined(); // presence mints no advisory, on either surface
   });
 
   it("an explicit language with nothing to scan in scope says so", async () => {
