@@ -102,13 +102,13 @@ const CODE_SEARCH_TOOL: Tool = {
     "For an exact parameter list use the body slot too (`function $NAME($ARG) { $$$ }`) — a bodiless parameterized pattern (`function $NAME($ARG)`) matches only bodiless declarations like TS overload signatures, NOT definitions. " +
     "Typed signatures need their slots in the full form (`function $NAME<$TP>($$$ARGS): $RET { $$$ }`); the partial form avoids that. " +
     "Plain text with no metavariables is a literal exact-node match. " +
-    "Examples: `function $NAME` finds function definitions; `await $CALL($$$ARGS)` finds call sites; `return $VALUE` finds returned values.",
+    "Examples: `function $NAME` finds function definitions; `await $CALL($$$ARGS)` finds call sites; `return $VALUE` finds returned values; `console.log(`$$$X`)` finds template-literal log calls (add `, $$$REST` for calls with more arguments).",
   parameters: Type.Object({
     pattern: Type.String({ description: "AST pattern (code, not regex — $NAME single node, $$$NAME node list)" }),
     path: Type.Optional(Type.String({ description: "Workspace-relative root to search (default: whole workspace)" })),
     lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css. Default: auto-detect from file extensions — files outside these languages are reported as unscanned" })),
     globs: Type.Optional(Type.Array(Type.String(), { description: "Glob filter, gitignore semantics; '!' prefix excludes; later globs win (e.g. ['*.ts', '!*.test.ts'])" })),
-    maxMatches: Type.Optional(Type.Integer({ description: "Max matches to return (default 50, max 1000)", minimum: 1, maximum: 1000 })),
+    maxMatches: Type.Optional(Type.Integer({ description: "Max matches to return (default 50, max 1000). For a pure count use maxMatches=1 — the summary line still reports totalMatches across all matches", minimum: 1, maximum: 1000 })),
     skip: Type.Optional(Type.Integer({ description: "Skip the first N matches for pagination (default 0)", minimum: 0 })),
   }),
 };
