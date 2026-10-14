@@ -1,10 +1,11 @@
 # Code Search — structural code navigation for Porrima
 
-**Status:** Phase 0 implemented — model-level `code_search` tool, dark behind
-`PORRIMA_CODE_SEARCH=1`. Extends the kernel-codemode design: it is the concrete
-design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9 (model-level
-wrapper first, in-kernel projection second, outline deferred as its own
-feature). Phase 1 (kernel projection) rides the same executor.
+**Status:** Phases 0–1 implemented — model-level `code_search` tool (dark
+behind `PORRIMA_CODE_SEARCH=1`) and the kernel projection (same flag, riding
+the live kernel-tools flag). Extends the kernel-codemode design: it is the
+concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
+(model-level wrapper first, in-kernel projection second, outline deferred as
+its own feature).
 **Date:** 2026-10-14
 **Revised (10-14, review pass 2):** engine facts re-verified empirically against
 napi 0.50.0 — the extension set is broader than the five language names (§3.1
@@ -17,6 +18,8 @@ phase via the official `@ast-grep/lang-*` packages (§5, §6 G); phase re-order
 (outline before remote). The regex-shape guard is now advisory-on-absence, not
 a hard reject (§3.2). Other Phase 0 fixes: directory globs, `~` parity with
 workspace.ts, census under the call deadline, per-language pattern cache.
+**Phase 1 (kernel projection) shipped the same pass** — §3.3 carries the
+as-built shape (`value_json` wire flag, `code=` snippet mode).
 
 ## 1. Problem
 
@@ -543,18 +546,26 @@ on-ramp for pattern syntax lives where the tool is, because the failure mode
   a bare identifier named `$`. Three dollars plus a name is the list syntax.
 - Language coverage statement (the five languages; rg for the rest).
 
-### 3.3 The kernel projection — Phase 1
+### 3.3 The kernel projection — Phase 1 (shipped 10-14)
 
-One line on the dispatcher's exposure list (`createKernelToolDispatcher`),
-same projection pattern as the other Phase A rows. Differences from the
-model-level tool, both deliberate:
+One conditional row on the dispatcher's exposure list
+(`createKernelToolDispatcher`), same projection pattern as the other Phase A
+rows; the gate (`PORRIMA_CODE_SEARCH=1`) is evaluated per dispatcher
+construction — per cell — so a flip needs no restart beyond the one the
+kernel-tools line already rides. Differences from the model-level tool, all
+deliberate:
 
 - **Structured output.** In the kernel, result bytes are free (they stay in
   variables), so the kernel projection returns the normalized JSON shape
   (`CodeSearchResult` without `text`). The model-level text is for context;
   the kernel JSON is for computation — including `skipped`/`unscanned`, so
   a program can decide whether absence is meaningful before drawing a
-  conclusion.
+  conclusion. **Wire shape:** the manager JSON-stringifies structured values
+  and flags the response `value_json`; the driver decodes the flag back into
+  a real dict for the cell (a decode failure keeps the raw string — the flag
+  never fails a call). Truncated JSON stays a marked string (a cut string is
+  not parseable); spill references carry `json: True` so the cell knows to
+  `json.load(open(path))`.
 - **The rule-authoring loop** — the case the MCP exists for, made free:
 
   ```python
@@ -574,13 +585,26 @@ model-level tool, both deliberate:
   ten-iteration refine pass stays well under a second, and scoping keeps it
   there. The auto-detect path caches one compiled pattern per language, so
   loop iterations pay parse cost, never recompile cost.
-- **Snippet testing without the filesystem** (the `parseFiles`/`pattern`
-  napi path): a kernel program can test a pattern against a string it built,
-  not just files — the `test_match_code_rule` MCP tool, in-kernel.
+- **Snippet testing without the filesystem** (the `parse`/`pattern` napi
+  path): `code=` switches the same tool to snippet mode — test a pattern
+  against a string the program built, not just files. The
+  `test_match_code_rule` MCP tool, in-kernel. Shipped shape:
+  `runCodeSearchOnSnippet({pattern, code, lang?, maxMatches?, skip?})` →
+  `{matches (file = "(snippet)"), totalMatches, lang, truncated, hint?}`;
+  `lang` defaults to ts (the house language) and the resolved language rides
+  in the result — snippet mode has no census, so the mis-language class is
+  the one silent failure the result must at least name. The advisory
+  regex-shape hint (§3.2) rides both paths, at absence only. Synchronous by
+  construction (parse + findAll on a bounded string); no filesystem means it
+  works on **remote kernels too** — the file scan stays local-only until the
+  remote carve-out phase.
 
 `code_search` joins the codemode §4.3 Tier 1 row as designed (read-only; the
 density case is query→loop→transform; the remote carve-out is §3.1's
-(b)-then-(a)).
+(b)-then-(a)). The manager's per-tool timeout gives it 150 s — 30 s of
+headroom over the executor's own 120 s deadline so the executor's more useful
+timeout message ("narrow `path`…") wins the race instead of the generic
+abort text.
 
 ### 3.4 Orientation — named, deferred, designed separately
 
@@ -728,7 +752,7 @@ on the flip alone.
 | phase | scope | gates |
 |---|---|---|
 | **0** | model-level `code_search`: executor (napi, local), scope census + coverage reporting, tool definition, budgets, gating, tests | implemented; dark behind `PORRIMA_CODE_SEARCH=1` |
-| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`pattern`/`parseFiles`) | rides the live kernel flag; one exposure-list line |
+| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | **implemented (10-14)** — exposure gated on `PORRIMA_CODE_SEARCH=1` per dispatcher construction; structured values ride the `value_json` wire flag (driver decodes to a real dict); e2e-pinned through the registry seam |
 | **2** | `code_outline` — its own design section, kernel-first | **re-ordered ahead of remote (10-14):** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |

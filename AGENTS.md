@@ -290,7 +290,7 @@ Design documents (`docs/design/`) — rationale and history for shipped subsyste
 - [Browser Observability](docs/design/browser-observability.md) — Live screenshot PiP viewer (P1 client-only, P2 auto-capture)
 - [KV Snapshot Parking](docs/design/kv-snapshot-parking.md) — Disk tier for idle slot KV: app-side save/restore orchestration around llama.cpp's `/slots` API
 - [Kernel Codemode](docs/design/kernel-codemode.md) — In-kernel tool composition: projection-based tools API over the session kernel (Phase A live 10-13; design doc carries implementation notes through slice 2)
-- [Code Search](docs/design/code-search.md) — Structural code navigation (ast-grep): model-level tool + kernel projection (Phase 0 implemented, dark behind `PORRIMA_CODE_SEARCH=1`)
+- [Code Search](docs/design/code-search.md) — Structural code navigation (ast-grep): model-level tool + kernel projection (Phases 0–1 implemented, dark behind `PORRIMA_CODE_SEARCH=1`)
 
 Release and onboarding:
 

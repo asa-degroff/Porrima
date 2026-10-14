@@ -292,7 +292,7 @@ identity weight and need provenance rather than exclusion.
 |---|---|
 | `bash` | Asa's acceptance bar; codex nests `shell_command`, prime-agent keeps it model-level but full-host |
 | `read_file`, `list_files` | pagination loops; output spilling already handled |
-| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) — Phase 0 implemented (dark behind `PORRIMA_CODE_SEARCH=1`); this row is Phase 1** |
+| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) — Phases 0–1 implemented: model tool dark behind `PORRIMA_CODE_SEARCH=1`; this row shipped (dispatcher exposure + structured `value_json` projection + `code=` snippet mode)** |
 | `web_search`, `web_fetch` | the flagship token-piping case |
 | `read_pdf` | heavy payloads, in-code processing; Phase A (10-13 review: pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
 | `search_memory`, `search_conversation`, `read_archived_context` | research pipelines; non-destructive |
@@ -569,11 +569,12 @@ the design:
   `dir(tools)` enumeration, web/memory routing incl. chat-scope threading, gated
   description assertion.
 - **Remaining after the flip (slice 3+):** budget placement in UI settings (env
-  knobs live meanwhile), `code_search` (§4.3 row / §7 Q9 — designed in
-  [code-search.md](code-search.md); Phase 0 implemented, dark behind
-  `PORRIMA_CODE_SEARCH=1`, kernel projection phase 1), nested-call partial streaming
+  knobs live meanwhile), nested-call partial streaming
   (§4.9), remote per-call spill delivery (Phase C), and the tier-2 provenance
-  seam (Phase B).
+  seam (Phase B). (`code_search` — §4.3 row / §7 Q9 — is no longer remaining:
+  Phases 0–1 implemented per [code-search.md](code-search.md), dark behind
+  `PORRIMA_CODE_SEARCH=1`; its kernel projection introduced the `value_json`
+  structured-value wire flag.)
 
 ## 5. Staging
 
