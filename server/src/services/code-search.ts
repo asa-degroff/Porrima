@@ -34,9 +34,12 @@
  * - Match nodes carry no file path; it lives at `node.getRoot().filename()`
  *   (absolute when the scan scope is absolute).
  * - `range()` is 0-based; the model-facing text is 1-based.
- * - Patterns must be complete nodes: `function $NAME($$$ARGS)` (no body)
- *   matches nothing; the partial prefix `function $NAME` matches every
- *   function definition (typed, generic, async).
+ * - Patterns must be complete nodes: a bodiless parameterized pattern
+ *   (`function $NAME($$$ARGS)`) matches only bodiless DECLARATIONS (e.g. TS
+ *   overload signatures), never definitions — exact parameter shapes need
+ *   the body slot (`function $NAME($ARG) { $$$ }`). The partial prefix
+ *   `function $NAME` matches every function definition (typed, generic,
+ *   async).
  * - Multi-element bindings include separator nodes; `join("")` reconstructs
  *   the source span. `getMatch(name)` returns the single-binding node,
  *   `getMultipleMatches(name)` the list.

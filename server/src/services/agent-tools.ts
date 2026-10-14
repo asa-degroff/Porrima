@@ -99,6 +99,7 @@ const CODE_SEARCH_TOOL: Tool = {
     "Covers TypeScript, TSX, JavaScript/JSX, HTML, and CSS; files in other languages are reported as unscanned — use rg via bash for those. " +
     "Patterns are code, not regex: $NAME binds a single node, $$$NAME binds a list of nodes. " +
     "A pattern is a complete node (`function $NAME($$$ARGS) { $$$ }`) or a partial prefix of one — `function $NAME` matches ANY function definition (typed, generic, async). " +
+    "For an exact parameter list use the body slot too (`function $NAME($ARG) { $$$ }`) — a bodiless parameterized pattern (`function $NAME($ARG)`) matches only bodiless declarations like TS overload signatures, NOT definitions. " +
     "Typed signatures need their slots in the full form (`function $NAME<$TP>($$$ARGS): $RET { $$$ }`); the partial form avoids that. " +
     "Plain text with no metavariables is a literal exact-node match. " +
     "Examples: `function $NAME` finds function definitions; `await $CALL($$$ARGS)` finds call sites; `return $VALUE` finds returned values.",
