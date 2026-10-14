@@ -100,6 +100,13 @@ export interface WorkspaceBashOptions {
 export interface WorkspaceAdapter {
   readonly label: string;
   readonly kind: "local" | "ssh";
+  /**
+   * Absolute root on the SERVER's filesystem — set by the local adapter only.
+   * Tools that need server-local file access (code_search's in-process napi
+   * executor, docs/design/code-search.md §3.1) gate on this; SSH workspaces
+   * leave it undefined and get the Phase 2 carve-out error instead.
+   */
+  readonly localRoot?: string;
   readFile(args: Record<string, any>, opts?: WorkspaceReadFileOptions, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   writeFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
   editFile(args: Record<string, any>, signal?: AbortSignal): Promise<{ content: string; isError: boolean }>;
@@ -316,9 +323,11 @@ async function runStreamingBash(
 export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
   readonly kind = "local" as const;
+  readonly localRoot: string;
 
   constructor(private readonly root: string = HOME) {
     this.label = root;
+    this.localRoot = root;
   }
 
   private resolve(inputPath: string): string {

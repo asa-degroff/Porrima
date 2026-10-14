@@ -10,6 +10,7 @@
     "analyze:token-estimates": "tsx src/scripts/analyze-token-estimates.ts"
   },
   "dependencies": {
+    "@ast-grep/napi": "0.50.0",
     "@earendil-works/pi-agent-core": "^1.0.2",
     "@earendil-works/pi-ai": "^1.0.2",
     "@mozilla/readability": "^0.6.0",
@@ -21,6 +22,7 @@
     "express": "^5.1.0",
     "express-session": "^1.19.0",
     "linkedom": "^0.18.12",
+    "minimatch": "^10.2.6",
     "puppeteer-core": "^25.4.0",
     "sentence-tokenizer": "^1.0.1",
     "sharp": "^0.35.3",

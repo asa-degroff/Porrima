@@ -12,6 +12,7 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
+import { codeSearchEnabled, runCodeSearch, CodeSearchError, type CodeSearchParams } from "./code-search.js";
 import {
   executeInKernel,
   kernelToolsEnabled,
@@ -81,6 +82,33 @@ const LIST_FILES_TOOL: Tool = {
   parameters: Type.Object({
     path: Type.Optional(Type.String({ description: "Directory path (defaults to working directory)" })),
     pattern: Type.Optional(Type.String({ description: "Glob pattern to match (e.g. '**/*.ts')" })),
+  }),
+};
+
+/**
+ * Structural code search (docs/design/code-search.md, Phase 0). Dark behind
+ * PORRIMA_CODE_SEARCH=1 — the tool definition ships only when the flag is on
+ * (zero schema bytes until the flip). Read-only and lock-free: parallel-safe
+ * like read_file (never takes workspace:<label>, not in SEQUENTIAL_TOOL_NAMES).
+ * Worked examples in the description are all verified against 0.50.0 (10-13).
+ */
+const CODE_SEARCH_TOOL: Tool = {
+  name: "code_search",
+  description:
+    "Structurally search code with AST patterns (ast-grep) — matches syntax, not text: function shapes, call sites, assignments. " +
+    "Use when the answer depends on the language's syntax tree; use rg via bash for plain-text search. " +
+    "Patterns are code, not regex: $NAME binds a single node, $$$NAME binds a list of nodes. " +
+    "A pattern is a complete node (`function $NAME($$$ARGS) { $$$ }`) or a partial prefix of one — `function $NAME` matches ANY function definition (typed, generic, async). " +
+    "Typed signatures need their slots in the full form (`function $NAME<$TP>($$$ARGS): $RET { $$$ }`); the partial form avoids that. " +
+    "Plain text with no metavariables is a literal exact-node match. " +
+    "Examples: `function $NAME` finds function definitions; `await $CALL($$$ARGS)` finds call sites; `return $VALUE` finds returned values.",
+  parameters: Type.Object({
+    pattern: Type.String({ description: "AST pattern (code, not regex — $NAME single node, $$$NAME node list)" }),
+    path: Type.Optional(Type.String({ description: "Workspace-relative root to search (default: whole workspace)" })),
+    lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css (the executor's supported languages, napi 0.50.0). Default: auto-detect from file extensions — files in other languages are skipped" })),
+    globs: Type.Optional(Type.Array(Type.String(), { description: "Glob filter, gitignore semantics; '!' prefix excludes; later globs win (e.g. ['*.ts', '!*.test.ts'])" })),
+    maxMatches: Type.Optional(Type.Integer({ description: "Max matches to return (default 50, max 1000)", minimum: 1, maximum: 1000 })),
+    skip: Type.Optional(Type.Integer({ description: "Skip the first N matches for pagination (default 0)", minimum: 0 })),
   }),
 };
 
@@ -431,6 +459,10 @@ const FILESYSTEM_TOOLS: Tool[] = [
   WRITE_FILE_TOOL,
   EDIT_FILE_TOOL,
   LIST_FILES_TOOL,
+  // Dark behind PORRIMA_CODE_SEARCH=1 (docs/design/code-search.md §3.2): the
+  // definition ships only when the flag is on, uniform per server process —
+  // the kernel-tools capability-line pattern.
+  ...(codeSearchEnabled() ? [CODE_SEARCH_TOOL] : []),
   BASH_TOOL,
   RUN_PYTHON_TOOL,
   PYTHON_JOBS_TOOL,
@@ -1078,6 +1110,29 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       return wrapResult(await workspace.listFiles(params as Record<string, any>, signal), "list_files");
     },
   });
+
+  // code_search (Phase 0, docs/design/code-search.md): read-only and
+  // lock-free — no withMutationLock, parallel-safe like read_file. The
+  // executor owns budgets (maxMatches / skip / char cap / timeout); errors
+  // arrive as CodeSearchError with model-readable messages.
+  if (codeSearchEnabled()) {
+    tools.push({
+      ...CODE_SEARCH_TOOL,
+      label: "code_search",
+      execute: async (_id, params, signal) => {
+        const workspace = await workspacePromise;
+        try {
+          const result = await runCodeSearch(params as CodeSearchParams, workspace, signal);
+          return wrapResult({ content: result.text, isError: false }, "code_search");
+        } catch (e: any) {
+          return wrapResult(
+            { content: e instanceof CodeSearchError ? e.message : `code_search failed: ${e.message}`, isError: true },
+            "code_search",
+          );
+        }
+      },
+    });
+  }
 
   tools.push({
     ...BASH_TOOL,
