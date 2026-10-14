@@ -745,6 +745,34 @@ alone — and that line is a **nudge, not the mechanism**: the feature must
 not depend on AGENTS.md being load-bearing, which is why the battery
 measures schema-only discovery in the first place.
 
+**Results (first gate run, 10-14; Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp, reps 3,
+both arms complete, 30 runs):** verdict **FAIL — the flag stays dark.**
+Aggregate over the efficiency tasks: turns 15 → 21, tokens 43.2k → 49.1k
+(summed per-task medians); completion rate 11/15 on both arms; zero false
+conclusions across 60 runs in two gate runs; the T4 probe passes both. The
+human-graded appendix tells the rest of the story: the on-arm is never less
+correct and its answers are consistently richer (AST-cross-verified counts,
+line-level breakdowns; its one completed T3 run is the only answer in the
+battery to identify the string-literal false positive inside the oracle's
+textual count — a tool-description example line, demonstrating the
+AST-vs-text boundary live). The efficiency loss decomposes into: (1) schema
+cost where the tool is correctly unused (T4, +7%); (2) additive
+verification — the model wields code_search *on top of* rg rather than
+instead of it, and pays for line-numbered payloads on counting questions
+(the `maxMatches=1` hint went unused; the model wants the lines); (3)
+non-adoption where the task's semantics are textual rather than structural
+(T3: adoption 0/6 across both gates — starts-with-backtick is a ripgrep
+question, the model correctly prefers text tools, then over-verifies into
+parser-building swamps on *both* arms). T2 proved non-discriminative: 0/3
+off completed, 1/3 on completed and wrong — the closed shape list did not
+contain the model's enumeration reflex. Adoption where the shape is
+AST-native is solid: T5 3/3, T1 2/3, plus a correct coverage-note-routed
+cross-check on T4. **The verdict is model-scoped** — a 27B quant with a
+strong write-your-own-parser prior; the battery reruns as the model floor
+changes. **The kernel projection (§3.3) is untested by this battery** —
+kernel-side adoption rides under `run_python` in the metrics, and the
+density thesis remains open.
+
 ## 5. Dependency placement
 
 - **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds).
@@ -802,7 +830,7 @@ measures schema-only discovery in the first place.
 | **2** | `code_outline` — its own design section, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
-| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery** (flag off vs on, schema-only discovery), not on the flip alone |
+| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery** (flag off vs on, schema-only discovery), not on the flip alone — first gate run 10-14: **FAIL, flag stays dark** (§4.1 Results; model-scoped verdict, kernel projection untested) |
 
 ## 7. Risks
 
