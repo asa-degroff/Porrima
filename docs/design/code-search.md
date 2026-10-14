@@ -673,25 +673,36 @@ known ground truth: (1) find all call sites of a chosen function; (2) find
 every function taking a given parameter shape; (3) find template-literal
 `console.log`s; (4) a deliberate false-absence probe — a query whose answer
 lives in a `.py` file, checking the model honors the coverage note instead of
-concluding absence; (5) one iterative query→refine case (the §3.3 kernel
-shape, once Phase 1 is live). The runner is
+concluding absence; (5) a two-count task that decomposes naturally into
+query→refine (the full §3.3 kernel shape earns a dedicated case once kernel
+adoption shows up in the wild). The runner is
 `server/src/scripts/eval-code-search.ts`: it drives real headless turns on
-project chats bound to the repo (fixed harness prompt — both arms differ only
-in the tool surface), recomputes ground truth at run time so the battery
-survives repo drift (rg as an independent oracle; engine-derived only for
-shapes rg cannot express), and takes a foreground turn-gate lease per run.
-Correctness grading is human by design — the report prints every final answer
-beside its oracle — with one auto-flag: an absence claim where truth exists.
+project chats bound to this repo, recomputes ground truth at run time so the
+battery survives repo drift (rg as an independent oracle; engine-derived only
+for shapes rg cannot express — where the complete-node trap applies to the
+oracle author exactly as to the model), and takes a foreground turn-gate
+lease per run. The harness prompt is fixed and names **no tools**: both arms
+differ only in the tool surface, and discovery must come from the schema
+alone — the exact condition the flip creates. Correctness grading is human by
+design — the report prints every final answer beside its oracle, and warns
+when a task's oracle differs across arms (repo drift between runs) — with
+one auto-flag: an absence claim where truth exists (numeric zeros included;
+only non-zero commitments suppress it).
 
 **Metrics** — Porrima already records the raw material (request-log,
 model-stats): turns to answer, tokens spent on search calls, tool-error rate,
 and **false-conclusion rate** (a wrong answer delivered confidently — the
 failure the census exists to prevent). Run the battery with the flag off
-(bash+rg baseline) and on. The ~150 schema tokens (§3.2) are earned only if
-the on-run wins on turns/tokens *and* does not lose on false conclusions.
+(bash+rg baseline) and on; `--reps 3` minimum for gate decisions (single-run
+medians are noise). The ~150 schema tokens (§3.2) are earned only if the
+on-run **does not lose** on turns/tokens (ties pass — at battery scale,
+parity with the baseline is the bar; wins are the bonus) *and* adds no false
+conclusions.
 
-**Gate:** Phase 4's AGENTS.md default-shift line lands on a battery win, not
-on the flip alone.
+**Gate:** Phase 4's guidance line lands on a battery pass, not on the flip
+alone — and that line is a **nudge, not the mechanism**: the feature must
+not depend on AGENTS.md being load-bearing, which is why the battery
+measures schema-only discovery in the first place.
 
 ## 5. Dependency placement
 
@@ -750,7 +761,7 @@ on the flip alone.
 | **2** | `code_outline` — its own design section, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
-| **4** | the one-line default shift in AGENTS.md / tool guidance | **gated on the §4.1 eval battery** (flag off vs on), not on the flip alone |
+| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery** (flag off vs on, schema-only discovery), not on the flip alone |
 
 ## 7. Risks
 
