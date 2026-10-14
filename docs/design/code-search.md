@@ -530,6 +530,16 @@ on-ramp for pattern syntax lives where the tool is, because the failure mode
 - `await $CALL($$$ARGS)` — single metavariables bind; `$$$NAME` binds lists.
   Statement-level forms (e.g. `$VAR = await $CALL()`) are grammar-dependent;
   prefer the call expression itself.
+- The template-literal shape is its own worked example: ``console.log(`$$$X`)``
+  (add `, $$$REST` for calls with more arguments). Without a template case in
+  the cheatsheet, models default to text tools for backtick queries even
+  though the pattern expresses the shape — the example is the discovery
+  on-ramp for a whole task family.
+- **Count mode**: `maxMatches=1` (carried in the parameter description) — the
+  summary line always reports `totalMatches`, so a pure count costs one
+  output line instead of 50 matches' worth of node text. Counting is the
+  densest common query shape; paying full payload for it is the token loss
+  the hint removes.
 - Plain text with no metavariables is a **literal** exact-node match.
 - The classic trap: `$` is *not* a multi-element metavariable — it parses as
   a bare identifier named `$`. Three dollars plus a name is the list syntax.
@@ -672,13 +682,24 @@ weighted F1 that prioritizes precision because context pollution costs more
 than missing recall (§2).
 
 **Battery.** A small fixed task set over the Porrima repo itself, each with a
-known ground truth: (1) find all call sites of a chosen function; (2) find
-every function taking a given parameter shape; (3) find template-literal
-`console.log`s; (4) a deliberate false-absence probe — a query whose answer
-lives in a `.py` file, checking the model honors the coverage note instead of
-concluding absence; (5) a two-count task that decomposes naturally into
-query→refine (the full §3.3 kernel shape earns a dedicated case once kernel
-adoption shows up in the wild). The runner is
+known ground truth: (1) find all call sites of a chosen function; (2) count
+single-parameter function declarations under a **closed shape list** (plain
+and async `function name(oneParam) {…}` only — arrows, methods, generators,
+and overload signatures excluded, non-test files only; the open-ended
+"which function definitions" phrasing sent *both* arms into
+build-your-own-parser spirals, so the question is as closed as the oracle);
+(3) count `console.log` calls whose first argument **starts with** a
+template literal — the prompt's semantics are pinned to the oracle's
+textual starts-with reading (backtick first after the paren, modulo
+whitespace, concatenations included), because the is-vs-starts-with
+ambiguity otherwise makes correct answers ungradeable; (4) a deliberate
+false-absence probe — a query whose answer lives in a `.py` file, checking
+the model honors the coverage note instead of concluding absence — graded
+on **correctness/fc only**, since the on-arm correctly does *not* use the
+tool there and a per-task efficiency gate would only measure the schema
+cost; (5) a two-count task that decomposes naturally into query→refine (the
+full §3.3 kernel shape earns a dedicated case once kernel adoption shows up
+in the wild). The runner is
 `server/src/scripts/eval-code-search.ts`: it drives real headless turns on
 project chats bound to the repo and takes a foreground turn-gate lease per
 run. Eval chats carry the `eval[` title prefix, which doubles as the
@@ -709,10 +730,15 @@ model-stats): turns to answer, tokens spent on search calls, tool-error rate,
 and **false-conclusion rate** (a wrong answer delivered confidently — the
 failure the census exists to prevent). Run the battery with the flag off
 (bash+rg baseline) and on; `--reps 3` minimum for gate decisions (single-run
-medians are noise). The ~150 schema tokens (§3.2) are earned only if the
-on-run **does not lose** on turns/tokens (ties pass — at battery scale,
-parity with the baseline is the bar; wins are the bonus) *and* adds no false
-conclusions.
+medians are noise). Per-task gate lines are diagnostics; the **flip verdict
+is the battery-level aggregate**: summed per-task median turns and tokens
+across the efficiency tasks (the schema cost amortizes across the battery,
+not per task), plus two guards — completion rate must not drop (an arm
+cannot win by censoring its slow runs out of the median) and false
+conclusions must not increase. The ~150 schema tokens (§3.2) are earned only
+if the on-run **does not lose** the aggregate on turns/tokens (ties pass —
+at battery scale, parity with the baseline is the bar; wins are the bonus)
+*and* adds no false conclusions.
 
 **Gate:** Phase 4's guidance line lands on a battery pass, not on the flip
 alone — and that line is a **nudge, not the mechanism**: the feature must

@@ -76,6 +76,10 @@ interface TaskDef {
   oracle: () => Promise<string>;
   /** For the false-conclusion flag: truth considered "answer exists". */
   truthPresent: (oracle: string) => boolean;
+  /** False for probe tasks (T4): graded on correctness/fc only — the on-arm
+   *  correctly does NOT use the tool there, so turns/tokens would only
+   *  measure the schema cost, which the battery-level aggregate amortizes. */
+  efficiencyGated?: boolean;
 }
 
 function rgLines(args: string[]): string[] {
@@ -106,25 +110,39 @@ const TASKS: TaskDef[] = [
   },
   {
     id: 2,
-    label: "one-parameter function defs (engine oracle — rg cannot express this shape)",
-    prompt: "In `server/src/services`, which function definitions take EXACTLY one parameter? Report each function's name and file. Cover both plain and async definitions.",
+    label: "one-parameter function declarations (engine oracle — rg cannot express this shape)",
+    // Bounded on purpose: the open-ended "which function definitions" form
+    // (arrows? methods? generators? overloads?) sent BOTH arms into
+    // build-your-own-parser spirals in the first gate run. The shape list
+    // makes the question as closed as the oracle is.
+    prompt: "In `server/src/services`, considering only non-test TypeScript files (exclude `*.test.ts`): how many function declarations take exactly one parameter? Count declarations of the form `function name(oneParam) { ... }`, including `async function` ones. Do NOT count arrow functions, class methods, generator functions (`function*`), or TypeScript overload signatures (body-less declarations). Report the count and each function's name with its file.",
     oracle: async () => {
       // Complete-node form — WITHOUT `{ $$$ }` the pattern matches only
       // body-less declarations (overload signatures), not definitions: the
       // engine's complete-node rule cuts both ways. The plain form covers
-      // async definitions too (verified: the async-specific pattern's
+      // async declarations too (verified: the async-specific pattern's
       // matches are a subset of this one's).
       const ws = new LocalWorkspaceAdapter(REPO_ROOT);
-      const res = await runCodeSearch({ pattern: "function $NAME($ARG) { $$$ }", path: "server/src/services", maxMatches: 200 }, ws);
+      const res = await runCodeSearch({
+        pattern: "function $NAME($ARG) { $$$ }",
+        path: "server/src/services",
+        globs: ["!*.test.ts"],
+        maxMatches: 200,
+      }, ws);
       const names = res.matches.map((m) => `${m.metaVariables?.NAME}@${m.file}`);
-      return `${names.length} definitions: ${JSON.stringify(names)}`;
+      return `${names.length} declarations: ${JSON.stringify(names)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
   },
   {
     id: 3,
     label: "template-literal console.log (rg oracle, multiline-aware)",
-    prompt: "In `server/src` (TypeScript files), how many `console.log` calls pass a template literal (a backtick string) as their first argument? Report the count and the files with per-file counts.",
+    // Prompt semantics === oracle semantics: rg -U counts the TEXTUAL
+    // starts-with shape (backtick first after the paren, modulo whitespace),
+    // which includes templates continuing into `+` concatenations. The
+    // is-vs-starts-with ambiguity (strict-AST 315 vs starts-with 369 in the
+    // first gate run) is resolved in the question itself.
+    prompt: "In `server/src` (TypeScript files), how many `console.log` calls have a first argument that STARTS WITH a template literal — i.e. a backtick is the first non-whitespace character after the opening paren? This includes calls where the template continues into a `+` concatenation, and calls with further arguments after it. Report the count and the files with per-file counts.",
     oracle: async () => {
       // Multiline-aware (-U --count-matches): line-based rg undercounts calls
       // whose backtick starts after whitespace or on a later line (measured
@@ -145,6 +163,7 @@ const TASKS: TaskDef[] = [
       return `${lines.length} json.dumps calls in: ${JSON.stringify(files)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
+    efficiencyGated: false,
   },
   {
     id: 5,
@@ -500,21 +519,67 @@ function report(files: string[]): void {
   // battery scale parity with the baseline is the bar; wins are the bonus)
   // and must not add false conclusions. Medians run over completed rows
   // only — a censored turn's counts are truncated at the cap, not earned.
+  // Probe tasks (efficiencyGated: false, i.e. T4) are graded on
+  // correctness/fc only: the on-arm correctly does NOT use the tool there,
+  // so per-task efficiency would only measure the schema cost — which the
+  // battery aggregate below amortizes instead.
   console.log("\ngate (per §4.1: on must not lose turns/tokens, no new false conclusions; censored rows excluded):");
+  let aggOffTurns = 0, aggOnTurns = 0, aggOffTokens = 0, aggOnTokens = 0;
+  let aggTasks = 0, aggIncomparable = 0;
+  let offDoneTotal = 0, offRunsTotal = 0, onDoneTotal = 0, onRunsTotal = 0;
+  let offFc = 0, onFc = 0;
   for (const t of taskIds) {
+    const task = TASKS.find((x) => x.id === t);
     const off = byTaskArm.get(`${t}:off`) ?? [];
     const on = byTaskArm.get(`${t}:on`) ?? [];
     const offDone = off.filter((r) => !isCensored(r));
     const onDone = on.filter((r) => !isCensored(r));
+    const offFcT = off.filter((r) => r.suspectedFalseConclusion).length;
+    const onFcT = on.filter((r) => r.suspectedFalseConclusion).length;
+    offFc += offFcT; onFc += onFcT;
+    offDoneTotal += offDone.length; offRunsTotal += off.length;
+    onDoneTotal += onDone.length; onRunsTotal += on.length;
+    const fc = onFcT <= offFcT;
+    const efficiency = task?.efficiencyGated !== false;
     if (offDone.length === 0 || onDone.length === 0) {
-      console.log(`  T${t}: no comparison (${offDone.length}/${off.length} off done, ${onDone.length}/${on.length} on done)`);
+      console.log(`  T${t}: no comparison (done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length}${fc ? "" : "; false-conclusions WORSE"})`);
+      if (efficiency) aggIncomparable++;
       continue;
     }
-    const turns = median(onDone.map((r) => r.iterations)) <= median(offDone.map((r) => r.iterations));
-    const tokens = median(onDone.map((r) => r.totalTokens)) <= median(offDone.map((r) => r.totalTokens));
-    const fc = on.filter((r) => r.suspectedFalseConclusion).length <= off.filter((r) => r.suspectedFalseConclusion).length;
+    if (!efficiency) {
+      console.log(`  T${t}: ${fc ? "PASS" : "FAIL"} (probe task — correctness/fc only; false-conclusions ${fc ? "ok" : "worse"}; done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length})`);
+      continue;
+    }
+    const offTurns = median(offDone.map((r) => r.iterations));
+    const onTurns = median(onDone.map((r) => r.iterations));
+    const offTokens = median(offDone.map((r) => r.totalTokens));
+    const onTokens = median(onDone.map((r) => r.totalTokens));
+    aggOffTurns += offTurns; aggOnTurns += onTurns;
+    aggOffTokens += offTokens; aggOnTokens += onTokens;
+    aggTasks++;
+    const turns = onTurns <= offTurns;
+    const tokens = onTokens <= offTokens;
     console.log(`  T${t}: ${turns && tokens && fc ? "PASS" : "FAIL"} (turns ${turns ? "ok" : "worse"}, tokens ${tokens ? "ok" : "worse"}, false-conclusions ${fc ? "ok" : "worse"}; done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length})`);
   }
+  // Battery-level verdict (§4.1): the ~150-token schema cost amortizes over
+  // the whole battery, not per task. The on arm must not lose on aggregate
+  // turns/tokens across the comparable efficiency tasks, must not complete
+  // fewer runs (the censoring-asymmetry guard — an arm cannot win by
+  // dropping its slow runs from the median), and must add no false
+  // conclusions anywhere.
+  const completionOk = onRunsTotal === 0 || onDoneTotal / onRunsTotal >= offDoneTotal / offRunsTotal;
+  const aggTurnsOk = aggOnTurns <= aggOffTurns;
+  const aggTokensOk = aggOnTokens <= aggOffTokens;
+  const fcOk = onFc <= offFc;
+  const comparable = aggIncomparable === 0;
+  console.log(
+    `\nbattery verdict (sum of per-task medians over ${aggTasks} comparable efficiency task${aggTasks === 1 ? "" : "s"}${aggIncomparable > 0 ? `, ${aggIncomparable} incomparable` : ""}):\n` +
+    `  turns:             off=${aggOffTurns} on=${aggOnTurns}  ${aggTurnsOk ? "ok" : "WORSE"}\n` +
+    `  tokens:            off=${aggOffTokens} on=${aggOnTokens}  ${aggTokensOk ? "ok" : "WORSE"}\n` +
+    `  completion rate:   off=${offDoneTotal}/${offRunsTotal} on=${onDoneTotal}/${onRunsTotal}  ${completionOk ? "ok" : "WORSE"}\n` +
+    `  false conclusions: off=${offFc} on=${onFc}  ${fcOk ? "ok" : "WORSE"}\n` +
+    `  => ${aggTurnsOk && aggTokensOk && completionOk && fcOk && comparable ? "PASS — the §4.1 flip gate is satisfied" : "FAIL — the §4.1 flip gate is not satisfied"} (answer correctness per the appendix remains a human judgment)`,
+  );
 
   // Grading appendix: oracle vs final answer, per run (human judgment).
   console.log("\ngrading appendix (human check — oracle vs answer):");
