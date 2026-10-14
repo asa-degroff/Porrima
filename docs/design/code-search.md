@@ -7,19 +7,6 @@ concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
 its own feature).
 **Date:** 2026-10-14
-**Revised (10-14, review pass 2):** engine facts re-verified empirically against
-napi 0.50.0 — the extension set is broader than the five language names (§3.1
-fact 1; the Phase 0 alias table shipped too narrow and was fixed, with a
-drift-pin test), the platform matrix includes Linux arm64/musl prebuilds (§5),
-and one pi package does use the napi (§2 novelty note, corrected). Added: the
-adjacent lineages — LSP/Serena, trigram indices, Comby, Semgrep (§2); success
-criteria and an eval plan (§4.1); grammar coverage as a planned, demand-gated
-phase via the official `@ast-grep/lang-*` packages (§5, §6 G); phase re-order
-(outline before remote). The regex-shape guard is now advisory-on-absence, not
-a hard reject (§3.2). Other Phase 0 fixes: directory globs, `~` parity with
-workspace.ts, census under the call deadline, per-language pattern cache.
-**Phase 1 (kernel projection) shipped the same pass** — §3.3 carries the
-as-built shape (`value_json` wire flag, `code=` snippet mode).
 
 ## 1. Problem
 
@@ -224,7 +211,7 @@ structured metadata alongside model-facing text is the field shape; a
 CLI) vs auto-detect-with-override (oh-my-pi, matching the CLI default) — this
 design takes the latter (§3.1).
 
-**One honest novelty note (corrected 10-14):** the napi route is rare, not
+**One honest novelty note:** the napi route is rare, not
 unprecedented. The pi wrappers mostly shell out to the CLI (and pay for it —
 resolver chains, TLS-only auto-download, `sg` name collisions); oh-my-pi
 compiles `ast-grep-core` into its own native addon; and one pi package
@@ -347,13 +334,12 @@ Four binding properties shape the executor, each load-bearing:
 1. **The napi bundle supports five languages** — typescript, tsx, javascript
    (jsx alias), html, css — and silently never visits files whose extension
    infers anything else. **The extension set is broader than the language
-   names** (verified empirically on 0.50.0): js/mjs/cjs/jsx → JavaScript,
+   names**: js/mjs/cjs/jsx → JavaScript,
    ts/mts/cts → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss →
-   Css. The executor's alias table must mirror the engine's inference set —
+   Css. The executor's alias table mirrors the engine's inference set —
    a stale table mis-reports *scanned* files as unscanned (and can emit a
    false "no X files in scope" scope error), the coverage-honesty inversion
-   the census exists to prevent; this shipped in Phase 0, was caught in
-   review, and is now pinned by a drift test that asks the live engine which
+   the census exists to prevent; a drift-pin test asks the live engine which
    extensions it visits and compares against the table. Coverage is otherwise
    the executor's job (§3.1 census below), and the broader CLI language set
    applies only to the CLI fallback path (§5).
@@ -579,8 +565,8 @@ deliberate:
   the wire until the final result. This is the codemode thesis in the
   concrete place §2.5 named. Honest cost: every iteration is a fresh parse of
   the scoped tree — the loop is free in *context*, not in CPU; at measured
-  cost (~0.05 s over all of `server/src` on the dev box — re-verified 10-14:
-  ~55 ms `findInFiles`, ~45 ms `parseFiles` over 295 files, while `rg` stays
+  cost (~0.05 s over all of `server/src` on the dev box: ~55 ms `findInFiles`,
+  ~45 ms `parseFiles` over 295 files, while `rg` stays
   ~10× faster wall-clock, the precision-not-speed framing of §2 holding) a
   ten-iteration refine pass stays well under a second, and scoping keeps it
   there. The auto-detect path caches one compiled pattern per language, so
@@ -672,7 +658,7 @@ ships dark, so it can land independently of the Phase A flag. The kernel row
 is one line on the existing exposure list and follows as soon as the executor
 exists.
 
-### 4.1 Success criteria — how the flip earns its keep (added 10-14)
+### 4.1 Success criteria — how the flip earns its keep
 
 The default-shift bet (§4) is falsifiable and should be falsified or
 confirmed with measurements, not vibes — the field now models this: Zed
@@ -702,11 +688,11 @@ on the flip alone.
 ## 5. Dependency placement
 
 - **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds).
-  Platform support (corrected 10-14 against the pinned version's *published
-  artifacts* — the npm README's support table lags them): Windows
+  Platform support, per the pinned version's *published artifacts* (the npm
+  README's support table lags them): Windows
   x64/arm64/x32, macOS x64/arm64, **Linux x64 gnu, Linux x64 musl, Linux
-  arm64 gnu, Linux arm64 musl**. Enceladus (Ubuntu x64) is covered, and the
-  matrix gap this design originally feared does not exist at 0.50.0. The
+  arm64 gnu, Linux arm64 musl**. Enceladus (Ubuntu x64) is covered, and
+  0.50.0 has no local-platform gap at all. The
   `@ast-grep/cli` binary via the onboarding profiles remains a supported
   execution path — now primarily for remote hosts (phase 3(a)) and as
   insurance against prebuild regressions on future bumps, not for local
@@ -752,8 +738,8 @@ on the flip alone.
 | phase | scope | gates |
 |---|---|---|
 | **0** | model-level `code_search`: executor (napi, local), scope census + coverage reporting, tool definition, budgets, gating, tests | implemented; dark behind `PORRIMA_CODE_SEARCH=1` |
-| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | **implemented (10-14)** — exposure gated on `PORRIMA_CODE_SEARCH=1` per dispatcher construction; structured values ride the `value_json` wire flag (driver decodes to a real dict); e2e-pinned through the registry seam |
-| **2** | `code_outline` — its own design section, kernel-first | **re-ordered ahead of remote (10-14):** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
+| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | **implemented** — exposure gated on `PORRIMA_CODE_SEARCH=1` per dispatcher construction; structured values ride the `value_json` wire flag (driver decodes to a real dict); e2e-pinned through the registry seam |
+| **2** | `code_outline` — its own design section, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
 | **4** | the one-line default shift in AGENTS.md / tool guidance | **gated on the §4.1 eval battery** (flag off vs on), not on the flip alone |
@@ -776,10 +762,10 @@ on the flip alone.
    rg wins wall-clock there). Mitigations: `path`/`globs` scoping as the
    primary lever, server-side budgets and the 120 s backstop, and honest docs
    that this tool buys precision, not speed.
-3. **napi platform matrix gaps — largely retired (10-14).** 0.50.0 publishes
+3. **napi platform matrix gaps — narrower than the README suggests.**
+   0.50.0 publishes
    Linux arm64 gnu/musl and x64 musl prebuilds alongside the rest (§5); the
-   original matrix fear was a stale README table, not the published
-   artifacts. Residual: prebuild *regressions* on future bumps, and hosts
+   README's support table understates the published artifacts. Residual: prebuild *regressions* on future bumps, and hosts
    outside the nine published targets. Mitigation: the CLI fallback path
    (§5), the test suite's skip-not-fail prebuild probe, and remote hosts
    sidestepping both via phase 3(b) until (a) is earned. oh-my-pi's

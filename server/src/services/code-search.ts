@@ -1,7 +1,7 @@
 /**
  * Code search — structural code navigation via ast-grep.
  * Design: docs/design/code-search.md (§3); Phase 0 is the model-level tool,
- * Phase 1 (shipped) is the kernel projection — the dispatcher row in
+ * Phase 1 is the kernel projection — the dispatcher row in
  * agent-tools.ts rides this same executor and returns the structured shape
  * (`CodeSearchResult` minus `text`) plus the snippet path below.
  *
@@ -19,12 +19,12 @@
  *   extension infers anything else; the CLI covers more. Coverage is therefore
  *   the executor's job: a scope census (ignore-aware walk) reports every file
  *   the engine cannot visit, so a zero-match result is never silently partial.
- * - The engine's EXTENSION set is broader than the five language names
- *   (verified empirically on 0.50.0): js/mjs/cjs/jsx → JavaScript, ts/mts/cts
+ * - The engine's EXTENSION set is broader than the five language names:
+ *   js/mjs/cjs/jsx → JavaScript, ts/mts/cts
  *   → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss → Css.
  *   LANGUAGE_ALIASES must mirror it — a stale table mis-reports SCANNED files
- *   as unscanned, the coverage-honesty inversion the census exists to prevent
- *   (this shipped in Phase 0 and was caught in review). The drift-pin test in
+ *   as unscanned, the coverage-honesty inversion the census exists to
+ *   prevent. The drift-pin test in
  *   code-search.test.ts queries the live engine and compares.
  * - `pattern()` never throws: tree-sitter parses tolerantly, so garbage
  *   patterns compile and match nothing. Static validity is undecidable (any
