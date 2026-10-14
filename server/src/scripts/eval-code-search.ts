@@ -219,15 +219,22 @@ interface RunRow {
 const ABSENCE_RE = /\bnone\b|no matches|no (?:call|file|match|occurrence|definition)s?|not found|doesn'?t exist|zero(?:$|\s|\()|\b0+[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)\b|there (?:is|are) no\b/i;
 /**
  * An answer "claims absence" only when it does NOT commit to a NON-ZERO
- * count. Measured on a live run: correct answers qualify with "there are
- * no other candidates" — a local qualifier beside a stated "6 calls", not
- * a conclusion. The guard is deliberately blind to zero counts ("0 calls"
- * is an absence claim, not a commitment — `\b0+` above catches it, and
- * `\b` keeps "10 calls" out of both branches). Flags are recomputed at
- * report time, so this logic can evolve without invalidating stored rows.
+ * count, in either presentation: "6 calls" (count-then-counter) or
+ * "expressions: 147" / "Total: 369" (colon form — a live gate run flagged a
+ * fully correct answer whose counts were all colon-form while a local
+ * "verify there are no edge cases" qualifier tripped ABSENCE_RE). Measured
+ * on live runs: correct answers qualify with "there are no other
+ * candidates" — a local qualifier beside a stated count, not a conclusion.
+ * The guard is deliberately blind to zero counts ("0 calls" is an absence
+ * claim, not a commitment — `\b0+` above catches it, and `\b` keeps
+ * "10 calls" out of both branches); the colon form requires the separator
+ * so prose like "no matches in the 3 files" doesn't smuggle a suppression.
+ * Flags are recomputed at report time, so this logic can evolve without
+ * invalidating stored rows.
  */
 function answerClaimsAbsence(text: string): boolean {
   if (/[*]*[1-9]\d*[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)/i.test(text)) return false;
+  if (/(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?|expressions?|total)\s*[:=]\s*[*]*[1-9]\d*/i.test(text)) return false;
   return ABSENCE_RE.test(text);
 }
 
