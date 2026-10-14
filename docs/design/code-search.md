@@ -6,6 +6,17 @@ design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9 (model-level
 wrapper first, in-kernel projection second, outline deferred as its own
 feature). Phase 1 (kernel projection) rides the same executor.
 **Date:** 2026-10-14
+**Revised (10-14, review pass 2):** engine facts re-verified empirically against
+napi 0.50.0 — the extension set is broader than the five language names (§3.1
+fact 1; the Phase 0 alias table shipped too narrow and was fixed, with a
+drift-pin test), the platform matrix includes Linux arm64/musl prebuilds (§5),
+and one pi package does use the napi (§2 novelty note, corrected). Added: the
+adjacent lineages — LSP/Serena, trigram indices, Comby, Semgrep (§2); success
+criteria and an eval plan (§4.1); grammar coverage as a planned, demand-gated
+phase via the official `@ast-grep/lang-*` packages (§5, §6 G); phase re-order
+(outline before remote). The regex-shape guard is now advisory-on-absence, not
+a hard reject (§3.2). Other Phase 0 fixes: directory globs, `~` parity with
+workspace.ts, census under the call deadline, per-language pattern cache.
 
 ## 1. Problem
 
@@ -79,6 +90,13 @@ behind the codemode Phase B provenance seam (Tier 2 by construction).
   is a parsed node with byte offsets and metavariable bindings, not a line of
   text. Which is why per-call scoping and budgets are first-class (§3.2, §7),
   not an afterthought.
+- **Retrieval evidence points the same way.** Cognition's SWE-grep work
+  (RL-trained retrieval over parallel grep/glob/read calls) found that highly
+  parallel cheap searches beat serial deep ones, and that *context pollution
+  costs more than missing recall* — the agent is usually a few searches from
+  recovering what it missed. Independent support for two choices here: the
+  index-not-payload rendering (§3.2) and the read-only, lock-free,
+  parallel-safe tool (§3.2 budgets).
 - **The kernel makes it strictly more useful than model-level alone** — the
   rule-authoring loop and the pattern-syntax on-ramp (§3.3) are where the
   design pays out.
@@ -116,8 +134,11 @@ revise → dump AST → test snippet) and community servers. This is the pattern
 the kernel projection replaces — see §2 above.
 
 **4. Harness-native tools** (first-class tools inside the agent) — the pattern
-this doc designs into. The pi ecosystem alone has four independent
-implementations:
+this doc designs into. The pi ecosystem alone has at least six independent
+implementations (four surveyed in depth here; also `@nicknisi/pi-ast-grep` and
+`@davehardy20/pi-ast-grep-tools` — the latter **napi-based**, see the novelty
+note below — plus `pi-code-nav`, which composes LSP semantics + ast-grep +
+text-scan fallbacks, a bridge to the adjacent-lineages section below):
 
 - **pi-ast-grep** (code-yeongyu, a faithful port of the oh-my-openagent tool
   stack): `ast_grep_search` + `ast_grep_replace` (**dry-run by default**),
@@ -148,7 +169,9 @@ implementations:
   `ast_grep_run` (**pattern *or* kind**, plus a `code=` snippet mode that
   runs the §3.3 snippet-testing case at *model* level), `ast_grep_scan` (YAML
   rules), `ast_grep_rewrite` (preview default, `apply` opt-in), a live
-  **`ast_grep_outline`** ("map a file before you read it"),
+  **`ast_grep_outline`** ("map a file before you read it" — a rich surface:
+  `view`, `match`, `type`, `pub_members`, `outline_rules`, `threads`,
+  `follow`, `no_ignore`),
   `ast_grep_debug_query` (pattern debugging as a tool), and
   `ast_grep_languages` (a language catalog *is* a tool). Injects a bounded
   "promotion" guidance block into the system prompt only while its tools are
@@ -177,7 +200,10 @@ Outside the pi ecosystem:
   match context expanded to the parent syntax node's range, match headers
   carrying **symbol breadcrumbs** (`### impl Foo for Bar › fn baz › L1278`).
   Reported eval impact: better diffs, fewer tool failures, fewer turns.
-  Stated future work: an "elision" output mode.
+  Stated future work: an "elision" output mode. (Verified 10-14: the shipped
+  `grep_tool` carries `max_ancestor_lines`/`context_lines` knobs — PR #64954 —
+  and a 2048-byte snippet cap centered on the match — PR #62166. The
+  enrichment line is actively developed, not a one-off experiment.)
 
 **5. CI / rule-system role** (non-agentic). ast-grep as a repository rule
 engine — `sgconfig.yml`, YAML rules with validation, `ast-grep test`
@@ -185,28 +211,85 @@ snapshots, ratchet gates. Durable project artifact, not agent tooling; out of
 scope, noted because the same rule syntax serves both roles.
 
 **Convergences this design commits to:** rewrite-dry-run-default and the
-anti-regex guard are universal across implementations (§3.2); output bounding
-with a saved-file pointer is the established spill pattern; structured
-metadata alongside model-facing text is the field shape; a 50-match page is
-what oh-my-pi hardcodes, and this design defaults `maxMatches` to 50. The
-`lang` handling splits: required (pi-ast-grep, Gemini CLI) vs
-auto-detect-with-override (oh-my-pi, matching the CLI default) — this design
-takes the latter (§3.1).
+anti-regex guard are universal across implementations (§3.2 — this design's
+form is advisory-on-absence rather than a hard reject, closest to the
+"nudges" of pi-ast-grep and oh-my-pi; the revised rationale is in §3.2);
+output bounding with a saved-file pointer is the established spill pattern;
+structured metadata alongside model-facing text is the field shape; a
+50-match page is what oh-my-pi hardcodes, and this design defaults
+`maxMatches` to 50. The `lang` handling splits: required (pi-ast-grep, Gemini
+CLI) vs auto-detect-with-override (oh-my-pi, matching the CLI default) — this
+design takes the latter (§3.1).
 
-**One honest novelty note:** no surveyed harness uses `@ast-grep/napi`. The
-pi wrappers shell out to the CLI (and pay for it — resolver chains,
-TLS-only auto-download, `sg` name collisions); oh-my-pi compiles
-`ast-grep-core` into its own native addon. The pinned-prebuild choice in §5
-is what those problems make impossible — and its consequences (§3.1's
-delivery barrier, the five-language set) are things this design had to
-discover because nobody else's notes cover them.
+**One honest novelty note (corrected 10-14):** the napi route is rare, not
+unprecedented. The pi wrappers mostly shell out to the CLI (and pay for it —
+resolver chains, TLS-only auto-download, `sg` name collisions); oh-my-pi
+compiles `ast-grep-core` into its own native addon; and one pi package
+(`@davehardy20/pi-ast-grep-tools`, May 2026) does depend on `@ast-grep/napi`
+— and independently landed on the same narrow-language tradeoff (TS/JS/TSX
+only). The pinned-prebuild choice in §5 is what the CLI wrappers' problems
+make impossible — and its consequences (§3.1's delivery barrier, the
+extension-set bookkeeping) are things this design still had to discover
+largely alone: the napi user above ships no coverage census.
 
 **Divergences named, not resolved:** Zed's in-situ enrichment (structure
 injected into the text tool) vs this design's dedicated structural tool;
 `ast_read`-style single-node structural reads sit between search and outline
 (§3.4/§8). **Not adopting ast-grep (anywhere found):** aider (tree-sitter
 directly, the precomputed-map lineage), and no built-in surface in
-Cursor/Copilot/Codex/opencode — the ripgrep lineages of codemode §2–3.
+Cursor/Copilot/Codex/opencode — the ripgrep lineages of codemode §2–3. The
+non-ast-grep structural-navigation lineages are named in the next section.
+
+### Adjacent lineages — structural navigation without ast-grep (round 5, 10-14)
+
+The adoption survey covers ast-grep's own shapes. Three adjacent lineages
+answer the same underlying need — navigate code by structure, not text — with
+different engines; naming them keeps this design's boundaries honest.
+
+**The LSP lineage (semantic navigation).** The field's most-adopted
+structural-navigation tool for agents is not ast-grep-based at all: **Serena**
+(~24k stars) drives *language servers* over MCP — `find_symbol`,
+`find_referencing_symbols`, `get_symbols_overview`, `replace_symbol_body`,
+`rename_symbol` — across 30+ languages. The same direction shows up inside
+harnesses: Zed PR #45685 (expose LSP goto-definition/find-references to the
+agent), oh-my-pi ships an `lsp` tool alongside its ast-grep ones, and
+`pi-code-nav` combines LSP semantics (TS-only) with ast-grep and text-scan
+fallbacks. The distinction is a hard capability boundary: ast-grep matches
+*syntax* — "every call site of `foo`" is a pattern approximation that cannot
+disambiguate two different `foo`s, cannot follow a rename, cannot see types.
+LSP answers those, at costs this design's principles currently refuse: a
+language server per language, project dependencies installed for full
+resolution, startup latency per workspace, and an index/build posture in
+tension with the fresh-query stance (§2). **Not adopted — but the excluding
+principles are not set in stone.** If usage shows demand for reference-grade
+semantics ("what calls this, *exactly*"), the path is an LSP adapter —
+tsserver is already on every Porrima host, and the TS-only carve is exactly
+what pi-code-nav ships — not more ast-grep. Note also that Serena's
+most-praised tool, `get_symbols_overview`, is the same seam as
+`code_outline` (§3.4): one more signal that orientation is where this family
+of tools earns its keep, and one more reason §6 re-orders outline ahead of
+remote.
+
+**Trigram indices (precomputed text).** Zoekt and GitHub's Blackbird power
+server-scale code search with precomputed trigram indices. Text, not
+structure — the wrong axis for this tool — but they are the precomputed
+pole's heavyweights, and the fresh-query stance rejects them for the same
+reason it rejects aider's repo map: an index is a build step and a staleness
+surface (§3.5).
+
+**Grammar-free structural matchers.** **Comby** matches structural holes
+(`:[x]`) uniformly across languages with no per-language grammar — the exact
+complement of ast-grep's napi coverage ceiling (§5). Less precise (no real
+syntax tree, so no metavariable bindings over node structure) and a smaller
+ecosystem; it answers a question Porrima does not have today, because the
+census + rg fallback covers the polyglot tail adequately and the
+grammar-packages plan (§6 G) shrinks the ceiling itself.
+
+**Semantic rule engines.** **Semgrep** (taint/dataflow analysis, its own MCP
+surface) is the heavyweight cousin — CI/security-rule oriented, far beyond
+orientation needs. ast-grep's YAML rule system covers the lightweight end of
+the same spectrum and is deliberately out of scope here (§1); the
+pattern-only surface is the 90% case (§8's `-k/--kind` note).
 
 ## 3. Design
 
@@ -248,19 +331,29 @@ export async function runCodeSearch(params, workspace, signal): Promise<CodeSear
 
 **Execution: in-process via `@ast-grep/napi`** — no subprocess, no
 shell-quoting surface, version-pinned to the server's package.json. The API
-shape (0.50.0): `pattern(lang, pattern)` compiles a matcher `NapiConfig`;
-`findInFiles(lang, {paths, matcher, languageGlobs?}, callback)` discovers and
-parses files in Rust and delivers matched `SgNode`s; `parseFiles` parses a
-file list. Language arguments are plain strings — `sg.Lang` is a compile-side
-enum, empty at runtime.
+shape (0.50.0): `pattern(lang, pattern)` compiles a matcher `NapiConfig`
+(reusable across `findAll` calls — the auto-detect path caches one compiled
+pattern per language); `findInFiles(lang, {paths, matcher, languageGlobs?},
+callback)` discovers and parses files in Rust and delivers matched `SgNode`s;
+`parseFiles` parses a file list. Language arguments are plain strings
+(`sg.Lang` is populated at runtime in 0.50.0, but names only the bundled
+five; the executor never reads it).
 
 Four binding properties shape the executor, each load-bearing:
 
 1. **The napi bundle supports five languages** — typescript, tsx, javascript
    (jsx alias), html, css — and silently never visits files whose extension
-   infers anything else. Coverage is therefore the executor's job (§3.1
-   census below), and the broader CLI language set applies only to the CLI
-   fallback path (§5).
+   infers anything else. **The extension set is broader than the language
+   names** (verified empirically on 0.50.0): js/mjs/cjs/jsx → JavaScript,
+   ts/mts/cts → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss →
+   Css. The executor's alias table must mirror the engine's inference set —
+   a stale table mis-reports *scanned* files as unscanned (and can emit a
+   false "no X files in scope" scope error), the coverage-honesty inversion
+   the census exists to prevent; this shipped in Phase 0, was caught in
+   review, and is now pinned by a drift test that asks the live engine which
+   extensions it visits and compares against the table. Coverage is otherwise
+   the executor's job (§3.1 census below), and the broader CLI language set
+   applies only to the CLI fallback path (§5).
 2. **Match nodes carry no file path.** It lives at `node.getRoot().filename()`,
    populated only on the discovery path. `CodeSearchMatch.file` routes
    through it.
@@ -271,7 +364,10 @@ Four binding properties shape the executor, each load-bearing:
    worst on early calls of a process. The executor waits (bounded grace,
    under the same timeout race) until delivered callbacks equal the
    resolved count, and flags the result as incomplete rather than trusting a
-   short read if the grace expires.
+   short read if the grace expires. This is an upstream-known limitation:
+   ast-grep's own *Performance Tip for napi usage* page documents the race
+   and ships the same counted-callback workaround — re-check it on every
+   version bump (§7 Risk 6).
 4. **`pattern()` never throws** — tree-sitter parses tolerantly, so garbage
    patterns compile and match nothing. Static validity is undecidable at this
    boundary (any token parses as an identifier in some grammar). Pre-
@@ -284,7 +380,22 @@ from ripgrep: passing an ignored path **explicitly** in `paths` matches it
 anyway — scans descend ignore-clean, requested paths are honored as asked.
 There is no include/exclude glob at the napi boundary (`languageGlobs` maps
 extensions to a language, it is not a filter), so the `globs` parameter is
-executor-side filtering over discovered paths.
+executor-side filtering over discovered paths. Executor-side means
+gitignore semantics for real: a bare directory pattern (`!dist`) excludes
+everything beneath it (ancestor-segment matching, not just whole-path
+minimatch — the Phase 0 filter shipped without this and `!dist` silently
+kept `dist/foo.ts`), `!` negates, later globs win. (`languageGlobs` does
+have one coverage use the filter framing hides: `findInFiles` accepts globs
+whose matching files are parsed *as* the call's language — e.g. `*.vue` /
+`*.svelte` as HTML — a partial reach-extension noted in §8.)
+
+**Path resolution.** Mirrors `workspace.ts`'s `resolveLocalPath` exactly,
+including `~` → HOME (not workspace-root-relative — the Phase 0 executor
+diverged here): the same path string must mean the same thing to `read_file`
+and `code_search`, including in project chats where root ≠ HOME. Absolute
+paths and `..` escapes follow the house convention (bash can reach them
+too); the census cap and the call deadline bound the cost of an
+over-wide scope.
 
 **Coverage: the scope census.** A zero-match result is only honest if the
 caller knows what the engine could not see. The executor walks the scope
@@ -370,23 +481,34 @@ refinements make absence *honest*, not just clean:
 **Budgets, server-side** (the codemode §4.9 principle — the caller cannot be
 trusted to count itself): `maxMatches` default 50, hard cap 1000; output char
 cap 20 KB (`PORRIMA_CODE_SEARCH_MAX_CHARS`); per-call timeout 120 s
-(`PORRIMA_CODE_SEARCH_TIMEOUT_MS`) — the timeout stops *waiting* (the Rust
-scan cannot be cancelled mid-flight; scoping is the remedy, the timeout the
-backstop). The tool is **read-only and lock-free**: it never acquires
-`workspace:<label>` and is not in `SEQUENTIAL_TOOL_NAMES` — parallel-safe,
-exactly like `read_file`.
+(`PORRIMA_CODE_SEARCH_TIMEOUT_MS`) — **one deadline for the whole call**,
+covering the census walk as well as the scan; the timeout stops *waiting*
+(neither the walk nor the Rust scan can be cancelled mid-flight; scoping is
+the remedy, the timeout the backstop). The tool is **read-only and
+lock-free**: it never acquires `workspace:<label>` and is not in
+`SEQUENTIAL_TOOL_NAMES` — parallel-safe, exactly like `read_file`.
 
-**Pattern pre-validation, two layers.** The engine referee (a tolerant parse
-that matches nothing) handles everything the mechanical layers don't, so the
-surface only catches what is cheap and certain:
+**Pattern pre-validation: one hard class, one advisory.** The engine referee
+(a tolerant parse that matches nothing) handles everything the mechanical
+layers don't, so the surface only catches what is cheap and certain:
 
-1. **Regex-shape heuristic** — rejects the classic regex shapes (`\w`, `\d`,
-   `.*`, `[a-z]`, and *spaceless* `|`) with the hint *"ast-grep patterns are
-   code, not regex — for text search use `rg` via bash."* The pipe rule is
-   deliberately space-aware: `foo|bar` is almost always a regex-union mistake,
-   while `a | b` is valid code (bitwise-or, TS union types) and must pass.
-   Known tradeoff: a spaceless legitimate bit-or pattern gets nudged to rg —
-   the same call the field's implementations make.
+1. **Regex-shape heuristic — advisory, not a rejection** (revised 10-14).
+   The classic regex shapes (`\w`, `\d`, `.*`, `[a-z]`, and *spaceless* `|`)
+   are detected, but the search **runs anyway**; the hint (*"the pattern
+   looks regex-shaped — ast-grep patterns are code, not regex; for text
+   search use `rg` via bash"*) is appended **only when the result is a
+   zero-match**. Rationale: the detector has real false-positive classes in
+   a TS codebase — a tight union type (`string|number` inside a signature
+   pattern) and index arithmetic (`$ARR[$I-1]`) both trip it — and a hard
+   rejection converts a possibly-valid pattern into a guaranteed no-result.
+   Advisory-on-absence keeps the engine the referee (a regex-shaped pattern
+   that matches real code returns matches and no note) and fires the nudge
+   exactly where the over-conclusion risk lives: at absence. The pipe rule
+   stays space-aware (`a | b` never trips it). Cost: a genuine regex
+   pattern spends one ~50 ms scan before being redirected — acceptable, and
+   still cheaper than the model's rg round-trip. The field's hard-reject /
+   nudge implementations make the opposite call; this design follows its own
+   principle that only the engine can decide validity.
 2. **No-code-content class** — empty strings and bare punctuation mirror the
    CLI's exit-8 "Cannot parse query" and are a hard tool error.
 
@@ -446,8 +568,12 @@ model-level tool, both deliberate:
   the wire until the final result. This is the codemode thesis in the
   concrete place §2.5 named. Honest cost: every iteration is a fresh parse of
   the scoped tree — the loop is free in *context*, not in CPU; at measured
-  cost (~0.05 s over all of `server/src` on the dev box) a ten-iteration
-  refine pass stays well under a second, and scoping keeps it there.
+  cost (~0.05 s over all of `server/src` on the dev box — re-verified 10-14:
+  ~55 ms `findInFiles`, ~45 ms `parseFiles` over 295 files, while `rg` stays
+  ~10× faster wall-clock, the precision-not-speed framing of §2 holding) a
+  ten-iteration refine pass stays well under a second, and scoping keeps it
+  there. The auto-detect path caches one compiled pattern per language, so
+  loop iterations pay parse cost, never recompile cost.
 - **Snippet testing without the filesystem** (the `parseFiles`/`pattern`
   napi path): a kernel program can test a pattern against a string it built,
   not just files — the `test_match_code_rule` MCP tool, in-kernel.
@@ -522,28 +648,71 @@ ships dark, so it can land independently of the Phase A flag. The kernel row
 is one line on the existing exposure list and follows as soon as the executor
 exists.
 
+### 4.1 Success criteria — how the flip earns its keep (added 10-14)
+
+The default-shift bet (§4) is falsifiable and should be falsified or
+confirmed with measurements, not vibes — the field now models this: Zed
+reports eval deltas for its grep enrichment (better diffs, fewer tool
+failures, fewer turns), and Cognition trained retrieval models against a
+weighted F1 that prioritizes precision because context pollution costs more
+than missing recall (§2).
+
+**Battery.** A small fixed task set over the Porrima repo itself, each with a
+known ground truth: (1) find all call sites of a chosen function; (2) find
+every function taking a given parameter shape; (3) find template-literal
+`console.log`s; (4) a deliberate false-absence probe — a query whose answer
+lives in a `.py` file, checking the model honors the coverage note instead of
+concluding absence; (5) one iterative query→refine case (the §3.3 kernel
+shape, once Phase 1 is live).
+
+**Metrics** — Porrima already records the raw material (request-log,
+model-stats): turns to answer, tokens spent on search calls, tool-error rate,
+and **false-conclusion rate** (a wrong answer delivered confidently — the
+failure the census exists to prevent). Run the battery with the flag off
+(bash+rg baseline) and on. The ~150 schema tokens (§3.2) are earned only if
+the on-run wins on turns/tokens *and* does not lose on false conclusions.
+
+**Gate:** Phase 4's AGENTS.md default-shift line lands on a battery win, not
+on the flip alone.
+
 ## 5. Dependency placement
 
 - **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds).
-  Platform support matrix: Windows x64/arm64, macOS x64/arm64, **Linux x64
-  gnu** — Enceladus (Ubuntu x64) is covered. **musl and arm64 Linux are not
-  in the matrix** — the fallback for those hosts is the `@ast-grep/cli`
-  binary via the onboarding profiles, which is why the CLI remains a
-  supported execution path even where napi is not.
-- **The five-language ceiling.** The napi bundle visits typescript, tsx,
-  javascript, html, css — and only those. Two escape routes exist and are
-  deliberately not taken in v1: `registerDynamicLanguage` (load extra
-  tree-sitter grammars as native objects) and the CLI (28+ languages). Both
-  are Phase-1+ decisions; until then the scope census (§3.1) makes the
-  ceiling visible in every result rather than silently wrong, and `rg` via
-  bash covers the rest.
-- **Field position.** No surveyed harness uses `@ast-grep/napi`: the pi
-  wrappers shell to the CLI (six-step resolver chains, TLS-only
-  auto-download, `sg` name collisions are exactly what a pinned dependency
-  makes impossible), while oh-my-pi sidesteps the prebuild matrix entirely by
-  compiling `ast-grep-core` into its own Rust addon — demonstrated insurance
-  if the platform matrix ever bites, and evidence that broader grammar
-  coverage is solvable in-process without changing the dependency story.
+  Platform support (corrected 10-14 against the pinned version's *published
+  artifacts* — the npm README's support table lags them): Windows
+  x64/arm64/x32, macOS x64/arm64, **Linux x64 gnu, Linux x64 musl, Linux
+  arm64 gnu, Linux arm64 musl**. Enceladus (Ubuntu x64) is covered, and the
+  matrix gap this design originally feared does not exist at 0.50.0. The
+  `@ast-grep/cli` binary via the onboarding profiles remains a supported
+  execution path — now primarily for remote hosts (phase 3(a)) and as
+  insurance against prebuild regressions on future bumps, not for local
+  platform gaps.
+- **The five-language ceiling — and its cheap escape route.** The napi bundle
+  visits typescript, tsx, javascript, html, css — and only those (extension
+  set per §3.1 fact 1, which is wider than the five names). v1 deliberately
+  ships at the ceiling: the scope census (§3.1) makes it visible in every
+  result rather than silently wrong, and `rg` via bash covers the rest. But
+  raising it is now a dependency addition, not a research project:
+  ast-grep publishes official **`@ast-grep/lang-*` packages** (the
+  ast-grep/langs monorepo) — prebuilt tree-sitter grammars made exactly for
+  the napi's `registerDynamicLanguage` — so python coverage is `npm install
+  @ast-grep/lang-python` + one register call + alias-table entries (the
+  drift-pin test then guards the table). Caveats: per-platform native dynamic
+  libraries, a postinstall script (pnpm ≥ 10 needs `--allow-build`
+  allowlisting; npm runs it by default), and prebuild availability per
+  grammar. **On the plan** (§6, phase G), demand-gated — the census's
+  `unscanned` counts *are* the demand metric. The CLI (28+ languages) remains
+  the fallback of last resort.
+- **Field position.** The napi route is rare but not unprecedented (§2
+  novelty note): the pi wrappers mostly shell to the CLI (six-step resolver
+  chains, TLS-only auto-download, `sg` name collisions are exactly what a
+  pinned dependency makes impossible), one pi package
+  (@davehardy20/pi-ast-grep-tools) uses the napi with the same
+  narrow-language tradeoff, and oh-my-pi sidesteps the prebuild matrix
+  entirely by compiling `ast-grep-core` into its own Rust addon —
+  demonstrated insurance if the platform matrix ever bites, and evidence that
+  broader grammar coverage is solvable in-process without changing the
+  dependency story.
 - **`minimatch`** powers the `globs` post-filter (the napi's filter surface
   is ignores + languageGlobs, nothing else); **`ignore`** powers the
   gitignore-aware scope census. Both small and pure-JS.
@@ -560,42 +729,59 @@ exists.
 |---|---|---|
 | **0** | model-level `code_search`: executor (napi, local), scope census + coverage reporting, tool definition, budgets, gating, tests | implemented; dark behind `PORRIMA_CODE_SEARCH=1` |
 | **1** | kernel dispatcher row + JSON projection + snippet-testing path (`pattern`/`parseFiles`) | rides the live kernel flag; one exposure-list line |
-| **2** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern) |
-| **3** | `code_outline` — its own design section, kernel-first | deferred; boundary named in §3.4 |
-| **4** | the one-line default shift in AGENTS.md / tool guidance | lands with phase 0's flip |
+| **2** | `code_outline` — its own design section, kernel-first | **re-ordered ahead of remote (10-14):** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
+| **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
+| **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
+| **4** | the one-line default shift in AGENTS.md / tool guidance | **gated on the §4.1 eval battery** (flag off vs on), not on the flip alone |
 
 ## 7. Risks
 
 1. **Pattern-syntax learning cost.** The `$$` vs `$$$ARGS` trap and the
    complete-node requirement are real authoring failures with silent outcomes
    (a wrong pattern parses and matches nothing). Mitigations: the cheatsheet
-   in the tool description (§3.2), ast-grep's `--debug-query` as the debugger
-   (shipped as a model-level tool by @juvio15/pi-ast-grep — the proven
-   fallback shape if friction shows up in usage), and the kernel rule loop
-   (§3.3) where syntax errors are cheap to find. Residual: the model will
-   still author bad patterns; the clean error surface keeps that recoverable.
+   in the tool description (§3.2), the advisory regex-shape note on
+   zero-match results (§3.2 — fires only at absence, so valid-but-
+   regex-shaped code patterns are never blocked), ast-grep's `--debug-query`
+   as the debugger (shipped as a model-level tool by @juvio15/pi-ast-grep —
+   the proven fallback shape if friction shows up in usage), and the kernel
+   rule loop (§3.3) where syntax errors are cheap to find. Residual: the
+   model will still author bad patterns; the clean absence surface keeps
+   that recoverable, and the §4.1 battery's false-conclusion rate is how the
+   residual gets *measured* rather than assumed away.
 2. **Fresh-parse cost on large repos** (startup-dominated below ~200 files;
    rg wins wall-clock there). Mitigations: `path`/`globs` scoping as the
    primary lever, server-side budgets and the 120 s backstop, and honest docs
    that this tool buys precision, not speed.
-3. **napi platform matrix gaps** (musl/arm64 Linux). Mitigation: the CLI
-   fallback path (§5); remote hosts sidestep both via phase 2 (b) until (a)
-   is earned. oh-my-pi's own-addon route is demonstrated insurance.
+3. **napi platform matrix gaps — largely retired (10-14).** 0.50.0 publishes
+   Linux arm64 gnu/musl and x64 musl prebuilds alongside the rest (§5); the
+   original matrix fear was a stale README table, not the published
+   artifacts. Residual: prebuild *regressions* on future bumps, and hosts
+   outside the nine published targets. Mitigation: the CLI fallback path
+   (§5), the test suite's skip-not-fail prebuild probe, and remote hosts
+   sidestepping both via phase 3(b) until (a) is earned. oh-my-pi's
+   own-addon route is demonstrated insurance.
 4. **Coverage illusion** — a five-language engine returning a clean zero over
    a polyglot repo *is the false absence this design exists to prevent*.
    Mitigation: the scope census (§3.1) names every unscanned file and
    extension in the result, the description tells the model the ceiling up
    front, and the qualified-absence phrasing (§3.2) makes "no matches" read
-   as "no matches *among what was scanned*." Residual: the census walk
-   approximates (not replicates) ignore-crate semantics; discrepancies fail
-   safe by under-reporting skips.
+   as "no matches *among what was scanned*." The alias table itself is a
+   drift surface in BOTH directions — the engine's extension set is wider
+   than the five language names, and Phase 0 shipped a table too narrow
+   (scanned `.mjs`/`.mts`/`.scss` files reported unscanned, false "no X
+   files in scope" errors) — so it is pinned by a test that queries the live
+   engine (§3.1 fact 1). Residual: the census walk approximates (not
+   replicates) ignore-crate semantics; discrepancies fail safe by
+   under-reporting skips.
 5. **Output-volume blowout** (one query, 10k matches). Mitigation:
    `maxMatches` + char cap enforced server-side, summary line always present.
 6. **API drift.** The napi surface has changed underfoot before
    (`matchSourceCode` is gone in 0.50.0), and d.ts-vs-runtime traps are
-   routine (empty `Lang` at runtime; no path on the node; callbacks lagging
-   resolution). Mitigation: version-pinned, executor isolated in one module,
-   engine facts pinned in the module header and re-verified on every bump.
+   routine (`Lang` names only the bundled five at runtime; no path on the
+   node; callbacks lagging resolution — the last one upstream-documented,
+   §3.1 fact 3). Mitigation: version-pinned, executor isolated in one module,
+   engine facts pinned in the module header and re-verified on every bump —
+   the drift-pin test makes the extension-set fact self-checking.
 7. **Staleness: none by design** — fresh parse per call. The risk is the
    inverse (someone later adding a cache); the design brief says the cache is
    how this feature goes wrong.
@@ -603,18 +789,33 @@ exists.
 ## 8. Future directions
 
 - **`code_outline`** (§3.4) — kernel-first orientation, then a decision about
-  a model-level surface.
-- **Grammar coverage** — `registerDynamicLanguage` (dynamic tree-sitter
-  grammars through the napi) or the CLI fallback path for languages beyond
-  the bundled five; the census makes the current ceiling explicit wherever
-  it sits.
+  a model-level surface. Now staged as phase 2 (§6), ahead of remote: the
+  orientation signal from the field (Serena's `get_symbols_overview`,
+  @juvio15's outline tool, `sg outline`) is the strongest in this family.
+- **Grammar coverage** — now a planned phase (§6 G) via the official
+  `@ast-grep/lang-*` prebuilt grammar packages + `registerDynamicLanguage`
+  (§5); `languageGlobs` (`findInFiles` parsing `*.vue`/`*.svelte` as HTML,
+  etc.) is a partial reach-extension for embedded syntaxes, worth trying
+  before full grammar packages for those cases. The census makes the current
+  ceiling explicit wherever it sits, and its `unscanned` counts are the
+  demand signal that schedules this phase.
+- **LSP semantics** (§2 adjacent lineages) — if usage shows demand for
+  reference-grade navigation ("what calls this symbol, *exactly*", rename-
+  aware), the path is a language-server adapter (tsserver first — already on
+  every Porrima host; pi-code-nav's TS-only carve is the demonstrated shape),
+  not more ast-grep. The principles excluding it are revisitable, not
+  load-bearing.
 - **`-k/--kind` selector** (match by node kind without a pattern): a
   one-line addition over the napi rule object when usage asks; deferred on
-  description-bytes cost — pattern-only is the 90% case.
+  description-bytes cost — pattern-only is the 90% case. (The napi matcher
+  already accepts full YAML-shaped rule objects — kind, relational rules,
+  constraints — so this is a schema question, never an engine one.)
 - **In-situ enrichment** (the Zed direction): `read_file` context selection
   by syntax-node range, symbol breadcrumbs — a `read_file` refinement or the
-  outline primitive, not a new tool.
-- **Remote phase (a)** — host-owned `ast-grep` binary over the remote bash
+  outline primitive, not a new tool. Zed's shipped `grep_tool` knobs
+  (`max_ancestor_lines`/`context_lines`, 2048-byte snippet cap) are the
+  concrete reference shape.
+- **Remote phase 3(a)** — host-owned `ast-grep` binary over the remote bash
   path, if measured slow.
 - **The full pattern reference** kernel-loadable on demand once the
   description cheatsheet is proven insufficient by usage.
