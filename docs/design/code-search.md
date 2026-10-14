@@ -481,7 +481,7 @@ lock-free**: it never acquires `workspace:<label>` and is not in
 (a tolerant parse that matches nothing) handles everything the mechanical
 layers don't, so the surface only catches what is cheap and certain:
 
-1. **Regex-shape heuristic — advisory, not a rejection** (revised 10-14).
+1. **Regex-shape heuristic — advisory, not a rejection**.
    The classic regex shapes (`\w`, `\d`, `.*`, `[a-z]`, and *spaceless* `|`)
    are detected, but the search **runs anyway**; the hint (*"the pattern
    looks regex-shaped — ast-grep patterns are code, not regex; for text
@@ -546,7 +546,8 @@ deliberate:
   (`CodeSearchResult` without `text`). The model-level text is for context;
   the kernel JSON is for computation — including `skipped`/`unscanned`, so
   a program can decide whether absence is meaningful before drawing a
-  conclusion. **Wire shape:** the manager JSON-stringifies structured values
+  conclusion, and the §3.2 regex-shape `hint` (it has no `text` to read
+  from). **Wire shape:** the manager JSON-stringifies structured values
   and flags the response `value_json`; the driver decodes the flag back into
   a real dict for the cell (a decode failure keeps the raw string — the flag
   never fails a call). Truncated JSON stays a marked string (a cut string is
@@ -673,7 +674,14 @@ every function taking a given parameter shape; (3) find template-literal
 `console.log`s; (4) a deliberate false-absence probe — a query whose answer
 lives in a `.py` file, checking the model honors the coverage note instead of
 concluding absence; (5) one iterative query→refine case (the §3.3 kernel
-shape, once Phase 1 is live).
+shape, once Phase 1 is live). The runner is
+`server/src/scripts/eval-code-search.ts`: it drives real headless turns on
+project chats bound to the repo (fixed harness prompt — both arms differ only
+in the tool surface), recomputes ground truth at run time so the battery
+survives repo drift (rg as an independent oracle; engine-derived only for
+shapes rg cannot express), and takes a foreground turn-gate lease per run.
+Correctness grading is human by design — the report prints every final answer
+beside its oracle — with one auto-flag: an absence claim where truth exists.
 
 **Metrics** — Porrima already records the raw material (request-log,
 model-stats): turns to answer, tokens spent on search calls, tool-error rate,
