@@ -28,7 +28,6 @@ console.log("\n--- python pattern (census reports unscanned languages) ---\n" + 
 
 for (const [label, p, expect] of [
   ["trivial", ";;;", /no code content/],
-  ["regex shape", "get[0-9]+", /rg/],
 ] as const) {
   try {
     await runCodeSearch({ pattern: p, lang: "ts" }, ws);
@@ -37,5 +36,14 @@ for (const [label, p, expect] of [
     if (!expect.test(e.message)) console.log(`\nERROR: ${label} message unexpected:`, e.message);
     else console.log(`\n--- ${label} pattern (expected error) ---\n${e.message}`);
   }
+}
+
+// Regex-shape is advisory now: the search runs, and a zero-match carries the
+// rg hint (the engine referees — a regex-shaped pattern that matches real
+// code needs no nudge).
+const r5 = await runCodeSearch({ pattern: "get[0-9]+", lang: "ts" }, ws);
+console.log("\n--- regex shape pattern (advisory: rg hint on absence) ---\n" + r5.text);
+if (r5.totalMatches === 0 && !/regex-shaped/.test(r5.text)) {
+  console.log("ERROR: zero matches without the regex-shape note");
 }
 console.log("\nsmoke OK");

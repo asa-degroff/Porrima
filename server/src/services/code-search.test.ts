@@ -16,14 +16,16 @@ import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { mkdir, writeFile, rm } from "fs/promises";
 import { promisify } from "util";
 import { execFile } from "child_process";
+import { homedir } from "os";
 import { join } from "path";
 import { createRequire } from "module";
-import { runCodeSearch, CodeSearchError, passesGlobs, regexShapeHint, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
+import { runCodeSearch, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
 import { LocalWorkspaceAdapter } from "./workspace.js";
 import type { WorkspaceAdapter } from "./workspace.js";
 
 const execFileP = promisify(execFile);
 const FIXTURE = "/tmp/quje-code-search-fixture";
+const DRIFT_DIR = "/tmp/quje-code-search-drift";
 let napiAvailable = true;
 
 function localWs(root: string): LocalWorkspaceAdapter {
@@ -41,6 +43,7 @@ async function gitFixtures() {
     "export function alpha(x) { return x; }",
     "function two(a, b) { return a; }",
     "function beta(x) { return x; }",
+    "const flags = 1|2;",
     "",
   ].join("\n"));
   await writeFile(join(src, "b.ts"), [
@@ -56,6 +59,14 @@ async function gitFixtures() {
     "",
   ].join("\n"));
   await writeFile(join(src, "styles.css"), ".a { color: red }\n");
+  // The engine's extension set is broader than the five language names
+  // (js→mjs/cjs, ts→mts/cts, html→htm/xhtml, css→scss): the census must
+  // count these as SCANNED — the alias-drift regression fixture.
+  await writeFile(join(src, "mod.mjs"), "export function mjsFn() { return 1; }\n");
+  await writeFile(join(src, "types.mts"), "export function mtsFn() { return 1; }\n");
+  await writeFile(join(src, "theme.scss"), ".t { color: blue; }\n");
+  await mkdir(join(src, "generated"), { recursive: true });
+  await writeFile(join(src, "generated", "gen.ts"), "function genFn() { return 1; }\n");
   await writeFile(join(ignored, "hidden.ts"), "function hiddenFn() { return 1; }\n");
   await writeFile(join(FIXTURE, ".gitignore"), "ignored/\n");
 
@@ -82,6 +93,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(FIXTURE, { recursive: true, force: true }).catch(() => {});
+  await rm(DRIFT_DIR, { recursive: true, force: true }).catch(() => {});
 });
 
 const fnPattern = "function $NAME($$$ARGS) { $$$ }";
@@ -200,6 +212,103 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(res.text).toMatch(/narrow|mis-scoped/);
   });
 
+  it("the census mirrors the engine's extension set: .mjs/.mts/.scss are SCANNED, not unscanned (alias-drift regression)", async () => {
+    // Phase 0 shipped an alias table narrower than the engine's inference set
+    // (js/mjs/cjs/jsx, ts/mts/cts, html/htm/xhtml, css/scss) — the census
+    // mis-reported scanned files as unscanned and explicit-lang queries could
+    // emit a FALSE "no <lang> files in scope" scope error.
+    const res = await runCodeSearch({ pattern: fnPattern }, localWs(FIXTURE));
+    expect(res.matches.some((m) => m.file === "src/mod.mjs")).toBe(true);
+    expect(res.matches.some((m) => m.file === "src/types.mts")).toBe(true);
+    expect(res.unscanned.mjs).toBeUndefined();
+    expect(res.unscanned.mts).toBeUndefined();
+    expect(res.unscanned.scss).toBeUndefined();
+    expect(res.unscanned.py).toBe(1); // the honest skip is still honest
+    expect(res.skipped.some((s) => s.file.endsWith(".mjs") || s.file.endsWith(".mts") || s.file.endsWith(".scss"))).toBe(false);
+    // Explicit lang: .mjs counts toward javascript coverage — no false scope error.
+    const js = await runCodeSearch({ pattern: fnPattern, lang: "js", path: "src" }, localWs(FIXTURE));
+    expect(js.scannedFiles).toBeGreaterThanOrEqual(1);
+    expect(js.matches.some((m) => m.file === "src/mod.mjs")).toBe(true);
+    expect(js.text).not.toMatch(/no javascript files/);
+  });
+
+  it("drift pin: the engine's visited-extension set === LANGUAGE_ALIASES's extension set", async () => {
+    // Ground truth from the LIVE engine (no mocks): one file per candidate
+    // extension, parseFiles, compare against the table. If a napi bump widens
+    // or narrows the inference set, this fails and the table gets updated —
+    // the census must never claim coverage the engine doesn't provide (or
+    // deny coverage it does).
+    const CANDIDATES = [
+      // expected scanned (the 0.50.0 inference set)
+      "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "html", "htm", "xhtml", "css", "scss",
+      // expected NOT scanned
+      "py", "vue", "svelte", "less", "sass", "json", "md",
+    ];
+    await rm(DRIFT_DIR, { recursive: true, force: true });
+    await mkdir(DRIFT_DIR, { recursive: true });
+    for (const ext of CANDIDATES) {
+      const body = ["css", "scss", "less", "sass"].includes(ext)
+        ? ".a { color: red; }\n"
+        : ["html", "htm", "xhtml", "vue", "svelte"].includes(ext)
+          ? "<template><div></div></template>\n"
+          : ext === "json" ? "{}\n"
+          : ext === "md" ? "# x\n"
+          : "function probe() { return 1; }\n";
+      await writeFile(join(DRIFT_DIR, `f.${ext}`), body);
+    }
+
+    const napi = createRequire(import.meta.url)("@ast-grep/napi");
+    const visited: string[] = [];
+    let delivered = 0;
+    const count: number = await napi.parseFiles([DRIFT_DIR], (err: any, fileRoot: any) => {
+      delivered++;
+      if (!err) visited.push(String(fileRoot.filename()));
+    });
+    const t0 = Date.now();
+    while (delivered < count && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 2));
+    expect(delivered).toBe(count);
+    const visitedExts = [...new Set(visited.map((f) => f.slice(f.lastIndexOf(".") + 1).toLowerCase()))].sort();
+
+    // Every extension the engine visits must be census-supported …
+    for (const ext of visitedExts) {
+      expect(LANGUAGE_ALIASES[ext], `engine visits .${ext} but LANGUAGE_ALIASES lacks it`).toBeDefined();
+    }
+    // … and every extension the table claims (among the candidates) must
+    // actually be visited — over-claiming coverage is the same lie inverted.
+    const claimedExts = Object.keys(LANGUAGE_ALIASES).filter((k) => CANDIDATES.includes(k)).sort();
+    expect(claimedExts).toEqual(visitedExts);
+
+    // End-to-end: the census agrees with the engine over the same tree.
+    const res = await runCodeSearch({ pattern: "function $NAME" }, localWs(DRIFT_DIR));
+    expect(res.scannedFiles).toBe(visited.length);
+    for (const ext of visitedExts) expect(res.unscanned[ext]).toBeUndefined();
+  }, 30000);
+
+  it("globs exclude by directory name (gitignore semantics: '!generated' drops everything beneath it)", async () => {
+    const without = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src", globs: ["!generated"] }, localWs(FIXTURE));
+    expect(without.matches.some((m) => m.file.includes("generated/"))).toBe(false);
+    const withDir = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src" }, localWs(FIXTURE));
+    expect(withDir.matches.some((m) => m.file.includes("generated/"))).toBe(true);
+  });
+
+  it("regex-shaped patterns are advisory, not rejected: absence carries the rg hint", async () => {
+    // A hard reject converts a possibly-valid pattern into a guaranteed
+    // no-result; the engine referees instead, and the hint fires only at
+    // zero-match — where the over-conclusion risk lives.
+    const res = await runCodeSearch({ pattern: "get[0-9]+", lang: "ts", path: "src" }, localWs(FIXTURE));
+    expect(res.totalMatches).toBe(0);
+    expect(res.text).toMatch(/^no matches/);
+    expect(res.text).toMatch(/regex-shaped/);
+    expect(res.text).toMatch(/rg/);
+  });
+
+  it("a tight pipe that IS code (bitwise-or) matches — engine referees, no hint on presence", async () => {
+    const res = await runCodeSearch({ pattern: "1|2", lang: "ts", path: "src" }, localWs(FIXTURE));
+    expect(regexShapeHint("1|2")).not.toBeNull(); // the detector does trip …
+    expect(res.totalMatches).toBeGreaterThanOrEqual(1); // … but the pattern is valid code
+    expect(res.text).not.toMatch(/regex-shaped/);
+  });
+
   it("an explicit language with nothing to scan in scope says so", async () => {
     // src/services holds only svc.py — a ts query there is a scope error, not a result
     const res = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src/services" }, localWs(FIXTURE));
@@ -306,5 +415,25 @@ describe("gating and definition surface", () => {
     expect(passesGlobs("src/a.md", ["*.ts"])).toBe(false);
     expect(passesGlobs("src/a.ts", ["*.ts", "!a.ts"])).toBe(false);
     expect(passesGlobs("src/a.ts", ["!*.ts", "a.ts"])).toBe(true);
+  });
+
+  it("globs helper: directory patterns match descendants (gitignore semantics)", () => {
+    expect(passesGlobs("dist/foo.ts", ["!dist"])).toBe(false);
+    expect(passesGlobs("src/dist/foo.ts", ["!dist"])).toBe(false); // any depth
+    expect(passesGlobs("dist/foo.ts", ["!dist/"])).toBe(false); // trailing slash
+    expect(passesGlobs("distx/foo.ts", ["!dist"])).toBe(true); // no prefix false-positive
+    expect(passesGlobs("dist/foo.ts", ["*.ts", "!dist"])).toBe(false); // later wins
+    expect(passesGlobs("dist/foo.ts", ["!dist", "dist/foo.ts"])).toBe(true); // later wins, re-included
+    expect(passesGlobs("a.ts", ["dist"])).toBe(false); // include-only: non-matching is out
+    expect(passesGlobs("dist/foo.ts", ["dist"])).toBe(true);
+  });
+
+  it("resolveWorkspacePath: ~ is HOME-relative (workspace.ts parity), absolutes pass through", () => {
+    expect(resolveWorkspacePath("/ws/root", "~/x")).toBe(join(homedir(), "x"));
+    expect(resolveWorkspacePath("/ws/root", "~")).toBe(homedir());
+    expect(resolveWorkspacePath("/ws/root", "/abs/x")).toBe("/abs/x");
+    expect(resolveWorkspacePath("/ws/root", undefined)).toBe("/ws/root");
+    expect(resolveWorkspacePath("/ws/root", ".")).toBe("/ws/root");
+    expect(resolveWorkspacePath("/ws/root", "rel/x")).toBe(join("/ws/root", "rel/x"));
   });
 });

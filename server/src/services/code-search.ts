@@ -1,20 +1,27 @@
 /**
  * Code search — structural code navigation via ast-grep.
- * Design: docs/design/code_search (§3); Phase 0 is the model-level tool, the
+ * Design: docs/design/code-search.md (§3); Phase 0 is the model-level tool, the
  * kernel projection rides this same executor in Phase 1.
  *
  * Execution: in-process `@ast-grep/napi` (version-pinned in server/package.json)
  * — no subprocess, no shell-quoting surface. Local workspaces only (Phase 0);
- * the remote carve-out (adapter-read + in-process parse) is Phase 2.
+ * the remote carve-out (adapter-read + in-process parse) is a later phase.
  *
  * Engine facts this executor is written against (@ast-grep/napi 0.50.0):
- * - `sg.Lang` is a compile-side enum, empty at runtime — language arguments are
- *   plain strings.
+ * - Language arguments are plain strings. (`sg.Lang` IS populated at runtime in
+ *   0.50.0, but names only the bundled five; the executor never reads it.)
  * - The napi bundle supports five languages: typescript, tsx, javascript (jsx
  *   alias), html, css. `findInFiles`/`parseFiles` silently skip files whose
  *   extension infers anything else; the CLI covers more. Coverage is therefore
  *   the executor's job: a scope census (ignore-aware walk) reports every file
  *   the engine cannot visit, so a zero-match result is never silently partial.
+ * - The engine's EXTENSION set is broader than the five language names
+ *   (verified empirically on 0.50.0): js/mjs/cjs/jsx → JavaScript, ts/mts/cts
+ *   → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss → Css.
+ *   LANGUAGE_ALIASES must mirror it — a stale table mis-reports SCANNED files
+ *   as unscanned, the coverage-honesty inversion the census exists to prevent
+ *   (this shipped in Phase 0 and was caught in review). The drift-pin test in
+ *   code-search.test.ts queries the live engine and compares.
  * - `pattern()` never throws: tree-sitter parses tolerantly, so garbage
  *   patterns compile and match nothing. Static validity is undecidable (any
  *   token parses as an identifier in some grammar) — pre-validation is the
@@ -37,12 +44,15 @@
  *   libuv queue when the promise resolves: the resolved number is how many
  *   files WILL deliver. Reading early is silently partial (observed: full,
  *   short, and zero-match deliveries for one identical query) — the executor
- *   drains to the resolved count before returning.
+ *   drains to the resolved count before returning. Upstream-known: ast-grep's
+ *   "Performance Tip for napi usage" page documents the race and ships the
+ *   same counted-callback workaround — re-check it on every version bump.
  * - `context` is not in the Phase 0 schema: the index-not-payload rendering
  *   stands on its own (docs §3.2).
  */
 import { createRequire } from "module";
 import { access, readdir, readFile, stat } from "fs/promises";
+import { homedir } from "os";
 import { isAbsolute, join, relative, resolve } from "path";
 import { minimatch } from "minimatch";
 import ignore, { type Ignore } from "ignore";
@@ -66,16 +76,27 @@ export function codeSearchEnabled(): boolean {
 
 export const NAPI_LANGUAGES = ["typescript", "tsx", "javascript", "html", "css"] as const;
 
-// Extension/alias → canonical napi language, case-insensitive.
+// Extension/alias → canonical napi language, case-insensitive. The extension
+// half MUST mirror the engine's own inference set (module header; verified
+// empirically on 0.50.0 and pinned by the drift test in code-search.test.ts):
+// js/mjs/cjs/jsx, ts/mts/cts, tsx, html/htm/xhtml, css/scss. The bare language
+// names are also accepted as `lang` parameter aliases.
 export const LANGUAGE_ALIASES: Record<string, string> = {
   ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
   typescript: "typescript",
   tsx: "tsx",
   js: "javascript",
-  javascript: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
   jsx: "javascript",
+  javascript: "javascript",
   html: "html",
+  htm: "html",
+  xhtml: "html",
   css: "css",
+  scss: "css",
 };
 
 // --- Types ---
@@ -168,9 +189,14 @@ function bindingSpecs(pattern: string): { name: string; multi: boolean }[] {
 
 // --- Path resolution (same semantics as resolveLocalPath in workspace.ts) ---
 
-function resolveWorkspacePath(root: string, inputPath: string | undefined): string {
+const HOME = homedir();
+
+export function resolveWorkspacePath(root: string, inputPath: string | undefined): string {
   if (!inputPath || inputPath === "." || inputPath === "./") return root;
-  if (inputPath.startsWith("~")) return resolve(root, inputPath.slice(2));
+  // `~` is HOME-relative, exactly like workspace.ts's resolveLocalPath — the
+  // two must not diverge, or the same path string means different things to
+  // read_file and code_search in project chats (root ≠ HOME).
+  if (inputPath.startsWith("~")) return resolve(HOME, inputPath.slice(2));
   if (isAbsolute(inputPath)) return inputPath;
   return resolve(root, inputPath);
 }
@@ -183,13 +209,22 @@ function relativize(root: string, abs: string): string {
 
 // --- Glob filter (post-discovery; the napi has no filter surface) ---
 // gitignore-glob semantics, matching the CLI --globs contract: a pattern with
-// no leading slash matches at any depth; "!" excludes; the LAST matching glob
-// wins; when any include glob is present, a path matching no glob is out.
+// no leading slash matches at any depth; a pattern matching an ANCESTOR
+// DIRECTORY matches everything beneath it ("!dist" excludes dist/foo.ts); "!"
+// excludes; the LAST matching glob wins; when any include glob is present, a
+// path matching no glob is out.
 function globMatches(relPath: string, pattern: string): boolean {
-  return (
-    minimatch(relPath, pattern, { dot: true }) ||
-    (!pattern.includes("/") && minimatch(relPath, `**/${pattern}`, { dot: true }))
-  );
+  const p = pattern.replace(/\/+$/, ""); // "dist/" → "dist"
+  if (!p) return false;
+  const matchOne = (target: string) =>
+    minimatch(target, p, { dot: true }) ||
+    (!p.includes("/") && minimatch(target, `**/${p}`, { dot: true }));
+  if (matchOne(relPath)) return true;
+  const parts = relPath.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    if (matchOne(parts.slice(0, i).join("/"))) return true;
+  }
+  return false;
 }
 export function passesGlobs(relPath: string, globs?: string[]): boolean {
   if (!globs || globs.length === 0) return true;
@@ -325,8 +360,8 @@ interface DiscoverOutcome {
 
 /**
  * Run the scan. `lang` null = auto-detect per file (parseFiles visits only
- * the five supported extensions); otherwise one findInFiles pass with the
- * compiled matcher.
+ * the supported extensions); otherwise one findInFiles pass with the compiled
+ * matcher.
  *
  * Delivery barrier: the napi resolves BEFORE all per-file callbacks have
  * reached JavaScript (they queue on libuv; the resolved number is the count
@@ -334,11 +369,14 @@ interface DiscoverOutcome {
  * for parseFiles). Reading only what has landed by resolution silently loses
  * matches — nondeterministically, and worst on the first calls of a process.
  * So we wait until delivered callbacks equal the resolved count (bounded by a
- * grace window + the overall timeout), and flag incompleteness as a skipped
- * entry rather than trusting a short result.
+ * grace window + the call deadline), and flag incompleteness as a skipped
+ * entry rather than trusting a short result. (Upstream-known limitation:
+ * ast-grep's "Performance Tip for napi usage" page documents the race and
+ * ships the same counted-callback workaround.)
  *
- * The 120 s backstop races the whole scan — the Rust side cannot be cancelled
- * mid-flight, so a timeout stops WAITING (honest note, §3.2 budgets).
+ * `timeout`/`deadline` are owned by runCodeSearch — one budget for the whole
+ * call (census + scan + drain). The Rust side cannot be cancelled mid-flight,
+ * so a timeout stops WAITING (honest note, §3.2 budgets).
  */
 async function discover(
   lang: string | null,
@@ -346,13 +384,20 @@ async function discover(
   rawPattern: string,
   scopeAbs: string,
   root: string,
-  signal?: AbortSignal,
+  timeout: Promise<never>,
+  deadline: number,
 ): Promise<DiscoverOutcome> {
   const s = sg();
   const errors: SkippedFile[] = [];
   const internal: InternalMatch[] = [];
   const specs = bindingSpecs(rawPattern);
   let deliveredCallbacks = 0;
+  // Per-language compiled-pattern cache for the auto-detect path:
+  // findAll(string) recompiles the pattern for every file, and the kernel
+  // rule loop (Phase 1) leans on auto-detect hardest. Unmapped extensions
+  // fall back to the string form (which infers the file's own language), so
+  // correctness survives engine extension drift even if the cache misses.
+  const compiledByLang = new Map<string, any>();
 
   const collectFrom = (fileRel: string, nodes: any[]) => {
     for (const node of nodes) {
@@ -428,7 +473,13 @@ async function discover(
         } catch { fileRel = "(unknown)"; }
         let matches: any[];
         try {
-          matches = fileRoot.root().findAll(rawPattern);
+          const langName = LANGUAGE_ALIASES[fileExtension(fileRel)];
+          let cfg = langName ? compiledByLang.get(langName) : undefined;
+          if (langName && cfg === undefined) {
+            cfg = s.pattern(langName, rawPattern);
+            compiledByLang.set(langName, cfg);
+          }
+          matches = cfg ? fileRoot.root().findAll(cfg) : fileRoot.root().findAll(rawPattern);
         } catch (e: any) {
           errors.push({ file: fileRel, reason: `pattern rejected for this file: ${String(e.message).slice(0, 200)}` });
           return;
@@ -438,34 +489,23 @@ async function discover(
     );
   };
 
-  if (signal?.aborted) throw new CodeSearchError("code_search aborted.");
-  const timeoutMs = timeoutFromEnv();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let rejAbort: (e: Error) => void = () => {};
-  const onAbort = () => rejAbort(new CodeSearchError("code_search aborted."));
-  const timeout = new Promise<never>((_, rej) => {
-    rejAbort = rej;
-    timer = setTimeout(() => rej(new CodeSearchError(`code_search timed out after ${Math.round(timeoutMs / 1000)}s — narrow \`path\` to scope the scan.`)), timeoutMs);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    const fileCount = await Promise.race([run(), timeout]);
-    // Delivery barrier: `fileCount` is how many files will deliver a
-    // callback; they can still be in the libuv queue when the promise
-    // resolves. Wait for them (bounded) — a short read without this is
-    // silently partial.
-    if (fileCount > 0) {
-      const drainStart = Date.now();
-      while (deliveredCallbacks < fileCount && Date.now() - drainStart < DELIVERY_GRACE_MS) {
-        await Promise.race([new Promise((r) => setTimeout(r, 2)), timeout]);
-      }
-      if (deliveredCallbacks < fileCount) {
-        errors.push({ file: "(scope)", reason: `scan delivery incomplete (${deliveredCallbacks}/${fileCount} files) — results may be partial` });
-      }
+  const fileCount = await Promise.race([run(), timeout]);
+  // Delivery barrier: `fileCount` is how many files will deliver a callback;
+  // they can still be in the libuv queue when the promise resolves. Wait for
+  // them (bounded by the grace window and the call deadline) — a short read
+  // without this is silently partial.
+  if (fileCount > 0) {
+    const drainStart = Date.now();
+    while (
+      deliveredCallbacks < fileCount &&
+      Date.now() - drainStart < DELIVERY_GRACE_MS &&
+      Date.now() < deadline
+    ) {
+      await Promise.race([new Promise((r) => setTimeout(r, 2)), timeout]);
     }
-  } finally {
-    if (timer) clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
+    if (deliveredCallbacks < fileCount) {
+      errors.push({ file: "(scope)", reason: `scan delivery incomplete (${deliveredCallbacks}/${fileCount} files) — results may be partial` });
+    }
   }
   return { internal, errors };
 }
@@ -483,11 +523,12 @@ export async function runCodeSearch(
   workspace: WorkspaceAdapter,
   signal?: AbortSignal,
 ): Promise<CodeSearchResult> {
-  // Phase 0: local workspaces only (remote carve-out is Phase 2).
+  // Phase 0: local workspaces only (remote carve-out is a later phase).
   const root = workspace.localRoot;
   if (workspace.kind !== "local" || !root) {
     throw new CodeSearchError("code_search is available on local workspaces only (remote support lands in a later phase).");
   }
+  if (signal?.aborted) throw new CodeSearchError("code_search aborted.");
   const scopeAbs = resolveWorkspacePath(root, params.path);
   const scopeRel = relativize(root, scopeAbs);
 
@@ -517,8 +558,13 @@ export async function runCodeSearch(
     lang = resolved;
   }
 
-  const hint = regexShapeHint(pattern);
-  if (hint) throw new CodeSearchError(hint);
+  // Advisory, not a rejection (§3.2): the detector has real false-positive
+  // classes in code patterns (tight TS unions `string|number`, index
+  // arithmetic `$ARR[$I-1]`), and a hard reject converts a possibly-valid
+  // pattern into a guaranteed no-result. The search runs; the hint is
+  // appended only on a zero-match — the engine stays the referee, and the
+  // nudge fires exactly where the over-conclusion risk lives (absence).
+  const regexHint = regexShapeHint(pattern);
 
   const s = sg();
   let compiled: object | null = null;
@@ -530,9 +576,30 @@ export async function runCodeSearch(
     }
   }
 
+  // One deadline for the whole call: the census walk and the scan (neither
+  // cancellable mid-flight) both race it. The timeout stops WAITING —
+  // scoping is the remedy, the timeout the backstop (§3.2 budgets).
+  const timeoutMs = timeoutFromEnv();
+  const deadline = Date.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejAbort: (e: Error) => void = () => {};
+  const onAbort = () => rejAbort(new CodeSearchError("code_search aborted."));
+  const timeout = new Promise<never>((_, rej) => {
+    rejAbort = rej;
+    timer = setTimeout(() => rej(new CodeSearchError(`code_search timed out after ${Math.round(timeoutMs / 1000)}s — narrow \`path\` to scope the scan.`)), timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
   // Census before scan: what the engine can and cannot see in this scope.
-  const census = await scopeCensus(scopeAbs, root);
-  const discovered = await discover(lang, compiled, pattern, scopeAbs, root, signal);
+  let census: Census;
+  let discovered: DiscoverOutcome;
+  try {
+    census = await Promise.race([scopeCensus(scopeAbs, root), timeout]);
+    discovered = await discover(lang, compiled, pattern, scopeAbs, root, timeout, deadline);
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 
   const unscanned = extSummary(census);
   const scannedFiles = lang
@@ -583,6 +650,7 @@ export async function runCodeSearch(
     unscanned: unscanned.summary,
     unscannedTotal: unscanned.total,
     censusPartial: census.partial,
+    regexHint,
   });
 
   return {
@@ -613,6 +681,7 @@ interface RenderArgs {
   unscanned: string; // aggregated extension summary
   unscannedTotal: number;
   censusPartial: boolean;
+  regexHint: string | null; // advisory on zero-match (§3.2), never a rejection
 }
 
 function renderText(a: RenderArgs): string {
@@ -627,6 +696,11 @@ function renderText(a: RenderArgs): string {
 
   if (a.totalMatches === 0) {
     const lines: string[] = [`no matches in ${scopeLabel}`];
+    if (a.regexHint) {
+      // Advisory: fires only at absence — a regex-shaped pattern that matched
+      // real code (`a|b`, `$ARR[$I-1]`) proves itself valid and gets no note.
+      lines.push(`note: the pattern looks regex-shaped — ${a.regexHint}`);
+    }
     if (a.lang && !a.censusPartial && a.scannedFiles === 0) {
       // A scoped absence with nothing in scope is a scope error, not a result.
       lines.push(`no ${a.lang} files in ${scopeLabel}${a.unscannedTotal > 0 ? ` — found: ${a.unscanned}` : ""}.`);
