@@ -10,9 +10,10 @@
 // on is holding. The cell's own timeout + vitest turn that into a loud
 // failure — the §4.9 rule pinned as behavior.
 
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { createRequire } from "module";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
@@ -26,6 +27,9 @@ vi.mock("./workspace.js", async (importOriginal) => {
   const adapter = {
     kind: "local" as const,
     get label(): string {
+      return fake.rootPath;
+    },
+    get localRoot(): string {
       return fake.rootPath;
     },
     async readFile(args: Record<string, any>) {
@@ -73,6 +77,7 @@ async function setup() {
   process.env.PORRIMA_DATA_DIR = dataDir;
   process.env.PORRIMA_KERNEL_ROOT = kernelRootDir;
   process.env.PORRIMA_KERNEL_TOOLS = "1";
+  process.env.PORRIMA_CODE_SEARCH = "1";
   const agentTools = await import("./agent-tools.js");
   const kernel = await import("./python-kernel.js");
   current = { agentTools, kernel };
@@ -93,6 +98,7 @@ afterEach(async () => {
   if (current) await current.kernel.disposeAllKernels();
   current = null;
   delete process.env.PORRIMA_KERNEL_TOOLS;
+  delete process.env.PORRIMA_CODE_SEARCH;
   delete process.env.PORRIMA_DATA_DIR;
   delete process.env.PORRIMA_KERNEL_ROOT;
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
@@ -251,6 +257,7 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
     const names = (listed ?? "").split(",").filter(Boolean);
     expect(names).toEqual([
       "bash",
+      "code_search",
       "list_files",
       "list_memory_blocks",
       "read_archived_context",
@@ -271,4 +278,127 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
     expect(desc).toContain("await tools.<name>(**kwargs)");
     expect(desc).toContain("help(tools)");
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 1: the code_search kernel row (docs/design/code-search.md §3.3) —
+// structured JSON projection (dict in the cell, not a string), the snippet
+// path, the rule loop, and the exposure gate. Real kernel, real napi engine;
+// the workspace stays the fake adapter rooted at the temp data dir.
+// ---------------------------------------------------------------------------
+
+let napiAvailable = true;
+try {
+  createRequire(import.meta.url)("@ast-grep/napi");
+} catch {
+  napiAvailable = false;
+}
+
+describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
+  async function writeFixture(): Promise<void> {
+    await mkdir(join(dataDir, "src"), { recursive: true });
+    await writeFile(
+      join(dataDir, "src", "svc.ts"),
+      "export function kernelProbe(x: number) { return x; }\nfunction helper() { return compute(2); }\n",
+    );
+  }
+
+  function runPythonTool() {
+    return current!.agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+  }
+
+  it("file scan lands in the cell as a real dict — census fields ride, `text` does not", async () => {
+    const { agentTools } = await setup();
+    await writeFixture();
+    const result = await runPythonTool().execute(
+      "cs-1",
+      {
+        code: [
+          'out = await tools.code_search(pattern="function $NAME", lang="ts", path="src")',
+          'assert isinstance(out, dict), f"cell got {type(out).__name__}, want dict"',
+          'm = out["matches"][0]',
+          'print(out["totalMatches"], m["metaVariables"]["NAME"], m["file"], m["start"]["line"], out["scannedFiles"], "text" in out)',
+        ].join("\n"),
+        timeout: 60,
+      },
+      new AbortController().signal,
+    );
+    expect(resultText(result)).toContain("2 kernelProbe src/svc.ts 1 1 False");
+  }, 60_000);
+
+  it("snippet mode tests a pattern against a constructed string — no filesystem", async () => {
+    await setup();
+    const result = await runPythonTool().execute(
+      "cs-2",
+      {
+        code: [
+          'out = await tools.code_search(pattern="function $N($$$A) { $$$ }", code="function f(x) { return x; }\\nfunction g() {}")',
+          'print(type(out).__name__, out["lang"], out["totalMatches"], out["matches"][0]["metaVariables"]["N"], out["matches"][0]["file"])',
+        ].join("\n"),
+        timeout: 60,
+      },
+      new AbortController().signal,
+    );
+    expect(resultText(result)).toContain("dict typescript 2 f (snippet)");
+  }, 60_000);
+
+  it("the rule loop (§3.3): refine across iterations in variables, inspecting bindings", async () => {
+    await setup();
+    await writeFixture();
+    const result = await runPythonTool().execute(
+      "cs-3",
+      {
+        code: [
+          "found = []",
+          'for pat in ["function $NAME", "return $VALUE"]:',
+          '    out = await tools.code_search(pattern=pat, lang="ts", path="src")',
+          '    found.append(sorted(m["metaVariables"].get("NAME") or m["metaVariables"].get("VALUE") for m in out["matches"]))',
+          "print(found)",
+        ].join("\n"),
+        timeout: 60,
+      },
+      new AbortController().signal,
+    );
+    expect(resultText(result)).toContain("[['helper', 'kernelProbe'], ['compute(2)', 'x']]");
+  }, 60_000);
+
+  it("gating: flag off, code_search is absent from the namespace — allowlist authority", async () => {
+    await setup();
+    const on = await runPythonTool().execute(
+      "cs-4a",
+      { code: 'print(hasattr(tools, "code_search"))', timeout: 60 },
+      new AbortController().signal,
+    );
+    expect(resultText(on)).toContain("True");
+    // The exposure list is evaluated per dispatcher construction (per cell),
+    // and the driver rebuilds the namespace per execute — a flip needs no
+    // kernel restart.
+    delete process.env.PORRIMA_CODE_SEARCH;
+    const off = await runPythonTool().execute(
+      "cs-4b",
+      { code: 'print(hasattr(tools, "code_search"))', timeout: 60 },
+      new AbortController().signal,
+    );
+    expect(resultText(off)).toContain("False");
+    process.env.PORRIMA_CODE_SEARCH = "1";
+  }, 60_000);
+
+  it("executor errors surface as KernelToolError with the model-readable message", async () => {
+    await setup();
+    const result = await runPythonTool().execute(
+      "cs-5",
+      {
+        code: [
+          "try:",
+          '    await tools.code_search(pattern="def $F()", lang="python")',
+          '    print("no-raise")',
+          "except Exception as e:",
+          '    print(type(e).__name__, "not supported" in str(e))',
+        ].join("\n"),
+        timeout: 60,
+      },
+      new AbortController().signal,
+    );
+    expect(resultText(result)).toContain("KernelToolError True");
+  }, 60_000);
 });

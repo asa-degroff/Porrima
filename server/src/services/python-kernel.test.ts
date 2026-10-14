@@ -810,6 +810,33 @@ describe("kernel tools (protocol v2)", () => {
     expect(calls).toEqual([{ tool: "read_file", args: { path: "hello.txt" } }]);
   });
 
+  it("round-trips a structured value: JSON on the wire, a real dict in the cell (value_json)", async () => {
+    process.env.PORRIMA_KERNEL_TOOLS = "1";
+    // The code_search projection shape (docs/design/code-search.md §3.3):
+    // the manager JSON-stringifies non-string values and flags value_json;
+    // the driver decodes so the cell computes on a dict, not a string.
+    const dispatcher: KernelToolDispatcher = {
+      tools: ["code_search"],
+      call: async (): Promise<KernelToolCallResult> => ({
+        ok: true,
+        value: { totalMatches: 2, matches: [{ file: "a.ts", text: "fn a() {}" }], unscanned: { py: 1 } },
+      }),
+    };
+    const outcome = kernel(
+      await run(
+        "ktools-struct",
+        [
+          'out = await tools.code_search(pattern="function $NAME")',
+          'assert isinstance(out, dict), f"cell got {type(out).__name__}, want dict"',
+          'print(out["totalMatches"], out["matches"][0]["file"], out["unscanned"]["py"])',
+        ].join("\n"),
+        { toolDispatcher: dispatcher },
+      ),
+    );
+    expect(outcome.isError).toBe(false);
+    expect(outcome.content).toContain("2 a.ts 1");
+  });
+
   it("exposes no tools namespace when the flag is off", async () => {
     const dispatcher: KernelToolDispatcher = {
       tools: ["read_file"],

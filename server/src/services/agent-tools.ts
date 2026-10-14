@@ -12,7 +12,7 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
-import { codeSearchEnabled, runCodeSearch, CodeSearchError, type CodeSearchParams } from "./code-search.js";
+import { codeSearchEnabled, runCodeSearch, runCodeSearchOnSnippet, CodeSearchError, type CodeSearchParams } from "./code-search.js";
 import {
   executeInKernel,
   kernelToolsEnabled,
@@ -588,6 +588,11 @@ function createKernelToolDispatcher(workspace: WorkspaceAdapter, chatId: string)
       "web_search",
       "web_fetch",
       "read_pdf",
+      // Phase 1 (docs/design/code-search.md §3.3): the kernel row rides the
+      // same executor; the exposure gate is the same flag as the model-level
+      // tool, evaluated per dispatcher construction (per cell) so a flip
+      // needs no restart beyond the one the kernel-tools line already rides.
+      ...(codeSearchEnabled() ? ["code_search"] : []),
       ...KERNEL_MEMORY_READ_TOOLS,
     ],
     call: async (tool, args, signal) => {
@@ -628,6 +633,33 @@ function createKernelToolDispatcher(workspace: WorkspaceAdapter, chatId: string)
         return result.isError
           ? { ok: false, error: result.content || "list failed" }
           : { ok: true, value: result.content };
+      }
+      if (tool === "code_search") {
+        // Phase 1 (§3.3): structured JSON projection — result bytes are free
+        // in kernel variables, so the cell gets the normalized shape
+        // (CodeSearchResult minus `text`; the manager stringifies it for the
+        // wire and the driver decodes it back via value_json). `code=` runs
+        // the snippet-testing path — no filesystem, no workspace, so it
+        // works on remote kernels too (the file scan stays local-only until
+        // the remote carve-out phase).
+        const a = args as Record<string, any>;
+        try {
+          if (typeof a.code === "string") {
+            const result = runCodeSearchOnSnippet(
+              { pattern: String(a.pattern ?? ""), code: a.code, lang: a.lang, maxMatches: a.maxMatches, skip: a.skip },
+              signal,
+            );
+            return { ok: true, value: result as unknown as Record<string, unknown> };
+          }
+          const result = await runCodeSearch(a as CodeSearchParams, workspace, signal);
+          const { text: _modelProjection, ...structured } = result;
+          return { ok: true, value: structured as unknown as Record<string, unknown> };
+        } catch (e: any) {
+          return {
+            ok: false,
+            error: e instanceof CodeSearchError ? e.message : `code_search failed: ${e?.message ?? String(e)}`,
+          };
+        }
       }
       // Web + memory reads are pure projections back onto the executors the
       // model-level tools already use — same auth, same retrieval scoping,

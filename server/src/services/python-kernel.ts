@@ -86,10 +86,14 @@ const KERNEL_TOOL_SPILL_CHARS = 1_048_576;
 const KERNEL_TOOL_SPILL_HEAD_CHARS = 4096;
 // Per-tool timeout overrides: the generic cap guards the FIFO against
 // wedged dispatches, but tools with legitimate longer ceilings keep their
-// own bound (model-level bash allows 300 s).
+// own bound (model-level bash allows 300 s). code_search carries 30 s of
+// headroom over its own internal 120 s deadline so the executor's more
+// useful timeout message ("narrow `path`…") wins the race instead of the
+// generic abort text.
 const KERNEL_TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   bash: 300_000,
   read_pdf: 300_000,
+  code_search: 150_000,
 };
 
 function kernelToolCallsMax(): number {
@@ -207,8 +211,12 @@ export interface KernelRunOptions {
 
 export interface KernelToolCallResult {
   ok: boolean;
-  /** JSON-safe value returned into the kernel. Phase A: strings. */
-  value?: string;
+  /** JSON-safe value returned into the kernel. Strings ride verbatim;
+   *  structured values (Phase 1's code_search projection,
+   *  docs/design/code-search.md §3.3) are JSON-stringified onto the wire
+   *  with a `value_json` flag, and the driver decodes them back so the cell
+   *  computes on a real dict/list. */
+  value?: string | Record<string, unknown>;
   error?: string;
 }
 
@@ -1029,6 +1037,13 @@ async function dispatchKernelTool(
       respond({ ok: false, error: String(outcome.error ?? "tool call failed") });
       return;
     }
+    // Structured values (code_search's JSON projection) are stringified for
+    // the wire and flagged so the driver decodes them back into a dict/list
+    // for the cell. Spill and truncation operate on the string form; a
+    // truncated JSON string is not parseable, so value_json is withheld and
+    // the cell gets the marked string instead (spill references already
+    // return a dict the cell can open() the path of).
+    const structured = outcome.value !== undefined && typeof outcome.value !== "string";
     const raw =
       typeof outcome.value === "string"
         ? outcome.value
@@ -1050,6 +1065,7 @@ async function dispatchKernelTool(
           spill_path: spillPath,
           spilled: true,
           total_chars: total,
+          ...(structured ? { value_json: true } : {}),
         });
         return;
       } catch {
@@ -1062,6 +1078,7 @@ async function dispatchKernelTool(
       value: truncated ? raw.slice(0, KERNEL_TOOL_VALUE_MAX_CHARS) : raw,
       truncated,
       total_chars: total,
+      ...(structured && !truncated ? { value_json: true } : {}),
     });
   } catch (error: any) {
     respond({ ok: false, error: `dispatch failed: ${error?.message ?? String(error)}` });

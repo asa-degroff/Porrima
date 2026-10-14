@@ -253,15 +253,29 @@ async def _call_host_tool(tool: str, args: dict[str, Any]) -> Any:
     if result.get("spilled"):
         # Spill reference (§4.9): the full value lives on disk at `path`
         # (open it or process it in chunks); `head` previews the start.
-        return {
+        # "json" marks a structured projection spilled as JSON text —
+        # json.load(open(path)) gives the cell the real dict/list back.
+        ref = {
             "path": result.get("spill_path"),
             "head": value if isinstance(value, str) else "",
             "total_chars": result.get("total_chars"),
             "spilled": True,
         }
+        if result.get("value_json"):
+            ref["json"] = True
+        return ref
     if result.get("truncated") and isinstance(value, str):
         total = result.get("total_chars")
         value = f"{value}\n... [truncated: {len(value)} of {total} chars]"
+    elif result.get("value_json") and isinstance(value, str):
+        # Structured projection (code_search's dict, code-search.md §3.3):
+        # the manager JSON-stringified a non-string value for the wire —
+        # decode it back so the cell computes on a real dict/list. A decode
+        # failure keeps the raw string; never fail the call on the flag.
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
     return value
 
 
@@ -306,6 +320,20 @@ _KNOWN_TOOL_DOCS = {
         "  await tools.read_pdf(path=str, pages?:str, ocr?:bool, extractImages?:bool) -> str\n"
         "      Extracted PDF text; extracted figures are saved to disk and\n"
         "      listed as file paths in the result (open or emit() them)."
+    ),
+    "code_search": (
+        "  await tools.code_search(pattern=str, path?:str, globs?:list[str], lang?:str,\n"
+        "      maxMatches?:int, skip?:int, code?:str) -> dict\n"
+        "      Structural AST search (ast-grep): patterns are code, not regex\n"
+        "      ($NAME one node, $$$NAME a list; 'function $NAME' matches every\n"
+        "      function definition). File scans cover ts/tsx/js/jsx/html/css —\n"
+        "      the result's unscanned/skipped fields say what the engine could\n"
+        "      not see, so zero matches never means zero coverage. code=str\n"
+        "      tests a pattern against a snippet instead of files (lang defaults\n"
+        "      to ts) — write rule, test, inspect bindings, revise, all in\n"
+        "      variables. Dict: matches[{file,start,end,text,metaVariables}],\n"
+        "      totalMatches, filesWithMatches, scannedFiles, unscanned, skipped,\n"
+        "      truncated."
     ),
     "search_memory": (
         "  await tools.search_memory(query=str, ...) -> str\n"

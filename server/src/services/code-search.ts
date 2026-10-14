@@ -1,11 +1,15 @@
 /**
  * Code search — structural code navigation via ast-grep.
- * Design: docs/design/code-search.md (§3); Phase 0 is the model-level tool, the
- * kernel projection rides this same executor in Phase 1.
+ * Design: docs/design/code-search.md (§3); Phase 0 is the model-level tool,
+ * Phase 1 (shipped) is the kernel projection — the dispatcher row in
+ * agent-tools.ts rides this same executor and returns the structured shape
+ * (`CodeSearchResult` minus `text`) plus the snippet path below.
  *
  * Execution: in-process `@ast-grep/napi` (version-pinned in server/package.json)
- * — no subprocess, no shell-quoting surface. Local workspaces only (Phase 0);
- * the remote carve-out (adapter-read + in-process parse) is a later phase.
+ * — no subprocess, no shell-quoting surface. File scans are local-workspace
+ * only; the remote carve-out (adapter-read + in-process parse) is a later
+ * phase. The snippet path (runCodeSearchOnSnippet) touches no filesystem and
+ * therefore works on remote kernels too.
  *
  * Engine facts this executor is written against (@ast-grep/napi 0.50.0):
  * - Language arguments are plain strings. (`sg.Lang` IS populated at runtime in
@@ -353,6 +357,79 @@ interface InternalMatch {
   byteStart: number;
 }
 
+/**
+ * Normalize napi match nodes into CodeSearchMatch (1-based positions,
+ * flattened single + multi bindings). Shared by the file scan and the
+ * snippet path (Phase 1) so binding extraction lives in exactly one place.
+ */
+function collectMatches(nodes: any[], fileRel: string, specs: { name: string; multi: boolean }[]): InternalMatch[] {
+  const out: InternalMatch[] = [];
+  for (const node of nodes) {
+    try {
+      const r = node.range();
+      const match: CodeSearchMatch = {
+        file: fileRel,
+        start: { line: r.start.line + 1, column: r.start.column + 1 },
+        end: { line: r.end.line + 1, column: r.end.column + 1 },
+        text: node.text(),
+      };
+      if (specs.length > 0) {
+        const mv: Record<string, string> = {};
+        for (const { name, multi } of specs) {
+          let value: string | null = null;
+          try {
+            if (multi) {
+              const list = node.getMultipleMatches(name);
+              if (Array.isArray(list) && list.length > 0) value = list.map((x: any) => x.text()).join("");
+            } else {
+              const single = node.getMatch(name);
+              if (single && typeof single.text === "function") value = single.text();
+            }
+          } catch { /* binding unreadable — drop it */ }
+          if (value == null) {
+            // Fallback to the other accessor (defensive — the spec says
+            // which one is right, but the binding surface varies across
+            // grammars).
+            try {
+              if (multi) {
+                const single = node.getMatch(name);
+                if (single && typeof single.text === "function") value = single.text();
+              } else {
+                const list = node.getMultipleMatches(name);
+                if (Array.isArray(list) && list.length > 0) value = list.map((x: any) => x.text()).join("");
+              }
+            } catch { /* drop */ }
+          }
+          if (value != null) mv[name] = value;
+        }
+        if (Object.keys(mv).length > 0) match.metaVariables = mv;
+      }
+      out.push({ match, byteStart: r.start.index });
+    } catch { /* node without a usable range — skip */ }
+  }
+  return out;
+}
+
+/**
+ * Ordering contract: (file, start.line, start.column, byteOffset) —
+ * pagination is only coherent under a deterministic order with fresh parses
+ * (§3.2). Shared by the file scan and the snippet path.
+ */
+function compareInternal(a: InternalMatch, b: InternalMatch): number {
+  if (a.match.file !== b.match.file) return a.match.file < b.match.file ? -1 : 1;
+  if (a.match.start.line !== b.match.start.line) return a.match.start.line - b.match.start.line;
+  if (a.match.start.column !== b.match.start.column) return a.match.start.column - b.match.start.column;
+  return a.byteStart - b.byteStart;
+}
+
+/** Clamp the pagination budgets (server-side — the caller cannot be trusted to count). */
+function paginationBudgets(maxMatches?: number, skip?: number): { maxMatches: number; skip: number } {
+  return {
+    maxMatches: Math.min(Math.max(Math.floor(Number(maxMatches) || DEFAULT_MAX_MATCHES), 1), MAX_MAX_MATCHES),
+    skip: Math.max(Math.floor(Number(skip) || 0), 0),
+  };
+}
+
 interface DiscoverOutcome {
   internal: InternalMatch[];
   errors: SkippedFile[];
@@ -400,49 +477,7 @@ async function discover(
   const compiledByLang = new Map<string, any>();
 
   const collectFrom = (fileRel: string, nodes: any[]) => {
-    for (const node of nodes) {
-      try {
-        const r = node.range();
-        const match: CodeSearchMatch = {
-          file: fileRel,
-          start: { line: r.start.line + 1, column: r.start.column + 1 },
-          end: { line: r.end.line + 1, column: r.end.column + 1 },
-          text: node.text(),
-        };
-        if (specs.length > 0) {
-          const mv: Record<string, string> = {};
-          for (const { name, multi } of specs) {
-            let value: string | null = null;
-            try {
-              if (multi) {
-                const list = node.getMultipleMatches(name);
-                if (Array.isArray(list) && list.length > 0) value = list.map((x: any) => x.text()).join("");
-              } else {
-                const single = node.getMatch(name);
-                if (single && typeof single.text === "function") value = single.text();
-              }
-            } catch { /* binding unreadable — drop it */ }
-            if (value == null) {
-              // Fallback to the other accessor (defensive — the spec says
-              // which one is right, but the binding surface varies across
-              // grammars).
-              try {
-                if (multi) {
-                  const single = node.getMatch(name);
-                  if (single && typeof single.text === "function") value = single.text();
-                } else {
-                  const list = node.getMultipleMatches(name);
-                  if (Array.isArray(list) && list.length > 0) value = list.map((x: any) => x.text()).join("");
-                }
-              } catch { /* drop */ }
-            }
-            if (value != null) mv[name] = value;
-          }
-          if (Object.keys(mv).length > 0) match.metaVariables = mv;
-        }
-        internal.push({ match, byteStart: node.range().start.index });
-      } catch { /* node without a usable range — skip */ }
-    }
+    internal.push(...collectMatches(nodes, fileRel, specs));
   };
 
   const onDelivery = () => { deliveredCallbacks++; };
@@ -622,16 +657,10 @@ export async function runCodeSearch(
 
   // Ordering contract: (file, line, column, byte) — pagination is only
   // coherent under a deterministic order with fresh parses.
-  filtered.sort((a, b) => {
-    if (a.match.file !== b.match.file) return a.match.file < b.match.file ? -1 : 1;
-    if (a.match.start.line !== b.match.start.line) return a.match.start.line - b.match.start.line;
-    if (a.match.start.column !== b.match.start.column) return a.match.start.column - b.match.start.column;
-    return a.byteStart - b.byteStart;
-  });
+  filtered.sort(compareInternal);
 
   // Budgets (server-side).
-  const maxMatches = Math.min(Math.max(Math.floor(Number(params.maxMatches) || DEFAULT_MAX_MATCHES), 1), MAX_MAX_MATCHES);
-  const skip = Math.max(Math.floor(Number(params.skip) || 0), 0);
+  const { maxMatches, skip } = paginationBudgets(params.maxMatches, params.skip);
   const totalMatches = filtered.length;
   const page = filtered.slice(skip, skip + maxMatches);
   const filesWithMatches = new Set(filtered.map((im) => im.match.file)).size;
@@ -664,6 +693,83 @@ export async function runCodeSearch(
     text,
     truncated,
   };
+}
+
+// --- Snippet testing (Phase 1, §3.3): pattern vs a constructed string ---
+// The `test_match_code_rule` MCP case, in-kernel: no filesystem, no census,
+// no workspace — parse one string, run the pattern, return the same
+// normalized match shape. Kernel-only surface (the model-level tool keeps
+// its Phase 0 schema); rides the parse/pattern napi path. Synchronous by
+// construction (parse + findAll are sync napi calls on a bounded string —
+// no timeout race needed; the cell's own budget bounds it).
+
+export interface CodeSearchSnippetParams {
+  pattern: string;
+  code: string;
+  lang?: string; // alias table applies; default: ts (the house language)
+  maxMatches?: number;
+  skip?: number;
+}
+
+export interface CodeSearchSnippetResult {
+  matches: CodeSearchMatch[]; // file is "(snippet)"
+  totalMatches: number;
+  lang: string; // the resolved language the snippet was parsed as
+  truncated: boolean;
+  /** Advisory regex-shape note, present only on a zero-match (§3.2's rule
+   *  rides both paths — the engine referees; the hint fires at absence). */
+  hint?: string;
+}
+
+export function runCodeSearchOnSnippet(
+  params: CodeSearchSnippetParams,
+  signal?: AbortSignal,
+): CodeSearchSnippetResult {
+  if (signal?.aborted) throw new CodeSearchError("code_search aborted.");
+  const pattern = params.pattern;
+  if (!/[A-Za-z0-9_$]/.test(pattern.trim())) {
+    throw new CodeSearchError("pattern is empty or contains no code content.");
+  }
+  if (typeof params.code !== "string") {
+    throw new CodeSearchError("code must be a string.");
+  }
+  const langKey = (params.lang ?? "ts").toLowerCase();
+  const lang = LANGUAGE_ALIASES[langKey];
+  if (!lang) {
+    throw new CodeSearchError(
+      `language "${params.lang}" is not supported by code_search (supported: ${NAPI_LANGUAGES.join(", ")}).`,
+    );
+  }
+
+  const s = sg();
+  const root = s.parse(lang, params.code);
+  let nodes: any[];
+  try {
+    nodes = root.root().findAll(s.pattern(lang, pattern));
+  } catch (e: any) {
+    throw new CodeSearchError(`invalid pattern: ${String(e.message).slice(0, 300)}`);
+  }
+
+  const internal = collectMatches(nodes, "(snippet)", bindingSpecs(pattern));
+  internal.sort(compareInternal);
+  const { maxMatches, skip } = paginationBudgets(params.maxMatches, params.skip);
+  const totalMatches = internal.length;
+  const page = internal.slice(skip, skip + maxMatches);
+
+  const result: CodeSearchSnippetResult = {
+    matches: page.map((im) => im.match),
+    totalMatches,
+    lang,
+    truncated: totalMatches > skip + page.length,
+  };
+  // Coverage honesty, snippet-sized: there is no census here, so the only
+  // silent-failure class is a mis-language pattern — the advisory hint names
+  // the other one (regex shapes) at the exact point absence could mislead.
+  if (totalMatches === 0) {
+    const regexHint = regexShapeHint(pattern);
+    if (regexHint) result.hint = regexHint;
+  }
+  return result;
 }
 
 // --- Text projection (model-level; §3.2 rendering rules) ---

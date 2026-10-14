@@ -19,7 +19,7 @@ import { execFile } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 import { createRequire } from "module";
-import { runCodeSearch, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
+import { runCodeSearch, runCodeSearchOnSnippet, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
 import { LocalWorkspaceAdapter } from "./workspace.js";
 import type { WorkspaceAdapter } from "./workspace.js";
 
@@ -387,6 +387,70 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
       if (prev === undefined) delete process.env.PORRIMA_CODE_SEARCH_MAX_CHARS;
       else process.env.PORRIMA_CODE_SEARCH_MAX_CHARS = prev;
     }
+  });
+});
+
+describe.runIf(napiAvailable)("code_search snippet projection (Phase 1, §3.3)", () => {
+  it("tests a pattern against a constructed string — no filesystem", () => {
+    const res = runCodeSearchOnSnippet({
+      pattern: "function $NAME($$$ARGS) { $$$ }",
+      code: "function alpha(x) { return x; }\nfunction beta() {}",
+    });
+    expect(res.lang).toBe("typescript"); // the default
+    expect(res.totalMatches).toBe(2);
+    expect(res.matches[0].file).toBe("(snippet)");
+    expect(res.matches[0].metaVariables?.NAME).toBe("alpha");
+    expect(res.matches[0].start).toEqual({ line: 1, column: 1 }); // 1-based, same normalization as files
+    expect(res.matches[1].start.line).toBe(2);
+    expect(res.truncated).toBe(false);
+  });
+
+  it("honors lang, budgets, and ordering", () => {
+    const css = runCodeSearchOnSnippet({ pattern: "$SEL { $$$ }", code: ".a { color: red; }", lang: "css" });
+    expect(css.lang).toBe("css");
+    expect(css.totalMatches).toBe(1);
+
+    const paged = runCodeSearchOnSnippet({
+      pattern: "$NAME",
+      code: "const a = 1; const b = 2; const c = 3;",
+      maxMatches: 2,
+      skip: 2,
+    });
+    expect(paged.matches.length).toBe(2);
+    expect(paged.totalMatches).toBeGreaterThan(4);
+    expect(paged.truncated).toBe(true);
+    // Pagination is a slice of the deterministic full order — same comparator
+    // as the file path (line, column, byte).
+    const full = runCodeSearchOnSnippet({ pattern: "$NAME", code: "const a = 1; const b = 2; const c = 3;" });
+    expect(paged.matches).toEqual(full.matches.slice(2, 4));
+  });
+
+  it("carries the advisory regex hint only on zero-match — the engine referees", () => {
+    const absent = runCodeSearchOnSnippet({ pattern: "get[0-9]+", code: "const a = 1;" });
+    expect(absent.totalMatches).toBe(0);
+    expect(absent.hint).toMatch(/rg/);
+
+    const present = runCodeSearchOnSnippet({ pattern: "1|2", code: "const flags = 1|2;" });
+    expect(present.totalMatches).toBe(1);
+    expect(present.hint).toBeUndefined();
+  });
+
+  it("rejects unsupported languages and no-code-content patterns; garbage parses tolerantly", () => {
+    expect(() =>
+      runCodeSearchOnSnippet({ pattern: "def $F()", code: "def f(): pass", lang: "python" }),
+    ).toThrow(/not supported/);
+    expect(() => runCodeSearchOnSnippet({ pattern: ";;;", code: "x" })).toThrow(/no code content/);
+    // The engine is the referee: garbage compiles and simply matches nothing.
+    const garbage = runCodeSearchOnSnippet({ pattern: "function (unclosed", code: "const a = 1;" });
+    expect(garbage.totalMatches).toBe(0);
+  });
+
+  it("respects an aborted signal", () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(() =>
+      runCodeSearchOnSnippet({ pattern: "const $X", code: "const a = 1;" }, ac.signal),
+    ).toThrow(CodeSearchError);
   });
 });
 
