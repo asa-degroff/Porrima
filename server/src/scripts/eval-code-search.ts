@@ -65,7 +65,7 @@ const HARNESS_SYSTEM_PROMPT = [
   "You are a code-search agent in a project chat whose workspace is the root of this repository.",
   "Answer EXACTLY what the user asked — counts and file names — in your final message.",
   "Work from the files themselves using your tools.",
-  "Keep searches scoped to the path the question names. Do not modify any file.",
+  "Keep searches scoped to the path the question names. Do not create, modify, or delete any file in the workspace — if you need a scratch script, write it under /tmp.",
 ].join(" ");
 
 interface TaskDef {
