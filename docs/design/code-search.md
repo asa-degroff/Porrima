@@ -1,6 +1,9 @@
 # Code Search — structural code navigation for Porrima
 
-**Status:** Design draft (10-13). Written for coding-agent review; round-4
+**Status:** **Phase 0 IMPLEMENTED (10-13/14)** — executor, tool definition,
+budgets, gating, 20-test suite (all green), live smoke on the real repo
+(1,551 async-function matches); still dark behind `PORRIMA_CODE_SEARCH=1`.
+Design draft (10-13). Written for coding-agent review; round-4
 adoption survey folded in 10-13, corrected by a **review pass 10-13** (the
 pi-ecosystem claims re-verified against READMEs + oh-my-pi source — three
 survey claims corrected, two pi packages added; `@ast-grep/napi` slice-0 probes
@@ -396,8 +399,10 @@ summary appends "skipped files may mean the query is mis-scoped; narrow `path`
 before concluding absence." Absence-with-unparsed-corpus is exactly where the
 model over-concludes. (oh-my-pi additionally marks empty results `useless()` so
 compaction drops them; the Porrima analogue: a zero-match tool row is
-retention-fodder, never signal.) Invalid patterns are tool errors carrying
-ast-grep's message verbatim (including its suggestion when one is printed).
+retention-fodder, never signal.) Invalid patterns are tool errors generated
+by the executor's own validator (§3.2 pre-validation) — the engine itself
+never throws on bad syntax (tree-sitter's error tolerance carries garbage
+through, and it matches nothing).
 
 **Ordering and rendering (review-pass additions).** Matches sort by
 `(file, start.line, start.column, byteOffset)` before truncation — a pinned
@@ -429,9 +434,16 @@ to learn to choose (§4).
 **Description** carries a compact pattern cheatsheet plus three worked
 examples — the on-ramp for pattern syntax lives where the tool is, because
 the failure mode (cost #1) is authoring, not calling. Cheatsheet content
-(inferred, to be validated against 0.50.0 in slice 0):
-- `fn $NAME($$$ARGS)` / `function $NAME($ARG)` — structure with metavariables
-- `$VAR = await $CALL()` — single metavariables bind; `$$$NAME` binds *lists*
+(**validated against 0.50.0 in slice 0, 10-13/14** — the two inferred lines
+below were corrected):
+- `function $NAME($$$ARGS) { $$$ }` — the complete-node workhorse form.
+  **Patterns must be complete nodes**: a body-less function pattern
+  (`function $NAME($$$ARGS)`) matches NOTHING — the inferred `fn $NAME($$$ARGS)`
+  / `function $NAME($ARG)` lines were wrong on this point. The partial
+  prefix `function $NAME` (trailing ERROR node) is the workhorse instead —
+  it matches ANY function definition (typed, generic, async).
+- `await $CALL($$$ARGS)` — single metavariables bind; `$$$NAME` binds *lists*
+  (the inferred `$VAR = await $CALL()` statement form fails to match).
 - plain text with no metavariables is a **literal** match
 - the classic trap (verified via `--debug-query`): `$` is *not* a
   multi-element metavariable — it parses as a bare identifier named `$`.
@@ -441,12 +453,26 @@ the failure mode (cost #1) is authoring, not calling. Cheatsheet content
 4) guards against regex-shaped patterns *before* the call — pi-ast-grep
 detects them and nudges toward grep, the Hermes wrapper validates offline and
 never invokes `sg` on a regex-shaped pattern, the skills carry anti-pattern
-tables. The executor does the cheap half mechanically: the napi `pattern()`
-compile fails on invalid patterns (the error is a tool error carrying
-ast-grep's message), and a small heuristic rejects the classic regex shapes
-(`\w`, `\d`, `.*`, `|`, `[a-z]`) with the hint *"ast-grep patterns are code,
-not regex — for text search use `rg` via bash"* — saving a round-trip and
-pointing the model at the right tool instead of a confusing empty result.
+tables. The executor does the mechanical half in three layers, all
+calibrated against the CLI referee (probed 10-13/14):
+1. **regex-shape heuristic** — rejects the classic regex shapes (`\w`, `\d`,
+   `.*`, `|`, `[a-z]`) with the hint *"ast-grep patterns are code, not regex
+   — for text search use `rg` via bash"* — saving a round-trip and pointing
+   the model at the right tool instead of a confusing empty result.
+2. **trivial class** — no code content at all (empty, bare punctuation;
+   mirrors the CLI's exit-8 "Cannot parse query"). Hard tool error.
+3. **foreign-token rule** — the "written for a different language" class.
+   `pattern()` NEVER throws on bad syntax (tree-sitter parses tolerantly, so
+   ERROR-node presence is not a validity signal — `function (unclosed` is
+   100% ERROR yet must stay a clean 0-match, and `function $NAME` carries an
+   ERROR wrapper yet is the flagship matching pattern). The signal: a
+   concrete token that is a generic name in the target language but a
+   KEYWORD of another supported language, decided by a single-token parse
+   (keywords are anonymous nodes — `sg.kind()` only sees named kinds, so the
+   parse is the referee). Explicit `lang`: hard tool error naming the
+   offending token; auto-detect: per-file parse-error entry (file skipped,
+   the rest of the corpus still scanned — which is what makes the qualified
+   0-match phrase fire).
 
 ### 3.3 The kernel projection — Phase 1
 
@@ -577,7 +603,7 @@ list and follows as soon as the executor exists.
 
 | phase | scope | gates |
 |---|---|---|
-| **0** | model-level `code_search`: executor (napi, local), tool definition, budgets, gating, tests (napi ignore semantics **resolved 10-13, §3.1** — keep as a regression case; remaining pins: `findInFiles` return-count semantics, napi lang-string name table, `globs` post-discovery filtering + explicit-path precedence, the `(file, line, col, byte)` ordering comparator, multi-line rendering, invalid-pattern error shape, qualified 0-match value, budget stops) | dark; `PORRIMA_CODE_SEARCH=1` to flip |
+| **0** | model-level `code_search`: executor (napi, local), tool definition, budgets, gating, tests — **IMPLEMENTED + VERIFIED 10-13/14** (20/20 suite; every pin closed: napi ignore semantics, `findInFiles` resolves to a file count, the napi's five-language table, `globs` post-discovery filtering + explicit-path precedence, the `(file, line, col, byte)` ordering comparator, multi-line rendering, the error surface (trivial class + foreign-token rule), the qualified 0-match value, budget stops; live smoke on the real repo) | dark; `PORRIMA_CODE_SEARCH=1` to flip |
 | **1** | kernel dispatcher row + JSON projection + snippet-testing path (`pattern`/`parseFiles`) | rides the live kernel flag; one exposure-list line |
 | **2** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern) |
 | **3** | `code_outline` — its own design section, kernel-first | deferred; boundary named in §3.4 |
