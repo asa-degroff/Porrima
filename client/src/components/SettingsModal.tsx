@@ -25,7 +25,7 @@ import { getPersona, updatePersona } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, Theme, ThemePreset, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, CustomTheme, InferenceModel, Settings, Theme, ThemePreset, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerRadius, ActivityShape, ThinkingDisplayMode, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -273,6 +273,12 @@ const IMAGE_CAP_OPTIONS: Array<{ id: ImageCapPreset; label: string; description:
   { id: "maximum", label: "Maximum · 3.2 MP", description: "Large images for detail" },
 ];
 
+const THINKING_DISPLAY_OPTIONS: Array<{ id: ThinkingDisplayMode; label: string; description: string }> = [
+  { id: "start", label: "Top", description: "All thinking is shown above the message output." },
+  { id: "end", label: "Bottom", description: "All thinking is shown below the message output." },
+  { id: "interleaved", label: "Interleaved", description: "Thinking appears inline, in the order it occurred." },
+];
+
 interface RetrievalPresetValues {
   rerankerTimeoutMs: number;
   memoryContextSearchQueryChars: number;
@@ -355,6 +361,10 @@ function coerceRetrievalDepthProfile(profile: Settings["retrievalDepthProfile"])
 
 function coerceImageCapPreset(preset: Settings["imageCapPreset"]): ImageCapPreset {
   return IMAGE_CAP_OPTIONS.some((option) => option.id === preset) ? preset! : "standard";
+}
+
+function coerceThinkingDisplayMode(mode: Settings["thinkingDisplay"]): ThinkingDisplayMode {
+  return THINKING_DISPLAY_OPTIONS.some((option) => option.id === mode) ? mode! : "start";
 }
 
 function RetrievalRange({
@@ -835,6 +845,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
   const [surfaceDepth, setSurfaceDepth] = useState<"flat" | "beveled">(settings.surfaceDepth || "flat");
+  const [thinkingDisplay, setThinkingDisplay] = useState<ThinkingDisplayMode>(coerceThinkingDisplayMode(settings.thinkingDisplay));
   const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [activityHue, setActivityHue] = useState<number>(settings.activityHue ?? 38);
   const [activitySaturation, setActivitySaturation] = useState<number>(settings.activitySaturation ?? 85);
@@ -2201,6 +2212,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       mouseWarp,
       cornerRadius,
       surfaceDepth,
+      thinkingDisplay,
       activityShape,
       activityHue,
       activitySaturation,
@@ -4428,6 +4440,31 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 onChange={() => setOpaqueBubbles(!opaqueBubbles)}
                 accentColor="blue"
               />
+            </div>
+          </div>
+
+          {/* Thinking Display */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-white/60">Thinking Blocks</label>
+              <p className="text-white/30 text-xs mt-0.5">
+                {THINKING_DISPLAY_OPTIONS.find((option) => option.id === thinkingDisplay)?.description}
+              </p>
+            </div>
+            <div className="flex gap-2" role="group" aria-label="Thinking block order">
+              {THINKING_DISPLAY_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  aria-pressed={thinkingDisplay === opt.id}
+                  onClick={() => setThinkingDisplay(opt.id)}
+                  className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable ${
+                    thinkingDisplay === opt.id ? "border-white/30 bg-white/5" : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 

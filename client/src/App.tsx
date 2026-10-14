@@ -1678,6 +1678,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
         modelProgress={modelProgress}
         inferenceActivityPhase={inferenceActivityPhase}
         liveBrowserFrame={liveBrowserFrame}
+        thinkingDisplay={settings.thinkingDisplay ?? "start"}
         turnQueueInfo={turnQueueInfo}
         hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}

@@ -86,12 +86,17 @@ export interface ChatToolResult {
 /** A segment represents one unit of agent output in chronological order */
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "visual" | "compaction_marker";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "visual" | "compaction_marker" | "thinking";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
   visual?: InlineVisual;
+  /** Client-only: per-block thinking duration. "thinking" segments are
+   *  synthesized by ChatView for the interleaved thinking-display mode and
+   *  are never persisted or replayed — the server's segment arrays contain
+   *  no thinking entries (thinking lives on the message row as `thinking`). */
+  thinkingDurationMs?: number;
   /** Client-only: live tool status during streaming (not persisted) */
   liveStatus?: { name: string; status: "running" | "done" | "error"; result?: string };
   /** Client-only: latest in-flight output for a running tool (bash,
@@ -230,6 +235,12 @@ export interface ChatMessage {
   _toolLoopId?: string;
   /** True when this row is one tool-use iteration, not the final assistant answer. */
   _toolLoopFragment?: boolean;
+  /** Client-only (interleaved thinking display): index into this display
+   *  message's folded `segments` array where the in-flight fragment's raw
+   *  segments begin. Set by ChatView's fold; used to split the live bubble so
+   *  streaming thinking renders at its real position between committed
+   *  segments and live output. Never persisted. */
+  _interleavedLiveStart?: number;
   /** pi-ai provider identity used when this assistant row was generated. */
   _provider?: string;
   _api?: string;
@@ -510,6 +521,9 @@ export interface ThemePreset {
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper" | "linen";
 export type CornerRadius = "tiny" | "small" | "default";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
+/** Where thinking blocks render within an assistant bubble. Purely a display
+ *  preference — persisted with the settings blob, never consumed server-side. */
+export type ThinkingDisplayMode = "start" | "end" | "interleaved";
 
 export type WebSearchProvider = "brave" | "exa" | "tavily";
 export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
@@ -538,6 +552,8 @@ export interface Settings {
   mouseWarp?: boolean;
   cornerRadius?: CornerRadius;
   surfaceDepth?: "flat" | "beveled";
+  /** Where thinking blocks appear in assistant bubbles (display-only). */
+  thinkingDisplay?: ThinkingDisplayMode;
   activityShape?: ActivityShape;
   activityHue?: number;
   activitySaturation?: number;

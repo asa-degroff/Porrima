@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
-import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, ReadAloudHandler } from "../types";
+import type { Artifact, ChatMessage, ImageAttachment, InferenceActivityPhase, ReadAloudHandler, ThinkingDisplayMode } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -131,7 +131,7 @@ function ReadAloudButton({
   );
 }
 
-function isPlaceholderEllipsis(text: string | undefined): boolean {
+export function isPlaceholderEllipsis(text: string | undefined): boolean {
   if (!text) return false;
   const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
   return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
@@ -146,6 +146,9 @@ function segmentKey(
       return `tool-call-${segment.toolCall?.id ?? segment.seq}`;
     case "tool_result":
       return `tool-result-${segment.toolResult?.toolCallId ?? segment.seq}`;
+    case "thinking":
+      // Client-only synthetic segment (interleaved thinking display).
+      return `thinking-${segment.seq ?? fallbackIndex}`;
     case "artifact":
       return `artifact-${segment.artifact?.id ?? segment.seq}`;
     case "visual":
@@ -190,6 +193,8 @@ interface Props {
   inferenceActivityPhase?: InferenceActivityPhase | null;
   chatId?: string;
   onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
+  /** Where thinking blocks render in the bubble (assistant messages). */
+  thinkingDisplay?: ThinkingDisplayMode;
 }
 
 /**
@@ -269,6 +274,7 @@ export const MessageBubble = memo(function MessageBubble({
   inferenceActivityPhase,
   chatId,
   onArtifactRuntimeError,
+  thinkingDisplay = "start",
 }: Props) {
   const activityShape = useActivityShape();
   const isUser = message.role === "user";
@@ -441,6 +447,41 @@ export const MessageBubble = memo(function MessageBubble({
 
   // Build output segments - use ordered segments if available, otherwise separate arrays
   const renderSegments = !isUser && message.segments && message.segments.length > 0;
+
+  // Thinking placement per the `thinkingDisplay` setting:
+  // - "start": the standalone block leads the bubble (historical behavior).
+  // - "end": the block trails the output.
+  // - "interleaved": ChatView folds each committed fragment's thinking into
+  //   the ordered segments (clearing `message.thinking`), and the live
+  //   streamingThinking renders between the committed fold and the in-flight
+  //   fragment's raw segments (see `_interleavedLiveStart` below). Messages
+  //   without segments have nothing to interleave with, so they fall back to
+  //   the leading position.
+  const thinkingAtTop =
+    thinkingDisplay === "start" || (thinkingDisplay === "interleaved" && !renderSegments);
+  const interleavedLiveStart = message._interleavedLiveStart ?? 0;
+
+  const thinkingSection = (
+    <>
+      {visibleThinkingText && (
+        <ThinkingBlock
+          thinking={visibleThinkingText}
+          isStreaming={showStreaming}
+          thinkingDurationMs={message.thinkingDurationMs}
+          thinkingActive={showStreaming ? streamingThinkingActive : false}
+          thinkingAccumulatedMs={showStreaming ? (streamingThinkingAccumulatedMs ?? 0) : 0}
+          thinkingLastStartRef={streamingThinkingLastStartRef}
+        />
+      )}
+
+      {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
+      {!renderSegments && !message.content && visibleThinkingText && !showStreaming && (
+        <div className="text-sm leading-relaxed mt-2 text-white/70">
+          {visibleThinkingText}
+        </div>
+      )}
+    </>
+  );
 
   // Tool calls persisted without a backing segment. The server deliberately
   // skips the tool_call segment for ask_user (its dedicated ask_user SSE
@@ -686,35 +727,47 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
             ) : (
               <>
-                {visibleThinkingText && (
-                  <ThinkingBlock
-                    thinking={visibleThinkingText}
-                    isStreaming={showStreaming}
-                    thinkingDurationMs={message.thinkingDurationMs}
-                    thinkingActive={showStreaming ? streamingThinkingActive : false}
-                    thinkingAccumulatedMs={showStreaming ? (streamingThinkingAccumulatedMs ?? 0) : 0}
-                    thinkingLastStartRef={streamingThinkingLastStartRef}
-                  />
-                )}
-
-                {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
-                {!renderSegments && !message.content && visibleThinkingText && !showStreaming && (
-                  <div className="text-sm leading-relaxed mt-2 text-white/70">
-                    {visibleThinkingText}
-                  </div>
-                )}
+                {thinkingAtTop && thinkingSection}
 
                 {renderSegments ? (
                   // Interleaved segments in chronological order (streaming + persisted)
                   <>
-                    <MessageSegments
-                      segments={message.segments}
-                      showStreaming={showStreaming}
-                      isThinkingStreaming={isThinkingStreaming}
-                      streamingSegmentIndex={streamingSegmentIndex ?? null}
-                      chatId={chatId}
-                      onArtifactRuntimeError={onArtifactRuntimeError}
-                    />
+                    {thinkingDisplay === "interleaved" && showStreaming ? (
+                      // Split at the fold marker (ChatView sets
+                      // `_interleavedLiveStart`): committed fragments render
+                      // with their thinking folded in, the live fragment's
+                      // thinking streams next, then its not-yet-committed
+                      // segments. Streaming segment indices restart within
+                      // the live slice, matching the raw `streamingSegmentIndex`.
+                      <>
+                        <MessageSegments
+                          segments={(message.segments || []).slice(0, interleavedLiveStart)}
+                          showStreaming={false}
+                          isThinkingStreaming={false}
+                          streamingSegmentIndex={null}
+                          chatId={chatId}
+                          onArtifactRuntimeError={onArtifactRuntimeError}
+                        />
+                        {thinkingSection}
+                        <MessageSegments
+                          segments={(message.segments || []).slice(interleavedLiveStart)}
+                          showStreaming={showStreaming}
+                          isThinkingStreaming={isThinkingStreaming}
+                          streamingSegmentIndex={streamingSegmentIndex ?? null}
+                          chatId={chatId}
+                          onArtifactRuntimeError={onArtifactRuntimeError}
+                        />
+                      </>
+                    ) : (
+                      <MessageSegments
+                        segments={message.segments}
+                        showStreaming={showStreaming}
+                        isThinkingStreaming={isThinkingStreaming}
+                        streamingSegmentIndex={streamingSegmentIndex ?? null}
+                        chatId={chatId}
+                        onArtifactRuntimeError={onArtifactRuntimeError}
+                      />
+                    )}
                     {unsegmentedToolCalls.length > 0 && (
                       // Settled like the legacy list: these calls exist only on
                       // committed rows (the live tail carries segments, not
@@ -759,6 +812,8 @@ export const MessageBubble = memo(function MessageBubble({
                     )}
                   </>
                 )}
+
+                {!thinkingAtTop && !(thinkingDisplay === "interleaved" && renderSegments) && thinkingSection}
               </>
             )}
 
@@ -1197,6 +1252,16 @@ function SegmentRenderer({
   const { isPinned, unpin } = usePinnedItem();
   const isDesktop = useIsDesktop();
   switch (segment.type) {
+    case "thinking": {
+      if (isPlaceholderEllipsis(segment.content)) return null;
+      return segment.content ? (
+        <ThinkingBlock
+          thinking={segment.content}
+          isStreaming={false}
+          thinkingDurationMs={segment.thinkingDurationMs}
+        />
+      ) : null;
+    }
     case "text": {
       if (isPlaceholderEllipsis(segment.content)) return null;
       // Only show cursor on the actively streaming text segment

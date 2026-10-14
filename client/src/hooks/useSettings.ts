@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS: Settings = {
   globalProjectScoreMultiplier: 1.0,
   retrievalDepthProfile: "balanced",
   rerankerTimeoutMs: 25_000,
+  thinkingDisplay: "start",
 };
 
 export function useSettings() {

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, BrowserFrameEvent, ChatMessage, ChatType, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler } from "../types";
+import type { Artifact, BrowserFrameEvent, ChatMessage, ChatType, InferenceActivityPhase, MessageSegment, MessageUsage, ModelProgress, InferenceModel, ReadAloudHandler, ThinkingDisplayMode } from "../types";
 import type { ArtifactRuntimeErrorReport, LlmRequestLogEvent, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchSkills, fetchBrowserStatus } from "../api/client";
 import { RequestViewerModal } from "./RequestViewerModal";
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble, isPlaceholderEllipsis } from "./MessageBubble";
 import { MidTurnCompactionIndicator } from "./CompactionIndicator";
 import { CrossChatPostCard } from "./CrossChatPostCard";
 import { ReminderCard } from "./ReminderCard";
@@ -196,7 +196,62 @@ function mergeToolLoopMessages(group: ChatMessage[]): ChatMessage {
   };
 }
 
-function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
+/**
+ * Interleaved thinking display: fold each tool-loop fragment's committed
+ * `thinking` string into the ordered segments array at its true position —
+ * a synthetic `thinking` segment ahead of that fragment's text/tool output.
+ * This is exact for the current provider convention, where all
+ * `reasoning_content` of one LLM response merges into a single thinking block
+ * that precedes that fragment's visible output; thinking after a tool result
+ * belongs to the next fragment row. `message.thinking` is cleared so the
+ * bubble's standalone block only ever carries live streaming thinking.
+ *
+ * Returns the merged message unchanged when the group has no raw segments at
+ * all (legacy thinking-only rows), preserving the leading-block/text fallback
+ * rendering. Rows are not re-sequenced: synthetic segments use a negative
+ * per-fragment seq (key-namespaced by `segmentKey`) and real segments keep
+ * their stored seq so React keys stay stable while the live tail grows.
+ */
+function foldThinkingIntoSegments(group: ChatMessage[]): ChatMessage {
+  const realSegments = group.flatMap((m) => m.segments || []);
+  const plain = group.length === 1 ? group[0] : mergeToolLoopMessages(group);
+  if (realSegments.length === 0) return plain;
+
+  const segments: MessageSegment[] = [];
+  let liveStart = 0;
+  group.forEach((m, fi) => {
+    if (m.thinking && !isPlaceholderEllipsis(m.thinking)) {
+      segments.push({
+        seq: -(fi + 1),
+        type: "thinking",
+        content: m.thinking,
+        thinkingDurationMs: m.thinkingDurationMs,
+      });
+    }
+    if (fi === group.length - 1) liveStart = segments.length;
+    if (m.segments) segments.push(...m.segments);
+  });
+
+  return {
+    ...mergeToolLoopMessages(group),
+    thinking: undefined,
+    thinkingDurationMs: undefined,
+    segments,
+    _interleavedLiveStart: liveStart,
+  };
+}
+
+/** Build the display message for one assistant group (1..N fragment rows). */
+function projectAssistantGroup(group: ChatMessage[], interleavedThinking: boolean): ChatMessage {
+  const hasCommittedThinking = group.some(
+    (m) => !!m.thinking && !isPlaceholderEllipsis(m.thinking)
+  );
+  if (interleavedThinking && hasCommittedThinking) return foldThinkingIntoSegments(group);
+  return group.length === 1 ? group[0] : mergeToolLoopMessages(group);
+}
+
+function buildDisplayMessages(messages: ChatMessage[], thinkingDisplay: ThinkingDisplayMode): DisplayMessage[] {
+  const interleavedThinking = thinkingDisplay === "interleaved";
   const display: DisplayMessage[] = [];
   let i = 0;
 
@@ -247,12 +302,14 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
         i++;
       }
 
-      const streamingSegmentOffset = group
-        .slice(0, -1)
-        .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
+      const streamingSegmentOffset = interleavedThinking
+        ? 0
+        : group
+            .slice(0, -1)
+            .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
 
       display.push({
-        message: group.length === 1 ? msg : mergeToolLoopMessages(group),
+        message: projectAssistantGroup(group, interleavedThinking),
         localStartIdx: groupStart,
         localEndIdx: groupEnd,
         streamingSegmentOffset,
@@ -281,12 +338,14 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
         i++;
       }
 
-      const streamingSegmentOffset = group
-        .slice(0, -1)
-        .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
+      const streamingSegmentOffset = interleavedThinking
+        ? 0
+        : group
+            .slice(0, -1)
+            .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
 
       display.push({
-        message: group.length === 1 ? msg : mergeToolLoopMessages(group),
+        message: projectAssistantGroup(group, interleavedThinking),
         localStartIdx: groupStart,
         localEndIdx: groupEnd,
         streamingSegmentOffset,
@@ -295,7 +354,7 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
     }
 
     display.push({
-      message: msg,
+      message: msg.role === "assistant" ? projectAssistantGroup([msg], interleavedThinking) : msg,
       localStartIdx: i,
       localEndIdx: i,
       streamingSegmentOffset: 0,
@@ -371,6 +430,8 @@ interface Props {
   headerImageEnabled?: boolean;
   headerImageId?: string;
   autoFocusInput?: boolean;
+  /** Where thinking blocks render in assistant bubbles (from settings). */
+  thinkingDisplay?: ThinkingDisplayMode;
   /** Latest `llm_request_start`/`llm_request_end` SSE event — forwarded to
    *  the request viewer so its list appends rows live and the expanded
    *  entry refreshes when its own request resolves. */
@@ -437,6 +498,7 @@ export function ChatView({
   headerImageId,
   autoFocusInput,
   lastRequestLogEvent = null,
+  thinkingDisplay = "start",
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -466,7 +528,10 @@ export function ChatView({
   // Positioned ancestor for the browser PiP — the viewer clamps its
   // movable geometry against this wrapper's live bounds.
   const messagesAreaRef = useRef<HTMLDivElement>(null);
-  const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
+  const displayMessages = useMemo(
+    () => buildDisplayMessages(messages, thinkingDisplay),
+    [messages, thinkingDisplay]
+  );
   // Live browser view (docs/design/browser-observability.md): prefer the newest
   // live frame from the stream (Phase 2), fall back to the latest screenshot
   // derived from message data (covers page loads and idle chats).
@@ -1064,6 +1129,7 @@ export function ChatView({
                               streamingSegmentIndex={adjustedStreamingSegmentIndex}
                               showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
                               inferenceActivityPhase={isLast ? inferenceActivityPhase : null}
+                              thinkingDisplay={thinkingDisplay}
                               onReadAloud={ttsEnabled ? onReadAloud : undefined}
                               isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
                               chatId={chatId || undefined}
