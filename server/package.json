@@ -21,6 +21,7 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",
+    "ignore": "^7.0.12",
     "linkedom": "^0.18.12",
     "minimatch": "^10.2.6",
     "puppeteer-core": "^25.4.0",

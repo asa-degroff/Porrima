@@ -1,61 +1,56 @@
 /**
  * Code search — structural code navigation via ast-grep.
- *
- * docs/design/code-search.md (Phase 0 — model-level tool; Phase 1 adds the
- * kernel projection over this same executor).
+ * Design: docs/design/code_search (§3); Phase 0 is the model-level tool, the
+ * kernel projection rides this same executor in Phase 1.
  *
  * Execution: in-process `@ast-grep/napi` (version-pinned in server/package.json)
  * — no subprocess, no shell-quoting surface. Local workspaces only (Phase 0);
  * the remote carve-out (adapter-read + in-process parse) is Phase 2.
  *
- * Runtime-pinned (probed 10-13 against @ast-grep/napi@0.50.0, this machine):
- * - `sg.Lang` is a compile-side enum, empty at runtime — language arguments
- *   are plain strings, case-insensitive.
- * - **The napi supports exactly FIVE languages in 0.50.0**: typescript, tsx,
- *   javascript (jsx alias), html, css. `parse("python", …)` throws
- *   "python is not supported in napi"; `parseFiles` SILENTLY SKIPS files whose
- *   extension infers an unsupported language (no callback, no error). The CLI
- *   supports 28 languages (reference/languages) — the broader table applies to
- *   the CLI fallback path, not this executor.
- * - Match nodes carry no file path — it lives at `node.getRoot().filename()`
- *   (absolute when the scan scope is absolute; relative to CWD otherwise).
- * - `range()` is 0-based; the model-facing text is 1-based (CLI semantics).
- * - `pattern()` NEVER throws on bad syntax — tree-sitter error tolerance
- *   carries garbage patterns through and they match nothing. The CLI's
- *   referee behavior (probed 10-13): `;;;` → exit 8 "Cannot parse query";
- *   `function (unclosed` → WARNING + 0 matches; `function $NAME` (a partial
- *   pattern — it parses with a trailing ERROR node) → ACCEPTED, matches.
- *   The executor mirrors this: it rejects only the empty/trivial class (no
- *   code content), and `foreignTokensIn` catches the "not this language at
- *   all" class (concrete tokens that are keywords of another supported
- *   language) — explicit lang: a hard error; auto-detect: a per-file
- *   parse-error entry, other files still match.
+ * Engine facts this executor is written against (@ast-grep/napi 0.50.0):
+ * - `sg.Lang` is a compile-side enum, empty at runtime — language arguments are
+ *   plain strings.
+ * - The napi bundle supports five languages: typescript, tsx, javascript (jsx
+ *   alias), html, css. `findInFiles`/`parseFiles` silently skip files whose
+ *   extension infers anything else; the CLI covers more. Coverage is therefore
+ *   the executor's job: a scope census (ignore-aware walk) reports every file
+ *   the engine cannot visit, so a zero-match result is never silently partial.
+ * - `pattern()` never throws: tree-sitter parses tolerantly, so garbage
+ *   patterns compile and match nothing. Static validity is undecidable (any
+ *   token parses as an identifier in some grammar) — pre-validation is the
+ *   regex-shape heuristic and the no-code-content class only; everything else
+ *   gets a truthful zero-match.
+ * - Match nodes carry no file path; it lives at `node.getRoot().filename()`
+ *   (absolute when the scan scope is absolute).
+ * - `range()` is 0-based; the model-facing text is 1-based.
+ * - Patterns must be complete nodes: `function $NAME($$$ARGS)` (no body)
+ *   matches nothing; the partial prefix `function $NAME` matches every
+ *   function definition (typed, generic, async).
  * - Multi-element bindings include separator nodes; `join("")` reconstructs
- *   the original source span. `getMatch(name)` returns the single-binding
- *   node; `getMultipleMatches(name)` the multi-element list.
- * - `findInFiles`/`parseFiles` honor `.gitignore` (same ignore crate as the
- *   CLI); explicitly-requested paths override ignores.
- * - The callback fires once per file WITH matches (or per error); the promise
- *   resolves to a file count. There is no files-searched figure at this
- *   boundary — the summary counts files-with-matches.
- * - tree-sitter is error-tolerant: broken files still parse (ERROR nodes),
- *   invalid UTF-8 files are skipped silently — the zero-match scope note and
- *   the parse-error note cover both.
- * - ast-grep patterns must be COMPLETE syntax units: `function $NAME($$$ARGS)
- *   { $$$ }` matches; `function $NAME($$$ARGS)` (no body) matches nothing.
- * - `context` is NOT in the Phase 0 schema (open Q1 unsettled — an
- *   unimplemented parameter would be a trap; the index-not-payload rendering
- *   stands on its own).
+ *   the source span. `getMatch(name)` returns the single-binding node,
+ *   `getMultipleMatches(name)` the list.
+ * - `findInFiles`/`parseFiles` honor `.gitignore` (the same ignore crate as
+ *   the CLI); explicitly requested paths override ignores.
+ * - The `findInFiles` callback fires once per file with matches (or error);
+ *   `parseFiles` fires once per visited file. Neither reports a files-scanned
+ *   figure — the scope census supplies it. And callbacks can still be in the
+ *   libuv queue when the promise resolves: the resolved number is how many
+ *   files WILL deliver. Reading early is silently partial (observed: full,
+ *   short, and zero-match deliveries for one identical query) — the executor
+ *   drains to the resolved count before returning.
+ * - `context` is not in the Phase 0 schema: the index-not-payload rendering
+ *   stands on its own (docs §3.2).
  */
 import { createRequire } from "module";
-import { access } from "fs/promises";
-import { isAbsolute, relative, resolve } from "path";
+import { access, readdir, readFile, stat } from "fs/promises";
+import { isAbsolute, join, relative, resolve } from "path";
 import { minimatch } from "minimatch";
+import ignore, { type Ignore } from "ignore";
 import type { WorkspaceAdapter } from "./workspace.js";
 
-// The napi package is a native addon — load it lazily and only when the flag
-// is on, so the dark path never touches it (and the musl/arm64 hosts without
-// prebuilds (§5 Risk 3) don't pay at import time).
+// The napi is a native addon — load lazily, only when the flag is on, so the
+// dark path never touches it and hosts without a prebuild (§5 Risk 3) pay
+// nothing at import time.
 const requireNapi = createRequire(import.meta.url);
 let napiModule: any | null = null;
 function sg(): any {
@@ -67,13 +62,11 @@ export function codeSearchEnabled(): boolean {
   return process.env.PORRIMA_CODE_SEARCH === "1";
 }
 
-// --- Languages: the napi's actual support set (verified 10-13) ---
+// --- Languages: the napi's actual support set ---
 
 export const NAPI_LANGUAGES = ["typescript", "tsx", "javascript", "html", "css"] as const;
 
-// Alias → canonical napi language, case-insensitive lookup. The CLI's 28-
-// language table (ast-grep.github.io/reference/languages) does NOT apply here
-// — see the header pin.
+// Extension/alias → canonical napi language, case-insensitive.
 export const LANGUAGE_ALIASES: Record<string, string> = {
   ts: "typescript",
   typescript: "typescript",
@@ -101,28 +94,36 @@ export interface CodeSearchParams {
   globs?: string[]; // gitignore-glob semantics; "!" prefix excludes; later wins
   lang?: string; // napi language alias; default = auto-detect per file
   maxMatches?: number;
-  skip?: number; // pagination (open question 8)
+  skip?: number; // pagination
+}
+
+export interface SkippedFile {
+  file: string; // workspace-relative
+  reason: string;
 }
 
 export interface CodeSearchResult {
   matches: CodeSearchMatch[]; // the page returned (after skip + maxMatches)
   totalMatches: number; // all matches found (pre-pagination)
   filesWithMatches: number;
+  skipped: SkippedFile[]; // capped list — scan errors + files the engine cannot visit
+  skippedTotal: number;
+  unscanned: Record<string, number>; // extension → count of files outside the language set
+  scannedFiles: number; // files in scope the engine can visit (census; lower bound when partial)
   text: string; // model-level text projection
-  parseErrors: { file: string; message: string }[]; // capped list
-  parseErrorsTotal: number;
   truncated: boolean;
 }
 
 export class CodeSearchError extends Error {}
 
-// --- Budgets (server-side — §4.9: the caller cannot be trusted to count) ---
+// --- Budgets (server-side: the caller cannot be trusted to count) ---
 
 const DEFAULT_MAX_MATCHES = 50;
 const MAX_MAX_MATCHES = 1000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_CHARS = 20_000;
-const PARSE_ERROR_LIST_CAP = 10;
+const SKIPPED_LIST_CAP = 10;
+const DELIVERY_GRACE_MS = 10_000; // delivery barrier cap after the scan resolves
 const BINDING_RENDER_CAP = 60;
 const LINE_RENDER_CAP = 200;
 
@@ -138,92 +139,19 @@ function timeoutFromEnv(): number {
 // --- Pattern pre-validation ---
 
 /**
- * The cheap half of the guard (§3.2): reject classic regex shapes BEFORE
- * calling the engine, with a hint toward rg. Deliberately narrow — anchors
- * are excluded ($NAME is a metavariable, a stray ^ is caught downstream) —
- * the ERROR-node walk is the real validator; this heuristic just saves a
- * round-trip and points the model at the right tool.
+ * The regex-shape guard (§3.2): reject classic regex shapes BEFORE calling the
+ * engine, with a hint toward rg. Deliberately narrow and deliberately
+ * space-aware: `\S\|\S` rejects `foo|bar` (regex union — the common authoring
+ * error) while `a | b` — valid code (bitwise-or, TS union types) — passes. The
+ * engine referee is the real validator for everything else (garbage parses
+ * tolerantly and matches nothing, a truthful absence); this saves a round-trip
+ * and points the model at the right tool.
  */
-const REGEX_SHAPE_RE = /\\[wdsb]|\.\\?\*|\||\[[^\]]*-[^\]]*\]/;
+const REGEX_SHAPE_RE = /\\[wdsb]|\.\\?\*|\S\|\S|\[[^\]]*-[^\]]*\]/;
 export function regexShapeHint(pattern: string): string | null {
   return REGEX_SHAPE_RE.test(pattern)
     ? "ast-grep patterns are code, not regex — for text search use `rg` via bash."
     : null;
-}
-
-// Leaf kinds the grammar had no specific keyword slot for — a concrete token
-// parsed in one of these is a plain name, not a keyword of THAT language.
-const IDENTIFIERISH_KINDS = new Set([
-  "identifier",
-  "type_identifier",
-  "property_identifier",
-  "tag_name",
-]);
-
-/**
- * The real validator the napi lacks, calibrated against the CLI's referee
- * behavior AND the probe trees (10-13). ERROR-node presence is NOT the
- * signal — `function $NAME` parses in TS as one ERROR wrapper and is the
- * flagship matching pattern; `function (unclosed` is 100% ERROR and must
- * stay a clean 0-match; `interface $NAME { $$ }` parses in TS with zero
- * ERRORs. The signal is KEYWORD FOREIGNNESS: a concrete (non-metavariable)
- * token that is a named keyword of another napi-supported language but
- * gets demoted to a generic identifier in `lang` — the pattern was written
- * for a different language. Pinned cases:
- *   `function $NAME` in css        → identifier "function" (TS keyword) → foreign
- *   `interface $NAME { $$ }` css  → tag_name "interface" (TS keyword)  → foreign
- *   `function $NAME` in ts         → "function" is an anonymous TS keyword → not foreign
- *   `function (unclosed` in ts     → "unclosed" is a name in no language → not foreign
- * Returns the offending tokens (empty = valid in `lang`).
- */
-export function foreignTokensIn(lang: string, pattern: string): string[] {
-  const s = sg();
-  let root: any;
-  try {
-    root = s.parse(lang, pattern).root();
-  } catch {
-    return [];
-  }
-  const found: string[] = [];
-  const seen = new Set<string>();
-  const stack: any[] = [root];
-  while (stack.length > 0) {
-    const n = stack.pop();
-    let children: any[] = [];
-    try {
-      children = n.children() ?? [];
-    } catch {
-      continue;
-    }
-    if (children.length > 0) {
-      for (const c of children) stack.push(c);
-      continue;
-    }
-    // Leaf: does this concrete name belong to another supported language?
-    if (!IDENTIFIERISH_KINDS.has(String(n.kind()))) continue;
-    let text = "";
-    try {
-      text = String(n.text()).trim();
-    } catch {
-      continue;
-    }
-    if (!text || text.startsWith("$") || seen.has(text)) continue;
-    for (const other of NAPI_LANGUAGES) {
-      if (other === lang) continue;
-      let kind = 0;
-      try {
-        kind = s.kind(other, text as never);
-      } catch {
-        kind = 0; // not a named token in that language
-      }
-      if (kind !== 0) {
-        seen.add(text);
-        found.push(text);
-        break;
-      }
-    }
-  }
-  return found;
 }
 
 // Binding names in a pattern: $NAME (single, 1 dollar) and $$$NAME (list, 3+).
@@ -253,7 +181,7 @@ function relativize(root: string, abs: string): string {
   return rel.startsWith("..") ? abs : rel.replace(/^\.\//, "");
 }
 
-// --- Glob filter (post-discovery; napi has no filter surface — §3.1) ---
+// --- Glob filter (post-discovery; the napi has no filter surface) ---
 // gitignore-glob semantics, matching the CLI --globs contract: a pattern with
 // no leading slash matches at any depth; "!" excludes; the LAST matching glob
 // wins; when any include glob is present, a path matching no glob is out.
@@ -275,6 +203,114 @@ export function passesGlobs(relPath: string, globs?: string[]): boolean {
   return keep;
 }
 
+// --- Scope census ---
+// The napi silently visits only files whose extension infers one of its five
+// languages. A zero-match result is only honest if the executor knows what the
+// engine could not see — so the executor walks the scope itself (ignore-aware,
+// noise-pruned) and aggregates by extension. The census is metadata, never the
+// scan itself; discrepancies fail safe (under-report skips, never over-claim).
+
+const NOISE_DIRS = new Set([
+  "node_modules", "dist", "build", "out", "coverage",
+  "__pycache__", "venv", ".venv", "target", "vendor",
+]);
+const CENSUS_FILE_CAP = 20_000;
+const UNSUPPORTED_PATH_CAP = 50;
+
+interface Census {
+  extCounts: Map<string, number>; // lowercase extension ("(none)" for no extension)
+  langCounts: Map<string, number>; // canonical napi language → file count
+  supportedCount: number;
+  unsupportedPaths: string[]; // capped, workspace-relative
+  partial: boolean; // hit the file cap — counts are lower bounds
+}
+
+function fileExtension(relPath: string): string {
+  const dot = relPath.lastIndexOf(".");
+  return dot <= 0 ? "(none)" : relPath.slice(dot + 1).toLowerCase();
+}
+
+function isIgnored(abs: string, igs: { base: string; ig: Ignore }[], isDir: boolean): boolean {
+  for (const { base, ig } of igs) {
+    const rel = relative(base, abs).split("\\").join("/");
+    if (!rel) continue;
+    if (ig.ignores(isDir ? `${rel}/` : rel)) return true;
+  }
+  return false;
+}
+
+async function scopeCensus(scopeAbs: string, root: string): Promise<Census> {
+  const census: Census = {
+    extCounts: new Map(), langCounts: new Map(), supportedCount: 0,
+    unsupportedPaths: [], partial: false,
+  };
+  const record = (relPath: string) => {
+    const ext = fileExtension(relPath);
+    census.extCounts.set(ext, (census.extCounts.get(ext) ?? 0) + 1);
+    const lang = LANGUAGE_ALIASES[ext];
+    if (lang) {
+      census.supportedCount++;
+      census.langCounts.set(lang, (census.langCounts.get(lang) ?? 0) + 1);
+    } else if (census.unsupportedPaths.length < UNSUPPORTED_PATH_CAP) {
+      census.unsupportedPaths.push(relPath);
+    }
+  };
+
+  const st = await stat(scopeAbs).catch(() => null);
+  if (!st) return census;
+  if (st.isFile()) {
+    record(relativize(root, scopeAbs));
+    return census;
+  }
+
+  let total = 0;
+  const walk = async (dirAbs: string, igs: { base: string; ig: Ignore }[]): Promise<boolean> => {
+    let entries;
+    try {
+      entries = await readdir(dirAbs, { withFileTypes: true });
+    } catch {
+      return true; // unreadable dir: under-report, never fail the scan
+    }
+    let active = igs;
+    const gi = await readFile(join(dirAbs, ".gitignore"), "utf8").catch(() => null);
+    if (gi) active = [...igs, { base: dirAbs, ig: ignore().add(gi) }];
+    for (const e of entries) {
+      if (e.name === ".gitignore") continue;
+      const abs = join(dirAbs, e.name);
+      if (e.isDirectory()) {
+        if (e.name.startsWith(".") || NOISE_DIRS.has(e.name)) continue;
+        if (isIgnored(abs, active, true)) continue;
+        if (!(await walk(abs, active))) return false;
+      } else if (e.isFile()) {
+        if (isIgnored(abs, active, false)) continue;
+        record(relativize(root, abs));
+        if (++total >= CENSUS_FILE_CAP) {
+          census.partial = true;
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  await walk(scopeAbs, []);
+  return census;
+}
+
+/** Aggregate unscanned extensions, e.g. ".py×12, .go×3 (+2 more kinds)". */
+function extSummary(census: Census): { summary: string; total: number } {
+  let total = 0;
+  const entries: [string, number][] = [];
+  for (const [ext, n] of census.extCounts) {
+    if (LANGUAGE_ALIASES[ext]) continue; // scanned language — not a skip
+    entries.push([ext, n]);
+    total += n;
+  }
+  entries.sort((a, b) => b[1] - a[1]);
+  const shown = entries.slice(0, 4).map(([ext, n]) => `.${ext}\u00d7${n}`).join(", ");
+  const rest = entries.length - Math.min(entries.length, 4);
+  return { summary: shown + (rest > 0 ? ` (+${rest} more kinds)` : ""), total };
+}
+
 // --- Discovery ---
 
 interface InternalMatch {
@@ -284,15 +320,24 @@ interface InternalMatch {
 
 interface DiscoverOutcome {
   internal: InternalMatch[];
-  parseErrors: { file: string; message: string }[];
+  errors: SkippedFile[];
 }
 
 /**
- * Run the scan. `lang` null = auto-detect per file (parseFiles — only the
- * five supported extensions are visited; everything else is skipped silently);
- * otherwise a single findInFiles pass with the compiled matcher.
+ * Run the scan. `lang` null = auto-detect per file (parseFiles visits only
+ * the five supported extensions); otherwise one findInFiles pass with the
+ * compiled matcher.
  *
- * The 120 s backstop races the promise — the Rust scan cannot be cancelled
+ * Delivery barrier: the napi resolves BEFORE all per-file callbacks have
+ * reached JavaScript (they queue on libuv; the resolved number is the count
+ * of files that will deliver — matches-files for findInFiles, visited files
+ * for parseFiles). Reading only what has landed by resolution silently loses
+ * matches — nondeterministically, and worst on the first calls of a process.
+ * So we wait until delivered callbacks equal the resolved count (bounded by a
+ * grace window + the overall timeout), and flag incompleteness as a skipped
+ * entry rather than trusting a short result.
+ *
+ * The 120 s backstop races the whole scan — the Rust side cannot be cancelled
  * mid-flight, so a timeout stops WAITING (honest note, §3.2 budgets).
  */
 async function discover(
@@ -304,11 +349,10 @@ async function discover(
   signal?: AbortSignal,
 ): Promise<DiscoverOutcome> {
   const s = sg();
-  const parseErrors: { file: string; message: string }[] = [];
+  const errors: SkippedFile[] = [];
   const internal: InternalMatch[] = [];
   const specs = bindingSpecs(rawPattern);
-  // Per-language pattern-validity cache (auto path: one walk per language).
-  const validityCache = new Map<string, boolean>();
+  let deliveredCallbacks = 0;
 
   const collectFrom = (fileRel: string, nodes: any[]) => {
     for (const node of nodes) {
@@ -335,8 +379,8 @@ async function discover(
             } catch { /* binding unreadable — drop it */ }
             if (value == null) {
               // Fallback to the other accessor (defensive — the spec says
-              // which one is right, but the binding surface is probed, not
-              // specified).
+              // which one is right, but the binding surface varies across
+              // grammars).
               try {
                 if (multi) {
                   const single = node.getMatch(name);
@@ -356,13 +400,16 @@ async function discover(
     }
   };
 
+  const onDelivery = () => { deliveredCallbacks++; };
+
   const run = (): Promise<number> => {
     if (lang) {
       return s.findInFiles(
         lang,
         { paths: [scopeAbs], matcher: compiled },
         (err: Error | null, nodes: any[]) => {
-          if (err) { parseErrors.push({ file: "(scope)", message: String(err.message).slice(0, 200) }); return; }
+          onDelivery();
+          if (err) { errors.push({ file: "(scope)", reason: String(err.message).slice(0, 200) }); return; }
           let fileRel: string;
           try { fileRel = relativize(root, toAbs(String(nodes[0].getRoot().filename()), scopeAbs)); }
           catch { fileRel = "(unknown)"; }
@@ -373,32 +420,17 @@ async function discover(
     return s.parseFiles(
       [scopeAbs],
       (err: Error | null, fileRoot: any) => {
-        if (err) { parseErrors.push({ file: "(scope)", message: String(err.message).slice(0, 200) }); return; }
+        onDelivery();
+        if (err) { errors.push({ file: "(scope)", reason: String(err.message).slice(0, 200) }); return; }
         let fileRel: string;
-        let fileLang: string | null = null;
         try {
           fileRel = relativize(root, toAbs(String(fileRoot.filename()), scopeAbs));
-          fileLang = langFromExtension(fileRel);
         } catch { fileRel = "(unknown)"; }
-        // Per-file pattern validation (the napi's pattern() never throws —
-        // see the header pin): if the pattern is invalid in THIS file's
-        // language, record it and move on; it may still be valid elsewhere.
-        if (fileLang) {
-          let invalid = validityCache.get(fileLang);
-          if (invalid === undefined) {
-            invalid = foreignTokensIn(fileLang, rawPattern).length > 0;
-            validityCache.set(fileLang, invalid);
-          }
-          if (invalid) {
-            parseErrors.push({ file: fileRel, message: `pattern not valid in ${fileLang} — skipped` });
-            return;
-          }
-        }
         let matches: any[];
         try {
           matches = fileRoot.root().findAll(rawPattern);
         } catch (e: any) {
-          parseErrors.push({ file: fileRel, message: `pattern did not match in this file's language: ${String(e.message).slice(0, 200)}` });
+          errors.push({ file: fileRel, reason: `pattern rejected for this file: ${String(e.message).slice(0, 200)}` });
           return;
         }
         collectFrom(fileRel, matches);
@@ -417,19 +449,25 @@ async function discover(
     signal?.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    await Promise.race([run(), timeout]);
+    const fileCount = await Promise.race([run(), timeout]);
+    // Delivery barrier: `fileCount` is how many files will deliver a
+    // callback; they can still be in the libuv queue when the promise
+    // resolves. Wait for them (bounded) — a short read without this is
+    // silently partial.
+    if (fileCount > 0) {
+      const drainStart = Date.now();
+      while (deliveredCallbacks < fileCount && Date.now() - drainStart < DELIVERY_GRACE_MS) {
+        await Promise.race([new Promise((r) => setTimeout(r, 2)), timeout]);
+      }
+      if (deliveredCallbacks < fileCount) {
+        errors.push({ file: "(scope)", reason: `scan delivery incomplete (${deliveredCallbacks}/${fileCount} files) — results may be partial` });
+      }
+    }
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
-  return { internal, parseErrors };
-}
-
-// Language from a file extension (the napi's five, per its reference table).
-function langFromExtension(relPath: string): string | null {
-  const dot = relPath.lastIndexOf(".");
-  if (dot < 0) return null;
-  return LANGUAGE_ALIASES[relPath.slice(dot + 1).toLowerCase()] ?? null;
+  return { internal, errors };
 }
 
 // The callback yields paths relative to the scan scope (or absolute); make
@@ -460,10 +498,9 @@ export async function runCodeSearch(
   }
 
   const pattern = params.pattern;
-  // The CLI exit-8 class ("Cannot parse query as a valid pattern"): no code
-  // content at all — empty strings, bare punctuation. Everything else, the
-  // ast-grep matcher is the referee (garbage parses tolerantly and matches
-  // nothing — a truthful clean absence).
+  // The no-code-content class: empty strings, bare punctuation. Everything
+  // else, the ast-grep matcher is the referee (garbage parses tolerantly and
+  // matches nothing — a truthful clean absence).
   if (!/[A-Za-z0-9_$]/.test(pattern.trim())) {
     throw new CodeSearchError("pattern is empty or contains no code content.");
   }
@@ -474,15 +511,15 @@ export async function runCodeSearch(
     const resolved = LANGUAGE_ALIASES[params.lang.toLowerCase()];
     if (!resolved) {
       throw new CodeSearchError(
-        `language "${params.lang}" is not supported by the code_search executor (napi 0.50.0 supports: ${NAPI_LANGUAGES.join(", ")}).`,
+        `language "${params.lang}" is not supported by code_search (supported: ${NAPI_LANGUAGES.join(", ")}).`,
       );
     }
     lang = resolved;
   }
 
-  // Pattern validation: cheap regex guard, then the real ERROR-node walk.
   const hint = regexShapeHint(pattern);
   if (hint) throw new CodeSearchError(hint);
+
   const s = sg();
   let compiled: object | null = null;
   if (lang) {
@@ -491,23 +528,33 @@ export async function runCodeSearch(
     } catch (e: any) {
       throw new CodeSearchError(`invalid pattern: ${String(e.message).slice(0, 300)}`);
     }
-    const foreign = foreignTokensIn(lang, pattern);
-    if (foreign.length > 0) {
-      const tokens = foreign.map((t) => `"${t}"`).join(", ");
-      throw new CodeSearchError(
-        `pattern is not valid in ${lang} — ${tokens} ${foreign.length === 1 ? "is" : "are"} keyword${foreign.length === 1 ? "" : "s"} of another supported language, not ${lang} syntax. Rewrite the pattern in ${lang} or pass a different lang.`,
-      );
-    }
   }
 
+  // Census before scan: what the engine can and cannot see in this scope.
+  const census = await scopeCensus(scopeAbs, root);
   const discovered = await discover(lang, compiled, pattern, scopeAbs, root, signal);
 
-  // Glob filter (post-discovery — napi's filter surface is ignores +
-  // languageGlobs, nothing else, §3.1).
+  const unscanned = extSummary(census);
+  const scannedFiles = lang
+    ? (census.langCounts.get(lang) ?? 0)
+    : census.supportedCount;
+
+  // Skipped = scan errors + (auto-detect) files outside the language set.
+  const skippedFull: SkippedFile[] = [...discovered.errors];
+  if (!lang && !census.partial) {
+    for (const f of census.unsupportedPaths) {
+      skippedFull.push({ file: f, reason: `language not supported (use rg via bash for ${fileExtension(f)} files)` });
+    }
+  }
+  const skippedTotal =
+    discovered.errors.length + (lang || census.partial ? 0 : unscanned.total);
+
+  // Glob filter (post-discovery — the napi's filter surface is ignores +
+  // languageGlobs, nothing else).
   const filtered = discovered.internal.filter((im) => passesGlobs(im.match.file, params.globs));
 
-  // Ordering contract (review pass): (file, line, column, byte) — pagination
-  // is only coherent under a deterministic order with fresh parses.
+  // Ordering contract: (file, line, column, byte) — pagination is only
+  // coherent under a deterministic order with fresh parses.
   filtered.sort((a, b) => {
     if (a.match.file !== b.match.file) return a.match.file < b.match.file ? -1 : 1;
     if (a.match.start.line !== b.match.start.line) return a.match.start.line - b.match.start.line;
@@ -530,21 +577,28 @@ export async function runCodeSearch(
     skip,
     truncated,
     scopeRel,
-    parseErrors: discovered.parseErrors,
+    errors: discovered.errors,
+    lang,
+    scannedFiles,
+    unscanned: unscanned.summary,
+    unscannedTotal: unscanned.total,
+    censusPartial: census.partial,
   });
 
   return {
     matches: page.map((im) => im.match),
     totalMatches,
     filesWithMatches,
+    skipped: skippedFull.slice(0, SKIPPED_LIST_CAP),
+    skippedTotal,
+    unscanned: Object.fromEntries([...census.extCounts].filter(([ext]) => !LANGUAGE_ALIASES[ext])),
+    scannedFiles,
     text,
-    parseErrors: discovered.parseErrors.slice(0, PARSE_ERROR_LIST_CAP),
-    parseErrorsTotal: discovered.parseErrors.length,
     truncated,
   };
 }
 
-// --- Text projection (model-level; §3.2 review-pass rendering rules) ---
+// --- Text projection (model-level; §3.2 rendering rules) ---
 
 interface RenderArgs {
   page: CodeSearchMatch[];
@@ -553,25 +607,43 @@ interface RenderArgs {
   skip: number;
   truncated: boolean;
   scopeRel: string;
-  parseErrors: { file: string; message: string }[];
+  errors: SkippedFile[];
+  lang: string | null;
+  scannedFiles: number;
+  unscanned: string; // aggregated extension summary
+  unscannedTotal: number;
+  censusPartial: boolean;
 }
 
 function renderText(a: RenderArgs): string {
-  const lines: string[] = [];
+  const scopeLabel = a.scopeRel === "." ? "the workspace" : a.scopeRel;
+  const coverageNotes: string[] = [];
+  if (a.errors.length > 0) {
+    coverageNotes.push(`${a.errors.length} file(s) skipped by the scanner: ${a.errors.slice(0, 3).map((e) => `${e.file} (${capText(e.reason, 60)})`).join("; ")}${a.errors.length > 3 ? " …" : ""}`);
+  }
+  if (!a.lang && !a.censusPartial && a.unscannedTotal > 0) {
+    coverageNotes.push(`${a.unscannedTotal} file(s) in scope are not scanned (${a.unscanned}) — code_search covers ${NAPI_LANGUAGES.join("/")}; for other languages use rg via bash.`);
+  }
+
   if (a.totalMatches === 0) {
-    lines.push(`no matches in ${a.scopeRel === "." ? "the workspace" : a.scopeRel}`);
-    if (a.parseErrors.length > 0) {
-      // Qualified absence (oh-my-pi pattern): a partially-covered corpus is
-      // exactly where the model over-concludes.
-      lines.push(`${a.parseErrors.length} file(s) skipped (parse/pattern errors) — the query may be mis-scoped; narrow path before concluding absence.`);
+    const lines: string[] = [`no matches in ${scopeLabel}`];
+    if (a.lang && !a.censusPartial && a.scannedFiles === 0) {
+      // A scoped absence with nothing in scope is a scope error, not a result.
+      lines.push(`no ${a.lang} files in ${scopeLabel}${a.unscannedTotal > 0 ? ` — found: ${a.unscanned}` : ""}.`);
+    } else if (coverageNotes.length > 0) {
+      // Qualified absence: a partially-covered corpus is exactly where the
+      // model over-concludes.
+      lines.push(...coverageNotes);
+      lines.push("coverage above is partial — narrow `path` before concluding absence.");
     }
     return joinWithCap(lines);
   }
+
   let summary = `${a.totalMatches} matches in ${a.filesWithMatches} files`;
   if (a.truncated || a.skip > 0) {
     summary += ` (showing ${a.page.length} of ${a.totalMatches}${a.skip > 0 ? `, after skipping ${a.skip}` : ""})`;
   }
-  lines.push(summary);
+  const lines: string[] = [summary];
   for (const m of a.page) {
     const binds = m.metaVariables ? Object.entries(m.metaVariables) : [];
     const bindStr = binds.length
@@ -581,10 +653,7 @@ function renderText(a: RenderArgs): string {
     const multi = rest.length > 0 ? ` … +${rest.length} lines` : "";
     lines.push(`${m.file}:${m.start.line}${bindStr}: ${capLine(first, LINE_RENDER_CAP)}${multi}`);
   }
-  if (a.parseErrors.length > 0) {
-    const shown = a.parseErrors.slice(0, 3).map((p) => `${p.file}: ${capText(p.message, 80)}`).join("; ");
-    lines.push(`${a.parseErrors.length} file(s) skipped (parse/pattern errors)${a.parseErrors.length > 3 ? " (e.g.)" : ""} — ${shown}`);
-  }
+  lines.push(...coverageNotes);
   return joinWithCap(lines);
 }
 

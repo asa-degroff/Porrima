@@ -1,16 +1,16 @@
 /**
  * code_search — Phase 0 executor tests (docs/design/code-search.md §6).
  *
- * Referee layout: the napi is the real engine (no mocks) — these tests pin the
- * executor's contract: ignore semantics (the resolved 10-13 question, kept as
- * a regression case per §6), the (file, line, col, byte) ordering comparator,
+ * The napi is the real engine (no mocks) — these tests pin the executor's
+ * contract: ignore semantics, the (file, line, col, byte) ordering comparator,
  * globs post-discovery filtering, explicit-path precedence, 1-based
  * normalization, binding flattening, budgets (maxMatches/skip/char cap),
- * qualified zero-match, and the error surface (regex hint, invalid pattern,
- * unknown language, remote workspace, missing path).
+ * coverage honesty (the scope census qualifies partial absence), and the
+ * error surface (regex hint, trivial class, unknown language, remote
+ * workspace, missing path).
  *
- * The napi is a native addon — the executor suite is skipped (not failed) on
- * hosts without a prebuild for this platform (§5 Risk 3).
+ * The napi is a native addon — the suite is skipped (not failed) on hosts
+ * without a prebuild for this platform (§5 Risk 3).
  */
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { mkdir, writeFile, rm } from "fs/promises";
@@ -55,10 +55,7 @@ async function gitFixtures() {
     "    return 1",
     "",
   ].join("\n"));
-  // css file: a TS pattern is invalid in css (ERROR node) — drives the
-  // per-file parse-error path on auto-detect
   await writeFile(join(src, "styles.css"), ".a { color: red }\n");
-  // gitignored file with a matching pattern
   await writeFile(join(ignored, "hidden.ts"), "function hiddenFn() { return 1; }\n");
   await writeFile(join(FIXTURE, ".gitignore"), "ignored/\n");
 
@@ -99,18 +96,17 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(alpha).toBeDefined();
     expect(alpha!.start.line).toBe(1);
     // the matched node is the function_declaration — `export` lives on the
-    // parent export_statement (tree-sitter grammar shape, verified)
+    // parent export_statement (tree-sitter grammar shape)
     expect(alpha!.text).toBe("function alpha(x) { return x; }");
   });
 
   it("the partial prefix pattern matches ALL function shapes (typed, generic, async)", async () => {
     const res = await runCodeSearch({ pattern: "function $NAME", lang: "ts", path: "src" }, localWs(FIXTURE));
     const names = new Set(res.matches.map((m) => m.metaVariables?.NAME));
-    // plain, multi-line, async, typed, generic — the partial form catches all
     for (const n of ["alpha", "two", "beta", "gamma", "delta", "typedFn", "generic"]) {
       expect(names.has(n)).toBe(true);
     }
-    // and the matched text is the FULL node (verified: text includes the body)
+    // the matched text is the FULL node (body included)
     const typed = res.matches.find((m) => m.metaVariables?.NAME === "typedFn");
     expect(typed!.text).toBe("function typedFn(x: number): void { }");
   });
@@ -126,7 +122,7 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(delta!.metaVariables?.ARGS).toBeUndefined();
   });
 
-  it("honors .gitignore on a root scan (regression case — resolved 10-13, §3.1)", async () => {
+  it("honors .gitignore on a root scan", async () => {
     const res = await runCodeSearch({ pattern: fnPattern, lang: "ts" }, localWs(FIXTURE));
     expect(res.matches.some((m) => m.file.startsWith("ignored/"))).toBe(false);
   });
@@ -152,19 +148,23 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(line).toMatch(/… \+\d+ lines/);
   });
 
-  it("orders matches by (file, line, column)", async () => {
-    const res = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src" }, localWs(FIXTURE));
-    const keys = res.matches.map((m) => `${m.file}:${m.start.line}:${m.start.column}`);
-    expect(keys).toEqual([...keys].sort());
+  it("orders matches by (file, line, column, byte) — numerically, not lexicographically", async () => {
+    const res = await runCodeSearch({ pattern: "function $NAME", lang: "ts", path: "src" }, localWs(FIXTURE));
+    const cmp = (a: typeof res.matches[0], b: typeof res.matches[0]) =>
+      a.file === b.file
+        ? a.start.line - b.start.line || a.start.column - b.start.column
+        : (a.file < b.file ? -1 : 1);
+    for (let i = 1; i < res.matches.length; i++) {
+      expect(cmp(res.matches[i - 1], res.matches[i])).toBeLessThanOrEqual(0);
+    }
   });
 
-  it("applies globs post-discovery: include and '!' exclusion", async () => {
+  it("applies globs post-discovery: include and '!' exclusion, later-wins", async () => {
     const onlyA = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src", globs: ["a.ts"] }, localWs(FIXTURE));
     expect(onlyA.matches.length).toBeGreaterThan(0);
     expect(onlyA.matches.every((m) => m.file === "src/a.ts")).toBe(true);
     const excluded = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src", globs: ["*.ts", "!b.ts"] }, localWs(FIXTURE));
     expect(excluded.matches.every((m) => m.file !== "src/b.ts")).toBe(true);
-    // later-wins
     const reWin = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src", globs: ["!*.ts", "b.ts"] }, localWs(FIXTURE));
     expect(reWin.matches.every((m) => m.file === "src/b.ts")).toBe(true);
   });
@@ -188,48 +188,58 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(res.text).toMatch(/^no matches in src/);
   });
 
-  it("zero match is qualified when parse/pattern errors exist (auto-detect over mixed tree)", async () => {
+  it("zero match is qualified by the scope census: unscanned languages are named, not invisible", async () => {
     const res = await runCodeSearch({ pattern: "interface $NAME { $$$ }" }, localWs(FIXTURE));
     expect(res.totalMatches).toBe(0);
-    // the .css file: the TS pattern carries an ERROR node in css — skipped
-    // with a reason (the .py file is silently skipped by the napi — only
-    // its five supported languages are visited)
-    expect(res.parseErrorsTotal).toBeGreaterThan(0);
-    expect(res.parseErrors.some((p) => p.file === "src/styles.css")).toBe(true);
-    expect(res.text).toMatch(/mis-scoped|narrow path/);
+    // The napi silently never visits svc.py — the census must surface it so
+    // absence is not read as coverage.
+    expect(res.unscanned.py).toBe(1);
+    expect(res.skippedTotal).toBeGreaterThan(0);
+    expect(res.skipped.some((s) => s.file === "src/services/svc.py")).toBe(true);
+    expect(res.text).toMatch(/not scanned/);
+    expect(res.text).toMatch(/narrow|mis-scoped/);
   });
 
-  it("reports regex-shaped patterns with the rg hint (no engine round-trip)", async () => {
-    for (const p of ["foo.*bar", "\\w+call", "a|b", "get[0-9]"]) {
-      expect(regexShapeHint(p)).toMatch(/rg/);
-      await expect(runCodeSearch({ pattern: p, lang: "ts" }, localWs(FIXTURE))).rejects.toBeInstanceOf(CodeSearchError);
-    }
-    expect(regexShapeHint("function $NAME($$$ARGS) { $$$ }")).toBeNull();
+  it("an explicit language with nothing to scan in scope says so", async () => {
+    // src/services holds only svc.py — a ts query there is a scope error, not a result
+    const res = await runCodeSearch({ pattern: fnPattern, lang: "ts", path: "src/services" }, localWs(FIXTURE));
+    expect(res.totalMatches).toBe(0);
+    expect(res.scannedFiles).toBe(0);
+    expect(res.text).toMatch(/no typescript files in src\/services/);
   });
 
-  it("garbage patterns match nothing (clean absence); the trivial class is rejected", async () => {
-    // CLI referee behavior (probed): `function (unclosed` → warning + 0
-    // matches, not an error — the executor agrees (no subprocess to carry
-    // the warning, the absence is the answer)
+  it("garbage and mis-language patterns get a truthful clean absence (the engine is the referee)", async () => {
+    // `function (unclosed` parses tolerantly and matches nothing — the
+    // absence IS the answer, no error.
     const garbage = await runCodeSearch({ pattern: "function (unclosed", lang: "ts" }, localWs(FIXTURE));
     expect(garbage.totalMatches).toBe(0);
     expect(garbage.text).toMatch(/^no matches/);
-    // the exit-8 class: no code content at all
+    // A pattern written for another language: no static validator claims to
+    // know better than the engine; it matches nothing.
+    const foreign = await runCodeSearch({ pattern: "function $NAME", lang: "css" }, localWs(FIXTURE));
+    expect(foreign.totalMatches).toBe(0);
+    expect(foreign.text).toMatch(/^no matches/);
+    // The one hard-error class: no code content at all.
     for (const p of ["   ", ";;;"]) {
       await expect(
         runCodeSearch({ pattern: p, lang: "ts" }, localWs(FIXTURE)),
       ).rejects.toThrow(/no code content/);
     }
-    // "not this language at all": a TS pattern with lang=css
-    await expect(
-      runCodeSearch({ pattern: "function $NAME", lang: "css" }, localWs(FIXTURE)),
-    ).rejects.toThrow(/not valid in css/);
+  });
+
+  it("reports regex-shaped patterns with the rg hint; accepts spaced pipes (real code)", () => {
+    for (const p of ["foo.*bar", "\\w+call", "a|b", "get[0-9]"]) {
+      expect(regexShapeHint(p)).toMatch(/rg/);
+    }
+    // `a | b` is bitwise-or / TS union syntax — valid ast-grep patterns.
+    expect(regexShapeHint("x = a | b")).toBeNull();
+    expect(regexShapeHint("function $NAME($$$ARGS) { $$$ }")).toBeNull();
   });
 
   it("rejects languages outside the napi's five with the support list", async () => {
     await expect(
       runCodeSearch({ pattern: fnPattern, lang: "python" }, localWs(FIXTURE)),
-    ).rejects.toThrow(/not supported by the code_search executor/);
+    ).rejects.toThrow(/not supported/);
     expect(LANGUAGE_ALIASES.ts).toBe("typescript");
     expect(LANGUAGE_ALIASES.jsx).toBe("javascript");
     expect(LANGUAGE_ALIASES.py).toBeUndefined();

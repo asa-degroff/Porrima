@@ -90,13 +90,13 @@ const LIST_FILES_TOOL: Tool = {
  * PORRIMA_CODE_SEARCH=1 — the tool definition ships only when the flag is on
  * (zero schema bytes until the flip). Read-only and lock-free: parallel-safe
  * like read_file (never takes workspace:<label>, not in SEQUENTIAL_TOOL_NAMES).
- * Worked examples in the description are all verified against 0.50.0 (10-13).
  */
 const CODE_SEARCH_TOOL: Tool = {
   name: "code_search",
   description:
     "Structurally search code with AST patterns (ast-grep) — matches syntax, not text: function shapes, call sites, assignments. " +
     "Use when the answer depends on the language's syntax tree; use rg via bash for plain-text search. " +
+    "Covers TypeScript, TSX, JavaScript/JSX, HTML, and CSS; files in other languages are reported as unscanned — use rg via bash for those. " +
     "Patterns are code, not regex: $NAME binds a single node, $$$NAME binds a list of nodes. " +
     "A pattern is a complete node (`function $NAME($$$ARGS) { $$$ }`) or a partial prefix of one — `function $NAME` matches ANY function definition (typed, generic, async). " +
     "Typed signatures need their slots in the full form (`function $NAME<$TP>($$$ARGS): $RET { $$$ }`); the partial form avoids that. " +
@@ -105,7 +105,7 @@ const CODE_SEARCH_TOOL: Tool = {
   parameters: Type.Object({
     pattern: Type.String({ description: "AST pattern (code, not regex — $NAME single node, $$$NAME node list)" }),
     path: Type.Optional(Type.String({ description: "Workspace-relative root to search (default: whole workspace)" })),
-    lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css (the executor's supported languages, napi 0.50.0). Default: auto-detect from file extensions — files in other languages are skipped" })),
+    lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css. Default: auto-detect from file extensions — files outside these languages are reported as unscanned" })),
     globs: Type.Optional(Type.Array(Type.String(), { description: "Glob filter, gitignore semantics; '!' prefix excludes; later globs win (e.g. ['*.ts', '!*.test.ts'])" })),
     maxMatches: Type.Optional(Type.Integer({ description: "Max matches to return (default 50, max 1000)", minimum: 1, maximum: 1000 })),
     skip: Type.Optional(Type.Integer({ description: "Skip the first N matches for pagination (default 0)", minimum: 0 })),

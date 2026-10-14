@@ -2,7 +2,7 @@
 import { codeSearchEnabled, runCodeSearch } from "../services/code-search.js";
 import { LocalWorkspaceAdapter } from "../services/workspace.js";
 
-if (process.env.PORRIMA_CODE_SEARCH !== "1") {
+if (!codeSearchEnabled()) {
   console.error("PORRIMA_CODE_SEARCH=1 is required — refusing to run (the feature is dark without it).");
   process.exit(1);
 }
@@ -11,35 +11,31 @@ if (process.env.PORRIMA_CODE_SEARCH !== "1") {
 const ws = new LocalWorkspaceAdapter(process.cwd().replace(/\/server$/, ""));
 console.log("workspace:", ws.label);
 
-const p1 = { pattern: "function $NAME", lang: "ts", path: "server/src/services", maxMatches: 5 };
-const r1 = await runCodeSearch(p1, ws);
-console.log("\n--- async function defs (5) ---\n" + r1.text);
+const r1 = await runCodeSearch({ pattern: "function $NAME", lang: "ts", path: "server/src/services", maxMatches: 5 }, ws);
+console.log("\n--- function defs (5) ---\n" + r1.text);
 
-const p1b = { pattern: "return $VALUE", lang: "ts", path: "server/src/services/turn-gate.ts", maxMatches: 3 };
-const r1b = await runCodeSearch(p1b, ws);
+const r1b = await runCodeSearch({ pattern: "return $VALUE", lang: "ts", path: "server/src/services/turn-gate.ts", maxMatches: 3 }, ws);
 console.log("\n--- return VALUE in turn-gate (3) ---\n" + r1b.text);
 
-const p2 = { pattern: "await tools.$FN($$$ARGS)" };
-const r2 = await runCodeSearch(p2, ws);
+const r2 = await runCodeSearch({ pattern: "await tools.$FN($$$ARGS)" }, ws);
 console.log("\n--- await tools.* (auto-detect) ---\n" + r2.text);
 
-const p3 = { pattern: "function (broken" , lang: "ts"};
-const r3 = await runCodeSearch(p3, ws);
-console.log("\n--- garbage pattern (CLI: warning + no matches; executor: clean absence) ---\n" + r3.text);
+const r3 = await runCodeSearch({ pattern: "function (broken", lang: "ts" }, ws);
+console.log("\n--- garbage pattern (tolerant parse → clean absence) ---\n" + r3.text);
 
-const p3b = { pattern: ";;;" , lang: "ts"};
-try {
-  await runCodeSearch(p3b, ws);
-  console.log("\nERROR: trivial pattern did not throw");
-} catch (e: any) {
-  console.log("\n--- trivial pattern (expected error) ---\n" + e.message);
-}
+const r4 = await runCodeSearch({ pattern: "def $F($$$ARGS)" }, ws);
+console.log("\n--- python pattern (census reports unscanned languages) ---\n" + r4.text);
 
-const p4 = { pattern: "get[0-9]+" , lang: "ts"};
-try {
-  await runCodeSearch(p4, ws);
-  console.log("\nERROR: regex pattern did not throw");
-} catch (e: any) {
-  console.log("\n--- regex pattern (expected error) ---\n" + e.message);
+for (const [label, p, expect] of [
+  ["trivial", ";;;", /no code content/],
+  ["regex shape", "get[0-9]+", /rg/],
+] as const) {
+  try {
+    await runCodeSearch({ pattern: p, lang: "ts" }, ws);
+    console.log(`\nERROR: ${label} pattern did not throw`);
+  } catch (e: any) {
+    if (!expect.test(e.message)) console.log(`\nERROR: ${label} message unexpected:`, e.message);
+    else console.log(`\n--- ${label} pattern (expected error) ---\n${e.message}`);
+  }
 }
 console.log("\nsmoke OK");
