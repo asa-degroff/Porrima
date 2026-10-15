@@ -833,15 +833,46 @@ function renderText(a: RenderArgs): string {
   }
   const lines: string[] = [summary];
   for (const m of a.page) {
-    const binds = m.metaVariables ? Object.entries(m.metaVariables) : [];
-    const bindStr = binds.length
-      ? " " + binds.map(([k, v]) => `[${k}=${capText(v, BINDING_RENDER_CAP)}]`).join(" ")
-      : "";
-    const [first, ...rest] = m.text.split("\n");
-    const multi = rest.length > 0 ? ` … +${rest.length} lines` : "";
-    lines.push(`${m.file}:${m.start.line}${bindStr}: ${capLine(first, LINE_RENDER_CAP)}${multi}`);
+    lines.push(renderMatchLine(m));
   }
   lines.push(...coverageNotes);
+  return joinWithCap(lines);
+}
+
+function renderMatchLine(m: CodeSearchMatch): string {
+  const binds = m.metaVariables ? Object.entries(m.metaVariables) : [];
+  const bindStr = binds.length
+    ? " " + binds.map(([k, v]) => `[${k}=${capText(v, BINDING_RENDER_CAP)}]`).join(" ")
+    : "";
+  const [first, ...rest] = m.text.split("\n");
+  const multi = rest.length > 0 ? ` … +${rest.length} lines` : "";
+  return `${m.file}:${m.start.line}${bindStr}: ${capLine(first, LINE_RENDER_CAP)}${multi}`;
+}
+
+/** Model-level text projection for snippet mode (S1, §4.2): a pattern test,
+ *  not a corpus query — there is no census, scope, or unscanned to report.
+ *  The one honesty axis is the zero: a snippet zero is a pattern problem,
+ *  not an absence, and must say so or the model over-concludes. */
+export function renderSnippetText(
+  params: CodeSearchSnippetParams,
+  result: CodeSearchSnippetResult,
+): string {
+  if (result.totalMatches === 0) {
+    const lines: string[] = [`no matches in the snippet (parsed as ${result.lang})`];
+    lines.push("a zero here is a pattern problem, not an absence — the pattern did not match the constructed code. Revise the pattern and re-test before scanning.");
+    if (result.hint) {
+      lines.push(`note: the pattern looks regex-shaped — ${result.hint}`);
+    }
+    return joinWithCap(lines);
+  }
+  let summary = `${result.totalMatches} matches in the snippet`;
+  if (result.truncated || (params.skip ?? 0) > 0) {
+    summary += ` (showing ${result.matches.length} of ${result.totalMatches}${(params.skip ?? 0) > 0 ? `, after skipping ${params.skip}` : ""})`;
+  }
+  const lines: string[] = [summary];
+  for (const m of result.matches) {
+    lines.push(renderMatchLine(m));
+  }
   return joinWithCap(lines);
 }
 

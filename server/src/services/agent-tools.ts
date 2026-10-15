@@ -12,7 +12,7 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
-import { codeSearchEnabled, runCodeSearch, runCodeSearchOnSnippet, CodeSearchError, type CodeSearchParams } from "./code-search.js";
+import { codeSearchEnabled, runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, type CodeSearchParams } from "./code-search.js";
 import {
   executeInKernel,
   kernelToolsEnabled,
@@ -95,16 +95,18 @@ const CODE_SEARCH_TOOL: Tool = {
   name: "code_search",
   description:
     "Structurally search code with AST patterns (ast-grep) — matches syntax, not text: function shapes, call sites, assignments. " +
-    "Use when the answer depends on the language's syntax tree; use rg via bash for plain-text search. " +
+    "Default for syntax-structural questions; if the answer depends on text content (string literals, character order), not syntax, use rg via bash — and do not write a script to count what a pattern can match: the pattern is the script. " +
     "Covers TypeScript, TSX, JavaScript/JSX, HTML, and CSS; files in other languages are reported as unscanned — use rg via bash for those. " +
     "Patterns are code, not regex: $NAME binds a single node, $$$NAME binds a list of nodes. " +
     "A pattern is a complete node (`function $NAME($$$ARGS) { $$$ }`) or a partial prefix of one — `function $NAME` matches ANY function definition (typed, generic, async). " +
     "For an exact parameter list use the body slot too (`function $NAME($ARG) { $$$ }`) — a bodiless parameterized pattern (`function $NAME($ARG)`) matches only bodiless declarations like TS overload signatures, NOT definitions. " +
     "Typed signatures need their slots in the full form (`function $NAME<$TP>($$$ARGS): $RET { $$$ }`); the partial form avoids that. " +
     "Plain text with no metavariables is a literal exact-node match. " +
+    "If you are unsure a pattern will match, test it first against a snippet: pass code= with a small example — cheaper than scanning. " +
     "Examples: `function $NAME` finds function definitions; `await $CALL($$$ARGS)` finds call sites; `return $VALUE` finds returned values; `console.log(`$$$X`)` finds template-literal log calls (add `, $$$REST` for calls with more arguments).",
   parameters: Type.Object({
     pattern: Type.String({ description: "AST pattern (code, not regex — $NAME single node, $$$NAME node list)" }),
+    code: Type.Optional(Type.String({ description: "Test the pattern against a constructed snippet instead of scanning files — matches this code only (path/globs ignored). Verify a pattern before scanning: a zero match here means the pattern is wrong, not that the code is absent" })),
     path: Type.Optional(Type.String({ description: "Workspace-relative root to search (default: whole workspace)" })),
     lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css. Default: auto-detect from file extensions — files outside these languages are reported as unscanned" })),
     globs: Type.Optional(Type.Array(Type.String(), { description: "Glob filter, gitignore semantics; '!' prefix excludes; later globs win (e.g. ['*.ts', '!*.test.ts'])" })),
@@ -1153,9 +1155,25 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       ...CODE_SEARCH_TOOL,
       label: "code_search",
       execute: async (_id, params, signal) => {
-        const workspace = await workspacePromise;
         try {
-          const result = await runCodeSearch(params as CodeSearchParams, workspace, signal);
+          // S1 (§4.2): snippet mode at the model level — the same route as the
+          // kernel dispatcher (identical semantics; text projection instead of
+          // the structured value). No filesystem, no workspace: a pattern test
+          // must not depend on the scan surface resolving.
+          const p = params as Record<string, any>;
+          if (typeof p.code === "string") {
+            const snippetParams = {
+              pattern: String(p.pattern ?? ""),
+              code: p.code,
+              lang: p.lang,
+              maxMatches: p.maxMatches,
+              skip: p.skip,
+            };
+            const result = runCodeSearchOnSnippet(snippetParams, signal);
+            return wrapResult({ content: renderSnippetText(snippetParams, result), isError: false }, "code_search");
+          }
+          const workspace = await workspacePromise;
+          const result = await runCodeSearch(p as CodeSearchParams, workspace, signal);
           return wrapResult({ content: result.text, isError: false }, "code_search");
         } catch (e: any) {
           return wrapResult(

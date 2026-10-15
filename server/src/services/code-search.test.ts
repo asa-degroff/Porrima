@@ -19,7 +19,7 @@ import { execFile } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 import { createRequire } from "module";
-import { runCodeSearch, runCodeSearchOnSnippet, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
+import { runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
 import { LocalWorkspaceAdapter } from "./workspace.js";
 import type { WorkspaceAdapter } from "./workspace.js";
 
@@ -458,6 +458,36 @@ describe.runIf(napiAvailable)("code_search snippet projection (Phase 1, §3.3)",
   });
 });
 
+describe.runIf(napiAvailable)("code_search snippet text projection (S1, §4.2)", () => {
+  it("renders matches in snippet form — shared line idiom, no census vocabulary", () => {
+    const params = { pattern: "function $NAME($$$ARGS) { $$$ }", code: "function alpha(x) { return x; }\nfunction beta() {}" };
+    const res = runCodeSearchOnSnippet(params);
+    const text = renderSnippetText(params, res);
+    expect(text).toMatch(/^2 matches in the snippet/);
+    expect(text).toContain("(snippet):1 [NAME=alpha]");
+    expect(text).toContain("(snippet):2 [NAME=beta]");
+    // Snippet mode has no scope: the census vocabulary must not appear.
+    expect(text).not.toMatch(/files|scanned|unscanned|workspace/i);
+  });
+
+  it("renders an honest zero — a pattern problem, not an absence", () => {
+    const params = { pattern: "function $NAME()", code: "const a = 1;" };
+    const res = runCodeSearchOnSnippet(params);
+    const text = renderSnippetText(params, res);
+    expect(text).toContain("no matches in the snippet (parsed as typescript)");
+    expect(text).toMatch(/pattern problem, not an absence/);
+  });
+
+  it("carries the regex hint on a zero, and the pagination summary when paged", () => {
+    const hintParams = { pattern: "get[0-9]+", code: "const a = 1;" };
+    expect(renderSnippetText(hintParams, runCodeSearchOnSnippet(hintParams))).toMatch(/regex-shaped/);
+
+    const pagedParams = { pattern: "$NAME", code: "const a = 1; const b = 2; const c = 3; const d = 4;", maxMatches: 2, skip: 2 };
+    const text = renderSnippetText(pagedParams, runCodeSearchOnSnippet(pagedParams));
+    expect(text).toMatch(/\(showing 2 of \d+, after skipping 2\)/);
+  });
+});
+
 describe("gating and definition surface", () => {
   it("flag off: absent from definitions; flag on: present (fresh import sees the flip)", async () => {
     delete process.env.PORRIMA_CODE_SEARCH;
@@ -475,6 +505,50 @@ describe("gating and definition surface", () => {
     expect(def!.description).toMatch(/complete node/);
     expect(def!.parameters).toBeDefined();
     delete process.env.PORRIMA_CODE_SEARCH;
+  });
+
+  it("S2: the battery-v3 description pins — substitutive boundary, anti-script, snippet nudge", async () => {
+    process.env.PORRIMA_CODE_SEARCH = "1";
+    try {
+      const on = await import(new URL("./agent-tools.ts?codesearch=s2", import.meta.url).href);
+      const def = on.getAgentToolDefinitions().find((t: { name: string }) => t.name === "code_search")!;
+      // The v2 complement framing is gone; the v3 boundary replaces it.
+      expect(def.description).not.toMatch(/use when the answer depends on the language/);
+      expect(def.description).toMatch(/Default for syntax-structural questions/);
+      expect(def.description).toMatch(/text content \(string literals, character order\)/);
+      expect(def.description).toMatch(/do not write a script to count what a pattern can match/);
+      expect(def.description).toMatch(/test it first against a snippet/);
+      // Schema exposes the snippet parameter (S1).
+      expect(JSON.stringify(def.parameters)).toContain('"code"');
+    } finally {
+      delete process.env.PORRIMA_CODE_SEARCH;
+    }
+  });
+
+  it("S1: model-level execute routes code= to the snippet path — no workspace, honest projection", async () => {
+    process.env.PORRIMA_CODE_SEARCH = "1";
+    try {
+      const on = await import(new URL("./agent-tools.ts?codesearch=s1", import.meta.url).href);
+      const tools = on.getAgentTools("test-chat", { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} });
+      const tool = tools.find((t: any) => t.name === "code_search");
+      expect(tool).toBeDefined();
+      const ac = new AbortController();
+      // Match: snippet summary + shared match-line idiom, zero census bytes.
+      const hit = await tool!.execute("call-1", { pattern: "function $NAME($$$ARGS) { $$$ }", code: "function alpha(x) { return x; }" }, ac.signal);
+      const hitText = hit.content.map((c: any) => c.text ?? "").join("");
+      expect(hitText).toMatch(/1 matches in the snippet/);
+      expect(hitText).toContain("(snippet):1 [NAME=alpha]");
+      // Zero: the pattern-problem honesty, not a bare absence.
+      const zero = await tool!.execute("call-2", { pattern: "function $NAME()", code: "const a = 1;" }, ac.signal);
+      const zeroText = zero.content.map((c: any) => c.text ?? "").join("");
+      expect(zeroText).toMatch(/pattern problem, not an absence/);
+      // Errors still surface as thrown messages (wrapResult contract).
+      await expect(
+        tool!.execute("call-3", { pattern: ";;;", code: "x" }, ac.signal),
+      ).rejects.toThrow(/no code content/);
+    } finally {
+      delete process.env.PORRIMA_CODE_SEARCH;
+    }
   });
 
   it("globs helper: gitignore-style any-depth match, later-wins", () => {

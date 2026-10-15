@@ -6,8 +6,9 @@ the live kernel-tools flag). Extends the kernel-codemode design: it is the
 concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
 its own feature). First gate run (10-14): **FAIL — flag stays dark**;
-battery v3 (three-arm surface isolation) designed in §4.2, pending the
-S1/S2 surface changes.
+battery v3 (three-arm surface isolation) designed in §4.2 — S1
+(model-level `code=`) and S2 (description v3) **shipped 10-15**; the
+probe run is next.
 **Date:** 2026-10-15
 
 ## 1. Problem
@@ -424,7 +425,7 @@ Phase 0 refuses non-local workspaces with a message naming the phase.
 **Name:** `code_search`. **Surface (shipped):**
 
 ```
-code_search(pattern, path?, globs?, lang?, maxMatches?, skip?)
+code_search(pattern, code?, path?, globs?, lang?, maxMatches?, skip?)
 ```
 
 `context` is deliberately not in the schema: the index-not-payload rendering
@@ -823,16 +824,23 @@ as designed, not a defect of the model.
 
 **Surface changes (prerequisites — the battery cannot run v3 without both).**
 
-- **S1 — `code=` at the model level.** The executor's snippet path
-  (`runCodeSearchOnSnippet`, §3.3) already exists; the model-level handler
-  routes `code` there and the schema gains the parameter. Snippet results
-  have no scope census, so the model-level projection must say *snippet*,
-  not *workspace* — no invented totals. Tests: the six kernel snippet unit
-  cases plus model-level schema/routing cases. The single highest-leverage
-  change: it converts the one behavior the weights cannot self-resolve
-  (unverified pattern coverage) into a ~200 ms tool call.
-- **S2 — description v3.** Candidate text, a diff against the shipped §3.2
-  text (measured before/after — the gate's aggregate eats the delta):
+- **S1 — `code=` at the model level.** *(implemented 10-15.)* The
+  executor's snippet path (`runCodeSearchOnSnippet`, §3.3) already exists;
+  the model-level handler routes `code` there and the schema gains the
+  parameter. Snippet results have no scope census, so the model-level
+  projection must say *snippet*, not *workspace* — no invented totals
+  (`renderSnippetText`: shared match-line idiom with `renderText`, and the
+  honest zero — *"a zero here is a pattern problem, not an absence"*).
+  The snippet path takes no workspace, parity with the kernel dispatcher.
+  The honest-zero text earned its keep on day one: the first version of the
+  S1 tests typed `$$` for `$$$` in a pattern — the §7 Risk 1 silent-outcome
+  trap — and the projection's pattern-problem line is what surfaced it.
+  The single highest-leverage change: it converts the one behavior the
+  weights cannot self-resolve (unverified pattern coverage) into a ~200 ms
+  tool call.
+- **S2 — description v3.** *(implemented 10-15 — the candidate text below
+  is the shipped text.)* A diff against the prior §3.2 text (measured
+  before/after — the gate's aggregate eats the delta):
   - *add* — the snippet nudge: "If you are unsure a pattern will match,
     test it first against a snippet: pass `code=` with a small example —
     cheaper than scanning." (the verification gap)
@@ -894,11 +902,15 @@ still runs, re-scoped.
   conclusion guard, ties pass.
 - **Nudge gate (C vs A):** the field's bet — tool plus routing line.
 - Decision matrix:
-  - **C passes, B fails** → ship the tool *with* the line (the field's
-    positioning: oh-my-pi teaches in the prompt, the vendor's first rung
-    is the AGENTS.md line); the purism clause becomes a revisit item, not
-    a law.
-  - **B passes** (regardless of C) → flip; the line is optional.
+  - **C passes, B fails** → routing is load-bearing but the description
+    alone doesn't carry it — ship the tool *with* the routing instruction,
+    and the placement preference is the tool's own surface first: extend
+    the description (the token cost is measured, like everything else in
+    the battery) before any external doc; AGENTS.md / tool guidance is a
+    last resort, not the default. The purism clause becomes a revisit item
+    — an open question for the measured data, not a law.
+  - **B passes** (regardless of C) → flip; routing already rides the
+    description, and no external line is needed at all.
   - **both fail** → the model-scoped verdict stands as written; the line
     holds until the model floor moves (the Qwen4 canary is the clock), and
     the surface stays dark.
