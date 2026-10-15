@@ -5,8 +5,10 @@ behind `PORRIMA_CODE_SEARCH=1`) and the kernel projection (same flag, riding
 the live kernel-tools flag). Extends the kernel-codemode design: it is the
 concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
-its own feature).
-**Date:** 2026-10-14
+its own feature). First gate run (10-14): **FAIL — flag stays dark**;
+battery v3 (three-arm surface isolation) designed in §4.2, pending the
+S1/S2 surface changes.
+**Date:** 2026-10-15
 
 ## 1. Problem
 
@@ -775,6 +777,155 @@ kernel dispatch telemetry (`kernel_tool_stats`, kernel-codemode §4.9)
 records it directly, so future runs can measure the projection's density
 thesis without transcript surgery.
 
+### 4.2 Battery v3 — surface isolation (design, 10-15)
+
+The first gate run's verdict is model-scoped, but that scope was measured
+only in the hardest configuration the feature could ship in: schema-only
+discovery, no nudge, no cheap pattern-test path at the model level. A
+10-15 re-analysis of the 60-run jsonl (`byTool` per run) shows the
+efficiency loss decomposes into components the surface can address — and
+the field's actual bet is guided positioning, not what the battery
+measured.
+
+**Evidence (60-run re-analysis).** Adoption is task-shaped, not
+model-fixed: T5 (pure syntax two-count) is on-arm 6/6 with *fewer*
+iterations (median 5 → 3.5) and zero false conclusions — the off arm had
+one. T3 (textual semantics) is on-arm 0/6 with a +55% token cost (20.5k →
+31.8k) at zero adoption — pure consideration cost: the tool was *considered*
+on a task it cannot answer. The T2 swamp exists on *both* arms (off arm:
+17 iterations, 36.6k tokens, pure bash+python; on arm: code_search **and**
+run_python and bash in the same runs) — counting phrasing invites
+scripting regardless of the tool, and the on arm pays the additive-
+verification price.
+
+**The self-probe.** The T2 closed shape is expressible in a *single*
+pattern: `function $NAME($ARG) { $$ }` matched exactly the countable class
+on a fixture containing every excluded shape — arrows and methods excluded
+by root node type, generators by the `*` token, bodiless overload
+signatures by the complete-node rule. One shot, no negation needed. The
+weights can generate the right pattern; what they cannot do at the model
+level is *verify* it cheaply before committing to a scan. Untestable
+certainty resolves to a script — sound epistemic behavior under a surface
+that prices certainty too high. The gap is verification, not fluency or
+expressiveness.
+
+**Field position.** The vendor's prompting ladder (AGENTS.md default-shift
+line → skill → llms-full in context → MCP rule-development process) carries
+its own caveat: the line "requires a model with up-to-date knowledge of
+ast-grep to be effective. If the model is not familiar with the tool, it
+may not utilize it as instructed" — the failure mode is *selection*, not
+familiarity. oh-my-pi teaches the full metavariable grammar in the
+model-facing prompt and ships `ast_grep` **disabled by default**; Serena v2's
+headline interface is a Python REPL (composition in code) — the same
+lineage as Porrima's `run_python`, and Prime Agent's deliberately minimal
+surface. "Write your own parser" is the system's strongest affordance used
+as designed, not a defect of the model.
+
+**Surface changes (prerequisites — the battery cannot run v3 without both).**
+
+- **S1 — `code=` at the model level.** The executor's snippet path
+  (`runCodeSearchOnSnippet`, §3.3) already exists; the model-level handler
+  routes `code` there and the schema gains the parameter. Snippet results
+  have no scope census, so the model-level projection must say *snippet*,
+  not *workspace* — no invented totals. Tests: the six kernel snippet unit
+  cases plus model-level schema/routing cases. The single highest-leverage
+  change: it converts the one behavior the weights cannot self-resolve
+  (unverified pattern coverage) into a ~200 ms tool call.
+- **S2 — description v3.** Candidate text, a diff against the shipped §3.2
+  text (measured before/after — the gate's aggregate eats the delta):
+  - *add* — the snippet nudge: "If you are unsure a pattern will match,
+    test it first against a snippet: pass `code=` with a small example —
+    cheaper than scanning." (the verification gap)
+  - *add* — the anti-script clause: "Do not write a script to count what a
+    pattern can match — the pattern is the script." (the T2 swamp)
+  - *replace* — the complement framing ("use rg via bash for plain-text
+    search") becomes a boundary plus substitutive positioning: "If the
+    answer depends on text content (string literals, character order), not
+    syntax, use rg via bash — this tool matches syntax only, and is the
+    default for syntax-structural questions." (the additive double-dip;
+    the T3 consideration cost)
+  - *deliberately omitted* — full grammar completion (`$_`, the
+    metavariable-reuse rule, per-language traps — the oh-my-pi standard):
+    the self-probe showed one-shot syntactic fluency is present; the gap
+    is verification, not grammar. Every token must carry a measured
+    justification — grammar tokens don't.
+
+**Arms.**
+
+- **A — off** (baseline, unchanged).
+- **B — on, schema-only** (with S1+S2). Must be re-run: S2 changes the
+  surface, so the v2 on-arm is not comparable.
+- **C — on + routing line**: the harness-prompt variant carrying the
+  Phase 4 nudge (candidate: "For questions about code structure —
+  declarations, call sites, argument shapes — use `code_search`; for
+  questions about text content, use rg via bash; do not write scripts to
+  count what a pattern can match."). The line rides the harness prompt,
+  not AGENTS.md — the battery's firewall and schema-only purity are
+  unchanged in A/B; C approximates what the AGENTS.md deployment would add
+  in production. The line's own ~25 tokens sit inside C's numbers.
+
+**Tasks.** T1–T5 byte-identical to v2 (comparability with the recorded
+numbers). **T6 — diagnostic probe** (excluded from the flip aggregate,
+like T4): *"Count `if` statements (without else) whose consequent is
+exactly one `return` statement — both the brace-less form `if (x) return y;`
+and the single-statement block `if (x) { return y; }` count."* The trap: a
+block-form-only pattern (or brace-less-only) silently misses the other
+form — the naive single pattern gives a wrong count; a snippet test
+containing both forms catches it in one call, and the correct full answer
+is a two-pattern decomposition (the §3.3 kernel shape exercised at the
+model level). Oracle: engine-derived (tree-sitter); the complete-node
+trap applies to the oracle author as always. **Fixture audit before
+freeze — both forms must exist in server/src with non-zero instances
+(no vacuous witness); if the brace-less form is absent, swap the task.**
+
+**Protocol — probe first.** Before committing the 45-run battery:
+T1+T2+T5 × 3 reps on arm B only (9 runs, ~20–30 min on the local model).
+The questions: does the T2 swamp collapse (median iterations 14.5 → single
+digits, `run_python` dropping out)? Does snippet mode get used at all? If
+the behavior does not move, selection — not verification — is the binding
+constraint and the nudge arm becomes the whole question; the full battery
+still runs, re-scoped.
+
+**Gates — two verdict lines, one decision.**
+
+- **Strict gate (B vs A):** the doc's original purism — the flip must not
+  lean on the nudge. Same aggregate as §4.1: summed per-task median turns
+  and tokens across the efficiency tasks, completion guard, false-
+  conclusion guard, ties pass.
+- **Nudge gate (C vs A):** the field's bet — tool plus routing line.
+- Decision matrix:
+  - **C passes, B fails** → ship the tool *with* the line (the field's
+    positioning: oh-my-pi teaches in the prompt, the vendor's first rung
+    is the AGENTS.md line); the purism clause becomes a revisit item, not
+    a law.
+  - **B passes** (regardless of C) → flip; the line is optional.
+  - **both fail** → the model-scoped verdict stands as written; the line
+    holds until the model floor moves (the Qwen4 canary is the clock), and
+    the surface stays dark.
+- A passing arm C validates the routing instruction as a *prompt* surface;
+  it does not by itself validate the AGENTS.md deployment — a cheap smoke
+  (a small run subset with the line in the real project context) follows
+  the flip if C is the passing arm.
+
+**Couplings and caveats.**
+
+- **T4 × Phase G:** adding python grammar (§5, phase G) flips T4's ground
+  truth from "none, route to rg" to "N found" — the battery's oracle is
+  coupled to the language-coverage decision; the census's `unscanned`
+  demand metric and the battery cannot both be treated as frozen facts.
+- **Adversarial counting prompts:** v2's closed shape lists make the
+  counting tasks harder than the wild; a v3 pass there may overstate
+  adoption. T4's probe remains the honest signal — and it already passes
+  both arms.
+- **Kernel projection:** still not battery-measurable (transcript
+  surgery); `kernel_tool_stats` records the rule-loop density from real
+  post-flip usage. Battery v3 does not change this.
+
+**Not in v3 (scope fence):** no new model, no outline tasks (phase 2 is a
+separate feature with its own design section), no Phase G, no MCP/skill
+paths (superseded by the kernel-composition thesis, §2.5), no changes to
+the censoring or aggregate machinery.
+
 ## 5. Dependency placement
 
 - **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds).
@@ -832,7 +983,7 @@ thesis without transcript surgery.
 | **2** | `code_outline` — its own design section, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
-| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery** (flag off vs on, schema-only discovery), not on the flip alone — first gate run 10-14: **FAIL, flag stays dark** (§4.1 Results; model-scoped verdict, kernel projection untested) |
+| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery**, not on the flip alone — first gate run 10-14: **FAIL, flag stays dark** (§4.1 Results; model-scoped verdict, kernel projection untested); **battery v3 designed §4.2** (S1 model-level `code=` + S2 description v3 as prerequisites; arms A/B/C with the strict gate B-vs-A and nudge gate C-vs-A decision matrix) |
 
 ## 7. Risks
 
