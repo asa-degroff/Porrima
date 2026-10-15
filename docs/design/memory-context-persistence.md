@@ -113,7 +113,7 @@ the symptom and worsens the warm's hit rate; the fix below removes the need for 
 | Memory blocks | SQLite `memory_blocks` | ✓ |
 | Conversation history | SQLite `chat_messages` | ✓ |
 | Base system prompt | SQLite `chats.systemPrompt` | ✓ |
-| `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable |
+| `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable (AGENTS.md caveat: §11) |
 | **Frozen set (ids + section text)** | **process Map** (memory-context.ts:134) | **✗ ← the bug** |
 | `deltaIds` | process Map | ✗ (minor: dedup only) |
 | `promptCache` / `stablePrefixCache` / `promptBreakdownCache` | process Maps | ✗ (derived, cheap) |
@@ -586,3 +586,97 @@ should be extinct.
 Single PR: Fix A + B together (A alone rots once B removes most Case 1
 arrivals; both are small). Phase 2 (cache-warm stop-re-roll) stays separate
 per §7 sequencing.
+
+## 11. Follow-up: the project-context snapshot (deferred AGENTS.md)
+
+The §2 inventory marked `stablePrefix` as "✓ rebuildable" — deterministic from
+durable inputs. That held only while nobody edits AGENTS.md between sessions.
+A `git checkout` or an editor save while porrima is down makes the next
+rebuild render a different system prompt, and a prefix change at ANY offset
+re-prefills every token after it — i.e. the entire retained history. Resume
+paid the full miss for content the conversation had never been built against,
+while the in-process Map cache (which never re-validates against disk) had
+been happily serving the OLD bytes. The inconsistency: deferral by accident
+mid-session, forced application on restart.
+
+Fix, in the same shape as the frozen-section persistence: durably mirror the
+last-SERVED `## Project Context` section.
+
+### 11.1 Schema
+
+`chat_project_context_state (chat_id PK, source, content, content_hash,
+updated_at)` in the memory DB (`memory-storage.ts`). The rendered SECTION
+string is stored, not the file — byte-exact restore by construction, same
+rationale as `frozen_section`. Deliberately a separate table:
+`hydrateContextState` treats ANY `memory_context_state` row as established
+memory context, so a prefix-build writing a row with an empty frozen section
+would trap the chat in Case 2 and suppress the Case 1 freeze.
+
+`source` records the workspace identity (resolved label/path) the snapshot was
+rendered from. It separates "the user moved the workspace" (source differs →
+apply fresh immediately; the move is a deliberate event and `projects.ts` also
+calls `invalidateAllCaches`, which drops the row) from "the file content
+moved" (source same, hash differs → defer).
+
+### 11.2 Rules (buildStablePrefix, cache-miss path only)
+
+| Disk vs snapshot | Behavior |
+|---|---|
+| No row / first build | Render fresh, persist row. |
+| Hash match | Serve disk bytes (identical), re-persist (no-op write). |
+| Hash mismatch, same source | Serve snapshot bytes; `pendingProjectUpdate=true` on the Map entry; `project context diverged` canary. |
+| Hash mismatch, source differs | Workspace move: render fresh, overwrite row. |
+| Workspace read throws | Serve snapshot (transient fs/ssh blips must not empty the section); no notice — disk state unknown, not known-changed. |
+| Rendered section > 128KB | Apply fresh, DROP the row — don't stash a snapshot too big to defer with. |
+
+`preview: true` builds (the `context-view` fallback) consult the Map and the
+snapshot for honest display but write neither: a preview must not baseline a
+snapshot for a chat that has never delivered, and must not seed the Map with
+bytes a delivery build then serves without persisting.
+
+### 11.3 Notice: the change is visible while deferred
+
+The prefix is untouchable, so the notice rides the message tail with the
+`[time:]` anchor — `buildTimeAnchor(messages, chatId)` appends
+`buildProjectContextNotice(chatId)` while the Map entry is pending. It freezes
+on the persisted row and replays byte-exact like the anchor itself. On the
+main and edit paths the anchor is stamped BEFORE the prompt build (which is
+what discovers the deferral), so the route re-stamps the notice onto this
+turn's row after `buildSplitAugmentedPrompt` returns and re-saves — wire and
+row stay identical. Without the notice the agent could work all session
+against instructions it can't see it's missing.
+
+### 11.4 Landing points
+
+Deferred content applies where the prompt is reprocessed (or re-warmed)
+anyway:
+
+- `softResetMemoryContext` (every compaction path) → `applyProjectContextLanding`:
+  drop row + Map entry. Runs before the no-state early-return, since a chat
+  with no memory context still compacted.
+- `resetMemoryContext` (chat deletion, cache-warm prep) → drop row + entry;
+  the warm then pre-fills fresh bytes at zero additional cost.
+- `invalidateAllCaches` (workspace move) → drop row.
+
+Explicitly NOT landing points: `invalidateStablePrefixCache` /
+`invalidateAllStablePrefixCaches` (synthesis, block edits, budget changes).
+Those clear the Map globally; a project chat whose non-project sections
+rebuild byte-identical still keeps its prefix — wiping the snapshot there
+would land an AGENTS.md edit on the chat's next turn for a reason unrelated
+to compaction.
+
+### 11.5 Scope notes
+
+- Only the PROJECT SECTION defers. Persona/zeitgeist/blocks changes flow
+  through deliberate global invalidations where the system consciously
+  propagates new content to every chat; AGENTS.md edits arrive with no event
+  at all, which is why they get the deferral treatment.
+- If a global invalidation coincides with a divergence, the turn pays its
+  (already owed) miss with the snapshot's stale bytes embedded — zero extra
+  cost, content lands at the next compaction.
+- The agent's own AGENTS.md edits defer like any others; the per-turn notice
+  says "read AGENTS.md / check git status", so a working agent sees the newer
+  file immediately.
+- Per-chat keying means each chat lands at ITS next compaction; two chats on
+  one project can serve different versions concurrently. Correct by
+  construction — each chat's KV cache was built against its own bytes.

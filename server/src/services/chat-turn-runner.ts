@@ -807,7 +807,7 @@ export async function runHeadlessChatTurn(
       if (followUp.message.role === "user" && !followUp.message.timeAnchor) {
         // Freeze the anchor on the persisted row and mirror it into the wire
         // message so this turn's prompt is a prefix of later replays.
-        followUp.message.timeAnchor = buildTimeAnchor(chat.messages);
+        followUp.message.timeAnchor = buildTimeAnchor(chat.messages, chat.id);
       }
       chat.messages.push(followUp.message);
       await saveChat(chat);

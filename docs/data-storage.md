@@ -87,6 +87,7 @@ Opened via `memory-storage.ts` `getDb()`. Also the handle used by `notebook-stor
 - `memory_blocks_fts` — FTS5 virtual table over `content`, `name`, `description`
 - `memory_blocks_history` — per-update block snapshots, keyed implicitly by rowid. A trigger snapshots the old state on any content/name/description change *and* on supersession, so the superseded row's final state is still versioned
 - `memory_context_state` — per-chat memory-context persistence: `frozen_section`, `section_hash`, `frozen_ids`, `delta_ids`, and a `dirty` flag that drives natural retry after a failed build
+- `chat_project_context_state` — per-chat project-context snapshot: the last-SERVED `## Project Context` section (`content`, `content_hash`) plus the workspace `source` it was read from. Lets a stable-prefix rebuild after a restart serve byte-exact AGENTS.md content instead of busting the KV cache; deferred edits land at the next compaction (see `docs/design/memory-context-persistence.md` §11)
 - `user_notebook_entries` — user notebook entries (`content`, `links`, `images` JSON). Agent notebook entries are dual-represented as memory blocks rather than living here
 - `user_notebook_entries_fts` — FTS5 virtual table over notebook content
 - `metadata` — key-value migration/version metadata

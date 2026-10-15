@@ -56,6 +56,9 @@ describe("memory context after cache warming", () => {
       deleteMemoryContextState: vi.fn(),
       setMemoryContextDirty: vi.fn(),
       setAllMemoryContextDirty: vi.fn(),
+      getProjectContextState: vi.fn(() => null),
+      upsertProjectContextState: vi.fn(),
+      deleteProjectContextState: vi.fn(),
     }));
     vi.doMock("../services/reranker.js", () => ({
       RERANK_INSTRUCTIONS: {

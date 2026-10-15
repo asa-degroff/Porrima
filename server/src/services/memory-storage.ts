@@ -371,6 +371,28 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // Project-context state — durable mirror of the `## Project Context` section
+  // last SERVED for a chat (including its AGENTS.md body). Same persistence
+  // rationale as memory_context_state: the llama.cpp KV cache is built against
+  // the exact bytes we sent, so a rebuild after a process restart must restore
+  // those bytes rather than re-reading a file the user may have edited between
+  // sessions. A detected divergence is deferred to the next compaction (which
+  // re-prefills anyway) — see docs/design/memory-context-persistence.md.
+  //
+  // Separate table from memory_context_state on purpose: hydrateContextState()
+  // treats ANY row there as established memory context, so a prefix-build
+  // writing a row with an empty frozen section would trap the chat in Case 2
+  // and suppress the Case 1 freeze.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_project_context_state (
+      chat_id      TEXT PRIMARY KEY,
+      source       TEXT NOT NULL DEFAULT '',
+      content      TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+  `);
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -2522,6 +2544,72 @@ export function setAllMemoryContextDirty(): void {
   getDb()
     .prepare("UPDATE memory_context_state SET dirty = 1, updated_at = ?")
     .run(Date.now());
+}
+
+// ---------------------------------------------------------------------------
+// Project-context state — durable mirror of the last-served project section
+// ---------------------------------------------------------------------------
+// Persists the exact `## Project Context` string (project line + cwd line +
+// AGENTS.md body) so a stable-prefix rebuild after a restart serves the bytes
+// the server's KV cache was built against, even when the file on disk moved
+// between sessions. `source` records the workspace identity (label/path) the
+// snapshot was read from: a deliberate workspace move makes the snapshot stale
+// and the fresh content applies immediately. A same-source divergence defers
+// to the next compaction. See docs/design/memory-context-persistence.md.
+
+export interface ProjectContextStateRow {
+  chatId: string;
+  source: string;
+  content: string;
+  contentHash: string;
+  updatedAt: number;
+}
+
+interface ProjectContextStateRowDb {
+  chat_id: string;
+  source: string;
+  content: string;
+  content_hash: string;
+  updated_at: number;
+}
+
+export function getProjectContextState(chatId: string): ProjectContextStateRow | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM chat_project_context_state WHERE chat_id = ?")
+    .get(chatId) as ProjectContextStateRowDb | undefined;
+  if (!row) return null;
+  return {
+    chatId: row.chat_id,
+    source: row.source,
+    content: row.content,
+    contentHash: row.content_hash,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function upsertProjectContextState(
+  chatId: string,
+  state: { source: string; content: string }
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO chat_project_context_state
+      (chat_id, source, content, content_hash, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    chatId,
+    state.source,
+    state.content,
+    createHash("sha1").update(state.content, "utf8").digest("hex"),
+    Date.now()
+  );
+}
+
+export function deleteProjectContextState(chatId: string): void {
+  getDb()
+    .prepare("DELETE FROM chat_project_context_state WHERE chat_id = ?")
+    .run(chatId);
 }
 
 // ---- Token budgets for block attachment (stable prefix) ----

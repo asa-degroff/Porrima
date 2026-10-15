@@ -1,6 +1,11 @@
+import { createHash } from "crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, Memory } from "../types.js";
 import type { MemoryBlock } from "../services/memory-storage.js";
+
+function sha1(s: string): string {
+  return createHash("sha1").update(s, "utf8").digest("hex");
+}
 
 function block(overrides: Partial<MemoryBlock>): MemoryBlock {
   return {
@@ -52,6 +57,10 @@ function expectInOrder(text: string, markers: string[]): void {
   }
 }
 
+// Shared project-context snapshot store for the storage mock below — tests
+// pre-seed it to exercise the AGENTS.md deferral path.
+const projectContextRows = new Map<string, { source: string; content: string; contentHash: string; updatedAt: number }>();
+
 function mockMemoryContextDeps(options: {
   globalBlocks?: MemoryBlock[];
   projectBlocks?: MemoryBlock[];
@@ -62,6 +71,7 @@ function mockMemoryContextDeps(options: {
   const memories = options.memories ?? [];
 
   vi.resetModules();
+  projectContextRows.clear();
   vi.doMock("../services/embeddings.js", () => ({
     embed: vi.fn(async () => [1, 0]),
     cosineSimilarity: vi.fn(() => 1),
@@ -79,6 +89,21 @@ function mockMemoryContextDeps(options: {
     isSystemManagedMemoryBlock: vi.fn((b: MemoryBlock) => b.blockType !== "note" || b.scope === "archived"),
     buildMemoryIndexText: (text: string, subject?: string) =>
       subject?.trim() ? `${subject.trim()}\n${text}` : text,
+    getMemoryContextState: vi.fn(() => null),
+    upsertMemoryContextState: vi.fn(),
+    deleteMemoryContextState: vi.fn(),
+    setMemoryContextDirty: vi.fn(),
+    setAllMemoryContextDirty: vi.fn(),
+    getProjectContextState: vi.fn((chatId: string) => {
+      const r = projectContextRows.get(chatId);
+      return r ? { chatId, source: r.source, content: r.content, contentHash: sha1(r.content), updatedAt: 0 } : null;
+    }),
+    upsertProjectContextState: vi.fn((chatId: string, s: { source: string; content: string }) => {
+      projectContextRows.set(chatId, { source: s.source, content: s.content, contentHash: "", updatedAt: 0 });
+    }),
+    deleteProjectContextState: vi.fn((chatId: string) => {
+      projectContextRows.delete(chatId);
+    }),
   }));
   vi.doMock("../services/reranker.js", () => ({
     RERANK_INSTRUCTIONS: {

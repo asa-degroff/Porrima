@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { embed, cosineSimilarity } from "./embeddings.js";
 import { estimateTextTokens } from "./token-count.js";
 import {
@@ -5,7 +6,8 @@ import {
   isSystemManagedMemoryBlock, buildMemoryIndexText,
   getMemoryContextState, upsertMemoryContextState, deleteMemoryContextState,
   setMemoryContextDirty, setAllMemoryContextDirty, getBlockTokenBudgets,
-  type MemoryBlock, type BlockTokenBudgets,
+  getProjectContextState, upsertProjectContextState, deleteProjectContextState,
+  type MemoryBlock, type BlockTokenBudgets, type ProjectContextStateRow,
 } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats, buildSelectedResult } from "./reranker-stats.js";
@@ -66,7 +68,16 @@ const stablePrefixCache = new Map<string, {
       (any path: UI, API, hand-edit) makes the entry stale at read time. */
   globalBlockTokenBudget: number;
   projectBlockTokenBudget: number;
+  /** True while the rendered project section is a deferred snapshot: AGENTS.md
+      on disk diverges from the last-applied bytes and the change lands at the
+      next compaction. Drives buildProjectContextNotice. */
+  pendingProjectUpdate: boolean;
 }>();
+
+/** Snapshot cap for chat_project_context_state content. Above this, fresh
+    bytes apply immediately and the row is dropped — deferring an ancient
+    snapshot over a huge edited file is not worth the storage. */
+const PROJECT_CONTEXT_SNAPSHOT_CAP_CHARS = 128 * 1024;
 
 /**
  * Per-section token estimates captured the last time a chat's augmented prompt
@@ -111,6 +122,47 @@ async function loadProjectContext(projectId?: string, projectPath?: string): Pro
   return { id: projectId, label: "", agentsMd: null };
 }
 
+/**
+ * Render the `## Project Context` section exactly as it goes into the stable
+ * prefix. Extracted so the snapshot path (buildStablePrefix) and tests share
+ * one definition of "the bytes we serve".
+ */
+export function renderProjectSection(projectContext: { id: string; name?: string; label: string; agentsMd: string | null }): string {
+  // Surface the project name + ID so the agent can reference the project
+  // in memory-block tools (scope='project', project_id=...).
+  const projectLine = projectContext.name
+    ? `Current project: ${projectContext.name} (${projectContext.id})`
+    : `Current project: ${projectContext.id}`;
+  const cwdLine = projectContext.label
+    ? `\nCurrent working directory: ${projectContext.label}`
+    : "";
+  const agentsSection = projectContext.agentsMd
+    ? `\n\nProject instructions from AGENTS.md:\n${projectContext.agentsMd}`
+    : "";
+  return `\n\n## Project Context\n${projectLine}${cwdLine}${agentsSection}`;
+}
+
+/**
+ * One-line tail note appended while a chat serves a DEFERRED project context:
+ * AGENTS.md on disk diverged from the version baked into the stable prefix, and
+ * the change lands at the next compaction instead of busting the KV cache now.
+ * The prefix itself must never change (any divergence re-prefills the entire
+ * retained history), so this rides the current turn's message tail — the same
+ * cache-safe position the `[time:]` anchor uses — and freezes on the persisted
+ * row exactly like the anchor. Returns "" when nothing is pending.
+ */
+export function buildProjectContextNotice(chatId?: string): string {
+  if (!chatId) return "";
+  const entry = stablePrefixCache.get(chatId);
+  if (!entry?.pendingProjectUpdate) return "";
+  return (
+    "\n\n[project: AGENTS.md on disk has changed since the project context in this prompt was " +
+    "applied. The prompt intentionally still shows the previous version to preserve the cached " +
+    "context — read AGENTS.md or check git status if project instructions matter to the current " +
+    "work. The updated file is applied at the next compaction.]"
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Delta-based memory context: frozen memories in system prompt + deltas at end
 // ---------------------------------------------------------------------------
@@ -140,6 +192,18 @@ async function loadProjectContext(projectId?: string, projectPath?: string): Pro
 // On compaction the state is soft-reset: the frozen set is retained byte-exact,
 // the state is marked dirty, and the next build delivers new memories as a
 // delta against the compacted history.
+//
+// Project context (AGENTS.md) follows the same philosophy: the stable prefix is
+// rebuilt from disk whenever the per-chat Map entry is cold (process restart,
+// synthesis invalidation, budget change), but the file may have moved between
+// sessions (git checkout, external edit). Swapping the rendered section in at
+// that moment would rewrite the system prompt and re-prefill the ENTIRE
+// retained history — so the last-served `## Project Context` section is
+// snapshotted durably (chat_project_context_state) and rebuilds serve the
+// snapshot bytes while the divergence is noted on the message tail
+// (buildProjectContextNotice). The fresh content lands at the next compaction
+// (softResetMemoryContext drops the snapshot), where the prompt is reprocessed
+// anyway. See docs/design/memory-context-persistence.md.
 
 interface MemoryContextState {
   /** Memory IDs baked into the system prompt */
@@ -157,7 +221,10 @@ const contextState = new Map<string, MemoryContextState>();
 /**
  * Durable mirror of `contextState`. The frozen section is the only
  * non-derivable artifact in the prompt pipeline — everything else survives a
- * porrima restart in SQLite or is deterministically rebuildable. We persist
+ * porrima restart in SQLite or is deterministically rebuildable (with one
+ * caveat: the project section is rebuildable only while nobody edits
+ * AGENTS.md between sessions, which is why it gets its own last-served
+ * snapshot — see chat_project_context_state). We persist
  * the section string itself (not its inputs) so restore is byte-exact and
  * never touches the reranker. See docs/design/memory-context-persistence.md.
  *
@@ -254,13 +321,44 @@ export function invalidateAllMemoriesCaches(): void {
  * (the warm owns the rebuilt prefix). Automations and system-chat runs must
  * NOT use this — they are follow-up messages in a persistent chat and their
  * cache behavior depends on keeping the existing frozen section byte-exact.
+ *
+ * The project-context snapshot goes with it: a rebuild is imminent and owes no
+ * cache continuity, so deferred AGENTS.md changes land immediately here.
  */
 export function resetMemoryContext(chatId: string): void {
   contextState.delete(chatId);
+  stablePrefixCache.delete(chatId);
   try {
     deleteMemoryContextState(chatId);
   } catch (e) {
     console.warn(`[memory-context] chat=${chatId} failed to delete context state row:`, e);
+  }
+  try {
+    deleteProjectContextState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete project-context row:`, e);
+  }
+}
+
+/**
+ * Drop the durable project-context snapshot so the deferred change lands at the
+ * next prefix build. Only chats WITH a snapshot (i.e. project chats that have
+ * built a prefix at least once) are touched: with nothing pending there is
+ * nothing to land, and the cached prefix entry must survive compaction so
+ * non-project chats keep byte-identical prefixes — and their prefix KV reuse —
+ * exactly as before.
+ */
+function applyProjectContextLanding(chatId: string): void {
+  let snapshot: ProjectContextStateRow | null = null;
+  try {
+    snapshot = getProjectContextState(chatId);
+    if (snapshot) deleteProjectContextState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to drop project-context snapshot:`, e);
+    return; // unknown state: keep the cached entry rather than gamble a rebuild
+  }
+  if (snapshot) {
+    stablePrefixCache.delete(chatId);
   }
 }
 
@@ -277,8 +375,14 @@ export function resetMemoryContext(chatId: string): void {
  * Hard `resetMemoryContext` is reserved for chat deletion and cache-warm
  * preparation. Automation and system-chat runs are follow-up messages in a
  * persistent chat: they retain the frozen set and cached prefix instead.
+ *
+ * Also the landing point for deferred AGENTS.md changes: compaction reprocesses
+ * the whole prompt anyway, so the snapshot is dropped here and the next build
+ * re-reads the file at zero additional cache cost.
  */
 export function softResetMemoryContext(chatId: string): void {
+  applyProjectContextLanding(chatId);
+
   // Never resurrect state from nothing: only soften what already exists.
   // Hydrate first so a soft reset after a process restart lands on the row.
   if (!contextState.has(chatId)) {
@@ -342,6 +446,11 @@ export function commitMemoryDelta(chatId: string, memoryIds: string[]): void {
 
 /**
  * Invalidate the stable prefix cache for a chat (e.g., after block modifications).
+ * The durable project-context snapshot deliberately SURVIVES this: a global
+ * rebuild reason (synthesis, block edit, budget change) still lets a project
+ * chat's prefix match byte-for-byte if its non-project sections are unchanged,
+ * and wiping the snapshot there would land a deferred AGENTS.md edit on that
+ * chat's next turn — busting its prefix for a reason unrelated to compaction.
  */
 export function invalidateStablePrefixCache(chatId: string): void {
   stablePrefixCache.delete(chatId);
@@ -349,10 +458,12 @@ export function invalidateStablePrefixCache(chatId: string): void {
 
 /**
  * Invalidate all derived caches for a chat (stable prefix + prompt caches).
- * The frozen memory state (Map entry AND durable row) is deliberately kept:
- * a workspace change rewrites AGENTS.md → stablePrefix changes → the prefill
- * is owed anyway, and re-rolling the frozen set on top would only manufacture
- * a pool orphan plus a second source of prefix churn for zero benefit.
+ * Used for workspace moves: the move is a deliberate edit, so the project
+ * context snapshot is dropped too and the new workspace's AGENTS.md applies
+ * immediately. The frozen memory state (Map entry AND durable row) is
+ * deliberately kept: the stablePrefix changes → the prefill is owed anyway,
+ * and re-rolling the frozen set on top would only manufacture a pool orphan
+ * plus a second source of prefix churn for zero benefit.
  * (The frozen section embeds blockHint/zeitgeistHint, both derived from
  * durable inputs, so the persisted string stays valid.)
  */
@@ -360,6 +471,11 @@ export function invalidateAllCaches(chatId: string): void {
   stablePrefixCache.delete(chatId);
   promptCache.delete(chatId);
   promptBreakdownCache.delete(chatId);
+  try {
+    deleteProjectContextState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete project-context row:`, e);
+  }
 }
 
 /**
@@ -874,8 +990,17 @@ export async function buildStablePrefix(
   chatId: string,
   projectId?: string,
   projectPath?: string,
+  options?: {
+    /** Display-only build (context viewer): renders the bytes a real build
+        WOULD serve — consulting the cached entry and the snapshot deferral
+        rule — but never writing either. A preview must not baseline a
+        snapshot: a chat that has never delivered has nothing cached server
+        side, so its first delivery build must serve fresh disk bytes. */
+    preview?: boolean;
+  },
 ): Promise<{ stablePrefix: string; blocksSection: string }> {
   const cacheKey = chatId;
+  const preview = options?.preview === true;
   // Read before the cache check: a budget change (any path) must invalidate
   // the cached block sections, so the current budgets are part of validity.
   const budgets = await getBlockTokenBudgets();
@@ -908,25 +1033,68 @@ export async function buildStablePrefix(
   }
 
   let projectSection = "";
+  let pendingProjectUpdate = false;
   if (projectId) {
+    // Snapshot of the last-served project section (persisted, survives process
+    // death like the frozen memory section). The KV cache was built against
+    // THESE bytes; swapping in freshly-read disk bytes on a resume would
+    // rewrite the system prompt and re-prefill the entire retained history.
+    const snapshotChat = cacheKey === "_default" ? null : chatId;
+    let snapshot: ProjectContextStateRow | null = null;
+    if (snapshotChat) {
+      try {
+        snapshot = getProjectContextState(snapshotChat);
+      } catch (e) {
+        console.warn(`[memory] chat=${snapshotChat} failed to read project-context snapshot, applying fresh:`, e);
+      }
+    }
     try {
       const projectContext = await loadProjectContext(projectId, projectPath);
       if (projectContext) {
-        // Surface the project name + ID so the agent can reference the project
-        // in memory-block tools (scope='project', project_id=...).
-        const projectLine = projectContext.name
-          ? `Current project: ${projectContext.name} (${projectContext.id})`
-          : `Current project: ${projectContext.id}`;
-        const cwdLine = projectContext.label
-          ? `\nCurrent working directory: ${projectContext.label}`
-          : "";
-        const agentsSection = projectContext.agentsMd
-          ? `\n\nProject instructions from AGENTS.md:\n${projectContext.agentsMd}`
-          : "";
-        projectSection = `\n\n## Project Context\n${projectLine}${cwdLine}${agentsSection}`;
+        const fresh = renderProjectSection(projectContext);
+        const freshHash = createHash("sha1").update(fresh, "utf8").digest("hex");
+        if (
+          snapshotChat && snapshot &&
+          snapshot.source === projectContext.label &&
+          snapshot.contentHash !== freshHash
+        ) {
+          // Same workspace, diverged content (file edited between sessions):
+          // serve the last-applied bytes to keep the KV prefix intact and let
+          // buildProjectContextNotice tell the agent the file moved. The
+          // change lands at the next compaction (softResetMemoryContext drops
+          // the snapshot), where the prompt is reprocessed anyway.
+          projectSection = snapshot.content;
+          pendingProjectUpdate = true;
+          log(
+            `[memory-context] chat=${snapshotChat} project context diverged — deferring to next ` +
+            `compaction (served snapshot ${snapshot.contentHash}, disk ${freshHash})`
+          );
+        } else {
+          projectSection = fresh;
+          if (snapshotChat && !preview) {
+            try {
+              if (fresh.length <= PROJECT_CONTEXT_SNAPSHOT_CAP_CHARS) {
+                upsertProjectContextState(snapshotChat, { source: projectContext.label, content: fresh });
+              } else {
+                // Oversized section: don't stash a snapshot we can't afford to
+                // defer — dropping the row keeps future rebuilds honest.
+                deleteProjectContextState(snapshotChat);
+              }
+            } catch (e) {
+              console.warn(`[memory] chat=${snapshotChat} failed to persist project-context snapshot:`, e);
+            }
+          }
+        }
       }
     } catch (e) {
       console.error("[memory] Failed to load AGENTS.md:", e);
+      if (snapshot) {
+        // Workspace read hiccup (transient fs/ssh failure): the snapshot still
+        // matches the cached KV prefix, so serve it rather than dropping the
+        // section — an emptied section would bust the cache for no reason.
+        // No notice: the disk state is unknown, not known-changed.
+        projectSection = snapshot.content;
+      }
     }
   }
 
@@ -960,20 +1128,23 @@ export async function buildStablePrefix(
   // template anymore. Leading newlines are trimmed so a failed persona load
   // still starts the prompt clean.
   const stablePrefix = `${personaSection}${userSection}${globalBlocksSection}${zeitgeistSection}${projectSection}${projectBlocksSection}`.replace(/^\n+/, "");
-  stablePrefixCache.set(cacheKey, {
-    prefix: stablePrefix,
-    blocksSection: combinedBlocksSection,
-    hasIndexedBlocks,
-    globalBlockTokenBudget: budgets.global,
-    projectBlockTokenBudget: budgets.project,
-    sectionTokens: {
-      persona: estimateTextTokens(personaSection),
-      userDocument: estimateTextTokens(userSection),
-      memoryBlocks: estimateTextTokens(globalBlocksSection) + estimateTextTokens(projectBlocksSection),
-      zeitgeist: estimateTextTokens(zeitgeistSection),
-      projectContext: estimateTextTokens(projectSection),
-    },
-  });
+  if (!preview) {
+    stablePrefixCache.set(cacheKey, {
+      prefix: stablePrefix,
+      blocksSection: combinedBlocksSection,
+      hasIndexedBlocks,
+      globalBlockTokenBudget: budgets.global,
+      projectBlockTokenBudget: budgets.project,
+      pendingProjectUpdate,
+      sectionTokens: {
+        persona: estimateTextTokens(personaSection),
+        userDocument: estimateTextTokens(userSection),
+        memoryBlocks: estimateTextTokens(globalBlocksSection) + estimateTextTokens(projectBlocksSection),
+        zeitgeist: estimateTextTokens(zeitgeistSection),
+        projectContext: estimateTextTokens(projectSection),
+      },
+    });
+  }
 
   return { stablePrefix, blocksSection: combinedBlocksSection };
 }
@@ -1016,8 +1187,13 @@ function formatGap(ms: number): string {
  * pushed to chat.messages before the prompt is built). A fresh chat with no
  * prior rows gets the bare timestamp, which is exactly when the model has no
  * other temporal reference point.
+ *
+ * When a `chatId` is given, a pending project-context notice (deferred
+ * AGENTS.md change, see buildProjectContextNotice) rides the same tail: the
+ * composite string freezes on the persisted row and replays byte-exact, and
+ * anything appended after the history is cache-safe by construction.
  */
-export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
+export function buildTimeAnchor(recentMessages: ChatMessage[], chatId?: string): string {
   const nowMs = Date.now();
   const stamp = formatAgentClock(new Date(nowMs));
   let line = `[time: ${stamp}]`;
@@ -1038,7 +1214,7 @@ export function buildTimeAnchor(recentMessages: ChatMessage[]): string {
     }
   }
 
-  return `\n\n${line}`;
+  return `\n\n${line}${buildProjectContextNotice(chatId)}`;
 }
 
 // ---- Public API ----

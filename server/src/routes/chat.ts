@@ -38,7 +38,7 @@ import {
   estimateContextPressure,
   type PressureEstimate,
 } from "../services/context-pressure.js";
-import { buildSplitAugmentedPrompt, buildTimeAnchor, setCachedAugmentedPrompt, softResetMemoryContext, commitMemoryDelta } from "../services/memory-context.js";
+import { buildSplitAugmentedPrompt, buildTimeAnchor, buildProjectContextNotice, setCachedAugmentedPrompt, softResetMemoryContext, commitMemoryDelta } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
 import { getAutomationLock } from "../services/automation-lock.js";
@@ -2408,7 +2408,7 @@ async function handleChatStream(
         const assistantMsg = finalizeUncommittedAssistantMessage();
         const steeringRow = queuedMessageToChatMessage(queued);
         if (steeringRow.role === "user") {
-          steeringRow.timeAnchor = buildTimeAnchor(chat.messages);
+          steeringRow.timeAnchor = buildTimeAnchor(chat.messages, chat.id);
         }
         chat.messages.push(steeringRow);
         await saveChat(chat);
@@ -2451,7 +2451,7 @@ async function handleChatStream(
         const assistantMsg = finalizeUncommittedAssistantMessage();
         const followUpRow = queuedMessageToChatMessage(queued);
         if (followUpRow.role === "user") {
-          followUpRow.timeAnchor = buildTimeAnchor(chat.messages);
+          followUpRow.timeAnchor = buildTimeAnchor(chat.messages, chat.id);
         }
         chat.messages.push(followUpRow);
         await saveChat(chat);
@@ -4121,7 +4121,7 @@ async function handleChatStream(
       if (postLoopFollowUpRow.role === "user") {
         // Freeze this turn's anchor on the row; the replay-based context
         // reconstruction below appends it, keeping wire and history identical.
-        postLoopFollowUpRow.timeAnchor = buildTimeAnchor(chat.messages);
+        postLoopFollowUpRow.timeAnchor = buildTimeAnchor(chat.messages, chat.id);
       }
       chat.messages.push(postLoopFollowUpRow);
       await saveChat(chat);
@@ -4909,7 +4909,7 @@ router.post("/", async (req, res) => {
 
     // Inject the user's answer as a ToolResultMessage for the pending ask_user call
     // One anchor instance shared by the wire prompt and the persisted row.
-    const resumeTimeAnchor = buildTimeAnchor(chat.messages);
+    const resumeTimeAnchor = buildTimeAnchor(chat.messages, chat.id);
     const toolResultMsg: ToolResultMessage = {
       role: "toolResult",
       toolCallId: pendingState.askToolCallId,
@@ -5121,7 +5121,7 @@ router.post("/", async (req, res) => {
       // Freeze this turn's `[time:]` anchor on the row: the same string is
       // appended to the wire prompt below and replayed verbatim on later
       // turns, keeping the KV-cache prefix stable across turns.
-      const timeAnchor = buildTimeAnchor(chat.messages);
+      const timeAnchor = buildTimeAnchor(chat.messages, chat.id);
       const userMsg: ChatMessage = {
         role: "user",
         content: message,
@@ -5167,6 +5167,17 @@ router.post("/", async (req, res) => {
     systemPrompt = split.systemPrompt;
     memoriesDelta = split.memoriesMessage;
     memoriesDeltaIds = split.newMemoryIds;
+
+    // A deferred AGENTS.md change is only discovered by the prompt build above
+    // (first prefix rebuild after a porrima restart). The anchor was stamped on
+    // this turn's user row before that build, so re-stamp its notice tail here:
+    // the composite string is what the wire reconstruction reads from the row,
+    // keeping wire == persisted exactly like every other frozen anchor.
+    const projectNotice = buildProjectContextNotice(chat.id);
+    if (projectNotice && currentUserRow?.timeAnchor && !currentUserRow.timeAnchor.includes(projectNotice)) {
+      currentUserRow.timeAnchor = `${currentUserRow.timeAnchor}${projectNotice}`;
+      await saveChat(chat);
+    }
 
     // Inject active skills into system prompt
     if (chat.activeSkills?.length) {
@@ -5609,7 +5620,7 @@ router.post("/artifact-error", async (req, res) => {
     chat.modelId,
     repairReplayIdentity,
   );
-  const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt), buildTimeAnchor(chat.messages));
+  const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt), buildTimeAnchor(chat.messages, chat.id));
 
   console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
   const repairLease = await acquireTurnGate(chat, req, res);
@@ -5881,7 +5892,7 @@ router.post("/edit", async (req, res) => {
     : (originalMessage.images?.length ? originalMessage.images : undefined);
   // Freeze this turn's `[time:]` anchor on the edited row so replays of the
   // rewritten history carry the exact tokens this turn's prompt contains.
-  const editTimeAnchor = buildTimeAnchor(chat.messages);
+  const editTimeAnchor = buildTimeAnchor(chat.messages, chat.id);
   const userMsg: ChatMessage = {
     role: "user",
     content: message,
@@ -5929,6 +5940,15 @@ router.post("/edit", async (req, res) => {
   systemPrompt = split.systemPrompt;
   editMemoriesDelta = split.memoriesMessage;
   editMemoriesDeltaIds = split.newMemoryIds;
+
+  // Deferred-AGENTS.md notice re-stamp: same contract as the main turn path
+  // (the prompt build above is what discovers the deferral on a cold prefix
+  // cache; the row must carry the exact bytes the wire reconstruction uses).
+  const editProjectNotice = buildProjectContextNotice(chat.id);
+  if (editProjectNotice && userMsg.timeAnchor && !userMsg.timeAnchor.includes(editProjectNotice)) {
+    userMsg.timeAnchor = `${userMsg.timeAnchor}${editProjectNotice}`;
+    await saveChat(chat);
+  }
 
   // Load settings for context window resolution
   const settings = await getSettings();

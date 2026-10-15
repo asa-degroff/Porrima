@@ -164,7 +164,12 @@ interface EmulatedRow {
   dirty: boolean;
 }
 
-function mockStorageModule(rows: Map<string, EmulatedRow>) {
+interface EmulatedProjectRow {
+  source: string;
+  content: string;
+}
+
+function mockStorageModule(rows: Map<string, EmulatedRow>, projectRows: Map<string, EmulatedProjectRow> = new Map()) {
   const get = (chatId: string) => {
     const r = rows.get(chatId);
     if (!r) return null;
@@ -213,6 +218,23 @@ function mockStorageModule(rows: Map<string, EmulatedRow>) {
     }),
     setAllMemoryContextDirty: vi.fn(() => {
       for (const r of rows.values()) r.dirty = true;
+    }),
+    getProjectContextState: vi.fn((chatId: string) => {
+      const r = projectRows.get(chatId);
+      if (!r) return null;
+      return {
+        chatId,
+        source: r.source,
+        content: r.content,
+        contentHash: sha1(r.content),
+        updatedAt: 0,
+      };
+    }),
+    upsertProjectContextState: vi.fn((chatId: string, s: EmulatedProjectRow) => {
+      projectRows.set(chatId, { source: s.source, content: s.content });
+    }),
+    deleteProjectContextState: vi.fn((chatId: string) => {
+      projectRows.delete(chatId);
     }),
   };
 }

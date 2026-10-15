@@ -111,7 +111,7 @@ export function buildCrossChatPostRow(input: {
     timestamp: Date.now(),
     // Frozen against the target's tail at append time so later replays carry
     // the exact tokens this row's delivery used.
-    timeAnchor: buildTimeAnchor(input.targetChat.messages),
+    timeAnchor: buildTimeAnchor(input.targetChat.messages, input.targetChat.id),
     _crossChatPost: {
       fromChatId: input.fromChatId,
       fromChatTitle: input.fromChatTitle,

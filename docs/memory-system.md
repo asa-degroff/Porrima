@@ -143,6 +143,20 @@ To maximize KV cache hit rates with llama.cpp's longest-common-prefix caching, m
 
 See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()` returns `systemPrompt` (frozen), `memoriesMessage` (delta), and `newMemoryIds`; a caller that puts the delta on the wire commits the ids with `commitMemoryDelta()` after its save.
 
+## Project Context Deferral (AGENTS.md)
+
+The `## Project Context` section (project line + working directory + AGENTS.md body) is embedded in the stable prefix. If the file changes between sessions (git checkout, external edit), serving freshly-read bytes at the prefix rebuild after a porrima restart would rewrite the system prompt and re-prefill the **entire retained history** — the opposite of the delta philosophy above. Meanwhile the in-process prefix cache never re-validates against disk, so the same edit was already deferred silently mid-session; only the restart forced it.
+
+The fix mirrors the frozen-section persistence: the last-SERVED project section is snapshotted per chat in `chat_project_context_state` (`memory-storage.ts`). On a cache-miss rebuild, `buildStablePrefix` compares the freshly rendered section (sha1) against the snapshot:
+
+- **Same workspace source, diverged content** → serve the snapshot bytes (cache intact), mark the Map entry pending, and append a one-line notice to the message tail (`buildProjectContextNotice`, riding the frozen `timeAnchor` field like the `[time:]` anchor) telling the agent the file moved and lands at the next compaction
+- **Different source (workspace move)** → apply fresh immediately and re-baseline the snapshot
+- **Workspace read failure** → serve the snapshot without claiming a change
+
+Landing points where the prompt is reprocessed anyway: `softResetMemoryContext` (every compaction path drops the snapshot + cached prefix entry), `resetMemoryContext` (chat deletion, cache-warm prep), and `invalidateAllCaches` (workspace move). Global Map-only invalidations (synthesis, block edits, budget changes) deliberately KEEP the snapshot: chats whose non-project sections rebuild byte-identical keep their KV prefix, and the deferred notice continues until that chat's own next compaction. `buildStablePrefix(..., { preview: true })` (the context viewer's display fallback) consults both stores for honest rendering but writes neither.
+
+Scope note: only the project section defers. Persona/zeitgeist/block changes flow through deliberate global invalidations where the system consciously propagates new content to every chat; AGENTS.md edits arrive with no Porrima event at all. See `docs/design/memory-context-persistence.md` §11.
+
 ## Passive Mid-Turn Memory Recall
 
 Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` (in `passive-memory-recall.ts`) runs from the HTTP chat loop and headless automation runner via two scheduling paths:

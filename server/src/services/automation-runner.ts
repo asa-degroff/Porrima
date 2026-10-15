@@ -282,7 +282,7 @@ async function runPromptAutomation(
       // Freeze this run's `[time:]` anchor on the trigger row so replays of the
       // automation chat match the tokens this run's prompt contains.
       const { buildTimeAnchor } = await import("./memory-context.js");
-      firstTriggerRow.timeAnchor = buildTimeAnchor(chat.messages);
+      firstTriggerRow.timeAnchor = buildTimeAnchor(chat.messages, chat.id);
       chat.messages.push(firstTriggerRow);
       triggerMessageIndex = chat.messages.length - 1;
       triggerMessageInserted = true;

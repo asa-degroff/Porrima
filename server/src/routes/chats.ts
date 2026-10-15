@@ -186,7 +186,7 @@ router.get("/:id/context-view", async (req, res) => {
       projectPath = project?.path;
     }
     try {
-      ({ stablePrefix: systemPrompt } = await buildStablePrefix(chat.id, chat.projectId, projectPath));
+      ({ stablePrefix: systemPrompt } = await buildStablePrefix(chat.id, chat.projectId, projectPath, { preview: true }));
     } catch {
       systemPrompt = "";
     }
