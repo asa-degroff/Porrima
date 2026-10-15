@@ -532,6 +532,21 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   // Create chat-aware SSE callbacks that route to the correct bgStream
   const makeStreamCallbacks = useCallback(
     (streamChatId: string, onDoneExtra?: (msgs: ChatMessage[]) => void): StreamCallbacks => {
+      // Shared live thinking-timer pause: visible text, tool execution, and
+      // tool-call composition all prove thinking has stopped. Without the
+      // tool-call hooks the "Thinking… Ns" counter would keep running while
+      // the model composes a call right after a thinking block, charging the
+      // argument generation to thinking.
+      const pauseThinkingTimer = (bg: BackgroundStream) => {
+        if (!bg.thinkingActive) return;
+        bg.thinkingAccumulatedMs += Date.now() - bg.thinkingLastStart;
+        bg.thinkingActive = false;
+        if (activeChatIdRef.current === streamChatId) {
+          setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
+          setStreamingThinkingActive(false);
+          streamingThinkingLastStartRef.current = 0;
+        }
+      };
       const callbacks: StreamCallbacks = {
       onDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
@@ -554,15 +569,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         }
 
         // Pause thinking timer on text output
-        if (bg.thinkingActive) {
-          bg.thinkingAccumulatedMs += Date.now() - bg.thinkingLastStart;
-          bg.thinkingActive = false;
-          if (activeChatIdRef.current === streamChatId) {
-            setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
-            setStreamingThinkingActive(false);
-            streamingThinkingLastStartRef.current = 0;
-          }
-        }
+        pauseThinkingTimer(bg);
 
         bg.content += delta;
 
@@ -814,15 +821,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         }
 
         // Pause thinking timer on tool execution
-        if (bg.thinkingActive) {
-          bg.thinkingAccumulatedMs += Date.now() - bg.thinkingLastStart;
-          bg.thinkingActive = false;
-          if (activeChatIdRef.current === streamChatId) {
-            setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
-            setStreamingThinkingActive(false);
-            streamingThinkingLastStartRef.current = 0;
-          }
-        }
+        pauseThinkingTimer(bg);
         const existingIdx = bg.tools.findIndex(
           (t) => t.name === status.name && t.status === "running"
         );
@@ -864,6 +863,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onToolCallStart: (info) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Argument generation has begun: thinking is over. Mirrors the
+        // server flushing its persisted timer at thinking_end/toolcall_start.
+        pauseThinkingTimer(bg);
         // A preview at the same index from an earlier fragment (a call the
         // model abandoned before it executed) is stale — replace it outright.
         const stale = bg.toolPreviews.get(info.index);
@@ -898,6 +900,9 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       onToolCallDelta: (info) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        // Also pause here: a reconnect can land mid-generation with no
+        // preceding start event, so deltas alone prove composition is running.
+        pauseThinkingTimer(bg);
         let preview = bg.toolPreviews.get(info.index);
         if (!preview) {
           // Deltas without a start (reconnect landed mid-generation): start a

@@ -1729,7 +1729,18 @@ async function handleChatStream(
     if (ame.type === "thinking_delta") {
       return appendThinkingDelta(ame.delta);
     }
+    // Thinking duration should cover the thinking itself, not what follows:
+    // the provider closes a thinking block with `thinking_end` when visible
+    // output or a tool call takes over, and `toolcall_start` marks the edge
+    // where argument generation begins. Flush there — otherwise the time
+    // spent composing a call (until tool_execution_start's flush) is billed
+    // to the thinking block and "Thought for Xs" over-counts.
+    if (ame.type === "thinking_end") {
+      flushThinkingTimer();
+      return false;
+    }
     if (ame.type === "toolcall_start") {
+      flushThinkingTimer();
       const block = ((event.message as AssistantMessage).content?.[ame.contentIndex] ?? {}) as {
         name?: string;
         id?: string;
