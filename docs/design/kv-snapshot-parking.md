@@ -1,6 +1,6 @@
 # KV Snapshot Parking — a disk tier for idle slot KV
 
-**Status:** **Phases 1–3 implemented 10-11, plus the 10-11 review fixes (slot probe, binary build tag, wire-failure strikes, min-build gate, slot-identity save guard, estimate ordering) and the fine-print fixes (stderr version banner, /slots capacity discovery — f89b1885).** Smoke script validated live 10-11 against b11552: cold prefill → save → erase → restore → repinned replay, `n_saved == n_restored`, replay cached 2798/2802. **First production park landed 10-11 13:44** (chat 21f67f84, 91,930 tokens, 16.3 GB, save 15.1 s, build-tagged, `ready`). Phase 4 (surfaces) pending.
+**Status:** **Phases 1–3 implemented 10-11, plus the 10-11 review fixes (slot probe, binary build tag, wire-failure strikes, min-build gate, slot-identity save guard, estimate ordering), the fine-print fixes (stderr version banner, /slots capacity discovery — f89b1885), and the 10-15 spine-rewrite park suppression (§5.3/§5.5 — invalidate-then-release race: end-of-turn compaction invalidated the snapshot, then the lease release parked the 214k pre-compaction slot state anyway, 34.3 GB / 83 s of wasted I/O).** Smoke script validated live 10-11 against b11552: cold prefill → save → erase → restore → repinned replay, `n_saved == n_restored`, replay cached 2798/2802. **First production park landed 10-11 13:44** (chat 21f67f84, 91,930 tokens, 16.3 GB, save 15.1 s, build-tagged, `ready`). Phase 4 (surfaces) pending.
 **Author:** Qwen 3.8 Flash
 **Date**: 2026-10-11
 
@@ -183,7 +183,11 @@ Restore is only sane if the prefix llama.cpp will compare against hasn't moved.
 the exact body the provider dispatches (`computeLlamaPrefixDigest`). The head is
 the frozen prefix by construction (memory deltas ride at the tail), so it shifts
 exactly when the parked KV stops matching — persona regeneration, extraction
-prompt edits, skill toggles, compaction.
+prompt edits, skill toggles. **It does not shift on compaction** (2026-10-15
+correction): compaction rewrites the messages, never the head, so a
+post-compaction park has the same wire-head digest and the gate cannot catch
+it — that case rides entirely on §5.5 eager invalidation and the §5.3
+spine-freshness gate.
 
 **Landed refinement (10-11):** the digest is *observed* by the provider on every
 recorded request (`observeLlamaRequestBody` stashes the latest per chat) rather
@@ -214,6 +218,7 @@ parking. Policy (all must hold):
 | Pinning | turn held a lease (slot known and still mapped to this chat) |
 | Eligibility | final iteration's `usage.prompt_tokens ≥ kvSnapshotMinTokens` — below this, re-prefill is cheaper than save+restore; the break-even is low (spike: 134k tokens re-prefilled in ~355 s vs ~7 s round-trip) |
 | Freshness | last save for this chat is older than `kvSnapshotSaveDebounceMs`, **or** context grew by more than `kvSnapshotMinGrowthTokens` since it — rapid-fire tool turns stay in tier 1; the last turn before an idle gap is what gets parked |
+| Spine freshness | the slot witness — the latest DONE chat request (D7's row, also the eligibility input) — must post-date the last §5.5 invalidation (`spineRewrittenAt`). End-of-turn compaction invalidates *before* the lease release enqueues the park, and the slot still holds the pre-rewrite wire shape: parking it re-registers the snapshot the drop just deleted (2026-10-15 race: 214k pre-compaction tokens parked after the invalidate, 34.3 GB, 83 s of slot-blocking I/O, `prefix_digest ''` from the deleted observation passing the restore gate vacuously — compaction is invisible to the head digest, §5.2). A rewrite landing mid-save is caught again at completion, before the `ready` mark. A rewrite that never gets a follow-up wire turn leaves the chat unparked, which is exactly right: the next turn re-prefills and then parks the fresh state |
 | Queue | per-`poolKey:slot` serialized job queue; a queued save is dropped (not deferred forever) if the same chat's turn restarts first |
 | Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio — read from the row **before** the `saving` upsert (the upsert rewrites `n_tokens` in place; reading after computes `prior.bytes / lastUsage`, an under-estimate whenever the context grew) |
 
@@ -293,6 +298,13 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 - Orphan sweeps (startup + hourly): file without row → unlink; row without file →
   `stale`. Chat deletion, chat model switch (poolKey change), and lease reassignment
   all remove files eagerly via `chat-deletion.ts` / lease eviction hooks.
+- **Eager invalidation + park suppression** (§5.3 spine-freshness gate):
+  `invalidateKvSnapshot` drops row + file, supersedes queued saves via the
+  `pendingTokens` bump, and stamps `spineRewrittenAt` — an in-memory per-chat
+  watermark that also suppresses parks enqueued AFTER the drop, until the next
+  DONE chat request (the rewritten spine refilling the slot) re-arms them.
+  The watermark is in-memory like `pendingTokens`: a restart leaves the slots
+  cold, and the slot-identity guard bounds the worst case for a lost entry.
 - Server **restart**: files remain valid (restore-across-restart is the upside of a
   disk tier, D5); server **binary/launch-config change** invalidates rows lazily at
   the §5.4 step-1 check, files unlinked by the sweeper.
@@ -388,6 +400,7 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 | Slot probe fails (pre-send) | restore skipped, no state change; turn pays normal prefill | automatic next turn |
 | Restore error/timeout | pre-send proceeds after the budgeted failure; strike counted at attempt time | two strikes close the breaker until a re-park |
 | Restore succeeds but prefix diverged | wasted restore seconds; LCP reuse degrades gracefully | digest gate tightens on next save; `miss_count` breaker caps repeats |
+| Spine rewrite (compaction/deletion) between the last wire turn and the park | save skipped at enqueue with a visible log line; a rewrite landing mid-save discards the file before the `ready` mark and rolls the row back | next eligible end-of-turn re-parks after a fresh turn refills the slot (§5.3 spine-freshness gate) |
 | Disk full / headroom | save refused pre-flight (estimate), stale rows pruned | budget policy; log + panel status |
 | Server swap (build/config) | build-tag mismatch → rows invalidated lazily | files pruned by the sweeper |
 | Lease reassigned / slot evicted by tier 1 | `slot_id` in row is history, not truth — re-park on next save with current lease | save always records the *current* slot |

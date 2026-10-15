@@ -432,6 +432,77 @@ describe("kv-snapshot save policy", () => {
   });
 });
 
+describe("kv-snapshot spine-rewrite suppression (§5.5 invalidate-then-release race)", () => {
+  // The 2026-10-15 production race: end-of-turn compaction invalidates the
+  // snapshot (deleting row + file), then the lease release parks the slot's
+  // pre-rewrite state anyway — the slot holds exactly what the rewrite made
+  // obsolete, and the wire-head digest cannot tell (compaction rewrites the
+  // messages, not [system, tools]). The gate: a park needs its slot witness
+  // (the last DONE chat request) to post-date the last rewrite.
+
+  it("suppresses a park enqueued after the last wire turn was invalidated", async () => {
+    const h = await loadHarness({ seedPromptTokens: 150_000 });
+    vi.setSystemTime(BASE_TIME + 60_000);
+    await h.kv.invalidateKvSnapshot(lease.chatId, "compaction");
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull();
+    h.db.close();
+  });
+
+  it("re-arms the park once a post-rewrite turn fills the slot", async () => {
+    const h = await loadHarness({ seedPromptTokens: 150_000 });
+    vi.setSystemTime(BASE_TIME + 60_000);
+    await h.kv.invalidateKvSnapshot(lease.chatId, "compaction");
+    // The next real turn: its DONE request is the slot's new witness.
+    h.db
+      .prepare(
+        "INSERT INTO llm_requests (id, chat_id, timestamp, model_id, provider, status, prompt_tokens) VALUES (?,?,?,?,?,?,?)",
+      )
+      .run("req-2", lease.chatId, BASE_TIME + 90_000, lease.modelId, "llamacpp", "done", 150_050);
+    vi.setSystemTime(BASE_TIME + 120_000);
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
+
+  it("discards a save whose invalidation lands mid-flight", async () => {
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      fetchImpl: async (url) => {
+        if (String(url).includes("action=save")) {
+          // Invalidation arriving while the write is in flight: the file may
+          // land, but it must never be registered as a ready snapshot.
+          await h.kv.invalidateKvSnapshot(lease.chatId, "compaction");
+          return Response.json({
+            id_slot: 2,
+            filename: "x.bin",
+            n_saved: 150_050,
+            n_written: 1_000,
+            timings: { save_ms: 1 },
+          });
+        }
+        return Response.json({ error: { message: "unexpected url" } }, { status: 404 });
+      },
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1); // the save fired...
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull(); // ...but nothing survived
+    h.db.close();
+  });
+
+  it("a deleted chat cannot resurrect a snapshot through a racing release-park", async () => {
+    const h = await loadHarness({ seedPromptTokens: 150_000 });
+    vi.setSystemTime(BASE_TIME + 30_000);
+    await h.kv.invalidateKvSnapshot(lease.chatId, "chat-deleted");
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull();
+    h.db.close();
+  });
+});
+
 describe("kv-snapshot pruning", () => {
   it("expires by TTL, clears stale rows, flags missing files, and sweeps orphans", async () => {
     const h = await loadHarness({

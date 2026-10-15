@@ -30,6 +30,15 @@ import { resolveLlamaBuildTag } from "./llama-build-probe.js";
  *   probes the pinned slot's `n_prompt_tokens` (GET /slots) instead of trusting
  *   the residency record, whose warm memory outlives llama.cpp's idle-slot
  *   eviction by orders of magnitude (10-11 review fix).
+ * - A park captures what the slot holds, and the slot holds the state the last
+ *   DONE chat request left there (D7). When a spine rewrite (compaction)
+ *   invalidates the snapshot after that request, the slot still holds exactly
+ *   the wire shape the rewrite made obsolete — parking it now would re-register
+ *   the invalidation as a `ready` row and burn the slot queue + tens of GB on a
+ *   capture that can only ever miss (the wire-head digest CANNOT catch this:
+ *   compaction rewrites the messages, not [system, tools], so the head digest
+ *   is identical pre/post rewrite — eager invalidation is the only spine
+ *   witness). §5.3 suppresses such parks at enqueue and again at completion.
  * - Build identity comes from the running binary (`/proc/<pid>/exe` +
  *   `--version` via llama-build-probe); `/server_info` is not a stable endpoint
  *   (absent on b11552). Wire-level restore failures count as breaker strikes
@@ -230,10 +239,12 @@ export function listKvSnapshots(): KvSnapshotRow[] {
  * the sha256 of [system head, tool surface] from the exact body llama.cpp
  * will tokenize. The head is the frozen prefix by Porrima's construction
  * (memory deltas ride at the tail), so it changes exactly when the parked KV
- * stops matching — persona/extract prompt rewrites, tool-surface changes,
- * compaction. It gates WASTED restores only; correctness never depends on it
- * (§2.9: the server validates token identity and re-prefills from the first
- * divergence).
+ * stops matching — persona regeneration, extraction prompt edits,
+ * tool-surface changes. **Not compaction**: compaction rewrites the messages,
+ * never the head, so the digest gate is blind to it — §5.5 eager invalidation
+ * plus the §5.3 spine-freshness gate carry that case. It gates WASTED
+ * restores only; correctness never depends on it (§2.9: the server validates
+ * token identity and re-prefills from the first divergence).
  */
 export function computeLlamaPrefixDigest(body: any): string {
   const head = body?.system ?? body?.messages?.[0] ?? null;
@@ -443,6 +454,10 @@ export function initializeKvSnapshotStore(): void {
 /** Monotonic per-chat token: queued jobs whose token was superseded are
  *  dropped instead of executed (D3 queue + "drop if restarted"). */
 const pendingTokens = new Map<string, number>();
+/** Last spine-rewrite per chat, stamped by `invalidateKvSnapshot` (§5.5).
+ *  In-memory like `pendingTokens`: a restart empties the slots, so the
+ *  slot-identity guard already bounds the worst case for a lost entry. */
+const spineRewrittenAt = new Map<string, number>();
 /** Per-slot serialized chains: llama.cpp processes one slot task at a time and
  *  our own queue keeps the registry's view of each slot coherent. */
 const slotQueues = new Map<string, Promise<void>>();
@@ -463,9 +478,26 @@ export async function maybeParkChatAfterTurn(input: {
     const policy = resolveKvSnapshotSettings(settings);
     if (!policy.enabled) return;
 
-    // Gate: wire-truth prompt size of the most recent DONE request (D7).
-    const lastUsage = lastDonePromptTokens(chatId);
-    if (lastUsage == null || lastUsage < policy.minTokens) return;
+    // Gate: wire-truth prompt size of the most recent DONE request (D7) —
+    // the slot holds the state that request left behind. The row's timestamp
+    // doubles as the slot-fill witness for the spine-freshness gate below.
+    const lastDone = lastDoneChatRequest(chatId);
+    if (lastDone == null || lastDone.promptTokens < policy.minTokens) return;
+
+    // Gate: spine freshness (§5.5). An invalidate that landed after the slot's
+    // witness request means the slot still holds the PRE-rewrite wire shape —
+    // exactly what the invalidation just made obsolete. Parking it would
+    // re-register the dropped snapshot as `ready` (a wasted multi-GB write and
+    // a guaranteed-miss restore). The next DONE chat request re-fills the slot
+    // with the rewritten spine and re-arms eligibility.
+    const rewritten = spineRewrittenAt.get(chatId);
+    if (rewritten != null && lastDone.timestamp <= rewritten) {
+      console.log(
+        `${LOG} chat=${short(chatId)} skipped: spine rewritten after the last wire turn (slot holds pre-rewrite state)`,
+      );
+      return;
+    }
+    const lastUsage = lastDone.promptTokens;
 
     // Gate: freshness (debounce + growth override).
     const existing = getKvSnapshot(chatId);
@@ -509,13 +541,19 @@ async function readSettings(): Promise<any> {
   }
 }
 
-function lastDonePromptTokens(chatId: string): number | null {
+/**
+ * The chat's most recent DONE wire-truth request (D7) and when it completed.
+ * Its `promptTokens` is the park eligibility input; its `timestamp` is the
+ * slot-fill witness for the spine-freshness gate: the pinned slot can only be
+ * assumed to hold the state THIS request left behind.
+ */
+function lastDoneChatRequest(chatId: string): { promptTokens: number; timestamp: number } | null {
   const row = getDb()
     .prepare(
-      "SELECT prompt_tokens FROM llm_requests WHERE chat_id = ? AND status = 'done' AND purpose = 'chat' AND prompt_tokens IS NOT NULL ORDER BY timestamp DESC, iteration DESC LIMIT 1",
+      "SELECT prompt_tokens, timestamp FROM llm_requests WHERE chat_id = ? AND status = 'done' AND purpose = 'chat' AND prompt_tokens IS NOT NULL ORDER BY timestamp DESC, iteration DESC LIMIT 1",
     )
-    .get(chatId) as { prompt_tokens: number } | undefined;
-  return row?.prompt_tokens ?? null;
+    .get(chatId) as { prompt_tokens: number; timestamp: number } | undefined;
+  return row ? { promptTokens: row.prompt_tokens, timestamp: row.timestamp } : null;
 }
 
 interface SaveJobInput {
@@ -621,6 +659,25 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
       `${LOG} chat=${short(chatId)} discarded save: n_saved=${save.nTokens} < finished-turn prompt=${lastUsage} (slot reassigned mid-save)`,
     );
     return;
+  }
+
+  // Spine-freshness re-check at completion (the enqueue gate's twin): a
+  // rewrite can also land AFTER the witness read above but before this write
+  // lands — `invalidateKvSnapshot` supersedes the job via the token check in
+  // that ordering, and this is the last gate standing between a `ready` row
+  // and a stale capture if any future path reorders those guards. Only a row
+  // whose witness request still post-dates the rewrite may be registered.
+  const rewritten = spineRewrittenAt.get(chatId);
+  if (rewritten != null) {
+    const witness = lastDoneChatRequest(chatId);
+    if (!witness || witness.timestamp <= rewritten) {
+      await unlinkFile(snapshotPath(filename));
+      rollbackToPrior(chatId, prior);
+      console.warn(
+        `${LOG} chat=${short(chatId)} discarded save: spine rewritten after the last wire turn (captured pre-rewrite slot state)`,
+      );
+      return;
+    }
   }
 
   const parkedTokens = save.nTokens ?? lastUsage;
@@ -1018,10 +1075,16 @@ export async function pruneKvSnapshots(): Promise<KvSnapshotPruneReport> {
 /**
  * Drop the chat's snapshot and its file. Called when the message spine is
  * rewritten (compaction), the chat is deleted, or the row would otherwise be
- * misleading. Also supersedes any queued-but-unrun save job.
+ * misleading. Also supersedes any queued-but-unrun save job, and — via
+ * `spineRewrittenAt` — suppresses parks enqueued LATER whose slot witness
+ * pre-dates this rewrite (the invalidate-then-release race: end-of-turn
+ * compaction drops the snapshot, then the lease release parks the stale
+ * pre-rewrite slot state the drop just discarded). Re-armed by the next DONE
+ * chat request, which refills the slot with the rewritten spine.
  */
 export async function invalidateKvSnapshot(chatId: string, reason: string): Promise<void> {
   try {
+    spineRewrittenAt.set(chatId, Date.now());
     pendingTokens.set(chatId, (pendingTokens.get(chatId) ?? 0) + 1);
     turnPrefixDigests.delete(chatId);
     restoreAttemptTurns.delete(chatId);
