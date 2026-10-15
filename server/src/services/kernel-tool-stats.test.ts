@@ -17,7 +17,10 @@ let dataDir = "";
 
 async function loadModule(env: Record<string, string | undefined>) {
   vi.resetModules();
-  for (const [k, v] of Object.entries(env)) {
+  // NODE_ENV is pinned to "test" for every import in this file — vitest only
+  // sets it when unset, so an ambient NODE_ENV (e.g. a shell that sources the
+  // service's production env) would leak in and flip the module's gating.
+  for (const [k, v] of Object.entries({ NODE_ENV: "test", ...env })) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
