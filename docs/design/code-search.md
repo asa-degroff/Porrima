@@ -7,8 +7,10 @@ concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
 its own feature). First gate run (10-14): **FAIL — flag stays dark**;
 battery v3 (three-arm surface isolation) designed in §4.2 — S1
-(model-level `code=`) and S2 (description v3) **shipped 10-15**; the
-probe run is next.
+(model-level `code=`) and S2 (description v3) **shipped 10-15**; **probe run
+B1 complete 10-15** (arm B, 9/9) — snippet mode live (22/53 calls), T2's
+residual swamp identified as a task-definition gap, not a surface gap; results
+in [code-search-probe-b1.md](code-search-probe-b1.md).
 **Date:** 2026-10-15
 
 ## 1. Problem
