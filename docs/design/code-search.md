@@ -11,8 +11,14 @@ battery v3 (three-arm surface isolation) designed in §4.2 — S1
 B1 complete 10-15** (arm B, 9/9) — snippet mode live (22/53 calls), T2's
 residual swamp identified as a task-definition gap, not a surface gap;
 results in [code-search-probe-b1.md](code-search-probe-b1.md). **T2 redefined 10-15** (the exclusion stated; 4-rep smoke confirms the
-contradiction dead, T2 demoted to diagnostic per §4.2); next: the 45-run
-three-arm battery.
+contradiction dead, T2 demoted to diagnostic per §4.2). **54-run battery
+complete 10-16**: both verdict lines print FAIL, each solely on T3's
+comparability clause (every measured surface axis — aggregate turns/tokens,
+completion guard, per-task correctness — wins or ties for the on-arms under
+human grading; the strict gate's one fc flag is a verified detector-wording
+artifact). **T3 redefined in v4** (10-16): AST semantics with an engine
+oracle, truth 336 of 438 calls, scope pinned outside the harness file; probe
+B2 (arm B × 3) is next.
 **Date:** 2026-10-15
 
 ## 1. Problem
@@ -906,7 +912,28 @@ still censors 0/4 in two remaining named modes — over-verification (the
 complement class makes any honest raw cross-check a swamp) and adoption
 variance (1 rep skipped the tool). **T2 is diagnostic in the v3 battery**
 (excluded from the flip aggregate, like T4): adoption, drowning mode,
-correctness-when-completed. **T6 — diagnostic probe** (excluded from the flip aggregate,
+correctness-when-completed. **T3 redefined
+in v4** (10-16, battery v3 evidence): the textual starts-with semantics were
+epistemically unresolvable — line-based grep (268), the textual oracle (375),
+`-o` counting (482), and AST parses (514) disagree by design; the oracle
+counted a tool-description string occurrence that any AST reader rejects;
+and the single completion in 15 runs peeked at the harness source from inside
+its own scan scope. T3-v4 stipulates AST semantics: a real call site whose
+first argument's leftmost token is a backtick (after whitespace, comments,
+leading parens — bare/interpolated templates, template-led `+` concatenation
+including chains, and parenthesized templates count; a template not first, a
+concatenation not led by one, and no-argument calls do not). The oracle is
+engine-derived: one whole-call scan (`console.log($$$ARGS)`) plus a
+deterministic leftmost-token filter on the bound ARGS text — NOT pattern
+enumeration (referee 10-16: the template-interior `$$$X` wildcard does
+correctly wildcard contents, but concatenation patterns miss left-nested
+chains and cannot enumerate the class). Freeze truth: **336 of 438 calls in
+scope** (census: 280 pure + 36 concat + 19 multi-arg + 1 paren-wrapped); the
+scope pin `!server/src/scripts` drops the harness's own calls and closes the
+peek channel; the tool-description false positive vanishes structurally (0
+matches in agent-tools.ts, census-confirmed). T3 stays efficiency-gated (the
+aggregate is T1+T3+T5); the v3-T3 rows are superseded, not a baseline.
+**T6 — diagnostic probe** (excluded from the flip aggregate,
 like T4; runs on all three arms × 3 reps — the nudge gate's
 question applies to T6's trap handling): *"Count `if` statements (without else) whose consequent is
 exactly one `return` statement — both the brace-less form `if (x) return y;`

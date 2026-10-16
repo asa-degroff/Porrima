@@ -37,10 +37,10 @@
  *   guidance line is a nudge, not the mechanism). Naming code_search in the
  *   prompt would inflate adoption above what the flip itself delivers.
  * - Ground truth is recomputed at run time so the battery survives repo
- *   drift. Tasks 1/3/4/5 use rg (an independent oracle; T3 multiline-aware —
- *   line-based rg undercounts wrapped calls); tasks 2 and 6 are engine-derived
- *   (rg cannot express the shapes — noted in the report). Oracle strings are
- *   deterministically ordered (rg's walk order is not).
+ *   drift. Tasks 1/4/5 use rg (an independent oracle); tasks 2/3/6 are
+ *   engine-derived (the shapes rg cannot express — T2's parameter class,
+ *   T3's v4 AST semantics, T6's else-exclusion; noted in the report).
+ *   Oracle strings are deterministically ordered (rg's walk order is not).
  * - Correctness grading is human by design: the report prints each run's
  *   final answer next to its oracle. The one auto-flag is the false-
  *   conclusion probe (task 4): an absence claim while the oracle shows the
@@ -162,20 +162,67 @@ const TASKS: TaskDef[] = [
   },
   {
     id: 3,
-    label: "template-literal console.log (rg oracle, multiline-aware)",
-    // Prompt semantics === oracle semantics: rg -U counts the TEXTUAL
-    // starts-with shape (backtick first after the paren, modulo whitespace),
-    // which includes templates continuing into `+` concatenations. The
-    // is-vs-starts-with ambiguity (strict-AST 315 vs starts-with 369 in the
-    // first gate run) is resolved in the question itself.
-    prompt: "In `server/src` (TypeScript files), how many `console.log` calls have a first argument that STARTS WITH a template literal — i.e. a backtick is the first non-whitespace character after the opening paren? This includes calls where the template continues into a `+` concatenation, and calls with further arguments after it. Report the count and the files with per-file counts.",
+    label: "template-literal console.log — AST semantics (engine oracle — v4)",
+    // v4 redefinition (10-16, battery v3 evidence): the v3 textual
+    // starts-with semantics were epistemically unresolvable — line-based
+    // grep (268), the multiline textual oracle (375), -o counting (482),
+    // and AST parses (514) disagreed by design; the oracle counted a
+    // tool-description string occurrence (agent-tools.ts line 106) that no
+    // AST reader would call a call; and the single completion in 15 runs
+    // (c T3 r1) peeked at the harness source from inside its own scan
+    // scope. v4 flips to stipulative AST semantics: real call sites whose
+    // first argument's LEFTMOST TOKEN is a backtick (after whitespace,
+    // leading comments, and leading parens). The scope pin
+    // (!server/src/scripts) drops the harness's own logging calls AND
+    // closes the peek channel. Referee (10-16, t3v4-referee.ts): the
+    // template-interior `$$$X` wildcard matches any template contents
+    // (bare + interpolated); concatenation patterns miss left-nested
+    // chains (`x` + y + z) — so the oracle is a whole-call scan plus a
+    // deterministic leftmost-token filter on the bound ARGS text, NOT
+    // pattern enumeration. Freeze census: 438 calls in 47 files in scope;
+    // truth 336 template-first (280 pure + 36 concat + 19 multi-arg + 1
+    // paren-wrapped); 0 matches in agent-tools.ts (the line-106 occurrence
+    // is gone structurally). Comment-led first args: 0 instances on this
+    // tree — the class is stated for principled completeness, not witness.
+    prompt: "In `server/src` (TypeScript files; excluding `server/src/scripts`): count the calls to `console.log(...)` whose first argument starts with a template literal. AST semantics: only real call sites count — occurrences inside strings or comments are not calls. \"Starts with\" means the first argument's leftmost token is a backtick: bare templates, interpolated templates (e.g. console.log(`a ${x} b`)), templates followed by `+` concatenation (including chains like console.log(`x` + y + z)), and parenthesized templates (e.g. console.log((`x`))) all count; whitespace or comments between the opening paren and the first argument make no difference. A template that is not the first argument (e.g. console.log(x, `t`)), a concatenation not starting with one (e.g. console.log(x + `t`)), and a call with no arguments do not count. Report the count and the files with per-file counts.",
     oracle: async () => {
-      // Multiline-aware (-U --count-matches): line-based rg undercounts calls
-      // whose backtick starts after whitespace or on a later line (measured
-      // 265 line-based vs 369 multiline — the models were right, the oracle
-      // was wrong). Still an independent (non-engine) oracle.
-      const c = rgCounts(["-U", "--count-matches", "console\\.log\\(\\s*`", "server/src", "-g", "*.ts"]);
-      return `${c.total} template-literal console.log calls: ${JSON.stringify(c.byFile)}`;
+      // Engine-derived (v4): one whole-call scan + the leftmost-token rule
+      // on the bound ARGS text. maxMatches 1000 > the 438-call freeze
+      // census — no silent clamp (the T6 lesson). ARGS includes leading
+      // extras (comments/whitespace) as bound, hence the strip loop.
+      const ws = new LocalWorkspaceAdapter(REPO_ROOT);
+      const res = await runCodeSearch({
+        pattern: "console.log($$$ARGS)",
+        path: "server/src",
+        globs: ["!server/src/scripts"],
+        maxMatches: 1000,
+      }, ws);
+      const byFile: Record<string, number> = {};
+      for (const m of res.matches) {
+        let args = m.metaVariables?.ARGS;
+        if (args == null) continue; // no first argument — excluded by definition
+        for (;;) {
+          args = args.trimStart();
+          if (args.startsWith("//")) {
+            const e = args.indexOf("\n");
+            if (e < 0) { args = ""; break; }
+            args = args.slice(e + 1);
+            continue;
+          }
+          if (args.startsWith("/*")) {
+            const e = args.indexOf("*/");
+            if (e < 0) break;
+            args = args.slice(e + 2);
+            continue;
+          }
+          if (args.startsWith("(")) { args = args.slice(1); continue; }
+          break;
+        }
+        if (args.startsWith("`")) byFile[m.file] = (byFile[m.file] ?? 0) + 1;
+      }
+      const total = Object.values(byFile).reduce((s, n) => s + n, 0);
+      const sorted = Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b)));
+      return `${total} template-first console.log calls (${res.totalMatches} calls in scope): ${JSON.stringify(sorted)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
   },
