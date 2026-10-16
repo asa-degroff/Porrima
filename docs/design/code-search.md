@@ -907,7 +907,8 @@ complement class makes any honest raw cross-check a swamp) and adoption
 variance (1 rep skipped the tool). **T2 is diagnostic in the v3 battery**
 (excluded from the flip aggregate, like T4): adoption, drowning mode,
 correctness-when-completed. **T6 — diagnostic probe** (excluded from the flip aggregate,
-like T4): *"Count `if` statements (without else) whose consequent is
+like T4; runs on all three arms × 3 reps — the nudge gate's
+question applies to T6's trap handling): *"Count `if` statements (without else) whose consequent is
 exactly one `return` statement — both the brace-less form `if (x) return y;`
 and the single-statement block `if (x) { return y; }` count."* The trap: a
 block-form-only pattern (or brace-less-only) silently misses the other
