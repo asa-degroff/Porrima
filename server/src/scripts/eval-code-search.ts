@@ -115,7 +115,14 @@ const TASKS: TaskDef[] = [
     // (arrows? methods? generators? overloads?) sent BOTH arms into
     // build-your-own-parser spirals in the first gate run. The shape list
     // makes the question as closed as the oracle is.
-    prompt: "In `server/src/services`, considering only non-test TypeScript files (exclude `*.test.ts`): how many function declarations take exactly one parameter? Count declarations of the form `function name(oneParam) { ... }`, including `async function` ones. Do NOT count arrow functions, class methods, generator functions (`function*`), or TypeScript overload signatures (body-less declarations). Report the count and each function's name with its file.",
+    // v3 redefinition (probe B1, 10-15): the original prompt's shape list
+    // closed over arrows/methods/generators/overloads but never stated the
+    // typed-return exclusion the oracle's complete-node form implements.
+    // The model found the typed class (750 matches) as readily as the
+    // literal one (4) and drowned reconciling the two — every arm, v2 and
+    // v3 probe alike. The exclusion is now stated: T2 is answerable. Its
+    // v2 rows are a null baseline, not a surface signal.
+    prompt: "In `server/src/services`, considering only non-test TypeScript files (exclude `*.test.ts`): how many function declarations take exactly one parameter? Count declarations of the form `function name(oneParam) { ... }` and `async function name(oneParam) { ... }` — declarations WITHOUT a return type annotation. Do NOT count declarations WITH a return type annotation (e.g. `function name(oneParam): T`), arrow functions, class methods, generator functions (`function*`), or TypeScript overload signatures (body-less declarations). Report the count and each function's name with its file.",
     oracle: async () => {
       // Complete-node form — WITHOUT `{ $$$ }` the pattern matches only
       // body-less declarations (overload signatures), not definitions: the

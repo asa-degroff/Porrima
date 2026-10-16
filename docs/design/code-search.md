@@ -9,8 +9,10 @@ its own feature). First gate run (10-14): **FAIL — flag stays dark**;
 battery v3 (three-arm surface isolation) designed in §4.2 — S1
 (model-level `code=`) and S2 (description v3) **shipped 10-15**; **probe run
 B1 complete 10-15** (arm B, 9/9) — snippet mode live (22/53 calls), T2's
-residual swamp identified as a task-definition gap, not a surface gap; results
-in [code-search-probe-b1.md](code-search-probe-b1.md).
+residual swamp identified as a task-definition gap, not a surface gap;
+results in [code-search-probe-b1.md](code-search-probe-b1.md). **T2 redefined 10-15** (the exclusion stated; 4-rep smoke confirms the
+contradiction dead, T2 demoted to diagnostic per §4.2); next: the 45-run
+three-arm battery.
 **Date:** 2026-10-15
 
 ## 1. Problem
@@ -692,7 +694,22 @@ single-parameter function declarations under a **closed shape list** (plain
 and async `function name(oneParam) {…}` only — arrows, methods, generators,
 and overload signatures excluded, non-test files only; the open-ended
 "which function definitions" phrasing sent *both* arms into
-build-your-own-parser spirals, so the question is as closed as the oracle);
+build-your-own-parser spirals, so the question is as closed as the oracle.
+**v3 redefinition (probe B1):** the closed list omitted one class —
+return-type-annotated signatures. The model found that class (750 matches)
+as readily as the literal one (4) and drowned reconciling the two in
+every arm, v2 and v3 probe alike. The v3 prompt states the exclusion,
+and the contradiction mode is confirmed dead: a 4-rep smoke (10-15, arm B)
+saw 2 reps reach the correct 4 in-scan after snippet-verifying the
+exclusion — the first correct T2 answer in any on-arm history — both then
+drowning in *over-verification* (a raw cross-check of a shape rg cannot
+cheaply express; the answer's complement class is the 750 typed
+declarations any enumeration exposes), and 1 rep skipping the tool into
+the script swamp outright (adoption variance, the v2 mode). 0/4 completed.
+T2 is therefore **demoted to a diagnostic probe** (like T4): excluded from
+the flip aggregate; graded on adoption, drowning mode, and
+correctness-when-completed. Its v2 rows are a null baseline, not a surface
+signal);
 (3) count `console.log` calls whose first argument **starts with** a
 template literal — the prompt's semantics are pinned to the oracle's
 textual starts-with reading (backtick first after the paren, modulo
@@ -874,8 +891,22 @@ as designed, not a defect of the model.
   unchanged in A/B; C approximates what the AGENTS.md deployment would add
   in production. The line's own ~25 tokens sit inside C's numbers.
 
-**Tasks.** T1–T5 byte-identical to v2 (comparability with the recorded
-numbers). **T6 — diagnostic probe** (excluded from the flip aggregate,
+**Tasks.** T1/T4/T5 byte-identical to v2 (comparability with the recorded
+numbers). **T2 redefined in v3** (probe B1, §4.1): the v2 prompt never
+stated the typed-return exclusion the oracle's complete-node form
+implements — the model found the typed class (750) as readily as the
+literal one (4) and every arm drowned in the reconciliation, so T2-as-
+written is unanswerable by an honest model and a known null in all arms.
+T2's v2 rows are a null baseline (and the v2 T2 oracle was already
+non-comparable between gate runs — pre-fix "6 definitions" vs post-fix
+"4 declarations", the e31a12fb glob fix landing between them). The v3
+redefinition is smoke-confirmed against a 4-rep arm-B run (10-15):
+contradiction mode dead (2 reps reached the correct 4 in-scan), but T2
+still censors 0/4 in two remaining named modes — over-verification (the
+complement class makes any honest raw cross-check a swamp) and adoption
+variance (1 rep skipped the tool). **T2 is diagnostic in the v3 battery**
+(excluded from the flip aggregate, like T4): adoption, drowning mode,
+correctness-when-completed. **T6 — diagnostic probe** (excluded from the flip aggregate,
 like T4): *"Count `if` statements (without else) whose consequent is
 exactly one `return` statement — both the brace-less form `if (x) return y;`
 and the single-statement block `if (x) { return y; }` count."* The trap: a
@@ -888,19 +919,24 @@ trap applies to the oracle author as always. **Fixture audit before
 freeze — both forms must exist in server/src with non-zero instances
 (no vacuous witness); if the brace-less form is absent, swap the task.**
 
-**Protocol — probe first.** Before committing the 45-run battery:
-T1+T2+T5 × 3 reps on arm B only (9 runs, ~20–30 min on the local model).
-The questions: does the T2 swamp collapse (median iterations 14.5 → single
-digits, `run_python` dropping out)? Does snippet mode get used at all? If
-the behavior does not move, selection — not verification — is the binding
-constraint and the nudge arm becomes the whole question; the full battery
-still runs, re-scoped.
+**Protocol — probe first (complete 10-15).** T1+T2+T5 × 3 reps on arm B
+only (9 runs, ~26 min). Results in
+[code-search-probe-b1.md](code-search-probe-b1.md): the T2 swamp collapsed
+as a *verification* problem (tokens halved, `run_python` out 3/6 → 0/3,
+pattern uncertainty solved on the first scan) and the residual failure is
+a **task-definition gap, not a surface gap** — the model found the
+typed-return class (750) as readily as the literal one (4) and drowned in
+the reconciliation. Snippet mode is used with judgment (22 of 53 calls,
+zero on unambiguous T1). The behavior moved: selection is not the binding
+constraint. T2 was redefined accordingly (see Tasks above); the full
+battery runs as designed.
 
 **Gates — two verdict lines, one decision.**
 
 - **Strict gate (B vs A):** the doc's original purism — the flip must not
   lean on the nudge. Same aggregate as §4.1: summed per-task median turns
-  and tokens across the efficiency tasks, completion guard, false-
+  and tokens across the efficiency tasks — **T1 + T3 + T5** (T2 and T4 are
+  diagnostic, excluded from the flip aggregate), completion guard, false-
   conclusion guard, ties pass.
 - **Nudge gate (C vs A):** the field's bet — tool plus routing line.
 - Decision matrix:
