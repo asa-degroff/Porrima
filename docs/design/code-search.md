@@ -16,9 +16,10 @@ complete 10-16**: both verdict lines print FAIL, each solely on T3's
 comparability clause (every measured surface axis — aggregate turns/tokens,
 completion guard, per-task correctness — wins or ties for the on-arms under
 human grading; the strict gate's one fc flag is a verified detector-wording
-artifact). **T3 redefined in v4** (10-16): AST semantics with an engine
-oracle, truth 336 of 438 calls, scope pinned outside the harness file; probe
-B2 (arm B × 3) is next.
+artifact). **T3 redefined in v4** (10-16): AST semantics, scope
+pinned outside the harness file (peek channel closed); the v4-B probe (arm B
+× 3) censored 0/3 on selection, not truth → **v4.1 strict A** — the class is
+one engine pattern, truth 280; probe B3 next.
 **Date:** 2026-10-15
 
 ## 1. Problem
@@ -918,21 +919,27 @@ epistemically unresolvable — line-based grep (268), the textual oracle (375),
 `-o` counting (482), and AST parses (514) disagree by design; the oracle
 counted a tool-description string occurrence that any AST reader rejects;
 and the single completion in 15 runs peeked at the harness source from inside
-its own scan scope. T3-v4 stipulates AST semantics: a real call site whose
-first argument's leftmost token is a backtick (after whitespace, comments,
-leading parens — bare/interpolated templates, template-led `+` concatenation
-including chains, and parenthesized templates count; a template not first, a
-concatenation not led by one, and no-argument calls do not). The oracle is
-engine-derived: one whole-call scan (`console.log($$$ARGS)`) plus a
-deterministic leftmost-token filter on the bound ARGS text — NOT pattern
-enumeration (referee 10-16: the template-interior `$$$X` wildcard does
-correctly wildcard contents, but concatenation patterns miss left-nested
-chains and cannot enumerate the class). Freeze truth: **336 of 438 calls in
-scope** (census: 280 pure + 36 concat + 19 multi-arg + 1 paren-wrapped); the
-scope pin `!server/src/scripts` drops the harness's own calls and closes the
-peek channel; the tool-description false positive vanishes structurally (0
-matches in agent-tools.ts, census-confirmed). T3 stays efficiency-gated (the
-aggregate is T1+T3+T5); the v3-T3 rows are superseded, not a baseline.
+its own scan scope. v4 flipped to AST semantics with a scope pin
+(`!server/src/scripts`) that drops the harness's own calls and closes the
+peek channel; the string-occurrence false positive vanishes structurally
+(engine-matched call nodes only — census: 0 in agent-tools.ts). **v4-B** —
+stipulated template-START class, oracle = whole-call scan plus a deterministic
+leftmost-token filter (NOT pattern enumeration: the referee showed
+concatenation patterns miss left-nested chains) — froze truth **336 of 438**
+and was probed arm-B × 3 (probe-b2, 10-16): 0/3 completed, but the failure
+changed character — the stipulation made the truth computable (one rep's own
+AST parser stated the exact 336 mid-run, censored by its verification loop,
+not by disagreement), while selection stayed on the parser affordance
+("AST semantics" phrasing; 2/3 runs never touched `code_search`) and the one
+rep that enumerated patterns undercounted live (3 vs census 19, left-nested
+chains). **v4.1 = strict A**, the demotion the probe's decision rule
+promised: the class whose whole semantics IS one engine pattern —
+`console.log(`$$$X`)` — sole argument a complete template literal,
+interpolated included; freeze truth **280**; one snippet-verifiable scan at
+model level, same single shape for the off arm. T3's mandate is now
+comparability, not asymmetry — both v3 gates printed FAIL solely on T3's
+comparability clause. Probe B3 (arm B × 3) before any battery; the v3-T3 and
+v4-B rows are superseded, not baselines.
 **T6 — diagnostic probe** (excluded from the flip aggregate,
 like T4; runs on all three arms × 3 reps — the nudge gate's
 question applies to T6's trap handling): *"Count `if` statements (without else) whose consequent is

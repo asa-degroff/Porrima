@@ -162,67 +162,50 @@ const TASKS: TaskDef[] = [
   },
   {
     id: 3,
-    label: "template-literal console.log — AST semantics (engine oracle — v4)",
-    // v4 redefinition (10-16, battery v3 evidence): the v3 textual
-    // starts-with semantics were epistemically unresolvable — line-based
-    // grep (268), the multiline textual oracle (375), -o counting (482),
-    // and AST parses (514) disagreed by design; the oracle counted a
-    // tool-description string occurrence (agent-tools.ts line 106) that no
-    // AST reader would call a call; and the single completion in 15 runs
-    // (c T3 r1) peeked at the harness source from inside its own scan
-    // scope. v4 flips to stipulative AST semantics: real call sites whose
-    // first argument's LEFTMOST TOKEN is a backtick (after whitespace,
-    // leading comments, and leading parens). The scope pin
-    // (!server/src/scripts) drops the harness's own logging calls AND
-    // closes the peek channel. Referee (10-16, t3v4-referee.ts): the
-    // template-interior `$$$X` wildcard matches any template contents
-    // (bare + interpolated); concatenation patterns miss left-nested
-    // chains (`x` + y + z) — so the oracle is a whole-call scan plus a
-    // deterministic leftmost-token filter on the bound ARGS text, NOT
-    // pattern enumeration. Freeze census: 438 calls in 47 files in scope;
-    // truth 336 template-first (280 pure + 36 concat + 19 multi-arg + 1
-    // paren-wrapped); 0 matches in agent-tools.ts (the line-106 occurrence
-    // is gone structurally). Comment-led first args: 0 instances on this
-    // tree — the class is stated for principled completeness, not witness.
-    prompt: "In `server/src` (TypeScript files; excluding `server/src/scripts`): count the calls to `console.log(...)` whose first argument starts with a template literal. AST semantics: only real call sites count — occurrences inside strings or comments are not calls. \"Starts with\" means the first argument's leftmost token is a backtick: bare templates, interpolated templates (e.g. console.log(`a ${x} b`)), templates followed by `+` concatenation (including chains like console.log(`x` + y + z)), and parenthesized templates (e.g. console.log((`x`))) all count; whitespace or comments between the opening paren and the first argument make no difference. A template that is not the first argument (e.g. console.log(x, `t`)), a concatenation not starting with one (e.g. console.log(x + `t`)), and a call with no arguments do not count. Report the count and the files with per-file counts.",
+    label: "template-only console.log — strict AST class (engine oracle — v4.1)",
+    // v4.1 (10-16): lineage in two lines. v3 textual starts-with was
+    // epistemically unresolvable (268/375/482/514 family; one completion in
+    // 15 runs, via peeking at the harness source inside its own scan scope).
+    // v4-B (stipulated template-START class; oracle = whole-call scan +
+    // leftmost-token filter; truth 336 of 438) was probed arm-B x 3
+    // (probe-b2.jsonl): 0/3 completed — the truth side worked (one rep's own
+    // parser hit the exact 336 mid-run, censored by the verification loop),
+    // but selection did not move ("AST semantics" phrasing primes the parser
+    // affordance: 2/3 runs never touched code_search) and pattern
+    // enumeration failed live as the referee predicted (a
+    // `console.log(`$T`, $$$REST)` attempt returned 3 vs the census's 19 —
+    // left-nested concatenation chains are not enumerable). v4.1 is the
+    // strict-A shape promised off that probe: the class whose WHOLE semantics
+    // is one engine pattern — the sole argument is a complete template
+    // literal (the `$$$X` interior wildcard matches bare and interpolated
+    // templates; referee-verified)
+    // — so the tool path is one snippet-verifiable scan, and the off-arm path
+    // is the same single shape. Comparability, not asymmetry, is T3's mandate:
+    // both v3 gates printed FAIL solely on T3's comparability clause.
+    // Referee + freeze (10-16, t3v4-referee.ts / t3v41-oracle-run.ts):
+    // pattern console.log(`$$$X`) over server/src, !server/src/scripts,
+    // maxMatches 1000 (no clamp: census 280). Occurrences inside strings or
+    // comments never match (no call_expression node — the old agent-tools.ts
+    // line-106 false positive is structurally dead; census: 0 in that file).
+    // Concatenation, multi-arg, paren-wrapped, non-template, and no-arg calls
+    // are excluded by the prompt AND unmatched by the pattern — definition,
+    // oracle, and tool are one object. The comment-led-first-arg class is
+    // vacuous on this tree (0 instances) and simply not claimed.
+    prompt: "In `server/src` (TypeScript files; excluding `server/src/scripts`): count the calls to `console.log(...)` whose sole argument is a complete template literal. Only real call sites count — occurrences inside strings or comments are not calls. Interpolated templates count (e.g. console.log(`a ${x} b`)); concatenations (console.log(`x` + y)), multiple arguments (console.log(`x`, y)), parenthesized templates (console.log((`x`))), non-template arguments (console.log(x)), and no-argument calls do not count. Report the count and the files with per-file counts.",
     oracle: async () => {
-      // Engine-derived (v4): one whole-call scan + the leftmost-token rule
-      // on the bound ARGS text. maxMatches 1000 > the 438-call freeze
-      // census — no silent clamp (the T6 lesson). ARGS includes leading
-      // extras (comments/whitespace) as bound, hence the strip loop.
+      // Engine-derived (v4.1): the class IS the pattern — one scan, no
+      // filter step.
       const ws = new LocalWorkspaceAdapter(REPO_ROOT);
       const res = await runCodeSearch({
-        pattern: "console.log($$$ARGS)",
+        pattern: "console.log(`$$$X`)",
         path: "server/src",
         globs: ["!server/src/scripts"],
         maxMatches: 1000,
       }, ws);
       const byFile: Record<string, number> = {};
-      for (const m of res.matches) {
-        let args = m.metaVariables?.ARGS;
-        if (args == null) continue; // no first argument — excluded by definition
-        for (;;) {
-          args = args.trimStart();
-          if (args.startsWith("//")) {
-            const e = args.indexOf("\n");
-            if (e < 0) { args = ""; break; }
-            args = args.slice(e + 1);
-            continue;
-          }
-          if (args.startsWith("/*")) {
-            const e = args.indexOf("*/");
-            if (e < 0) break;
-            args = args.slice(e + 2);
-            continue;
-          }
-          if (args.startsWith("(")) { args = args.slice(1); continue; }
-          break;
-        }
-        if (args.startsWith("`")) byFile[m.file] = (byFile[m.file] ?? 0) + 1;
-      }
-      const total = Object.values(byFile).reduce((s, n) => s + n, 0);
+      for (const m of res.matches) byFile[m.file] = (byFile[m.file] ?? 0) + 1;
       const sorted = Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b)));
-      return `${total} template-first console.log calls (${res.totalMatches} calls in scope): ${JSON.stringify(sorted)}`;
+      return `${res.totalMatches} template-only console.log calls in ${res.filesWithMatches} files: ${JSON.stringify(sorted)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
   },
