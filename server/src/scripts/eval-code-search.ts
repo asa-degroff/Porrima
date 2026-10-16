@@ -1,17 +1,20 @@
 /**
  * eval-code-search.ts — the §4.1 battery for docs/design/code-search.md.
  *
- * Measures the PORRIMA_CODE_SEARCH default-shift bet: same tasks, same
- * harness prompt, two arms (flag off = bash+rg baseline, flag on =
- * code_search available), metrics read back from the persisted eval chats.
+ * Measures the PORRIMA_CODE_SEARCH default-shift bet: same tasks, same base
+ * harness prompt, three arms (§4.2) — A off, B on schema-only, C on + the
+ * routing line — metrics read back from the persisted eval chats.
  *
  * Usage (from server/):
  *   PORRIMA_EVAL_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts \
- *       [--tasks 1,4] [--reps 3] [--model <id>] [--out <path>]
- *   # once per arm — the flag is per-process; the run records which arm it is:
- *   PORRIMA_EVAL_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --out /tmp/opencode/eval-code-search/off.jsonl
- *   PORRIMA_EVAL_CODE_SEARCH=1 PORRIMA_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --out /tmp/opencode/eval-code-search/on.jsonl
- *   npx tsx src/scripts/eval-code-search.ts --report /tmp/opencode/eval-code-search/off.jsonl /tmp/opencode/eval-code-search/on.jsonl
+ *       [--arm a|b|c] [--tasks 1,4] [--reps 3] [--model <id>] [--out <path>]
+ *   # once per arm — the flag must match the arm (A off, B/C on):
+ *   PORRIMA_EVAL_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --arm a --out /tmp/opencode/eval-code-search/v3-a.jsonl
+ *   PORRIMA_EVAL_CODE_SEARCH=1 PORRIMA_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --arm b --out /tmp/opencode/eval-code-search/v3-b.jsonl
+ *   PORRIMA_EVAL_CODE_SEARCH=1 PORRIMA_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --arm c --out /tmp/opencode/eval-code-search/v3-c.jsonl
+ *   # pairwise reports match the gates; three files run both verdict lines:
+ *   npx tsx src/scripts/eval-code-search.ts --report v3-a.jsonl v3-b.jsonl             # strict gate
+ *   npx tsx src/scripts/eval-code-search.ts --report v3-a.jsonl v3-b.jsonl v3-c.jsonl   # strict + nudge
  *   PORRIMA_EVAL_CODE_SEARCH=1 npx tsx src/scripts/eval-code-search.ts --purge
  *
  * Notes:
@@ -21,8 +24,10 @@
  *   per run — quiet the system (pause automations) for determinism; eval
  *   turns queue against live chat traffic otherwise.
  * - The harness system prompt is a fixed minimal coding-agent prompt, NOT
- *   the memory-augmented interactive one: both arms must differ only in the
- *   tool surface, and eval runs must not write memories or touch synthesis.
+ *   the memory-augmented interactive one: arms A/B differ only in the tool
+ *   surface (arm C adds the §4.2 routing line, verbatim — that is the whole
+ *   surface delta there), and eval runs must not write memories or touch
+ *   synthesis.
  *   The `eval[` title prefix doubles as the delayed-extraction firewall —
  *   the scheduler's candidate query skips such chats — so transcripts never
  *   feed the memory system even with a stray server alive. Purge the chats
@@ -33,8 +38,8 @@
  *   prompt would inflate adoption above what the flip itself delivers.
  * - Ground truth is recomputed at run time so the battery survives repo
  *   drift. Tasks 1/3/4/5 use rg (an independent oracle; T3 multiline-aware —
- *   line-based rg undercounts wrapped calls); task 2 is engine-derived (rg
- *   cannot express the shape — noted in the report). Oracle strings are
+ *   line-based rg undercounts wrapped calls); tasks 2 and 6 are engine-derived
+ *   (rg cannot express the shapes — noted in the report). Oracle strings are
  *   deterministically ordered (rg's walk order is not).
  * - Correctness grading is human by design: the report prints each run's
  *   final answer next to its oracle. The one auto-flag is the false-
@@ -68,6 +73,13 @@ const HARNESS_SYSTEM_PROMPT = [
   "Keep searches scoped to the path the question names. Do not create, modify, or delete any file in the workspace — if you need a scratch script, write it under /tmp.",
 ].join(" ");
 
+/**
+ * Arm C's routing line — §4.2's Phase 4 nudge candidate, verbatim (byte-
+ * checked against the design doc at patch time), riding the harness prompt.
+ * Arms A/B never see it; C's numbers carry the line's ~25 tokens (§4.2).
+ */
+const ROUTING_LINE = "For questions about code structure — declarations, call sites, argument shapes — use `code_search`; for questions about text content, use rg via bash; do not write scripts to count what a pattern can match.";
+
 interface TaskDef {
   id: number;
   label: string;
@@ -76,9 +88,10 @@ interface TaskDef {
   oracle: () => Promise<string>;
   /** For the false-conclusion flag: truth considered "answer exists". */
   truthPresent: (oracle: string) => boolean;
-  /** False for probe tasks (T4): graded on correctness/fc only — the on-arm
-   *  correctly does NOT use the tool there, so turns/tokens would only
-   *  measure the schema cost, which the battery-level aggregate amortizes. */
+  /** False for diagnostic tasks (T2, T4, T6 per §4.2): graded on
+   *  correctness/fc only — excluded from the flip aggregate (T4/T6 because
+   *  the on-arm correctly does NOT use the tool there; T2 because its known
+   *  null baseline and swamp-prone completion would poison the aggregate). */
   efficiencyGated?: boolean;
 }
 
@@ -140,6 +153,12 @@ const TASKS: TaskDef[] = [
       return `${names.length} declarations: ${JSON.stringify(names)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
+    // v3 (§4.2): demoted to diagnostic alongside T4. The redefinition fixed
+    // the contradiction mode (probe B1), but the complement class (750 typed
+    // declarations) still makes any honest raw cross-check a swamp, so T2's
+    // v2 rows are a null baseline and its flip-aggregate slot is vacated.
+    // Diagnostic reads: adoption, drowning mode, correctness-when-completed.
+    efficiencyGated: false,
   },
   {
     id: 3,
@@ -183,6 +202,63 @@ const TASKS: TaskDef[] = [
     },
     truthPresent: (o) => Number(o.match(/^total throws: (\d+)/)?.[1] ?? 0) > 0,
   },
+  {
+    id: 6,
+    label: "if-return two-form trap (engine oracle — diagnostic)",
+    // §4.2 T6 — the naive single pattern silently misses one of the two
+    // forms; a snippet test containing both catches it in one call; the
+    // correct full answer is the pattern decomposition. Diagnostic (like
+    // T4): runs on all three arms × 3 reps, excluded from the flip
+    // aggregate. Three framing clauses extend the §4.2 quote, each forced
+    // by the engine (referee 10-15, recorded in the battery report):
+    // (1) scope pinned — the fixture audit's scope is server/src, and an
+    //     unscoped question has no gradeable oracle;
+    // (2) "test files included" — models exclude tests by reflex (the T2
+    //     lesson: an unstated class the oracle silently drops is a
+    //     contradiction trap); the audit scope is plain server/src;
+    // (3) the bare-return clause — §4.2's two-pattern decomposition
+    //     (`return y;`, block form) cannot match value-less `return;`
+    //     (181 brace-less + 7 block instances at freeze-time audit), yet
+    //     the prompt's class ("exactly one return statement") includes
+    //     them. Oracle runs four patterns; the prompt states the coverage.
+    prompt: "In `server/src` (TypeScript files, test files included): count the `if` statements (without else) whose consequent is exactly one `return` statement — both the brace-less form `if (x) return y;` and the single-statement block `if (x) { return y; }` count; a bare `if (x) return;` (no value) counts too. Report the count and the files with per-file counts.",
+    oracle: async () => {
+      // Engine-derived, four-pattern decomposition (2 forms × value/bare).
+      // Referee findings this oracle implements:
+      //  - ast-grep statement patterns do NOT exclude a trailing else
+      //    clause (`if (a) return 2; else doIt();` matches the brace-less
+      //    pattern), so the no-else requirement is enforced by filtering
+      //    matched node text for a word-boundary `else`. Freeze-time audit:
+      //    exactly 2 else-carrying matches tree-wide (both genuine tts.ts
+      //    else-chains, zero string/comment false positives) — the filter
+      //    is precise on this tree.
+      //  - Block patterns match exactly-one-statement blocks (two-statement
+      //    block referee: 0); the two forms are disjoint (no cross-match).
+      //  - Fixture audit (non-vacuous): brace-less 814, block 398(−2), bare
+      //    181, bare-block 7 — all four classes non-empty; the task stands
+      //    (§4.2's swap clause not triggered).
+      const ws = new LocalWorkspaceAdapter(REPO_ROOT);
+      const patterns = [
+        "if ($COND) return $RET;",
+        "if ($COND) { return $RET; }",
+        "if ($COND) return;",
+        "if ($COND) { return; }",
+      ];
+      const perClass: number[] = [];
+      const byFile: Record<string, number> = {};
+      for (const pattern of patterns) {
+        const res = await runCodeSearch({ pattern, path: "server/src", maxMatches: 1000 }, ws);
+        const kept = res.matches.filter((m) => !/\belse\b/.test(m.text));
+        perClass.push(kept.length);
+        for (const m of kept) byFile[m.file] = (byFile[m.file] ?? 0) + 1;
+      }
+      const total = perClass.reduce((s, n) => s + n, 0);
+      const sorted = Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b)));
+      return `${total} no-else single-return if-statements (brace-less ${perClass[0]}, block ${perClass[1]}, bare ${perClass[2]}, bare-block ${perClass[3]}): ${JSON.stringify(sorted)}`;
+    },
+    truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
+    efficiencyGated: false,
+  },
 ];
 
 function groupCounts(lines: string[]): Record<string, number> {
@@ -224,7 +300,8 @@ function rgCounts(args: string[]): { total: number; byFile: Record<string, numbe
 
 interface RunRow {
   ts: string;
-  arm: "off" | "on";
+  /** v3 arms (§4.2); v2 rows carry the legacy "off"/"on" strings. */
+  arm: "a" | "b" | "c" | "off" | "on";
   task: number;
   rep: number;
   model: string;
@@ -280,8 +357,12 @@ function isCensored(r: RunRow): boolean {
   return !r.ok || r.stopReason !== "stop";
 }
 
-async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: string; out: string }): Promise<void> {
-  const arm = codeSearchEnabled() ? "on" : "off";
+async function runArm(opts: { arm: "a" | "b" | "c"; tasks: number[]; reps: number; modelOverride?: string; out: string }): Promise<void> {
+  const arm = opts.arm;
+  // The CLI arm and the per-process flag must agree (§4.2 arm definitions).
+  const flagOn = codeSearchEnabled();
+  if (arm === "a" && flagOn) throw new Error("--arm a requires PORRIMA_CODE_SEARCH off");
+  if (arm !== "a" && !flagOn) throw new Error(`--arm ${arm} requires PORRIMA_CODE_SEARCH=1`);
   const {
     createChat, getSettings, listProjects, saveChat,
   } = await import("../services/chat-storage.js");
@@ -350,7 +431,7 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
         // The flag is per-process; prove the arm's surface here rather than
         // trusting the env alone.
         const hasCodeSearch = tools.some((t: { name: string }) => t.name === "code_search");
-        if (hasCodeSearch !== (arm === "on")) {
+        if (hasCodeSearch !== (arm !== "a")) {
           throw new Error(`arm/surface mismatch: flag says ${arm}, tools say ${hasCodeSearch}`);
         }
         lease = await acquireTurn(chatId, { kind: "chat", priority: "foreground" });
@@ -358,7 +439,9 @@ async function runArm(opts: { tasks: number[]; reps: number; modelOverride?: str
           chat,
           modelId,
           model: runtimeModel,
-          systemPrompt: HARNESS_SYSTEM_PROMPT,
+          // Arm C = base prompt + routing line; A/B keep the byte-identical
+          // base prompt (§4.2: the line rides the harness prompt, not AGENTS.md).
+          systemPrompt: arm === "c" ? `${HARNESS_SYSTEM_PROMPT} ${ROUTING_LINE}` : HARNESS_SYSTEM_PROMPT,
           tools,
           emitter,
           contextWindow,
@@ -485,8 +568,9 @@ function report(files: string[]): void {
     byTaskArm.set(key, [...(byTaskArm.get(key) ?? []), r]);
   }
   const taskIds = [...new Set(rows.map((r) => r.task))].sort((a, b) => a - b);
+  const armOrder = ["a", "off", "b", "on", "c"].filter((x) => arms.includes(x as any));
   for (const t of taskIds) {
-    for (const a of arms) {
+    for (const a of armOrder) {
       const rs = byTaskArm.get(`${t}:${a}`) ?? [];
       if (rs.length === 0) continue;
       const done = rs.filter((r) => !isCensored(r));
@@ -496,7 +580,7 @@ function report(files: string[]): void {
         `T${t}`, a, String(rs.length), `${done.length}/${rs.length}`,
         med(done.map((r) => r.iterations)),
         med(done.map((r) => r.toolCalls)),
-        a === "on" ? `${usedCS}/${rs.length}` : "n/a",
+        (a === "off" || a === "a") ? "n/a" : `${usedCS}/${rs.length}`,
         String(rs.reduce((s, r) => s + r.toolErrors, 0)),
         med(done.map((r) => r.totalTokens).map(Math.round)),
         (rs.reduce((s, r) => s + r.toolResultChars, 0) / 1024).toFixed(1),
@@ -522,71 +606,95 @@ function report(files: string[]): void {
   }
   if (driftWarnings.length > 0) console.log(`\nwarnings:\n${driftWarnings.join("\n")}`);
 
-  // §4.1 gate per task: on must NOT LOSE on turns/tokens (ties pass — at
-  // battery scale parity with the baseline is the bar; wins are the bonus)
-  // and must not add false conclusions. Medians run over completed rows
-  // only — a censored turn's counts are truncated at the cap, not earned.
-  // Probe tasks (efficiencyGated: false, i.e. T4) are graded on
-  // correctness/fc only: the on-arm correctly does NOT use the tool there,
-  // so per-task efficiency would only measure the schema cost — which the
-  // battery aggregate below amortizes instead.
-  console.log("\ngate (per §4.1: on must not lose turns/tokens, no new false conclusions; censored rows excluded):");
-  let aggOffTurns = 0, aggOnTurns = 0, aggOffTokens = 0, aggOnTokens = 0;
-  let aggTasks = 0, aggIncomparable = 0;
-  let offDoneTotal = 0, offRunsTotal = 0, onDoneTotal = 0, onRunsTotal = 0;
-  let offFc = 0, onFc = 0;
-  for (const t of taskIds) {
-    const task = TASKS.find((x) => x.id === t);
-    const off = byTaskArm.get(`${t}:off`) ?? [];
-    const on = byTaskArm.get(`${t}:on`) ?? [];
-    const offDone = off.filter((r) => !isCensored(r));
-    const onDone = on.filter((r) => !isCensored(r));
-    const offFcT = off.filter((r) => r.suspectedFalseConclusion).length;
-    const onFcT = on.filter((r) => r.suspectedFalseConclusion).length;
-    offFc += offFcT; onFc += onFcT;
-    offDoneTotal += offDone.length; offRunsTotal += off.length;
-    onDoneTotal += onDone.length; onRunsTotal += on.length;
-    const fc = onFcT <= offFcT;
-    const efficiency = task?.efficiencyGated !== false;
-    if (offDone.length === 0 || onDone.length === 0) {
-      console.log(`  T${t}: no comparison (done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length}${fc ? "" : "; false-conclusions WORSE"})`);
-      if (efficiency) aggIncomparable++;
-      continue;
-    }
-    if (!efficiency) {
-      console.log(`  T${t}: ${fc ? "PASS" : "FAIL"} (probe task — correctness/fc only; false-conclusions ${fc ? "ok" : "worse"}; done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length})`);
-      continue;
-    }
-    const offTurns = median(offDone.map((r) => r.iterations));
-    const onTurns = median(onDone.map((r) => r.iterations));
-    const offTokens = median(offDone.map((r) => r.totalTokens));
-    const onTokens = median(onDone.map((r) => r.totalTokens));
-    aggOffTurns += offTurns; aggOnTurns += onTurns;
-    aggOffTokens += offTokens; aggOnTokens += onTokens;
-    aggTasks++;
-    const turns = onTurns <= offTurns;
-    const tokens = onTokens <= offTokens;
-    console.log(`  T${t}: ${turns && tokens && fc ? "PASS" : "FAIL"} (turns ${turns ? "ok" : "worse"}, tokens ${tokens ? "ok" : "worse"}, false-conclusions ${fc ? "ok" : "worse"}; done off=${offDone.length}/${off.length} on=${onDone.length}/${on.length})`);
+  // §4.2: two verdict lines against the flag-off baseline — the strict gate
+  // (B vs A) and the nudge gate (C vs A) — each on the §4.1 mechanism. The
+  // flip aggregate covers the efficiency tasks only (T1 + T3 + T5); T2/T4/T6
+  // are diagnostic — excluded from the aggregate, graded on correctness/fc
+  // per task (the v2 T4 treatment). The completion and false-conclusion
+  // guards stay battery-wide: an arm cannot win by censoring its slow runs
+  // out of the median, and no arm may add false conclusions anywhere.
+  // Medians run over completed rows only; ties pass.
+  const baseArm = armOrder.find((x) => x === "a" || x === "off") ?? null;
+  const onArms = armOrder.filter((x) => x !== "a" && x !== "off");
+  const gatePasses: Array<{ test: string; pass: boolean }> = [];
+  if (!baseArm || onArms.length === 0) {
+    console.log("\ngates: no comparison (the report needs the flag-off arm plus at least one on-arm)");
   }
-  // Battery-level verdict (§4.1): the ~150-token schema cost amortizes over
-  // the whole battery, not per task. The on arm must not lose on aggregate
-  // turns/tokens across the comparable efficiency tasks, must not complete
-  // fewer runs (the censoring-asymmetry guard — an arm cannot win by
-  // dropping its slow runs from the median), and must add no false
-  // conclusions anywhere.
-  const completionOk = onRunsTotal === 0 || onDoneTotal / onRunsTotal >= offDoneTotal / offRunsTotal;
-  const aggTurnsOk = aggOnTurns <= aggOffTurns;
-  const aggTokensOk = aggOnTokens <= aggOffTokens;
-  const fcOk = onFc <= offFc;
-  const comparable = aggIncomparable === 0;
-  console.log(
-    `\nbattery verdict (sum of per-task medians over ${aggTasks} comparable efficiency task${aggTasks === 1 ? "" : "s"}${aggIncomparable > 0 ? `, ${aggIncomparable} incomparable` : ""}):\n` +
-    `  turns:             off=${aggOffTurns} on=${aggOnTurns}  ${aggTurnsOk ? "ok" : "WORSE"}\n` +
-    `  tokens:            off=${aggOffTokens} on=${aggOnTokens}  ${aggTokensOk ? "ok" : "WORSE"}\n` +
-    `  completion rate:   off=${offDoneTotal}/${offRunsTotal} on=${onDoneTotal}/${onRunsTotal}  ${completionOk ? "ok" : "WORSE"}\n` +
-    `  false conclusions: off=${offFc} on=${onFc}  ${fcOk ? "ok" : "WORSE"}\n` +
-    `  => ${aggTurnsOk && aggTokensOk && completionOk && fcOk && comparable ? "PASS — the §4.1 flip gate is satisfied" : "FAIL — the §4.1 flip gate is not satisfied"} (answer correctness per the appendix remains a human judgment)`,
-  );
+  for (const testArm of baseArm ? onArms : []) {
+    const title = testArm === "b" ? "strict gate (B vs A)"
+      : testArm === "c" ? "nudge gate (C vs A)"
+      : `battery verdict (${testArm.toUpperCase()} vs ${baseArm!.toUpperCase()})`;
+    console.log(`\n${title} — §4.1 mechanism (on must not lose turns/tokens, no new false conclusions; censored rows excluded):`);
+    let aggBaseTurns = 0, aggTestTurns = 0, aggBaseTokens = 0, aggTestTokens = 0;
+    let aggTasks = 0, aggIncomparable = 0;
+    let baseDoneTotal = 0, baseRunsTotal = 0, testDoneTotal = 0, testRunsTotal = 0;
+    let baseFc = 0, testFc = 0;
+    for (const t of taskIds) {
+      const task = TASKS.find((x) => x.id === t);
+      const bs = byTaskArm.get(`${t}:${baseArm}`) ?? [];
+      const ts = byTaskArm.get(`${t}:${testArm}`) ?? [];
+      if (bs.length === 0 || ts.length === 0) continue; // task absent in one arm
+      const bDone = bs.filter((r) => !isCensored(r));
+      const tDone = ts.filter((r) => !isCensored(r));
+      const bFcT = bs.filter((r) => r.suspectedFalseConclusion).length;
+      const tFcT = ts.filter((r) => r.suspectedFalseConclusion).length;
+      baseFc += bFcT; testFc += tFcT;
+      baseDoneTotal += bDone.length; baseRunsTotal += bs.length;
+      testDoneTotal += tDone.length; testRunsTotal += ts.length;
+      const fc = tFcT <= bFcT;
+      const efficiency = task?.efficiencyGated !== false;
+      if (bDone.length === 0 || tDone.length === 0) {
+        console.log(`  T${t}: no comparison (done ${baseArm}=${bDone.length}/${bs.length} ${testArm}=${tDone.length}/${ts.length}${fc ? "" : "; false-conclusions WORSE"})`);
+        if (efficiency) aggIncomparable++;
+        continue;
+      }
+      if (!efficiency) {
+        console.log(`  T${t}: ${fc ? "PASS" : "FAIL"} (diagnostic task — correctness/fc only; false-conclusions ${fc ? "ok" : "worse"}; done ${baseArm}=${bDone.length}/${bs.length} ${testArm}=${tDone.length}/${ts.length})`);
+        continue;
+      }
+      const bTurns = median(bDone.map((r) => r.iterations));
+      const tTurns = median(tDone.map((r) => r.iterations));
+      const bTokens = median(bDone.map((r) => r.totalTokens));
+      const tTokens = median(tDone.map((r) => r.totalTokens));
+      aggBaseTurns += bTurns; aggTestTurns += tTurns;
+      aggBaseTokens += bTokens; aggTestTokens += tTokens;
+      aggTasks++;
+      const turns = tTurns <= bTurns;
+      const tokens = tTokens <= bTokens;
+      console.log(`  T${t}: ${turns && tokens && fc ? "PASS" : "FAIL"} (turns ${turns ? "ok" : "worse"}, tokens ${tokens ? "ok" : "worse"}, false-conclusions ${fc ? "ok" : "worse"}; done ${baseArm}=${bDone.length}/${bs.length} ${testArm}=${tDone.length}/${ts.length})`);
+    }
+    // Battery-level verdict (§4.1): summed per-task medians over the
+    // efficiency tasks — the ~150 schema tokens amortize across the battery,
+    // not per task; plus the two guards.
+    const completionOk = testRunsTotal === 0 || testDoneTotal / testRunsTotal >= baseDoneTotal / baseRunsTotal;
+    const aggTurnsOk = aggTestTurns <= aggBaseTurns;
+    const aggTokensOk = aggTestTokens <= aggBaseTokens;
+    const fcOk = testFc <= baseFc;
+    const comparable = aggIncomparable === 0;
+    const pass = aggTurnsOk && aggTokensOk && completionOk && fcOk && comparable;
+    gatePasses.push({ test: testArm, pass });
+    console.log(
+      `  aggregate over ${aggTasks} comparable efficiency task${aggTasks === 1 ? "" : "s"}${aggIncomparable > 0 ? `, ${aggIncomparable} incomparable` : ""}:\n` +
+      `    turns:             ${baseArm}=${aggBaseTurns} ${testArm}=${aggTestTurns}  ${aggTurnsOk ? "ok" : "WORSE"}\n` +
+      `    tokens:            ${baseArm}=${aggBaseTokens} ${testArm}=${aggTestTokens}  ${aggTokensOk ? "ok" : "WORSE"}\n` +
+      `    completion rate:   ${baseArm}=${baseDoneTotal}/${baseRunsTotal} ${testArm}=${testDoneTotal}/${testRunsTotal}  ${completionOk ? "ok" : "WORSE"}\n` +
+      `    false conclusions: ${baseArm}=${baseFc} ${testArm}=${testFc}  ${fcOk ? "ok" : "WORSE"}\n` +
+      `    => ${pass ? "PASS — this gate is satisfied" : "FAIL — this gate is not satisfied"} (answer correctness per the appendix remains a human judgment)`,
+    );
+  }
+  if (baseArm && onArms.includes("b") && onArms.includes("c")) {
+    const passB = gatePasses.find((g) => g.test === "b")?.pass;
+    const passC = gatePasses.find((g) => g.test === "c")?.pass;
+    if (passB !== undefined && passC !== undefined) {
+      console.log(
+        `\n§4.2 decision matrix: ` + (passB
+          ? "B PASSES → flip; routing already rides the description, no external line needed"
+          : passC
+            ? "C passes, B fails → routing is load-bearing: ship the tool WITH the routing instruction, description extension before any external doc"
+            : "both fail → the model-scoped verdict stands; surface stays dark until the model floor moves"),
+      );
+    }
+  }
 
   // Grading appendix: oracle vs final answer, per run (human judgment).
   console.log("\ngrading appendix (human check — oracle vs answer):");
@@ -624,7 +732,7 @@ const val = (name: string): string | undefined => {
 
 if (flag("report")) {
   const files = argv.slice(argv.indexOf("--report") + 1).filter((a) => !a.startsWith("--"));
-  if (files.length === 0) { console.error("--report needs one or two .jsonl files (off on)"); process.exit(1); }
+  if (files.length === 0 || files.length > 3) { console.error("--report needs one to three .jsonl files (a [b] [c])"); process.exit(1); }
   for (const f of files) if (!existsSync(f)) { console.error(`no such file: ${f}`); process.exit(1); }
   report(files);
 } else if (flag("purge")) {
@@ -636,9 +744,12 @@ if (flag("report")) {
     console.error("Run once per arm (with/without PORRIMA_CODE_SEARCH=1), then --report both files. See header.");
     process.exit(1);
   }
-  const tasks = (val("tasks") ?? "1,2,3,4,5").split(",").map((s) => Number(s.trim())).filter((n) => TASKS.some((t) => t.id === n));
+  const tasks = (val("tasks") ?? "1,2,3,4,5,6").split(",").map((s) => Number(s.trim())).filter((n) => TASKS.some((t) => t.id === n));
   const reps = Math.max(1, Number(val("reps") ?? "1"));
-  const arm = codeSearchEnabled() ? "on" : "off";
+  const armArg = (val("arm") ?? "").toLowerCase();
+  if (armArg && !["a", "b", "c"].includes(armArg)) { console.error("--arm must be a, b, or c"); process.exit(1); }
+  // No --arm: derive from the flag (A/B only — C is an explicit choice).
+  const arm = (armArg || (codeSearchEnabled() ? "b" : "a")) as "a" | "b" | "c";
   const out = val("out") ?? join(DEFAULT_OUT_DIR, `${arm}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.jsonl`);
-  void runArm({ tasks, reps, modelOverride: val("model"), out });
+  void runArm({ arm, tasks, reps, modelOverride: val("model"), out });
 }
