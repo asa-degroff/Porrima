@@ -19,7 +19,14 @@ human grading; the strict gate's one fc flag is a verified detector-wording
 artifact). **T3 redefined in v4** (10-16): AST semantics, scope
 pinned outside the harness file (peek channel closed); the v4-B probe (arm B
 × 3) censored 0/3 on selection, not truth → **v4.1 strict A** — the class is
-one engine pattern, truth 280; probe B3 next.
+one engine pattern, truth 280; **probe B3 complete 10-16: 2/3 completed
+(T3's first-ever on-arm completions), 3/3 reps reached the exact truth —
+tool-path r2 ran the designed sequence: snippet-test of the wildcard class
+(one match, the interpolated; all exclusions held), full scan (count in the
+summary), pagination for per-file attribution, and a count-mode control scan
+over the excluded scripts scope — 5 iterations; parser-path r3 also landed
+280 with the line-106 occurrence explicitly excluded; r1 hit the truth
+mid-run and censored in its verification loop.
 **Date:** 2026-10-15
 
 ## 1. Problem
@@ -938,8 +945,10 @@ promised: the class whose whole semantics IS one engine pattern —
 interpolated included; freeze truth **280**; one snippet-verifiable scan at
 model level, same single shape for the off arm. T3's mandate is now
 comparability, not asymmetry — both v3 gates printed FAIL solely on T3's
-comparability clause. Probe B3 (arm B × 3) before any battery; the v3-T3 and
-v4-B rows are superseded, not baselines.
+comparability clause. **Probe B3 ran (10-16): 2/3
+completed, 3/3 reached 280 — strict-A is battery-ready; the open question
+transfers to arm A's completion on this class, which the next battery
+settles.** The v3-T3 and v4-B rows are superseded, not baselines.
 **T6 — diagnostic probe** (excluded from the flip aggregate,
 like T4; runs on all three arms × 3 reps — the nudge gate's
 question applies to T6's trap handling): *"Count `if` statements (without else) whose consequent is
