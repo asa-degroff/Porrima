@@ -22,6 +22,11 @@ import {
   normalizeRouterModelId,
 } from "./llama-router-client.js";
 import {
+  acquireLlamaSlotLease,
+  releaseLlamaSlotLease,
+  type LlamaSlotLease,
+} from "./llama-slot-leases.js";
+import {
   buildOpenAICompatChatBody,
   buildTranscriptContext,
   digestPromptPayload,
@@ -44,6 +49,7 @@ import {
   setCachedAugmentedPrompt,
 } from "./memory-context.js";
 import { getAgentTools, type ToolSideEffects } from "./agent-tools.js";
+import { computeLlamaPrefixDigest, parkAfterWarm } from "./kv-snapshot.js";
 import { digestPromptText, recordWarmPromptSnapshot } from "./llama-prompt-debug.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
@@ -111,6 +117,7 @@ interface CacheResidencyContext {
   modelId: string;
   contextWindow?: number;
   bindingMode: LlamaCacheBindingMode;
+  slotId?: number;
 }
 
 const NOOP_TOOL_EFFECTS: ToolSideEffects = {
@@ -188,7 +195,7 @@ async function prefillOnly(
   baseUrl: string,
   modelId: string,
   prompt: string,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; slotId?: number }
 ): Promise<{
   promptMs: number;
   tokensCached: number;
@@ -201,6 +208,12 @@ async function prefillOnly(
     cache_prompt: true,
     return_tokens: false,
   };
+  // Post-warm park (10-17): pin the prefill to a physical slot so the
+  // pinned slot is the one that holds the warmed KV when the save fires.
+  // `id_slot` is a routing key — it does not touch the rendered prompt bytes.
+  if (options?.slotId != null) {
+    body.id_slot = options.slotId;
+  }
 
   const res = await undiciFetch(`${normalizeBaseUrl(baseUrl)}/completion`, {
     method: "POST",
@@ -416,6 +429,8 @@ interface WarmOpenAICompatBodyInput {
   modelId: string;
   contextWindow: number;
   body: any;
+  /** Physical slot the prefill is pinned to (post-warm park, 10-17). */
+  slotId?: number;
   forceNextUserPrefix?: boolean;
   signal?: AbortSignal;
 }
@@ -486,13 +501,15 @@ async function warmOpenAICompatBody(input: WarmOpenAICompatBodyInput): Promise<W
     baseUrl: input.baseUrl,
     modelId: input.modelId,
     contextWindow: input.contextWindow,
-    bindingMode: "auto",
+    bindingMode: input.slotId != null ? "enforced" : "auto",
+    slotId: input.slotId,
   };
   markLlamaCacheResidencyStarted(residencyContext);
 
   try {
     const stats = await prefillOnly(input.baseUrl, input.modelId, shortPrompt.prompt, {
       signal: input.signal,
+      slotId: input.slotId,
     });
     const totalTokens = stats.tokensCached + stats.tokensEvaluated;
     const hitRatio = totalTokens > 0 ? stats.tokensCached / totalTokens : 0;
@@ -547,6 +564,7 @@ export async function warmChatCache(
     reason: options.reason ?? "user-requested",
     warmedAt: Date.now(),
   };
+  let lease: LlamaSlotLease | null = null;
 
   try {
     // 1. Load the chat
@@ -584,6 +602,17 @@ export async function warmChatCache(
       return result;
     }
 
+    // 3b. Pin the warm prefill to a physical slot (10-17 post-warm park):
+    // the lease is what makes the post-warm disk capture deterministic — the
+    // save below targets this exact slot. Auto binding mode returns null and
+    // the warm stays exactly as it is today (no pin, no park).
+    lease = await acquireLlamaSlotLease({
+      baseUrl,
+      chatId,
+      modelId: normalizedModelId,
+      contextWindow: effectiveContextWindow,
+    });
+
     // 4. Build the same stable prompt prefix that the normal send path will use.
     const systemPrompt = await buildWarmSystemPrompt(chat, allMessages);
     const piModel = await createPiModelFromProvider(model);
@@ -593,7 +622,14 @@ export async function warmChatCache(
     const piMessages = await buildReplayMessages(allMessages, chat.modelId, model);
     const tools = await buildWarmTools(chat, effectiveContextWindow);
     const context = buildTranscriptContext(systemPrompt, piMessages, tools);
-    const { body } = await buildOpenAICompatChatBody(piModel as any, context);
+    const { body } = await buildOpenAICompatChatBody(piModel as any, context, {
+      llamaSlotLease: lease,
+    } as any);
+    // Head digest of the exact warm body — stamped on the disk row by the
+    // post-warm park so the restore gate can verify the parked head later.
+    // (The warm never crosses the provider choke point, so it has no
+    // provider-observed digest of its own.)
+    const prefixDigest = computeLlamaPrefixDigest(body);
     const stats = await warmOpenAICompatBody({
       targetId: chatId,
       targetKind: "chat",
@@ -602,7 +638,19 @@ export async function warmChatCache(
       modelId: normalizedModelId,
       contextWindow: effectiveContextWindow,
       body,
+      slotId: lease?.slotId,
       signal: options.signal,
+    });
+
+    // Capture the fresh head on disk now (fire-and-forget, mirrors the
+    // end-of-turn park): this pinned slot holds exactly what we just
+    // prefilled — the warm is its own witness. Digest-conditional inside:
+    // a no-op synthesis (byte-identical head) skips the write.
+    void parkAfterWarm({
+      chatId,
+      lease,
+      promptTokens: stats.totalPromptTokens,
+      prefixDigest,
     });
 
     return {
@@ -618,6 +666,8 @@ export async function warmChatCache(
     result.error = err instanceof Error ? err.message : String(err);
     console.warn(`[cache-warm] Failed to warm cache for chat ${chatId}:`, err);
     return result;
+  } finally {
+    await releaseLlamaSlotLease(lease);
   }
 }
 

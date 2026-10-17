@@ -238,6 +238,64 @@ turn's prompt — if `n_saved < lastUsage`, the file captured someone else's
 state: the new file is unlinked, the prior snapshot is restored, and the row
 never points at the bad file.
 
+### 5.3a Post-warm save (10-17)
+
+After the 10-17 block-deferral change (block edits defer to compaction,
+`memory-context-persistence.md` §10.4), the post-synthesis warm pass is the
+single remaining global head-refresh point. Until 10-17 it discarded the
+fresh head it just built, for three compounding reasons: the warm pinned no
+slot (the prefill landed on an arbitrary slot by model routing), it crossed
+no provider choke point (no `llm_requests` row, no observed digest), and the
+end-of-turn park of the synthesis turn itself captures the **pre**-rewrite
+head — that turn's head is built at turn start, while the zeitgeist rewrite
+happens mid-turn via tool calls. Tier-1's minutes-scale eviction then silently
+eats the only fresh head, and returns cold-prefill exactly what the warm just
+paid for.
+
+Mechanism (four parts):
+
+1. **Slot pinning.** `warmChatCache` acquires a llama slot lease
+   (`acquireLlamaSlotLease`; null in auto-binding mode → zero behavior change)
+   and threads it into the warm twice: the chat body (`options.llamaSlotLease`
+   → `body.id_slot`, which feeds template render, digest, and the debug
+   snapshot) and the prefill itself — `prefillOnly` adds `id_slot` to the
+   `/completion` body, which is the **operative** pin. `id_slot` is a routing
+   key; it does not touch the rendered prompt bytes (the warm's byte-parity
+   contract, §2 of the pi-migration review, is preserved). Residency records
+   now carry a real `slotId` with `bindingMode: "enforced"` instead of
+   `"auto"`-with-no-slot.
+2. **Explicit witness.** `parkAfterWarm({ chatId, lease, promptTokens,
+   prefixDigest })` is a second entry point onto the *same* `runSaveJob` core
+   — build gate, budget estimate + LRU + disk headroom, per-slot serialized
+   queue, token supersede, slot-identity guard, rollback on failure,
+   overwrite-after-success, breaker reset. What it skips: the
+   `lastDoneChatRequest` witness (the warm produces no wire row), the
+   spine-freshness comparison (a rewrite landing mid-save still supersedes
+   the job via the token check), and debounce/growth (replaced by the digest
+   rule below). The row is stamped with the **passed** digest — the
+   warm body's `[head, tools]` via `computeLlamaPrefixDigest` — not
+   `turnPrefixDigests`, which the warm by definition never populated.
+3. **Digest-conditional rule.** Park only when there is no `ready` row **or**
+   its `prefix_digest` differs from the warm body's digest. A byte-identical
+   head (no-op synthesis) skips the write: the file is still valid, the warm
+   only refreshed tier 1. This makes the post-synthesis pass the single place
+   where synthesis's effect on the disk tier is handled. Emergent benefit:
+   the end-of-turn park of a just-warmed chat is naturally suppressed by the
+   existing debounce gate (fresh row, little growth) — no double-parking, no
+   new coordination.
+4. **Wiring.** Fire-and-forget after prefill **success** (mirrors the
+   end-of-turn park; disk I/O never holds the warm), lease released in
+   `finally`. Aborted or preempted warm → no save (tier-1-only, as today — a
+   partial prefill would be a torn capture). The one-token-short shape means
+   `n_tokens = warm tokens`, and the next turn's LCP matches to that boundary
+   (the deliberate tokenizer-round-trip margin).
+
+Known benign race: if the warm defers (the user queued messages) and runs
+*after* that user's turn, its refreeze may pick a different top-k →
+different digest → the warm over-parks. Consistent either way, because the
+warm's head becomes the canonical future head (the next turn's Case-3 build
+retains that frozen section) — one extra multi-GB write in the corner case.
+
 ### 5.4 Restore (pre-send, iteration 1 only)
 
 Hooked in the provider's single dispatch choke point (`openai-compat-provider.ts`,
@@ -404,6 +462,9 @@ Stored in the existing settings blob (`routes/settings.ts` pattern):
 | Disk full / headroom | save refused pre-flight (estimate), stale rows pruned | budget policy; log + panel status |
 | Server swap (build/config) | build-tag mismatch → rows invalidated lazily | files pruned by the sweeper |
 | Lease reassigned / slot evicted by tier 1 | `slot_id` in row is history, not truth — re-park on next save with current lease | save always records the *current* slot |
+| Post-warm save error/timeout (10-17) | row rolls back to the prior `ready` snapshot (or `stale` if none); the fresh head lives in tier 1 until evicted | next end-of-turn park, or the next synthesis warm pass, re-parks |
+| Warm prefill aborted/preempted (10-17) | no save is issued — no partial slot state captured | tier-1-only, as today; next warm pass or turn re-parks |
+| Warm deferred past a user turn (10-17, benign) | one extra park (different digest) in the corner case | digest gate keeps the row canonical; end-of-turn debounce covers the common case |
 
 In every row: no data corruption is possible (llama.cpp validates token identity on
 reuse; §2.9), and the turn's output correctness is independent of this subsystem.
@@ -444,6 +505,16 @@ reuse; §2.9), and the turn's output correctness is independent of this subsyste
      enabled badge, pool totals + free disk, per-chat rows (slot, tokens,
      size, saved-ago, restore/miss counts, state dot, breaker warning).
      Refreshes on open and on the same statsVersion live-tracking tick.
+5. **Post-warm park** *(landed 10-17)* — `parkAfterWarm` + warm slot pinning
+   (§5.3a). `cache-warm-park.test.ts` pins the warm seam: `id_slot` on the
+   `/completion` body (the operative pin), park fired with the warm's witness
+   inputs, lease released in `finally`, failed prefill parks nothing, auto
+   binding mode degrades to no-pin. The `kv-snapshot.test.ts` post-warm block
+   pins the gates: disabled / no-lease / below-min / same-digest skip,
+   digest-drift save with the warm-digest stamp and prior-file unlink, first
+   park, a later warm pass superseding an in-flight earlier save, an
+   invalidate landing mid-save superseding the capture, failed-save rollback,
+   slot-identity discard.
 
 ## 11. Tests
 

@@ -518,7 +518,16 @@ export async function maybeParkChatAfterTurn(input: {
     const chainKey = `${lease.poolKey}#${lease.slotId}`;
     const previous = slotQueues.get(chainKey) ?? Promise.resolve();
     const job = previous.then(() =>
-      runSaveJob({ chatId, lease, policy, token, lastUsage, streamAtEnqueue, existing }),
+      runSaveJob({
+        chatId,
+        lease,
+        policy,
+        token,
+        promptTokens: lastUsage,
+        streamAtEnqueue,
+        existing,
+        reason: "end-of-turn",
+      }),
     );
     slotQueues.set(
       chainKey,
@@ -528,6 +537,79 @@ export async function maybeParkChatAfterTurn(input: {
   } catch (error: any) {
     // Save policy failures are background noise by contract.
     console.warn(`${LOG} end-of-turn parking failed:`, error?.message || error);
+  }
+}
+
+/**
+ * Fire-and-forget post-warm entry point (doc §5.3a): a cache warm has just
+ * prefilled a PINNED slot with a freshly built head, so the slot's content
+ * is known by construction — the warm is its own witness. This deliberately
+ * skips the turn-path gates: there is no `lastDoneChatRequest` witness (the
+ * warm never crosses the provider choke point), no spine-freshness
+ * comparison to make (a spine rewrite landing mid-save still supersedes the
+ * job via the token check, exactly as on the turn path), and no
+ * debounce/growth gate (the head-digest comparison replaces it). The row is
+ * stamped with the warm's own head digest, not the provider-observed
+ * `turnPrefixDigests` — which the warm by definition never populated.
+ */
+export async function parkAfterWarm(input: {
+  chatId: string;
+  lease: LlamaSlotLease | null | undefined;
+  /** Wire-truth size of the state the slot holds: the warm's (one-token-short) prompt. */
+  promptTokens: number;
+  /** Digest of the warm body's [head, tools] — same computation as the restore gate. */
+  prefixDigest: string;
+}): Promise<void> {
+  try {
+    const { chatId, lease } = input;
+    if (!lease) return; // D2 pinning requirement: auto binding mode has no pinned slot
+
+    const settings = await readSettings();
+    const policy = resolveKvSnapshotSettings(settings);
+    if (!policy.enabled) return;
+
+    if (input.promptTokens < policy.minTokens) return;
+
+    const existing = getKvSnapshot(chatId);
+
+    // Digest-conditional rule: a byte-identical head means the parked file is
+    // still valid — the warm only refreshed tier 1. This makes the post-
+    // synthesis warm pass the single place where synthesis's effect on the
+    // disk tier is handled: changed heads re-park here, unchanged heads skip.
+    if (
+      existing &&
+      existing.state === "ready" &&
+      existing.prefixDigest &&
+      existing.prefixDigest === input.prefixDigest
+    ) {
+      console.log(`${LOG} chat=${short(chatId)} post-warm park skipped: head digest unchanged`);
+      return;
+    }
+
+    const token = (pendingTokens.get(chatId) ?? 0) + 1;
+    pendingTokens.set(chatId, token);
+    const streamAtEnqueue = liveStreams.get(chatId);
+
+    const chainKey = `${lease.poolKey}#${lease.slotId}`;
+    const previous = slotQueues.get(chainKey) ?? Promise.resolve();
+    const job = previous.then(() =>
+      runSaveJob({
+        chatId,
+        lease,
+        policy,
+        token,
+        promptTokens: input.promptTokens,
+        streamAtEnqueue,
+        existing,
+        prefixDigest: input.prefixDigest,
+        reason: "post-warm",
+      }),
+    );
+    slotQueues.set(chainKey, job.catch(() => {}));
+    await job;
+  } catch (error: any) {
+    // Save policy failures are background noise by contract.
+    console.warn(`${LOG} post-warm parking failed:`, error?.message || error);
   }
 }
 
@@ -561,13 +643,19 @@ interface SaveJobInput {
   lease: LlamaSlotLease;
   policy: KvSnapshotSettings;
   token: number;
-  lastUsage: number;
+  /** Wire-truth size of the state the slot holds: the finished turn's prompt
+   *  (turn path) or the warm's one-token-short prompt (post-warm path). */
+  promptTokens: number;
   streamAtEnqueue: ReturnType<typeof liveStreams.get>;
   existing: KvSnapshotRow | null;
+  /** Explicit head-digest stamp (post-warm path). Omitted on the turn path,
+   *  which stamps the provider-observed wire digest at success time. */
+  prefixDigest?: string;
+  reason: "end-of-turn" | "post-warm";
 }
 
 async function runSaveJob(input: SaveJobInput): Promise<void> {
-  const { chatId, lease, policy, token, lastUsage, streamAtEnqueue, existing } = input;
+  const { chatId, lease, policy, token, promptTokens, streamAtEnqueue, existing, prefixDigest, reason } = input;
 
   // Drop-if-restarted (D3): a newer queued save, or a different (unended)
   // live stream than the one this save finalized, means this snapshot is stale
@@ -602,11 +690,11 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
   // happen before upsertSaving, which rewrites n_tokens in place (reading
   // after would compute prior.bytes / lastUsage, an under-estimate whenever
   // the context grew).
-  const estimate = estimateBytes(chatId, lease.poolKey, lastUsage);
+  const estimate = estimateBytes(chatId, lease.poolKey, promptTokens);
 
   // Claim the slot row in `saving`; keep the previous filename so a failed
   // save can roll the row back to whatever was actually true on disk.
-  upsertSaving(chatId, lease, filename, lastUsage, now, prior);
+  upsertSaving(chatId, lease, filename, promptTokens, now, prior);
 
   evictPoolToBudget(lease.poolKey, estimate, chatId, policy);
   const free = await freeDiskBytes();
@@ -648,15 +736,15 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
 
   // Slot-identity guard: the save fired AFTER this chat's lease released, so
   // a new turn may have acquired the same slot and started filling it before
-  // the write landed. The slot can never hold fewer tokens than the finished
-  // turn's prompt — a shortfall means the file captured someone else's
-  // state. Discard it and keep the prior snapshot instead of unlinking a
-  // good file under an alias for a bad one.
-  if (save.nTokens != null && save.nTokens < lastUsage) {
+  // the write landed. The slot can never hold fewer tokens than the captured
+  // prompt — a shortfall means the file captured someone else's state.
+  // Discard it and keep the prior snapshot instead of unlinking a good file
+  // under an alias for a bad one.
+  if (save.nTokens != null && save.nTokens < promptTokens) {
     await unlinkFile(snapshotPath(filename));
     rollbackToPrior(chatId, prior);
     console.warn(
-      `${LOG} chat=${short(chatId)} discarded save: n_saved=${save.nTokens} < finished-turn prompt=${lastUsage} (slot reassigned mid-save)`,
+      `${LOG} chat=${short(chatId)} discarded save: n_saved=${save.nTokens} < captured prompt=${promptTokens} (slot reassigned mid-save)`,
     );
     return;
   }
@@ -680,7 +768,7 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     }
   }
 
-  const parkedTokens = save.nTokens ?? lastUsage;
+  const parkedTokens = save.nTokens ?? promptTokens;
   const parkedBytes = save.nBytes ?? estimate;
   const database = getDb();
   // A successful park resets the restore breaker (§5.4 step 5): the parked
@@ -698,7 +786,7 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
       parkedTokens,
       parkedBytes,
       buildTag,
-      turnPrefixDigests.get(chatId) ?? "",
+      prefixDigest ?? turnPrefixDigests.get(chatId) ?? "",
       Date.now(),
       Date.now(),
       chatId,
@@ -709,7 +797,7 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
     await unlinkFile(snapshotPath(prior.filename));
   }
   console.log(
-    `${LOG} chat=${short(chatId)} parked slot=${lease.slotId} tokens=${parkedTokens} bytes=${parkedBytes} ms=${save.ms ?? "n/a"}`,
+    `${LOG} chat=${short(chatId)} parked slot=${lease.slotId} tokens=${parkedTokens} bytes=${parkedBytes} ms=${save.ms ?? "n/a"} reason=${reason}`,
   );
 }
 

@@ -432,6 +432,188 @@ describe("kv-snapshot save policy", () => {
   });
 });
 
+describe("kv-snapshot post-warm park (§5.3a, 10-17)", () => {
+  it("skips without a lease (auto binding mode degrades to no park)", async () => {
+    const h = await loadHarness();
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease: null, promptTokens: 150_000, prefixDigest: "d" });
+    expect(h.fetchMock).not.toHaveBeenCalled();
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull();
+    h.db.close();
+  });
+
+  it("is inert when the feature is disabled", async () => {
+    const h = await loadHarness({ settings: { kvSnapshotEnabled: false } });
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "d" });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    h.db.close();
+  });
+
+  it("skips below the token floor (wire-truth warm size)", async () => {
+    const h = await loadHarness();
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 500, prefixDigest: "d" });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull();
+    h.db.close();
+  });
+
+  it("skips when a ready row already holds the same head digest", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [
+        { state: "ready", filename: "old.bin", prefixDigest: "same-digest", nTokens: 150_000, savedAt: BASE_TIME - 1_000 },
+      ],
+    });
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "same-digest" });
+    expect(saveCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.filename).toBe("old.bin"); // untouched
+    h.db.close();
+  });
+
+  it("saves on digest drift and stamps the WARM digest, unlinks the superseded file", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [
+        { state: "ready", filename: "old.bin", prefixDigest: "old-digest", nTokens: 150_000, savedAt: BASE_TIME - 1_000 },
+      ],
+    });
+    writeFileSync(join(h.home, "kv-cache", "old.bin"), "x");
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "warm-digest" });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.prefixDigest).toBe("warm-digest");
+    expect(row?.filename).not.toBe("old.bin");
+    expect(existsSync(join(h.home, "kv-cache", "old.bin"))).toBe(false);
+    h.db.close();
+  });
+
+  it("parks with no prior row (first warm park)", async () => {
+    const h = await loadHarness();
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "warm-digest" });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.prefixDigest).toBe("warm-digest");
+    h.db.close();
+  });
+
+  it("a later warm pass supersedes an in-flight save from an earlier one", async () => {
+    // Field-realizable ordering: the warm queue serializes passes per chat,
+    // so pass 2's token bump lands after pass 1's but before pass 1's save
+    // completes. Gate pass 1's save wire call to hold it mid-write.
+    let saveCount = 0;
+    let resolveFirstSave: ((r: Response) => void) | null = null;
+    const h = await loadHarness({
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          saveCount++;
+          if (saveCount === 1) {
+            return new Promise<Response>((resolve) => {
+              resolveFirstSave = resolve;
+            });
+          }
+          return Response.json({ n_saved: 150_050, n_written: 6_000_000_000, timings: { save_ms: 1 } });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    const first = h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "d1" });
+    for (let i = 0; i < 10 && saveCount < 1; i++) await vi.advanceTimersByTimeAsync(1);
+    expect(saveCount).toBe(1); // pass 1's job is parked on the gated save fetch
+    const second = h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "d2" });
+    for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(1); // pass 2 bumps the token, queues behind pass 1
+    resolveFirstSave!(
+      Response.json({ n_saved: 150_050, n_written: 6_000_000_000, timings: { save_ms: 1 } }),
+    );
+    await Promise.all([first, second]);
+    // Pass 1's capture is superseded (token check), pass 2 owns the row.
+    expect(saveCalls(h.fetchMock)).toHaveLength(2);
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.prefixDigest).toBe("d2");
+    h.db.close();
+  });
+
+  it("an invalidate landing after the token bump, mid-save, supersedes the capture", async () => {
+    // The real ordering: the warm holds the turn gate, so its token bump
+    // precedes any new turn; only a spine rewrite landing between the bump
+    // and the completed write can supersede the job (compaction mid-save).
+    let resolveSave: ((r: Response) => void) | null = null;
+    let saveIssued = false;
+    const h = await loadHarness({
+      seedSnapshots: [
+        { state: "ready", filename: "prior.bin", prefixDigest: "old-digest", nTokens: 100_000, bytes: 1_000 },
+      ],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          saveIssued = true;
+          return new Promise<Response>((resolve) => {
+            resolveSave = resolve;
+          });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    writeFileSync(join(h.home, "kv-cache", "prior.bin"), "x");
+    const park = h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "warm-digest" });
+    // Let the job run deterministically to the (gated) save fetch: under fake
+    // timers the async module hops resolve via the async timer flush, not
+    // runAllTicks (the dynamic-import microtasks ride the loader queue).
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(1);
+      if (saveIssued) break;
+    }
+    expect(saveIssued).toBe(true);
+    await h.kv.invalidateKvSnapshot(lease.chatId, "compaction");
+    resolveSave!(
+      Response.json({ n_saved: 150_050, n_written: 6_000_000_000, timings: { save_ms: 1 } }),
+    );
+    await park;
+    expect(h.kv.getKvSnapshot(lease.chatId)).toBeNull(); // row deleted; superseded job rolled back into nothing
+    // The invalidate unlinked the CURRENT row's file (the in-flight "saving"
+    // capture); the displaced prior.bin is now an orphan — the prune sweep's
+    // jurisdiction, not the job's.
+    expect(existsSync(join(h.home, "kv-cache", "prior.bin"))).toBe(true);
+    h.db.close();
+  });
+
+  it("keeps the prior ready snapshot when the save fails", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [
+        { state: "ready", filename: "prior.bin", prefixDigest: "old-digest", nTokens: 100_000, bytes: 1_000, savedAt: BASE_TIME - 60 * 60_000 },
+      ],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          return Response.json({ error: { message: "disk full" } }, { status: 500 });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "warm-digest" });
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.filename).toBe("prior.bin"); // the good snapshot survives
+    h.db.close();
+  });
+
+  it("discards a save whose n_saved is below the warm prompt (slot reassigned mid-save)", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [
+        { state: "ready", filename: "prior.bin", prefixDigest: "old-digest", nTokens: 100_000, bytes: 1_000, savedAt: BASE_TIME - 60 * 60_000 },
+      ],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          return Response.json({ n_saved: 4_000, n_written: 2_000_000, timings: { save_ms: 10 } });
+        }
+        return Response.json([{ id: 2, n_prompt_tokens: 0 }]);
+      },
+    });
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 150_000, prefixDigest: "warm-digest" });
+    const row = h.kv.getKvSnapshot(lease.chatId);
+    expect(row?.state).toBe("ready");
+    expect(row?.filename).toBe("prior.bin"); // the good snapshot survives
+    h.db.close();
+  });
+});
+
 describe("kv-snapshot spine-rewrite suppression (§5.5 invalidate-then-release race)", () => {
   // The 2026-10-15 production race: end-of-turn compaction invalidates the
   // snapshot (deleting row + file), then the lease release parks the slot's
