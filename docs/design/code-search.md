@@ -11,12 +11,12 @@ battery v3 (three-arm surface isolation) designed in §4.2 — S1
 B1 complete 10-15** (arm B, 9/9) — snippet mode live (22/53 calls), T2's
 residual swamp identified as a task-definition gap, not a surface gap;
 results in [code-search-probe-b1.md](code-search-probe-b1.md). **T2 redefined 10-15** (the exclusion stated; 4-rep smoke confirms the
-contradiction dead, T2 demoted to diagnostic per §4.2). **54-run battery
-complete 10-16**: both verdict lines print FAIL, each solely on T3's
-comparability clause (every measured surface axis — aggregate turns/tokens,
-completion guard, per-task correctness — wins or ties for the on-arms under
-human grading; the strict gate's one fc flag is a verified detector-wording
-artifact). **T3 redefined in v4** (10-16): AST semantics, scope
+contradiction dead, T2 demoted to diagnostic per §4.2). **Battery v3 complete 10-16** (54 runs): both verdict lines print FAIL,
+each solely on T3's comparability clause (every measured surface axis —
+aggregate turns/tokens, completion guard, per-task correctness — wins or ties
+for the on-arms under human grading; the strict gate's one fc flag is a
+verified detector-wording artifact).
+**T3 redefined in v4** (10-16): AST semantics, scope
 pinned outside the harness file (peek channel closed); the v4-B probe (arm B
 × 3) censored 0/3 on selection, not truth → **v4.1 strict A** — the class is
 one engine pattern, truth 280; **probe B3 complete 10-16: 2/3 completed
@@ -26,7 +26,14 @@ tool-path r2 ran the designed sequence: snippet-test of the wildcard class
 summary), pagination for per-file attribution, and a count-mode control scan
 over the excluded scripts scope — 5 iterations; parser-path r3 also landed
 280 with the line-106 occurrence explicitly excluded; r1 hit the truth
-mid-run and censored in its verification loop.
+mid-run and censored in its verification loop. **Battery v4 complete 10-16**
+(second 54 runs, T3 at v4.1): both lines print FAIL — this time tokens/turns
+genuinely lose (cheap off-arm draw; verification cost as the on-arm tax) while
+the substance record is the program's cleanest: 38/38 completed rows
+human-correct, zero real false conclusions, T3 completed honestly for the first
+time (arm C, 2/3, exact 280), and the run caught its own T6 oracle undercount
+— truth 1,406 not 1,398; comments are match-significant children in block
+patterns. Record: [code-search-battery-v4.md](code-search-battery-v4.md).
 **Date:** 2026-10-15
 
 ## 1. Problem
