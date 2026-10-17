@@ -78,11 +78,22 @@ describe("chat_project_context_state storage", () => {
 // Service level — mocked storage + mutable workspace fixture
 // ---------------------------------------------------------------------------
 
+interface TestBlock {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  scope: string;
+  projectId: string | null;
+  tokenEstimate: number;
+}
+
 interface ProjectContextFixture {
   agentsMd: string | null;
   workspaceLabel: string;
   projectName: string;
   failWorkspace: boolean;
+  blocks: TestBlock[];
 }
 
 function mockProjectContextDeps(fixture: ProjectContextFixture) {
@@ -98,8 +109,12 @@ function mockProjectContextDeps(fixture: ProjectContextFixture) {
     mmrRerank: vi.fn((items: unknown[], _embedding, limit: number) => items.slice(0, limit)),
     updateMemory: vi.fn(async () => true),
     getBlockTokenBudgets: vi.fn(async () => ({ global: 3000, project: 5000 })),
-    getMemoryBlocksByScope: vi.fn(() => []),
-    getAllMemoryBlocks: vi.fn(() => []),
+    getMemoryBlocksByScope: vi.fn((scope: string, projectId?: string) =>
+      fixture.blocks.filter(
+        (b) => b.scope === scope && (scope !== "project" || b.projectId === projectId),
+      ),
+    ),
+    getAllMemoryBlocks: vi.fn(() => fixture.blocks),
     isSystemManagedMemoryBlock: vi.fn(() => false),
     buildMemoryIndexText: (text: string, subject?: string) =>
       subject?.trim() ? `${subject.trim()}\n${text}` : text,
@@ -190,6 +205,17 @@ describe("project context deferral (service)", () => {
       workspaceLabel: "/work/project",
       projectName: "Project",
       failWorkspace: false,
+      blocks: [
+        {
+          id: "blk-test",
+          name: "Test Block",
+          description: "test block",
+          content: "block v1 content",
+          scope: "global",
+          projectId: null,
+          tokenEstimate: 8,
+        },
+      ],
       ...overrides,
     };
   }
@@ -283,6 +309,35 @@ describe("project context deferral (service)", () => {
     expect(landed.stablePrefix).toContain("AGENTS v2 content");
     expect(mod.buildProjectContextNotice(CHAT)).toBe("");
     expect(projectRows.get(CHAT)!.content).toContain("AGENTS v2 content");
+  });
+
+  it("compaction soft reset lands mid-conversation block edits (non-project chat, no snapshot row)", async () => {
+    const f = fixture();
+    const { module } = mockProjectContextDeps(f);
+    const mod = await module;
+    mod.resetAllMemoryContextCaches();
+
+    const NO_PROJ = "no-project-chat";
+    const first = await mod.buildStablePrefix(NO_PROJ);
+    expect(first.stablePrefix).toContain("block v1 content");
+
+    // A mid-conversation block write (agent tool or UI): no invalidation —
+    // the new content already rides the editing chat's transcript.
+    f.blocks[0].content = "block v2 content";
+
+    // The cached stable prefix still serves the pre-edit bytes — the defer.
+    const mid = await mod.buildStablePrefix(NO_PROJ);
+    expect(mid.stablePrefix).toContain("block v1 content");
+    expect(mid.stablePrefix).not.toContain("block v2 content");
+
+    // Compaction: this chat has no project snapshot row, so the soft reset
+    // must drop the cached stable prefix ITSELF (regression pin — before the
+    // fix, only chats with an AGENTS.md snapshot re-read blocks at
+    // compaction; everyone else served pre-edit bytes until synthesis or a
+    // restart). The post-compaction rebuild reads CURRENT block bytes.
+    mod.softResetMemoryContext(NO_PROJ);
+    const landed = await mod.buildStablePrefix(NO_PROJ);
+    expect(landed.stablePrefix).toContain("block v2 content");
   });
 
   it("workspace move (source change) applies the new workspace immediately", async () => {

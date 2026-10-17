@@ -447,6 +447,12 @@ async function runPromptAutomation(
       });
     }
 
+    // Backstop, not the load-bearing invalidation: block writes from this
+    // turn (or any other headless write to prefix content) already defer to
+    // the per-chat compaction landing (softResetMemoryContext re-reads the
+    // blocks) and to synthesis. This clear is a byte-identical no-op when
+    // nothing prefix-relevant changed, and it heals any headless write that
+    // has no other landing point before the next synthesis.
     try {
       invalidateAllStablePrefixCaches();
     } catch (e: any) {

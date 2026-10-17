@@ -545,6 +545,18 @@ accumulate across many cycles. The existing valve handles it —
 re-roll (Fix C). Expected cadence ≈ once/day/chat, which matches the budget
 set aside for compaction re-rolls.
 
+**Revised (10-17):** `softResetMemoryContext` also drops the per-chat
+`stablePrefixCache` entry **unconditionally** (previously the entry was only
+dropped as a side effect of `applyProjectContextLanding` when an AGENTS.md
+snapshot row existed). Mid-conversation block writes (agent-tool and UI)
+now defer their stable-prefix cost to compaction: no invalidation at write
+time (the editing chat already carries the new content in its transcript),
+and the post-compaction rebuild reads CURRENT block bytes exactly when the
+in-context tool call gets cut. The rebuild is byte-identical when nothing
+changed, so a clean compaction costs no head re-prefill. This closes the
+hole where non-project chats (and project chats without a snapshot row)
+served pre-edit block bytes indefinitely after compaction.
+
 ### 10.5 Fix C — hysteresis re-roll at the delta-overflow valve (deferred)
 
 When the valve fires, instead of a pure Case 1 roll, perform a re-roll whose
@@ -652,8 +664,10 @@ Deferred content applies where the prompt is reprocessed (or re-warmed)
 anyway:
 
 - `softResetMemoryContext` (every compaction path) → `applyProjectContextLanding`:
-  drop row + Map entry. Runs before the no-state early-return, since a chat
-  with no memory context still compacted.
+  drop row + Map entry, and (10-17) drop the cached stable prefix entry
+  unconditionally — mid-conversation block edits land here too. Runs before
+  the no-state early-return, since a chat with no memory context still
+  compacted.
 - `resetMemoryContext` (chat deletion, cache-warm prep) → drop row + entry;
   the warm then pre-fills fresh bytes at zero additional cost.
 - `invalidateAllCaches` (workspace move) → drop row.
@@ -667,10 +681,13 @@ to compaction.
 
 ### 11.5 Scope notes
 
-- Only the PROJECT SECTION defers. Persona/zeitgeist/blocks changes flow
-  through deliberate global invalidations where the system consciously
-  propagates new content to every chat; AGENTS.md edits arrive with no event
-  at all, which is why they get the deferral treatment.
+- Only the PROJECT SECTION defers. AGENTS.md edits arrive with no event at
+  all, which is why they get the deferral treatment. Block edits likewise
+  defer (10-17): agent-tool and UI writes are not invalidated at write time;
+  they land at each chat's next compaction (the soft reset re-reads the
+  blocks) and at synthesis. The per-automation backstop clear and
+  synthesis's global invalidation remain as healers for headless writes and
+  global rewrites.
 - If a global invalidation coincides with a divergence, the turn pays its
   (already owed) miss with the snapshot's stale bytes embedded — zero extra
   cost, content lands at the next compaction.

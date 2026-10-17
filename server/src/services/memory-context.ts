@@ -379,9 +379,27 @@ function applyProjectContextLanding(chatId: string): void {
  * Also the landing point for deferred AGENTS.md changes: compaction reprocesses
  * the whole prompt anyway, so the snapshot is dropped here and the next build
  * re-reads the file at zero additional cache cost.
+ *
+ * Also the landing point for mid-conversation block edits: the cached stable
+ * prefix (persona / user doc / blocks / zeitgeist / project section) is
+ * dropped here too, so the post-compaction rebuild reads CURRENT block bytes.
+ * A block written mid-conversation (agent tool or UI) carries its new content
+ * in the editing chat's transcript, so invalidating at write time would turn
+ * the next turn into a needless mid-chat head re-prefill; the cost lands here
+ * instead — where the prompt is already being reprocessed — coalescing every
+ * edit since the last compaction into one rebuild. The rebuild is
+ * byte-identical when nothing changed, so a clean compaction costs nothing
+ * (the head KV still hits).
  */
 export function softResetMemoryContext(chatId: string): void {
   applyProjectContextLanding(chatId);
+
+  // Stable prefix re-read at compaction: see the deferral note above. The
+  // snapshot logic in applyProjectContextLanding already deletes the entry
+  // for chats with an AGENTS.md snapshot; this makes the drop unconditional
+  // so block edits land at compaction for every chat, not only project
+  // chats whose snapshot row happens to exist.
+  stablePrefixCache.delete(chatId);
 
   // Never resurrect state from nothing: only soften what already exists.
   // Hydrate first so a soft reset after a process restart lands on the row.

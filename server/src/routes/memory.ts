@@ -25,7 +25,6 @@ import {
 import { isBlockScope, resolveBlockScopeTarget } from "../services/memory-block-scope.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
-import { invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep-cycle.js";
 import { getActiveAutomationTaskId, isAutomationActive } from "../services/automation-lock.js";
 import { runAutomationTask } from "../services/automation-runner.js";
@@ -581,8 +580,12 @@ router.post("/blocks", async (req, res) => {
     supersededBy: undefined,
     supersedes: undefined,
   });
-  // Blocks affect the stable prefix — invalidate all caches
-  invalidateAllStablePrefixCaches();
+  // Block writes DEFER their stable-prefix cost: no invalidation here. The
+  // new bytes land at each chat's next compaction (softResetMemoryContext
+  // re-reads the blocks) and at synthesis; until then the editing chat
+  // carries the content in its transcript and read_memory_block always
+  // serves fresh bytes. An immediate global invalidation would turn every
+  // chat's next turn into a mid-conversation head re-prefill for one edit.
   res.status(201).json(block);
 });
 
@@ -620,7 +623,7 @@ router.patch("/blocks/:id", async (req, res) => {
     updatedBy: "user",
   });
   if (!success) return res.status(404).json({ error: "Block not found" });
-  invalidateAllStablePrefixCaches();
+  // No invalidation — same deferral policy as block create (see above).
   res.json(getMemoryBlock(req.params.id));
 });
 
@@ -628,7 +631,7 @@ router.patch("/blocks/:id", async (req, res) => {
 router.delete("/blocks/:id", async (req, res) => {
   const success = deleteMemoryBlock(req.params.id);
   if (!success) return res.status(404).json({ error: "Block not found" });
-  invalidateAllStablePrefixCaches();
+  // No invalidation — same deferral policy as block create (see above).
   res.json({ deleted: true });
 });
 
