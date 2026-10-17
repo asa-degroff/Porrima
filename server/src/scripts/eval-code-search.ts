@@ -52,6 +52,9 @@
  *   over single samples are noise, and ties pass the gate by design).
  * - Eval chats persist (the transcripts are the grading artifact);
  *   --purge deletes every chat with the eval title prefix.
+ * - The module is importable without side effects for oracle tests
+ *   (`export const TASKS`): the CLI dispatch runs only when the script is
+ *   invoked directly (argv[1] realpaths to this file), never on import.
  */
 import { randomUUID } from "crypto";
 import { execFileSync } from "child_process";
@@ -290,20 +293,36 @@ export const TASKS: TaskDef[] = [
         }
         for (const c of node.children()) visit(c, file);
       };
+      // Scope parity: this walk is intentionally naive (recursive readdir,
+      // node_modules skipped) rather than the engine's gitignore-aware
+      // discovery — it mirrors the raw model AST walks the 1,406 truth was
+      // cross-checked against. Consequence: a gitignored .ts file under
+      // server/src WOULD be counted here but not by the T2/T3 engine scans;
+      // none exist (the tree is clean between batteries). Read/parse
+      // failures are never silent: they are counted and announced in the
+      // truth string itself. Self-reference note: the scope includes this
+      // very file — harness edits can shift the truth (e.g. the d1308f63+
+      // guard commit moved 1,406 -> 1,407 via `if (entry == null) return
+      // false;`); run-time recompute absorbs it by §4.1 design, but
+      // cross-battery number comparisons must account for it.
+      const skipped: string[] = [];
       const walkDir = (dir: string): void => {
         for (const e of readdirSync(dir)) {
           const p = join(dir, e);
-          if (statSync(p).isDirectory()) { if (e !== "node_modules") walkDir(p); continue; }
+          let st;
+          try { st = statSync(p); } catch { skipped.push(e); continue; }
+          if (st.isDirectory()) { if (e !== "node_modules") walkDir(p); continue; }
           if (!e.endsWith(".ts")) continue;
           let root;
-          try { root = sg.parse("TypeScript", readFileSync(p, "utf8")).root(); } catch { continue; }
+          try { root = sg.parse("TypeScript", readFileSync(p, "utf8")).root(); } catch { skipped.push(p); continue; }
           visit(root, p.slice(REPO_ROOT.length + 1));
         }
       };
       walkDir(join(REPO_ROOT, "server/src"));
       const total = cls.reduce((s, n) => s + n, 0);
       const sorted = Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b)));
-      return `${total} no-else single-return if-statements (brace-less ${cls[0]}, block ${cls[1]}, bare ${cls[2]}, bare-block ${cls[3]}): ${JSON.stringify(sorted)}`;
+      const skippedNote = skipped.length > 0 ? `; ${skipped.length} file(s) unreadable/unparseable and NOT counted` : "";
+      return `${total} no-else single-return if-statements (brace-less ${cls[0]}, block ${cls[1]}, bare ${cls[2]}, bare-block ${cls[3]}${skippedNote}): ${JSON.stringify(sorted)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
     efficiencyGated: false,
@@ -779,33 +798,48 @@ async function purge(): Promise<void> {
 
 // --- main -----------------------------------------------------------------
 
-const argv = process.argv.slice(2);
-const flag = (name: string) => argv.includes(`--${name}`);
-const val = (name: string): string | undefined => {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? argv[i + 1] : undefined;
-};
-
-if (flag("report")) {
-  const files = argv.slice(argv.indexOf("--report") + 1).filter((a) => !a.startsWith("--"));
-  if (files.length === 0 || files.length > 3) { console.error("--report needs one to three .jsonl files (a [b] [c])"); process.exit(1); }
-  for (const f of files) if (!existsSync(f)) { console.error(`no such file: ${f}`); process.exit(1); }
-  report(files);
-} else if (flag("purge")) {
-  if (process.env.PORRIMA_EVAL_CODE_SEARCH !== "1") { console.error("PORRIMA_EVAL_CODE_SEARCH=1 required"); process.exit(1); }
-  void purge();
-} else {
-  if (process.env.PORRIMA_EVAL_CODE_SEARCH !== "1") {
-    console.error("PORRIMA_EVAL_CODE_SEARCH=1 required — this script runs real agent turns and writes eval chats.");
-    console.error("Run once per arm (with/without PORRIMA_CODE_SEARCH=1), then --report both files. See header.");
-    process.exit(1);
+// Direct-invocation guard: importing this module (e.g. `import { TASKS }`
+// for an oracle test) must not dispatch — only an executed script does
+// (argv[1] realpath == this file; broken/odd entries simply never dispatch).
+function invokedDirectly(): boolean {
+  const entry = process.argv[1];
+  if (entry == null) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
   }
-  const tasks = (val("tasks") ?? "1,2,3,4,5,6").split(",").map((s) => Number(s.trim())).filter((n) => TASKS.some((t) => t.id === n));
-  const reps = Math.max(1, Number(val("reps") ?? "1"));
-  const armArg = (val("arm") ?? "").toLowerCase();
-  if (armArg && !["a", "b", "c"].includes(armArg)) { console.error("--arm must be a, b, or c"); process.exit(1); }
-  // No --arm: derive from the flag (A/B only — C is an explicit choice).
-  const arm = (armArg || (codeSearchEnabled() ? "b" : "a")) as "a" | "b" | "c";
-  const out = val("out") ?? join(DEFAULT_OUT_DIR, `${arm}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.jsonl`);
-  void runArm({ arm, tasks, reps, modelOverride: val("model"), out });
+}
+
+if (invokedDirectly()) {
+  const argv = process.argv.slice(2);
+  const flag = (name: string) => argv.includes(`--${name}`);
+  const val = (name: string): string | undefined => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+
+  if (flag("report")) {
+    const files = argv.slice(argv.indexOf("--report") + 1).filter((a) => !a.startsWith("--"));
+    if (files.length === 0 || files.length > 3) { console.error("--report needs one to three .jsonl files (a [b] [c])"); process.exit(1); }
+    for (const f of files) if (!existsSync(f)) { console.error(`no such file: ${f}`); process.exit(1); }
+    report(files);
+  } else if (flag("purge")) {
+    if (process.env.PORRIMA_EVAL_CODE_SEARCH !== "1") { console.error("PORRIMA_EVAL_CODE_SEARCH=1 required"); process.exit(1); }
+    void purge();
+  } else {
+    if (process.env.PORRIMA_EVAL_CODE_SEARCH !== "1") {
+      console.error("PORRIMA_EVAL_CODE_SEARCH=1 required — this script runs real agent turns and writes eval chats.");
+      console.error("Run once per arm (with/without PORRIMA_CODE_SEARCH=1), then --report both files. See header.");
+      process.exit(1);
+    }
+    const tasks = (val("tasks") ?? "1,2,3,4,5,6").split(",").map((s) => Number(s.trim())).filter((n) => TASKS.some((t) => t.id === n));
+    const reps = Math.max(1, Number(val("reps") ?? "1"));
+    const armArg = (val("arm") ?? "").toLowerCase();
+    if (armArg && !["a", "b", "c"].includes(armArg)) { console.error("--arm must be a, b, or c"); process.exit(1); }
+    // No --arm: derive from the flag (A/B only — C is an explicit choice).
+    const arm = (armArg || (codeSearchEnabled() ? "b" : "a")) as "a" | "b" | "c";
+    const out = val("out") ?? join(DEFAULT_OUT_DIR, `${arm}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.jsonl`);
+    void runArm({ arm, tasks, reps, modelOverride: val("model"), out });
+  }
 }
