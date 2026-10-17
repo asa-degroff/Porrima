@@ -38,7 +38,10 @@ now field-based (truth re-frozen at 1,406; the comment-significance fact
 pinned in the executor header + Risk-6 bump list) and the fc detector is
 modifier-tolerant — both gate lines reprint with the fc axis honest
 (ok/ok); verdicts unchanged. Record:
-[code-search-battery-v4.md](code-search-battery-v4.md) §10.
+[code-search-battery-v4.md](code-search-battery-v4.md) §10. Next design steps drafted 10-16:
+§3.4 `code_outline` design (kernel-first; engine has no napi outline API — executor-side
+walk) + the density readout protocol in kernel-codemode §4.9 — the program's remaining
+questions are now instrumented or designed, pending the dogfood window and the canary.
 **Date:** 2026-10-16
 
 ## 1. Problem
@@ -639,22 +642,96 @@ headroom over the executor's own 120 s deadline so the executor's more useful
 timeout message ("narrow `path`…") wins the race instead of the generic
 abort text.
 
-### 3.4 Orientation — named, deferred, designed separately
+### 3.4 Orientation — `code_outline` (designed 10-16, kernel-first)
 
 `ast-grep outline` (text: `line: signature` per top-level symbol; `--json`:
 `{path, language, items: [{symbolType, name, range, signature, astKind,
 isImport, isExported}]}`) is a *different job* from search — "where do I look
 next" vs "where is this". It opens the project-context orientation seam
-noted in codemode §2.5 (outline entry → range-read by byte offset →
-transform, without full file reads).
+noted in codemode §2.5 (outline entry → range-read → transform, without full
+file reads). The field treats it as worth a tool (@juvio15's
+`ast_grep_outline` "map a file before you read it", Gemini CLI's `ast_read`,
+Serena's `get_symbols_overview` as its most-praised feature) and the battery
+program adds the local evidence: every T2/T6 drowning rep enumerated files by
+parsing or paginated scanning and **never oriented first** — a symbol map is
+the affordance that bounds "what shapes exist here" before a
+pattern-verification loop starts (the §3.3 loop's first step, generalized).
 
-The field treats it as worth a tool: @juvio15/pi-ast-grep ships
-`ast_grep_outline` at model level ("map a file before you read it") and
-Gemini CLI's `ast_read` sits in the same territory. The seam is real; the
-model-level commitment is what this design defers, on economics — zero
-schema bytes, the budgets make orientation free mid-kernel, and `list_files`
-covers the directory-tree case at model level. It is **kernel-first** and
-gets its own design section when it ships.
+**Engine fact (verified 10-16, on the pinned 0.50.0):** `@ast-grep/napi`
+exports `Lang kind parse pattern parseAsync findInFiles
+registerDynamicLanguage parseFiles` + the five language tags + node classes —
+**there is no outline API**; `sg outline` is CLI-only. So outline is an
+executor-side walk over a fresh `parse(lang, src)` tree, matching the root
+program node's top-level children against a pinned symbol-kind table. The
+fresh-parse posture (§3.5) holds: no index, cost is one read + one parse
+(§2's measured ~0.15 ms/file amortizes to sub-millisecond for a single file).
+
+**Surface (v1):**
+
+```
+code_outline(path)                      # single file, workspace-relative
+  → {path, language, items[]}            # structured (kernel); text only if ever model-level
+  items[]: {name, symbolType, astKind, signature,
+            range: {start:{line,column}, end:{line,column}},
+            byteRange: {start, end}, isExported, isImport}
+```
+
+- **Kind table (drift-pinned like the alias table, §3.1 fact 1):**
+  `function_declaration`, `generator_function_declaration`,
+  `class_declaration`, `abstract_class_declaration`, `interface_declaration`,
+  `enum_declaration`, `type_alias_declaration`, `lexical_declaration`
+  (classified `function` when the initializer is an arrow/function
+  expression — the const-arrow case is half of what orientation is *for* —
+  else `variable`), plus `import_statement` entries (`isImport: true`).
+  Top-level only; **class members and function nesting are v2** (one more
+  pattern pass per class when usage asks).
+- **Export handling:** an `export_statement` child of program is unwrapped to
+  its declaration with `isExported: true`; a default export without a name
+  gets `name: "(default)"`.
+- **Signature:** node text from start to the body-open brace or first
+  newline, whitespace-collapsed, capped — the `line: signature` idiom and
+  the same capped-line discipline as `renderMatchLine` (§3.2).
+- **Determinism:** single parse, document order; a file that yields zero
+  symbols is a clean empty list (the §3.2 no-match-is-a-value contract).
+- **Budgets/gating:** same flag (`PORRIMA_CODE_SEARCH=1` gates both
+  projections — one capability, two entry points), same path-resolution
+  rules (§3.1), same local-only carve-out message for remote workspaces
+  (outline is file-based by construction; unlike the snippet path it has no
+  remote exception), same 120 s deadline class (never approached in
+  practice at single-file cost).
+
+**The range-read seam is already closed by existing surfaces — do not add a
+read_file parameter.** Line ranges feed `read_file`'s existing
+`offset`/`limit`; byte offsets feed the kernel's `open(path).read()[a:b]`
+where value slicing is free. A `startByte`/`endByte` extension to
+`read_file` is a live candidate **only if** the §4.9 readout shows
+line-range reads missing sub-line targets; on current evidence, no new
+surface.
+
+**Model-level exposure: deferred by the token rule, not by taste.** Outline
+is a tool-definition (~80–150 schema bytes) whose job the model can do
+badly-but-survivably with `read_file` heads — so unlike `code_search` (which
+*replaces a default*, §4) it does not arrive self-earning. Kernel-first now;
+model-level ships when measured demand exists — the demand signal is the
+§4.9 density readout itself (outline dispatches at cell-chains, or model
+sessions paying full-read token costs where an outline would fit, both
+observable in the dogfood window). "One tool or two" (codemode §7 Q9):
+**two** — `code_search` and `code_outline` are separate schemas with
+separate jobs, sharing the executor and the gate; the MCP six-tool precedent
+(§2) says enumeration-style merging is where agent tools bloat.
+
+**Evaluation posture (settled before any task exists):** orientation has no
+countable truth, so outline gets **no gate slot** — any v5+ orientation task
+is diagnostic-only (T2/T4/T6 treatment): read on tokens-to-first-correct-
+identification, never in the flip aggregate, and the battery is structurally
+blind to kernel-side outline use (run_python masking — §4.1 caveat). The
+real evaluation is the usage census: does mapping-before-reading change the
+enumeration reflex the batteries kept watching?
+
+**v1 non-scope, named:** directory mode (O(files × parse) per call with no
+freshness win over `list_files` + targeted outlines; demand-gated), members
+enumeration, cross-file ranking (aider's repo-map lineage stays out per §2),
+any cache (§3.5's inverse-risk law), model-level exposure (above).
 
 ### 3.5 Guardrails
 
@@ -685,7 +762,7 @@ removal:
 | **searching other languages** (python, go, rust, …) | `bash` + `rg` | unchanged — `code_search` names them as unscanned and points at `rg` |
 | **searching text/non-code** (logs, configs, binaries, remote) | `bash` + `rg` | unchanged — `rg` stays *the* tool for text search |
 | **reading** | `read_file` | unchanged — search→read is still the loop; `code_search` replaces the *search half* with structure |
-| **orientation** | `list_files` (+ ad hoc `ls` via bash) | unchanged now; `code_outline` deferred (§3.4) |
+| **orientation** | `list_files` (+ ad hoc `ls` via bash) | unchanged at model level now; `code_outline` designed, kernel-first (§3.4) |
 | **kernel `tools.*`** | `bash`/`read_file` cover search via `tools.bash("rg")` + Python text-munging | `tools.code_search` — structured, loop-free (§3.3) |
 | **prompt/AGENTS.md guidance** | (implicit: "use rg") | one added line — *default to `code_search` for code; `rg` for text* |
 
@@ -1086,7 +1163,7 @@ the censoring or aggregate machinery.
 |---|---|---|
 | **0** | model-level `code_search`: executor (napi, local), scope census + coverage reporting, tool definition, budgets, gating, tests | implemented; dark behind `PORRIMA_CODE_SEARCH=1` |
 | **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | **implemented** — exposure gated on `PORRIMA_CODE_SEARCH=1` per dispatcher construction; structured values ride the `value_json` wire flag (driver decodes to a real dict); e2e-pinned through the registry seam |
-| **2** | `code_outline` — its own design section, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); boundary named in §3.4 |
+| **2** | `code_outline` — **designed §3.4 (10-16)**, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); battery evidence (T2/T6 never-orient-first) + design in §3.4; model-level exposure gated on the §4.9 density readout (kernel-codemode) |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
 | **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery**, not on the flip alone — first gate run 10-14: **FAIL, flag stays dark** (§4.1 Results; model-scoped verdict, kernel projection untested); **battery v3 designed §4.2** (S1 model-level `code=` + S2 description v3 as prerequisites; arms A/B/C with the strict gate B-vs-A and nudge gate C-vs-A decision matrix) |
@@ -1153,8 +1230,8 @@ the censoring or aggregate machinery.
 
 ## 8. Future directions
 
-- **`code_outline`** (§3.4) — kernel-first orientation, then a decision about
-  a model-level surface. Now staged as phase 2 (§6), ahead of remote: the
+- **`code_outline`** (§3.4, designed 10-16) — kernel-first orientation, then a decision about
+  a model-level surface gated on the §4.9 density readout. Now staged as phase 2 (§6), ahead of remote: the
   orientation signal from the field (Serena's `get_symbols_overview`,
   @juvio15's outline tool, `sg outline`) is the strongest in this family.
 - **Grammar coverage** — now a planned phase (§6 G) via the official

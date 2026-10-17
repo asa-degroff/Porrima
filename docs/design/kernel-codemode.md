@@ -503,6 +503,41 @@ fire-and-forget after the wire response — telemetry never fails or slows a
 dispatch — and is disabled under `NODE_ENV=test` so protocol tests never
 pollute the store (`PORRIMA_KERNEL_STATS=1/0` overrides).
 
+**Density readout protocol — `code_search` (pre-registered 10-16, before the
+traffic exists).** The transcript program (code-search.md §4.1–§4.2; battery
+records) established a behavioral law across five probe/battery rounds:
+*single-shot queries go to the tool, aggregation goes to scripts* — and the
+kernel projection is the half of the thesis the battery structurally cannot
+see. `cell_id` makes loop density directly observable without transcript
+surgery; the dogfood window (flag ON for real local work — an operator
+choice, distinct from the §4.1 flip) reads against these frozen questions:
+
+1. **Chain depth.** Dispatches sharing `(chat_id, cell_id)`: the density
+   thesis *fires* at median ≥ 2 `code_search` dispatches per cell — the
+   signature cell shape is snippet(`code=`) → file-scan → refined-scan,
+   `structured=1` throughout (the §3.3 loop taken in variables). Median 1
+   with nonzero volume means the kernel is being used as a one-shot call
+   site — the loop is not being taken.
+2. **Substitution (paired, transcript-side).** Stats cannot see raw Python
+   — `open()` + regex never dispatches — so a qualitative pass over the
+   week's `run_python` programs asks whether text-munging enumerate/count
+   loops are shrinking against the battery-era parser-archaeology baseline
+   (TS-API/Babel scratch scripts, battery v3/v4 T2/T3/T6). The claim is
+   substitution of raw scripting by `tools.code_search`, not dispatch
+   volume alone.
+3. **Wire-shape health.** `error`/`refused` rates against the model-level
+   record (zero real false conclusions across 108 runs); `truncated`/
+   `spilled` counts on large match pages (aggregation-in-variables
+   working); `duration_ms` against §2's measured ~50 ms/scan — a
+   ten-iteration refine pass staying sub-second is part of the promise.
+4. **Verdict shapes, pre-declared.** (a) Depth ≥ 2 + substitution: the
+   density case holds — Phase D's shrink gate gets its first real input
+   and `code_outline` (code-search.md §3.4) ships on the same demand
+   logic. (b) Model-tool alive, kernel zero: discoverability is the
+   binding constraint — fix the capability line / `tools.__doc__` text and
+   re-read before adding any surface. (c) Both dark: the default never
+   got reached in real work; nothing new gets designed until the canary.
+
 ### 4.10 Phase A implementation notes — slices 0–2 (10-13)
 
 What landed when slice 0 shipped, including the two places implementation refined
