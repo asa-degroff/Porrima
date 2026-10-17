@@ -440,6 +440,15 @@ interface WarmOpenAICompatBodyResult {
   tokensCached: number;
   tokensEvaluated: number;
   totalPromptTokens: number;
+  /**
+   * The one-token-short warm prompt's length — the exact state the pinned slot
+   * holds after prefill (the post-warm park's expected size). Deliberately not
+   * `tokens_cached + tokens_evaluated`: those are the server's workload
+   * counters and double-count on a warm-LCP prefill (10-17 field finding:
+   * expected 136,080 vs actual slot state 68,040 → the slot-identity guard
+   * discarded a correct save).
+   */
+  warmPromptTokens: number;
   cacheHitRatio: number;
 }
 
@@ -536,6 +545,7 @@ async function warmOpenAICompatBody(input: WarmOpenAICompatBodyInput): Promise<W
       tokensCached: stats.tokensCached,
       tokensEvaluated: stats.tokensEvaluated,
       totalPromptTokens: totalTokens,
+      warmPromptTokens: shortPrompt.warmTokenCount ?? totalTokens,
       cacheHitRatio: hitRatio,
     };
   } catch (err) {
@@ -649,7 +659,7 @@ export async function warmChatCache(
     void parkAfterWarm({
       chatId,
       lease,
-      promptTokens: stats.totalPromptTokens,
+      promptTokens: stats.warmPromptTokens,
       prefixDigest,
     });
 

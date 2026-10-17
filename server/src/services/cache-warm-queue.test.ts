@@ -176,7 +176,7 @@ describe("llama slot busy detection", () => {
 });
 
 describe("post-synthesis warm planning", () => {
-  it("reserves limited capacity for baseline and system before recent chats", async () => {
+  it("reserves limited capacity for recent chats first — baseline and system starve (10-17)", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url === "http://router.test/props") {
@@ -186,13 +186,15 @@ describe("post-synthesis warm planning", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
+    // The field case: capacity 2 took baseline+system under the old order,
+    // leaving recent at 0. Now the two most recent chats take both slots.
     const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2", "recent-3"]);
 
-    expect(results.map((r) => r.chatId)).toEqual(["system", "__porrima_new_agent_chat_baseline__"]);
-    expect(warmMockState.calls).toEqual(["chat:system", "baseline"]);
+    expect(results.map((r) => r.chatId)).toEqual(["recent-2", "recent-1"]);
+    expect(warmMockState.calls).toEqual(["chat:recent-2", "chat:recent-1"]);
   });
 
-  it("fills remaining capacity with recent chats and warms highest priority targets last", async () => {
+  it("fills remaining capacity with system after recents — baseline starves (10-17)", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url === "http://router.test/props") {
@@ -202,19 +204,16 @@ describe("post-synthesis warm planning", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
+    // All three recents take slots first (warmed least-recent first), then the
+    // system chat; the cheapest re-prefill (baseline) is last in line.
     const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2", "recent-3"]);
 
-    expect(results.map((r) => r.chatId)).toEqual([
-      "recent-2",
-      "recent-1",
-      "system",
-      "__porrima_new_agent_chat_baseline__",
-    ]);
+    expect(results.map((r) => r.chatId)).toEqual(["recent-3", "recent-2", "recent-1", "system"]);
     expect(warmMockState.calls).toEqual([
+      "chat:recent-3",
       "chat:recent-2",
       "chat:recent-1",
       "chat:system",
-      "baseline",
     ]);
   });
 
@@ -235,13 +234,11 @@ describe("post-synthesis warm planning", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
+    // Fallback capacity 3: both recents (least-recent first), then system;
+    // the baseline no longer reserves a slot ahead of the recents.
     const results = await schedulePostSynthesisWarms("system", ["recent-1", "recent-2"]);
 
-    expect(results.map((r) => r.chatId)).toEqual([
-      "recent-1",
-      "system",
-      "__porrima_new_agent_chat_baseline__",
-    ]);
+    expect(results.map((r) => r.chatId)).toEqual(["recent-2", "recent-1", "system"]);
   });
 
   it("skips the post-synthesis pass when the user has queued messages", async () => {

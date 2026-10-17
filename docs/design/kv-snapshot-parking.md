@@ -276,6 +276,16 @@ Mechanism (four parts):
    rule below). The row is stamped with the **passed** digest — the
    warm body's `[head, tools]` via `computeLlamaPrefixDigest` — not
    `turnPrefixDigests`, which the warm by definition never populated.
+   `promptTokens` is the warm's one-token-short prompt length
+   (`warmTokenCount`) — the exact state the pinned slot holds after prefill
+   (item 4: `n_tokens = warm tokens`). Deliberately **not** the server's
+   workload counters: on a warm-LCP prefill `tokens_cached +
+   tokens_evaluated` double-counts the prompt, and the slot-identity guard
+   then discards a correct save. Field-confirmed 10-17 (expected 136,080 vs
+   slot state 68,040 on a 68,040-token warm — the save captured the right
+   bytes and was thrown away). Every gate on the path logs a receipt (no
+   lease, disabled, below-min, digest-unchanged) — silent skips are how the
+   10-11 silent-drop class hides.
 3. **Digest-conditional rule.** Park only when there is no `ready` row **or**
    its `prefix_digest` differs from the warm body's digest. A byte-identical
    head (no-op synthesis) skips the write: the file is still valid, the warm
@@ -291,6 +301,19 @@ Mechanism (four parts):
    one-token-short shape means
    `n_tokens = warm tokens`, and the next turn's LCP matches to that boundary
    (the deliberate tokenizer-round-trip margin).
+
+5. **Plan allocation (recent-first, 10-17).** The post-synthesis warm plan
+   (`buildPostSynthesisWarmPlan`) consumes capacity recent-first: recent
+   agent chats, then the system chat, then the new-chat baseline. The first
+   field pass exposed why: at capacity 2 (the `--parallel` fallback —
+   `/props` no longer exposes `max_instances`), the old baseline→system→
+   recent order left recent structurally at 0 — the pass warmed the
+   13k-token baseline and the 68k-token system chat and skipped the three
+   60k+ user chats, whose next prefill is exactly what this pass exists to
+   buy. The system's cold next-synthesis start is headless (no user impact);
+   the baseline rides the regular warm schedule. Lever (undelivered): a
+   settings key to override plan capacity — it currently reads the managed
+   `--parallel`.
 
 Known benign race: if the warm defers (the user queued messages) and runs
 *after* that user's turn, its refreeze may pick a different top-k →

@@ -427,15 +427,28 @@ function jobMatchesTarget(
   return jobTargetId(job) === targetId && jobTargetKind(job) === targetKind;
 }
 
-function buildPostSynthesisWarmPlan(
+/**
+ * Post-synthesis warm plan, recent-first (10-17 field finding): the pass
+ * exists to refresh the heads synthesis just changed, and recent agent chats
+ * pay the most expensive next prefill — so they take the slots first. The
+ * system chat starts cold on the next synthesis (headless, no user impact),
+ * and the new-chat baseline is the cheapest re-prefill of the three; both
+ * ride the regular warm schedule when capacity remains. The old
+ * baseline→system→recent order left recent structurally at 0 at capacity 2
+ * (the `--parallel` fallback) — exactly the chats the pass was for.
+ */
+export function buildPostSynthesisWarmPlan(
   capacity: WarmCapacity,
   systemChatId: string | undefined,
   recentChatIds: string[],
 ): PostSynthesisWarmPlan {
   let remaining = Math.max(1, capacity.maxSlots);
 
-  const baseline = remaining > 0;
-  if (baseline) remaining--;
+  const uniqueRecentChatIds = Array.from(new Set(recentChatIds)).filter(
+    (chatId) => chatId !== systemChatId,
+  );
+  const recentLimit = Math.max(0, Math.min(uniqueRecentChatIds.length, POST_SYNTHESIS_RECENT_CHAT_LIMIT, remaining));
+  remaining -= recentLimit;
 
   let plannedSystemChatId: string | undefined;
   if (systemChatId && remaining > 0) {
@@ -443,8 +456,8 @@ function buildPostSynthesisWarmPlan(
     remaining--;
   }
 
-  const uniqueRecentChatIds = Array.from(new Set(recentChatIds)).filter((chatId) => chatId !== plannedSystemChatId);
-  const recentLimit = Math.max(0, Math.min(uniqueRecentChatIds.length, POST_SYNTHESIS_RECENT_CHAT_LIMIT, remaining));
+  const baseline = remaining > 0;
+  if (baseline) remaining--;
 
   return {
     capacity,
@@ -656,8 +669,9 @@ async function drainQueue(): Promise<void> {
 /**
  * After synthesis completes, the memory context for all chats has likely
  * changed (new memories, updated blocks). This function builds a capacity-aware
- * warm plan that reserves slots for the new-chat baseline and system chat, then
- * fills any remaining capacity with recent agent chats.
+ * warm plan, recent-first: recent agent chats take the slots first (their next
+ * prefill is the most expensive), then the system chat, then the new-chat
+ * baseline (see buildPostSynthesisWarmPlan).
  */
 export async function schedulePostSynthesisWarms(
   systemChatId: string | undefined,
@@ -689,9 +703,9 @@ export async function schedulePostSynthesisWarms(
   );
 
   // Warm selected recent agent chats in REVERSE order of recency (least recent
-  // first, most recent last). Higher-priority targets are warmed after recent
-  // chats below, so they are most likely to survive if runtime capacity changes
-  // while the warm sequence is running.
+  // first, most recent last), before the system chat and baseline: the
+  // high-value recents complete first, so they survive if the pass is
+  // interrupted.
   if (plan.recentChatIds.length > 0) {
     console.log(
       `[cache-warm-queue] post-synthesis: scheduling ${plan.recentChatIds.length} ` +

@@ -555,20 +555,37 @@ export async function maybeParkChatAfterTurn(input: {
 export async function parkAfterWarm(input: {
   chatId: string;
   lease: LlamaSlotLease | null | undefined;
-  /** Wire-truth size of the state the slot holds: the warm's (one-token-short) prompt. */
+  /**
+   * Wire-truth size of the state the slot holds: the warm's (one-token-short)
+   * prompt length (`warmTokenCount`). Not the server's workload counters —
+   * on a warm-LCP prefill `tokens_cached + tokens_evaluated` double-counts
+   * the prompt (10-17 field: expected 136,080 vs slot state 68,040).
+   */
   promptTokens: number;
   /** Digest of the warm body's [head, tools] — same computation as the restore gate. */
   prefixDigest: string;
 }): Promise<void> {
   try {
     const { chatId, lease } = input;
-    if (!lease) return; // D2 pinning requirement: auto binding mode has no pinned slot
+    if (!lease) {
+      // D2 pinning requirement: auto binding mode has no pinned slot.
+      console.log(`${LOG} chat=${short(chatId)} post-warm park skipped: no pinned slot lease`);
+      return;
+    }
 
     const settings = await readSettings();
     const policy = resolveKvSnapshotSettings(settings);
-    if (!policy.enabled) return;
+    if (!policy.enabled) {
+      console.log(`${LOG} chat=${short(chatId)} post-warm park skipped: feature disabled`);
+      return;
+    }
 
-    if (input.promptTokens < policy.minTokens) return;
+    if (input.promptTokens < policy.minTokens) {
+      console.log(
+        `${LOG} chat=${short(chatId)} post-warm park skipped: ${input.promptTokens} tokens below min ${policy.minTokens}`,
+      );
+      return;
+    }
 
     const existing = getKvSnapshot(chatId);
 

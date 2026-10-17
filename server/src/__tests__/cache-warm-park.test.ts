@@ -41,6 +41,8 @@ interface Harness {
 async function loadHarness(options: {
   lease?: ReturnType<typeof makeLease> | null;
   prefillFails?: boolean;
+  tokensCached?: number;
+  tokensEvaluated?: number;
 } = {}): Promise<Harness> {
   vi.resetModules();
   const home = mkdtempSync(join(tmpdir(), "warm-park-"));
@@ -67,8 +69,8 @@ async function loadHarness(options: {
         ok: true,
         json: async () => ({
           timings: { prompt_ms: 100 },
-          tokens_cached: 0,
-          tokens_evaluated: 3,
+          tokens_cached: options.tokensCached ?? 0,
+          tokens_evaluated: options.tokensEvaluated ?? 3,
         }),
       };
     }
@@ -229,7 +231,7 @@ describe("cache-warm post-warm park (§5.3a)", () => {
       expect(h.parkMock).toHaveBeenCalledWith({
         chatId: CHAT_ID,
         lease: expect.objectContaining({ slotId: 2 }),
-        promptTokens: 3, // tokens_cached + tokens_evaluated of the one-token-short prompt
+        promptTokens: 3, // warmTokenCount: the one-token-short prompt length (what the slot holds)
         prefixDigest: expect.any(String),
       });
 
@@ -257,10 +259,33 @@ describe("cache-warm post-warm park (§5.3a)", () => {
       expect(h.parkMock).toHaveBeenCalledWith({
         chatId: CHAT_ID,
         lease: null,
-        promptTokens: 3,
+        promptTokens: 3, // warmTokenCount, again — the null lease makes the park a no-op downstream
         prefixDigest: expect.any(String),
       });
       expect(h.releaseMock).toHaveBeenCalledWith(null);
+    } finally {
+      rmSync(h.home, { recursive: true, force: true });
+    }
+  });
+
+  it("a warm-LCP prefill parks the slot state, not the server's workload counters (10-17 field case)", async () => {
+    // Field shape: the slot already held ~the warm prompt (high LCP), so the
+    // server reports tokens_cached ≈ tokens_evaluated ≈ prompt length (3 each
+    // here; 68,040 each in the field). The park must expect the slot state —
+    // warmTokenCount — not their sum: the sum false-fired the slot-identity
+    // guard and discarded a correct save (n_saved=68,040 < expected 136,080).
+    const h = await loadHarness({ lease: makeLease(2), tokensCached: 3, tokensEvaluated: 3 });
+    try {
+      const result = await h.warm.warmChatCache(CHAT_ID, { reason: "post-synthesis" });
+      expect(result.warmed).toBe(true);
+      expect(result.totalPromptTokens).toBe(6); // workload counters: cached + evaluated
+      expect(h.parkMock).toHaveBeenCalledTimes(1);
+      expect(h.parkMock).toHaveBeenCalledWith({
+        chatId: CHAT_ID,
+        lease: expect.objectContaining({ slotId: 2 }),
+        promptTokens: 3, // warmTokenCount — NOT 3 + 3 = 6
+        prefixDigest: expect.any(String),
+      });
     } finally {
       rmSync(h.home, { recursive: true, force: true });
     }
