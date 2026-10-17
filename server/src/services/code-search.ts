@@ -54,6 +54,13 @@
  *   drains to the resolved count before returning. Upstream-known: ast-grep's
  *   "Performance Tip for napi usage" page documents the race and ships the
  *   same counted-callback workaround — re-check it on every version bump.
+ * - Comments are SIGNIFICANT children in block pattern matching in this
+ *   binding: `if ($C) { return $R; }` structurally refuses blocks whose
+ *   first child is a comment (leading-comment-then-return blocks, the T6
+ *   forensics shape) — battery v4: 8 misses, all comment-first; three
+ *   independent model ASTs agreed on the field-based count. Statement
+ *   census counts must enumerate fields (walk + comment filter), not
+ *   match block patterns. Re-verify on every version bump (Risk 6).
  * - `context` is not in the Phase 0 schema: the index-not-payload rendering
  *   stands on its own (docs §3.2).
  */

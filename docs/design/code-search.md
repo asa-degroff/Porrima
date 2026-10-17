@@ -33,8 +33,13 @@ the substance record is the program's cleanest: 38/38 completed rows
 human-correct, zero real false conclusions, T3 completed honestly for the first
 time (arm C, 2/3, exact 280), and the run caught its own T6 oracle undercount
 — truth 1,406 not 1,398; comments are match-significant children in block
-patterns. Record: [code-search-battery-v4.md](code-search-battery-v4.md).
-**Date:** 2026-10-15
+patterns. **Instrument repaired 10-16** (vela, verified): the T6 oracle is
+now field-based (truth re-frozen at 1,406; the comment-significance fact
+pinned in the executor header + Risk-6 bump list) and the fc detector is
+modifier-tolerant — both gate lines reprint with the fc axis honest
+(ok/ok); verdicts unchanged. Record:
+[code-search-battery-v4.md](code-search-battery-v4.md) §10.
+**Date:** 2026-10-16
 
 ## 1. Problem
 
@@ -1138,6 +1143,10 @@ the censoring or aggregate machinery.
    §3.1 fact 3). Mitigation: version-pinned, executor isolated in one module,
    engine facts pinned in the module header and re-verified on every bump —
    the drift-pin test makes the extension-set fact self-checking.
+   Battery v4 added one to the bump-verify list: comment-significance in
+   block patterns (the T6 oracle undercount — its frozen pattern form
+   structurally refused `if { /* c */ return }` blocks; field-based
+   enumeration is the oracle's form now).
 7. **Staleness: none by design** — fresh parse per call. The risk is the
    inverse (someone later adding a cache); the design brief says the cache is
    how this feature goes wrong.

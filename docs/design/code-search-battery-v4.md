@@ -178,21 +178,30 @@ ever — 38/38, zero real fc, two honest T3 completions, a self-caught oracle bu
 via model/engine disagreement. Procedurally, under the §4.1 gate at reps=3 on this
 model: FAIL, dark, as printed.
 
-## 10. Open items (none executed; each is a decision with the fence noted)
+## 10. Open items (① and ③ fixed 10-16 by vela; ② and ④ remain decisions)
 
-1. **T6 oracle fix**: replace the four-pattern+text-filter oracle with the
-   field-based structural enumeration (napi, `alternative` check); re-freeze truth
-   at 1,406; add the comment-significance fact to §3.1 engine facts and the Risk-6
-   bump-verify list. Harness-only; battery unaffected (T6 is diagnostic).
+1. **T6 oracle fix — FIXED 10-16**: the four-pattern+text-filter oracle was
+   replaced with the field-based structural enumeration (napi, `alternative`
+   field check, comment-filtered block census); truth re-frozen at 1,406 and
+   re-derived live against the executor the same day (814 brace-less, 402
+   block, 181 bare, 9 bare-block); the comment-significance fact is pinned
+   in the executor's module header and on the Risk-6 bump-verify list
+   (code-search.md §7.6). Harness-only; battery unaffected (T6 is
+   diagnostic).
 2. **T3 comparability**: off-arm 0/3 persists under every T3 definition tried
    (textual, B, A) — the parse-it-right reflex costs >16 iterations/600 s. Options:
    demote T3 to diagnostic like T2 (aggregate becomes T1+T5 — a mechanism change,
    doc-owner call), or raise T3's budget (same class of change), or accept the
    locked clause as the accurate signal that this task, as posed, cannot complete
    in arm A on this model.
-3. **fc detector**: extend suppression (add "declarations"/"qualify" class, note
-   wording beside committed counts). Mechanical, report-time-only, retro-silences
-   the three verified artifacts.
+3. **fc detector — FIXED 10-16**: committed-count suppression is now
+   modifier-tolerant (up to two words between count and noun: "147 line
+   matches", "4 function declarations") and the noun list gained
+   declarations/statements. Verified: the three battery-v4 artifacts
+   recompute clean (both gate lines print fc ok/ok), the v2-era stored
+   flag (gate-off T5 r2 — a fossil of the pre-colon-fix detector; the
+   answer committed 147/11 and was human-graded correct) recomputes clean
+   too, and absence answers without a committed count still flag.
 4. **600 s wall vs parallel turns**: the low-iteration timeouts (3, 6, 6 iters at
    exactly 600 s) show parallel-burst turns can hit the wall at iteration 3.
    Budget tuning would be iteration-blind today.

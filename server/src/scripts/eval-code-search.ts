@@ -55,7 +55,8 @@
  */
 import { randomUUID } from "crypto";
 import { execFileSync } from "child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "fs";
+import { createRequire } from "module";
 import { homedir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
@@ -109,7 +110,7 @@ function rgLines(args: string[]): string[] {
   }
 }
 
-const TASKS: TaskDef[] = [
+export const TASKS: TaskDef[] = [
   {
     id: 1,
     label: "call sites (rg oracle)",
@@ -253,38 +254,56 @@ const TASKS: TaskDef[] = [
     //     them. Oracle runs four patterns; the prompt states the coverage.
     prompt: "In `server/src` (TypeScript files, test files included): count the `if` statements (without else) whose consequent is exactly one `return` statement — both the brace-less form `if (x) return y;` and the single-statement block `if (x) { return y; }` count; a bare `if (x) return;` (no value) counts too. Report the count and the files with per-file counts.",
     oracle: async () => {
-      // Engine-derived, four-pattern decomposition (2 forms × value/bare).
-      // Referee findings this oracle implements:
-      //  - ast-grep statement patterns do NOT exclude a trailing else
-      //    clause (`if (a) return 2; else doIt();` matches the brace-less
-      //    pattern), so the no-else requirement is enforced by filtering
-      //    matched node text for a word-boundary `else`. Freeze-time audit:
-      //    exactly 2 else-carrying matches tree-wide (both genuine tts.ts
-      //    else-chains, zero string/comment false positives) — the filter
-      //    is precise on this tree.
-      //  - Block patterns match exactly-one-statement blocks (two-statement
-      //    block referee: 0); the two forms are disjoint (no cross-match).
-      //  - Fixture audit (non-vacuous): brace-less 814, block 398(−2), bare
-      //    181, bare-block 7 — all four classes non-empty; the task stands
-      //    (§4.2's swap clause not triggered).
-      const ws = new LocalWorkspaceAdapter(REPO_ROOT);
-      const patterns = [
-        "if ($COND) return $RET;",
-        "if ($COND) { return $RET; }",
-        "if ($COND) return;",
-        "if ($COND) { return; }",
-      ];
-      const perClass: number[] = [];
+      // Field-based structural enumeration (v4.2 fix, battery v4 §6). The
+      // four-pattern decomposition undercounted by 8: blocks whose first
+      // child is a comment are structurally refused by pattern matching
+      // (comments are significant children in ast-grep block patterns in
+      // this napi binding), so `if ($C) { return $R; }` cannot see
+      // `{ /* c */ return x; }`. Three independent model ASTs (two arm-A
+      // completions + v3-era b r2) agreed on 1,406 file-for-file; forensics
+      // (t6-forensics.cjs / t6-recount.cjs) localized all 8 misses to the
+      // comment-first shape and exonerated the else handling. Field-based
+      // is strictly stronger: no-else is now a structural field check
+      // (`alternative`), not a text filter, and comments are explicitly
+      // filtered from the block's statement census. Truth re-frozen at
+      // 1,406; class counts as enumerated here.
+      const requireNapi = createRequire(import.meta.url);
+      const sg = requireNapi("@ast-grep/napi");
+      const SKIP = new Set(["", "{", "}", "(", ")", ";", "comment"]);
       const byFile: Record<string, number> = {};
-      for (const pattern of patterns) {
-        const res = await runCodeSearch({ pattern, path: "server/src", maxMatches: 1000 }, ws);
-        const kept = res.matches.filter((m) => !/\belse\b/.test(m.text));
-        perClass.push(kept.length);
-        for (const m of kept) byFile[m.file] = (byFile[m.file] ?? 0) + 1;
-      }
-      const total = perClass.reduce((s, n) => s + n, 0);
+      const cls: [number, number, number, number] = [0, 0, 0, 0]; // brace-less, block, bare, bare-block
+      const visit = (node: any, file: string): void => {
+        if (node.kind() === "if_statement" && !node.field("alternative")) {
+          const cons = node.field("consequence");
+          if (cons) {
+            if (cons.kind() === "return_statement") {
+              if (cons.namedChildren().length === 0) cls[2] += 1; else cls[0] += 1;
+              byFile[file] = (byFile[file] ?? 0) + 1;
+            } else if (cons.kind() === "statement_block") {
+              const kids = cons.children().filter((c: any) => !SKIP.has(c.kind()));
+              if (kids.length === 1 && kids[0].kind() === "return_statement") {
+                if (kids[0].namedChildren().length === 0) cls[3] += 1; else cls[1] += 1;
+                byFile[file] = (byFile[file] ?? 0) + 1;
+              }
+            }
+          }
+        }
+        for (const c of node.children()) visit(c, file);
+      };
+      const walkDir = (dir: string): void => {
+        for (const e of readdirSync(dir)) {
+          const p = join(dir, e);
+          if (statSync(p).isDirectory()) { if (e !== "node_modules") walkDir(p); continue; }
+          if (!e.endsWith(".ts")) continue;
+          let root;
+          try { root = sg.parse("TypeScript", readFileSync(p, "utf8")).root(); } catch { continue; }
+          visit(root, p.slice(REPO_ROOT.length + 1));
+        }
+      };
+      walkDir(join(REPO_ROOT, "server/src"));
+      const total = cls.reduce((s, n) => s + n, 0);
       const sorted = Object.fromEntries(Object.entries(byFile).sort(([a], [b]) => a.localeCompare(b)));
-      return `${total} no-else single-return if-statements (brace-less ${perClass[0]}, block ${perClass[1]}, bare ${perClass[2]}, bare-block ${perClass[3]}): ${JSON.stringify(sorted)}`;
+      return `${total} no-else single-return if-statements (brace-less ${cls[0]}, block ${cls[1]}, bare ${cls[2]}, bare-block ${cls[3]}): ${JSON.stringify(sorted)}`;
     },
     truthPresent: (o) => Number(o.match(/^(\d+)/)?.[1] ?? 0) > 0,
     efficiencyGated: false,
@@ -370,8 +389,15 @@ const ABSENCE_RE = /\bnone\b|no matches|no (?:call|file|match|occurrence|definit
  * invalidating stored rows.
  */
 function answerClaimsAbsence(text: string): boolean {
-  if (/[*]*[1-9]\d*[*]*\s*(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?)/i.test(text)) return false;
-  if (/(?:calls?|matches?|occurrences?|definitions?|files?|throws?|sites?|instances?|expressions?|total)\s*[:=]\s*[*]*[1-9]\d*/i.test(text)) return false;
+  // A committed nonzero count is not an absence claim. The count may be
+  // separated from its noun by up to two modifier words ("147 line
+  // matches", "4 function declarations") — battery v4's three verified fc
+  // artifacts were all local qualifiers beside exactly such committed
+  // counts. Noun list gained declarations/statements (T2/T6 shapes).
+  // Cross-scope answers still flag ("no X in .ts — 5 were found in .py"
+  // has no number-adjacent-to-noun commitment for the asked scope).
+  if (/[*]*[1-9]\d*[*]*\s+(?:\w+\s+){0,2}(?:calls?|matches?|occurrences?|definitions?|declarations?|statements?|files?|throws?|sites?|instances?)/i.test(text)) return false;
+  if (/(?:calls?|matches?|occurrences?|definitions?|declarations?|statements?|files?|throws?|sites?|instances?|expressions?|total)\s*[:=]\s*[*]*[1-9]\d*/i.test(text)) return false;
   return ABSENCE_RE.test(text);
 }
 
