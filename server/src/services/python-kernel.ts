@@ -5,7 +5,7 @@ import { StringDecoder } from "string_decoder";
 import { fileURLToPath } from "url";
 import { createHash, randomUUID } from "crypto";
 import { appDataPath } from "./paths.js";
-import { recordKernelToolDispatch, type KernelToolOutcome } from "./kernel-tool-stats.js";
+import { recordKernelToolDispatch, codeSearchShapeTag, type KernelToolOutcome } from "./kernel-tool-stats.js";
 import { createOutputCapture, type OutputCapture } from "./output-capture.js";
 import {
   DEFAULT_SPILL_MAX_BYTES,
@@ -1029,6 +1029,9 @@ async function dispatchKernelTool(
   try {
     argsChars = JSON.stringify(args)?.length ?? 0;
   } catch { /* unserializable args — the dispatcher will surface it; size stays 0 */ }
+  // §4.9 density-readout tag for code_search ok samples (shapeTag is
+  // undefined for everything else — error/refusal detail untouched).
+  const shapeTag = codeSearchShapeTag(tool, args);
   if (!dispatcher.tools.includes(tool)) {
     respond({ ok: false, error: `tool "${tool}" is not exposed by this kernel` });
     record("refused", { detail: "not exposed" });
@@ -1100,7 +1103,7 @@ async function dispatchKernelTool(
           total_chars: total,
           ...(structured ? { value_json: true } : {}),
         });
-        record("ok", { valueChars: total, spilled: true, structured });
+        record("ok", { valueChars: total, spilled: true, structured, detail: shapeTag });
         return;
       } catch {
         /* fall through to truncation */
@@ -1114,7 +1117,7 @@ async function dispatchKernelTool(
       total_chars: total,
       ...(structured && !truncated ? { value_json: true } : {}),
     });
-    record("ok", { valueChars: total, truncated, structured: structured && !truncated });
+    record("ok", { valueChars: total, truncated, structured: structured && !truncated, detail: shapeTag });
   } catch (error: any) {
     respond({ ok: false, error: `dispatch failed: ${error?.message ?? String(error)}` });
     record("error", { detail: `dispatch failed: ${error?.message ?? String(error)}` });

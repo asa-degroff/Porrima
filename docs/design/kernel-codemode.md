@@ -538,6 +538,20 @@ choice, distinct from the §4.1 flip) reads against these frozen questions:
    re-read before adding any surface. (c) Both dark: the default never
    got reached in real work; nothing new gets designed until the canary.
 
+**Instruments (10-16).** Q1's *shape* half needs the args route + pattern
+identity, which the store did not carry — `code_search` ok samples now write
+a compact tag into the free `detail` field: ``snippet|scan pat:<hex8>`` (the
+same `code`-present route check the executors branch on; an 8-hex sha256
+digest of the pattern — chain joins on the digest, raw args stay unstored).
+`codeSearchShapeTag` in `kernel-tool-stats.ts`, wired at both ok record sites
+in `python-kernel.ts`, pinned by format/stability tests; error/refusal
+`detail` untouched, rows from before the tag simply read as untagged. The
+window computes with `npx tsx src/scripts/readout-kernel-density.ts
+[--days N] [--json]` — read-only against both stores, prints the four
+questions plus the verdict-shape echoes (it reports, it does not judge;
+Q2's substitution pass stays the transcript listing the checklist half
+surfaces).
+
 ### 4.10 Phase A implementation notes — slices 0–2 (10-13)
 
 What landed when slice 0 shipped, including the two places implementation refined

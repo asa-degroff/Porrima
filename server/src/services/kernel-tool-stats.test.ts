@@ -135,4 +135,33 @@ describe("kernel-tool-stats", () => {
     expect(s.getKernelToolSamples().length).toBe(0);
     expect(s.getKernelToolAggregates()).toEqual([]);
   });
+
+  // Density-readout shape tag (kernel-codemode.md §4.9 protocol Q1).
+  describe("codeSearchShapeTag", () => {
+    it("tags scan vs snippet routes and digests the pattern stably", async () => {
+      const s = await loadModule({ PORRIMA_DATA_DIR: dataDir, PORRIMA_KERNEL_STATS: "1" });
+      const scan = s.codeSearchShapeTag("code_search", { pattern: "function $NAME($ARG) { $$$ }" });
+      expect(scan).toMatch(/^scan pat:[0-9a-f]{8}$/);
+      const snip = s.codeSearchShapeTag("code_search", { pattern: "if ($C) return $R;", code: "if (a) return b;" });
+      expect(snip).toMatch(/^snippet pat:[0-9a-f]{8}$/);
+      // Stable digest, extra params irrelevant; a refined pattern differs.
+      expect(s.codeSearchShapeTag("code_search", { pattern: "function $NAME($ARG) { $$$ }", path: "server/src" })).toBe(scan!);
+      expect(s.codeSearchShapeTag("code_search", { pattern: "function $NAME" })).not.toBe(scan!);
+    });
+
+    it("is undefined outside code_search / odd args; a missing pattern digests as '-'", async () => {
+      const s = await loadModule({ PORRIMA_DATA_DIR: dataDir, PORRIMA_KERNEL_STATS: "1" });
+      expect(s.codeSearchShapeTag("read_file", { path: "x" })).toBeUndefined();
+      expect(s.codeSearchShapeTag("code_search", null)).toBeUndefined();
+      expect(s.codeSearchShapeTag("code_search", ["a"])).toBeUndefined();
+      expect(s.codeSearchShapeTag("code_search", {})).toBe("scan pat:-");
+    });
+
+    it("round-trips through the store as detail on ok samples", async () => {
+      const s = await loadModule({ PORRIMA_DATA_DIR: dataDir, PORRIMA_KERNEL_STATS: "1" });
+      const tag = s.codeSearchShapeTag("code_search", { pattern: "await $CALL($$$ARGS)" })!;
+      s.recordKernelToolDispatch({ ...baseSample, tool: "code_search", detail: tag });
+      expect(s.getKernelToolSamples().find((x) => x.tool === "code_search")!.detail).toBe(tag);
+    });
+  });
 });

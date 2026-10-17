@@ -14,7 +14,12 @@
  * dispatch (the record call swallows and logs its own errors). Disabled
  * under NODE_ENV=test so protocol tests never pollute the real store;
  * PORRIMA_KERNEL_STATS=1/0 overrides in either direction.
+ *
+ * The `codeSearchShapeTag` helper carries the density-readout convention
+ * (kernel-codemode.md §4.9 Q1): code_search ok samples record their loop
+ * shape in `detail` without storing raw args.
  */
+import { createHash } from "crypto";
 import Database from "better-sqlite3";
 import { appDataPath } from "./paths.js";
 
@@ -25,6 +30,27 @@ const MAX_SAMPLES = 1000;
 const DETAIL_CAP = 300;
 
 export type KernelToolOutcome = "ok" | "error" | "refused" | "aborted";
+
+/**
+ * Density-readout shape tag (kernel-codemode.md §4.9 readout protocol, Q1).
+ * For `code_search` ok samples: the route the dispatcher took (snippet test
+ * vs file scan — the same `code`-present check the executors branch on) plus
+ * an 8-hex digest of the pattern. Per-cell chains become countable —
+ * snippet → scan → refined-rescan = hasSnippet && distinct patterns >= 2 —
+ * without ever storing raw args. Undefined for other tools and odd inputs;
+ * callers pass it as `detail`, which stays reserved for error/refusal
+ * reasons on every other path.
+ */
+export function codeSearchShapeTag(tool: string, args: unknown): string | undefined {
+  if (tool !== "code_search") return undefined;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const a = args as Record<string, unknown>;
+  const kind = typeof a.code === "string" ? "snippet" : "scan";
+  const pat = typeof a.pattern === "string"
+    ? createHash("sha256").update(a.pattern).digest("hex").slice(0, 8)
+    : "-";
+  return `${kind} pat:${pat}`;
+}
 
 export interface KernelToolDispatchSample {
   id: string;
