@@ -1,9 +1,7 @@
 # Browser Observability — Live Screenshot Viewer (design plan)
 
-Status: **Phase 1 implemented** — 2026-10-09 (§8 records what shipped and deltas) ·
-**Phase 1.5 movable/resizable** — 2026-10-10 (§9) · **Phase 2 live follow-along** —
-2026-10-10 (§10). Decisions locked with the user: ship Phase 1 first, viewer is a
-floating PiP card over the message area.
+**Status:** Phases 1–2 implemented (live PiP viewer, movable/resizable card, auto-capture
+follow-along); the consent handshake design is shipped.
 
 ## 1. Problem
 
@@ -56,45 +54,86 @@ becomes a true live view: a frame after *every* browser action, not just explici
 **Zero server changes.** The data already reaches the client in three paths (live SSE,
 reconnect resync, history load), so the viewer *derives* its state from message data rather
 than a new event stream. That makes reload/resync continuity free and keeps one source of
-truth.
+truth. Locked design constraints: ship Phase 1 first; the viewer is a floating PiP card over
+the message area (not a side panel).
 
 ### 4.1 State derivation
 
-New hook `client/src/hooks/useBrowserViewer.ts`:
+New hook `client/src/hooks/useBrowserViewer.ts` (the pure scan is exported as
+`findLatestFrame` for direct unit tests):
 
-- Scan the active chat's messages **newest → oldest** (streaming assistant bubble segments
-  first, then persisted `ChatMessage.segments`/`.toolResults`) and return the first
-  `ChatToolResult` where `toolName === "browser_screenshot"`, `!isError`, and
-  `images?.[0]?.url` exists → `{ url, id, pageUrl, pageTitle, capturedAt }`.
-  `pageUrl`/`pageTitle` parsed from the `content` label (`Screenshot of <url> — "<title>"`),
-  regex-tolerant: fall back to filename-less generic copy.
-- Also return `running: boolean` — true while any `browser_*` tool call has a segment with
-  `liveStatus.status === "running"` — so the card can show a "working…" pulse and, in
-  Phase 2, an imminent-update hint.
+- Scan the active chat's messages **newest → oldest** — streaming assistant bubble segments
+  first, then persisted `ChatMessage.segments`, with the flat `toolResults` array as the
+  fallback for rows without segments — and return the first `ChatToolResult` where
+  `toolName === "browser_screenshot"`, `!isError`, and `images?.[0]?.url` exists →
+  `{ url, id, pageUrl, pageTitle, capturedAt }`. Frames without a server `url` (legacy
+  base64-only rows) are skipped rather than rebuilt from `data` — the payload migration is
+  the supported path for those rows. `pageUrl`/`pageTitle` parsed from the `content` label
+  (`Screenshot of <url> — "<title>"`), regex-tolerant: fall back to filename-less generic
+  copy.
+- Running signal: the card reads ChatView's existing `activeTools` (the same signal as the
+  running tool chips, less plumbing than a segment `liveStatus` scan) — true while any
+  `browser_*` tool is active, so the card can show a "working…" pulse and, in Phase 2, an
+  imminent-update hint.
 - Recompute is cheap: browser tool results are sparse; memoize on message/segment identity.
 
 ### 4.2 The PiP card
 
 New component `client/src/components/BrowserViewer.tsx`, rendered inside the messages
-positioned container in `ChatView.tsx` (sibling of the scroll-to-bottom pill at
-`ChatView.tsx:1037-1050`, same `absolute … z-20 backdrop-blur` idiom):
+position wrapper in `ChatView.tsx` (sibling of the scroll-to-bottom pill at
+`ChatView.tsx:1037-1050`, same `absolute … z-20 backdrop-blur` idiom). Mount gating: the
+viewer renders while a frame exists or a browser tool runs (`frame || browserToolActive`)
+and only when the chat is settled — `!isSwitching && !isFirstMessageMode`.
 
-- **Placement**: top-right of the scroll area (bottom-right is taken by the "New" pill;
-  top-left collides with nothing). `sm`-and-up: ~220px wide card, `object-contain` frame
-  capped at ~160px tall; on phones: ~140px, corner-tucked, slightly translucent until tapped.
-- **Contents**: latest screenshot, one-line host + title from the parsed label, live-pulse dot
-  while a browser tool runs, and a collapse button. `fullPage` shots letterbox — acceptable
-  for v1 (the lightbox is the real view; a scroll-mode toggle is an open question, §7).
+**Placement — a movable, width-resizable card** (the fixed top-right placement made the
+card a focus-stealer in exactly the position a user might want it in — over the composer,
+over the scroll pill). Coordinates live in messages-wrapper space; the wrapper carries
+`messagesAreaRef` as the measured bounds source.
+
+- `client/src/hooks/useBrowserViewerGeometry.ts` — geometry state `{ x, y, w }` with pure
+  `clampGeometry` / `defaultGeometry` / `estimateCardHeight` exported and unit-tested. The
+  hook clamps on every change (idempotent layout pass) and on a `ResizeObserver` over the
+  wrapper — window resizes and the pinned panel appearing can never push the card out of
+  the visible area; stored geometry that predates a smaller window is clamped back in on
+  load. Degenerate bounds (no layout, e.g. jsdom) pass through unclamped.
+- **Drag from the frame image** (not a handle strip): pointer capture with a 4px travel
+  threshold separating drag from click-to-enlarge; the click that follows a drag is
+  suppressed.
+- **Width-only resize** via a bottom-right corner grip — height stays locked to the 16:10
+  frame aspect (free 2D would make `object-cover` crop unpredictably). A reset button
+  restores the default docked position. Keyboard: arrows nudge (shift = 3× step), `+`/`-`
+  resize, while the frame is focused.
+- Limits: 120–520px width, 8px margin from wrapper edges. Defaults: 210px desktop / 132px
+  mobile — the historical fixed top-right placement, computed from wrapper width (the `sm`
+  breakpoint).
+- Persistence: geometry in `localStorage` under `porrima-browser-viewer-geom`, written at
+  gesture end and on clamping events, not per pointer move. The collapsed/docked preference
+  is a separate global key, `porrima-browser-viewer-collapsed` (not per-chat — mirrors
+  existing client-only UI prefs; *not* the server `ui-state` route: throwaway display
+  prefs, same class as theme-local toggles).
+- **z-order**: the scroll-to-bottom pill bumps to `z-30` so it stays clickable when the
+  card parks in its corner; the lightbox remains `z-50`, above both.
+- Testing: drag/resize/chip-drag wiring is verified in the field — jsdom has no pointer
+  capture; the clamping math (the part with real edge cases) is fully unit-tested instead.
+
+**Contents**: latest screenshot with `object-cover object-top` thumbnails (crops tall
+full-page shots to the top instead of letterboxing — reads better at card size), one-line
+host + title from the parsed label, live-pulse dot while a browser tool runs, and a
+collapse button.
+
 - **Click to enlarge**: reuse `ImageLightbox` via `createPortal` exactly as
   `ToolCallDisplay.tsx:283` does, passing the derived `ImageAttachment` (`url` present → no
   object-URL work in `UserImage`/`ImageLightbox`).
-- **Visibility lifecycle**: hidden while the chat has no browser screenshot in the loaded
-  window; auto-shows when the derived frame changes. Manual collapse minimizes it to a small
-  browser-icon chip (the `ToolIcons` entry) that pulses on new frames — the user's "ignore"
-  path, since a popping card is a focus-stealer.
-- **State persistence**: collapsed/docked preference in `localStorage` (global, not per-chat —
-  mirrors existing client-only UI prefs). *Not* the server `ui-state` route: this is a
-  throwaway display pref, same class as theme-local toggles.
+- **Visibility lifecycle**: hidden while the chat has no frame (live or derived) in the
+  loaded window; auto-shows when the frame changes. Manual collapse minimizes it to a
+  small browser-icon chip (the `ToolIcons` entry) that pulses/badges on new frames — the
+  user's "ignore" path, since a popping card is a focus-stealer. The chip **docks at the
+  card rectangle's top-right corner** (where the minimize button was — under the cursor)
+  and is itself **draggable**: the window moves with it and restores at the same spot.
+  Because the chip is *derived* from the card rectangle, `clampGeometry` always clamps the
+  card (no separate `collapsed` mode): a clamped card rectangle always contains its
+  top-right corner inside the wrapper, which guarantees a visible chip. Chip drag-vs-expand
+  reuses the frame's 4px threshold and click suppression.
 - **No new fetch layer**: `ImageLightbox`/`UserImage` already load server URLs with
   `credentials: "include"`.
 
@@ -113,52 +152,85 @@ touching model context.
 
 ### 5.1 Capture + emission
 
-- In `browser-tools.ts`, after each successful action returns, capture a **viewport-only**
-  frame via `screenshotPage(session, false)` downscaled to ~720px (new small option or
-  post-resize in the frame path; keep the LLM-facing 1280px path untouched).
+- In `browser-tools.ts`, after each successful `browser_navigate` / `browser_click` /
+  `browser_type` / `browser_hover` returns, `captureActionFrame` captures a
+  **viewport-only** frame via `screenshotPage(session, false, FRAME_MAX_WIDTH)` downscaled
+  to 720px, and can never fail the observed action (capture errors are caught and logged).
+  `screenshotPage` (`browser-session.ts`) takes a `maxWidth` override and returns the raw
+  `buffer` alongside the base64 — the LLM-facing 1280px path is untouched.
 - Frame data rides a **side channel**, never tool content. Add to `ToolSideEffects`
-  (`agent-tools.ts:189`): `onBrowserFrame(frame: BrowserFrameEvent)`. `chat.ts` wires it to
+  (`agent-tools.ts:189`): `onBrowserFrame?(frame: BrowserFrameEvent)` — optional, so the
+  many noop/estimation effects sites stay untouched. `executeBrowserTool` accepts the sink
+  **locally typed** in `browser-tools.ts` (structurally `ToolSideEffects.onBrowserFrame`,
+  kept local to avoid an import cycle). `publishFrame` stores the frame in the ring and
+  emits it.
+- Transports share one SSE frame constructor, `browserFrameFrame`, defined in
+  `synthesis-stream.ts` next to the other live-only frames, so the HTTP and headless
+  transports can't drift: `chat.ts` wires the effects to
   `emitToStream(liveStreams.get(chatId), browserFrameFrame(...))` so mid-tool delivery works
-  for the primary `res` *and* reconnect subscribers — the exact `visual`-event pattern.
-  Frame constructor lives beside the other live-only frames in `synthesis-stream.ts` so the
-  HTTP and headless transports can't drift.
+  for the primary `res` *and* reconnect subscribers — the exact `visual`-event pattern —
+  and `createEmitterSideEffects` wires the headless (synthesis/wake/automation) path to
+  `SynthesisEmitter.emitBrowserFrame`, a harmless no-op when nobody is watching.
 - SSE shape (live-only, not persisted, replayed via resync — §5.3):
   `event: browser_frame` + `{ chatId, frameId, imageUrl, pageUrl, pageTitle, mode, capturedAt }`.
-- Headless/automation path (`chat-turn-runner.ts`): emit the same event onto any live stream
-  for that chat; harmless no-op when nobody is watching.
 
 ### 5.2 Frame storage — in-memory ring, not disk
 
 Auto-frames are **observability bytes, not conversation content**: they are never referenced
 by message rows, never hydrated for replay, and would leak on disk with no owner. So:
 
-- `browser-session.ts` (or a new `browser-frames.ts`) keeps a per-chat ring of the last ~5
-  frames `{ frameId, png: Buffer, pageUrl, pageTitle, capturedAt }`, dropped with the session
-  in the 10-min idle sweeper.
+- `server/src/services/browser-frames.ts` keeps a per-chat ring of the last 5 frames
+  `{ frameId, png: Buffer, pageUrl, pageTitle, capturedAt }`, with a 1.5s per-chat throttle
+  marker for auto-captures. The ring is cleared by `closeBrowserSession` — so it also goes
+  on the 10-min idle sweep and on chat deletion. Never touches disk.
 - Serve `GET /api/browser/frame/:chatId/:frameId` (auth-gated, `Cache-Control: private,
-  max-age=3600`, `image/png` from memory). Client points `<img src>` at it.
-- Explicit `browser_screenshot` frames keep their existing disk lifecycle untouched.
+  max-age=1y, immutable` — a given frameId's bytes never change — `image/png` from memory).
+  Client points `<img src>` at it.
+- Explicit `browser_screenshot` frames keep their existing disk lifecycle untouched; they
+  additionally push into the ring and publish a live event (§5.4).
 
 ### 5.3 Status, resync, consent
 
-- `GET /api/browser/status/:chatId` → `{ active, mode, pageUrl, pageTitle, latestFrameId }`
-  read off the `sessions` Map — the first-ever public view of session state.
-- Chat `buildResync` additionally carries `browser: status | null` so a reconnecting client
-  restores the current frame without waiting for the next action.
+- `GET /api/browser/status/:chatId` returns the sync `getBrowserSessionSnapshot(chatId)` —
+  `{ active, mode, pageUrl, pendingConsent, latestFrame }`, read off the `sessions` Map and
+  the frame ring: the first-ever public view of session state. The page title comes from
+  the latest frame's capture-time metadata, which keeps the read synchronous — the resync
+  path cannot await a live `page.title()`.
+- Chat resync carries `browser: getBrowserSessionSnapshot(chatId)` — **both
+  `buildResyncPayload` implementations** (HTTP chat route and `synthesis-stream.ts`) — so a
+  reconnecting client restores the current frame without waiting for the next action.
 - Attach-consent UX: `attachSession` blocks up to 60s on Chrome's native remote-debugging
-  prompt. Record a `pendingConsent: { endpoint, startedAt }` marker on the opening path and
-  expose it via status; the PiP card renders "Approve debugging in Chrome…" — turning today's
-  silent stall into the feature's best observability win.
-- Throttle: min ~1.5s between auto-frames per chat; skip when no live stream has subscribers
-  for `chatId` (don't pay sharp+PNG for nobody); drop a capture if the page isn't settled
-  (short `load`/idle wait already implicit in tool completion is enough for v1).
+  prompt. A `consentPending` set tracks chats parked on the handshake (`withConsentPending`
+  around `openConsentTransport`), exposed as `pendingConsent` via the snapshot; the PiP
+  card renders "Approve debugging in Chrome…" — turning today's silent stall into the
+  feature's best observability win. While a browser tool runs and nothing has been
+  captured yet, the client polls status every 2s to pick that state up.
+- Gating applies to **auto-captures only**: min ~1.5s between auto-frames per chat; skip
+  when no live stream has subscribers for `chatId` (don't pay the PNG encode for nobody);
+  drop a capture if the page isn't settled (short `load`/idle wait already implicit in tool
+  completion is enough). Explicit `browser_screenshot`s are deliberately **not**
+  subscriber-gated or throttled — see §5.4.
 
 ### 5.4 Client updates
 
-- `client.ts` `processSSEEvent` + `StreamCallbacks`: `onBrowserFrame(frame)`; `useChat`'s
-  per-chat stream state keeps `latestBrowserFrame` (like `partialText` on segments);
-  `useBrowserViewer` prefers the live frame when newer than the derived history frame.
-- Same PiP card; header text switches to the live page URL/title.
+- `client.ts` `processSSEEvent` + `StreamCallbacks`: `onBrowserFrame(frame)` (the
+  `browser_frame` case); `useChat` keeps the frame in the per-chat `bgStreams` accumulator
+  (like `partialText` on segments) and mirrors it to `liveBrowserFrame` state while the chat
+  is displayed; resync adopts `payload.browser.latestFrame` (null clears back to the derived
+  frame); hydration on chat switch follows the `modelProgress` pattern. `App.tsx` plumbs the
+  state through to `ChatView`.
+- `useBrowserViewer` merges the sources with `pickViewerFrame(live, derived)`: the live frame
+  wins when present, else the Phase 1 history derivation.
+- Explicit `browser_screenshot`s **also** push to the ring and publish a live event (their
+  bytes already exist, so it costs a uuid + SSE frame) — deliberately not subscriber-gated
+  or throttled. The invariant this protects: without it, a message-row `timestamp`
+  (turn-start for the streaming placeholder) could lose a timestamp comparison against an
+  action frame and show a stale image; `pickViewerFrame` can then always treat the live
+  frame as the freshest visual.
+- Same PiP card; header text switches to the live page URL/title. The card mounts while a
+  frame exists or any `browser_*` tool runs, showing a connecting placeholder (consent copy
+  when `pendingConsent` is set — §5.3). `img onError` shows "Frame expired — waiting for the
+  next browser action" when a live URL outlives its ring entry.
 
 ## 6. File map
 
@@ -166,156 +238,12 @@ by message rows, never hydrated for replay, and would leak on disk with no owner
 |---|---|
 | Phase 1 client | `client/src/hooks/useBrowserViewer.ts` (new), `client/src/components/BrowserViewer.tsx` (new), `client/src/components/ChatView.tsx` (mount card), `client/src/components/ToolIcons.tsx` (reuse) |
 | Phase 1.5 client | `client/src/hooks/useBrowserViewerGeometry.ts` (new), `client/src/components/BrowserViewer.tsx` (drag/resize/keyboard/reset), `client/src/components/ChatView.tsx` (wrapper ref, pill z-30) |
-| Phase 2 server | `server/src/services/browser-tools.ts`, `browser-session.ts`, `agent-tools.ts` (`ToolSideEffects`), `routes/chat.ts` (wiring + resync), `services/synthesis-stream.ts` (frame constructor), `services/chat-turn-runner.ts`, new `routes/browser.ts` (status/frame), `index.ts` (mount) |
-| Phase 2 client | `client/src/api/client.ts`, `client/src/hooks/useChat.ts`, `BrowserViewer.tsx`, `useBrowserViewer.ts` |
+| Phase 2 server | `server/src/services/browser-tools.ts`, `browser-session.ts`, new `services/browser-frames.ts` (ring), `agent-tools.ts` (`ToolSideEffects`), `routes/chat.ts` (wiring + resync), `services/synthesis-stream.ts` (frame constructor), `services/chat-turn-runner.ts`, new `routes/browser.ts` (status/frame), `index.ts` (mount) |
+| Phase 2 client | `client/src/api/client.ts`, `client/src/hooks/useChat.ts`, `client/src/App.tsx` (state plumbing), `BrowserViewer.tsx`, `useBrowserViewer.ts` |
 
 ## 7. Open questions
 
-1. Does the agent's Chrome tab need a user "take over" affordance (focus that window) in a
-   later phase? Out of scope now; status endpoint makes it feasible.
-2. `fullPage` shots in the card: letterbox (v1) vs. a scroll/fit toggle — revisit after using it.
-3. Should Phase 2 auto-frames ever be *visible to the model* (e.g., attach latest frame as
-   context on the next turn)? Deliberately no for now — KV-cache + token cost; revisit if the
-   agent proves too blind between snapshots.
-4. Card position on phones: top-right may fight the header; prototype top-right vs.
-   bottom-left-of-composer before locking.
-5. Do we ever need to prune/clean the in-memory ring beyond session sweep? (No — bounded.)
-
-## 8. Phase 1 — what shipped (2026-10-09)
-
-- `client/src/hooks/useBrowserViewer.ts` — reverse scan over messages (segments first,
-  flat `toolResults` fallback) returning the newest `browser_screenshot` frame; page
-  URL/title parsed from the result label; exported `findLatestFrame` for direct unit tests.
-- `client/src/components/BrowserViewer.tsx` — top-right floating card (`absolute … z-20`,
-  same idiom as the "New" pill), host + title footer, live-pulse while any `browser_*` tool
-  runs, click → shared `ImageLightbox` via portal, minimize → icon chip with unseen-update
-  badge; collapsed pref in `localStorage` under `porrima-browser-viewer-collapsed`.
-- `client/src/components/ChatView.tsx` — mounts the viewer inside the messages position
-  wrapper, gated on `!isSwitching && !isFirstMessageMode`.
-- Tests: `useBrowserViewer.test.ts` (8) + `BrowserViewer.test.tsx` (5, jsdom).
-
-Deltas from plan: thumbnails use `object-cover object-top` (crops tall full-page shots to
-the top instead of letterboxing — reads better at card size; §7.2 stays open for the
-lightbox scroll-mode question). The running indicator reads ChatView's existing
-`activeTools` prop instead of segment `liveStatus` — same signal, less plumbing. Frames
-without a server `url` (legacy base64-only rows) are skipped rather than rebuilt from
-`data`, since the payload migration is the supported path.
-
-Field-verified 10-10 in a live browser session: card appearance, in-place frame
-updates across three screenshots, host/title footer, pulse-while-running, and
-minimize all confirmed by the user from the client.
-
-## 9. Phase 1.5 — movable + resizable card (2026-10-10)
-
-The fixed top-right placement made the card a focus-stealer in exactly the
-position a user might want it in (over the composer, over the scroll pill).
-The card is now movable and width-resizable, still zero-server:
-
-- `client/src/hooks/useBrowserViewerGeometry.ts` (new) — geometry state
-  `{ x, y, w }` in messages-wrapper coordinates. Pure
-  `clampGeometry` / `defaultGeometry` / `estimateCardHeight` exported and
-  unit-tested. The hook clamps on every change (idempotent layout pass) and
-  on a `ResizeObserver` over the wrapper — window resizes and the pinned
-  panel appearing can never push the card out of the visible area. Stored
-  geometry that predates a smaller window is clamped back in on load.
-  Degenerate bounds (no layout, e.g. jsdom) pass through unclamped.
-- `BrowserViewer.tsx` — **drag from the frame image**: pointer capture with
-  a 4px travel threshold separating drag from click-to-enlarge (the click
-  that follows a drag is suppressed). **Width-only resize** via a
-  bottom-right corner grip — height stays locked to the 16:10 frame aspect
-  (free 2D would make `object-cover` crop unpredictably). A reset button
-  restores the default docked position. On minimize the chip **docks at the
-  card rectangle's top-right corner** (where the minimize button was — under
-  the cursor) and is itself **draggable**: the window moves with it and
-  restores at the same spot. Keyboard: arrows nudge (shift = 3× step),
-  `+`/`-` resize, while the frame is focused.
-- `ChatView.tsx` — the messages wrapper carries `messagesAreaRef` (the
-  measured bounds source); the scroll-to-bottom pill bumps to `z-30` so it
-  stays clickable when the card is parked in its corner (lightbox remains
-  `z-50`, above both).
-- Limits: 120–520px width, 8px margin from wrapper edges. Defaults: 210px
-  desktop / 132px mobile — the original fixed placement, computed from
-  wrapper width (the `sm` breakpoint).
-- Persistence: `porrima-browser-viewer-geom` in localStorage, written at
-  gesture end and on clamping events, not per pointer move.
-
-Decisions locked with the user: width-only fixed-aspect resize (not free
-2D), drag-from-image (not a handle strip), chip docks top-right of the
-card and is draggable.
-
-**Revision (10-10, post-review):** the original chip sat at the card's
-top-left; it now docks at the top-right corner and moves by drag, so it
-lands where the minimize button was. Because the chip is *derived* from the
-card rectangle, `clampGeometry` no longer takes a `collapsed` mode — it
-always clamps the card, which guarantees a visible chip (a clamped card
-rectangle always contains its top-right corner inside the wrapper). Chip
-drag-vs-expand reuses the frame's 4px threshold and click suppression.
-
-Caveat: jsdom has no pointer capture, so the drag/resize/chip-drag wiring
-is field-verified, not unit-tested — the clamping math (the part with real
-edge cases) is fully unit-tested instead.
-
-## 10. Phase 2 — live follow-along, what shipped (2026-10-10)
-
-Auto-capture after every browser action, delivered on a live-only side channel.
-§5 described the design; this records what shipped and the deltas.
-
-**Server**
-
-- `services/browser-frames.ts` (new) — per-chat in-memory ring (last 5 frames,
-  PNG `Buffer` + page metadata) with a 1.5s per-chat throttle for auto-captures.
-  Cleared by `closeBrowserSession` (so also on idle sweep and chat deletion).
-  Never touches disk — observability bytes, not conversation content.
-- `browser-session.ts` — `screenshotPage` takes a `maxWidth` override and returns
-  the raw `buffer` alongside base64; a `consentPending` set tracks chats parked on
-  Chrome's remote-debugging WS handshake (`withConsentPending` around
-  `openConsentTransport`); new sync `getBrowserSessionSnapshot(chatId)` exposes
-  `{ active, mode, pageUrl, pendingConsent, latestFrame }` (title comes from the
-  frame's capture-time metadata so the read stays sync on the resync path).
-- `browser-tools.ts` — `executeBrowserTool` accepts a frame sink (passed from
-  `agent-tools.ts`, structurally `ToolSideEffects.onBrowserFrame`; kept local to
-  avoid an import cycle). `publishFrame` stores + emits; `captureActionFrame`
-  (viewport-only, 720px) runs after successful navigate/click/type/hover, gated on
-  subscriber presence + throttle, and can never fail the observed action.
-- `ToolSideEffects.onBrowserFrame?` — optional member, so the many noop/estimation
-  effects sites are untouched.
-- Transports: `chat.ts` effects write the shared `browserFrameFrame` builder
-  (defined in `synthesis-stream.ts` next to the other live-only frames);
-  `createEmitterSideEffects` wires the headless (synthesis/wake/automation) path
-  to `SynthesisEmitter.emitBrowserFrame` — the two transports cannot drift.
-  Both `buildResyncPayload` implementations carry `browser: getBrowserSessionSnapshot(...)`
-  so a reconnect restores the PiP without waiting for the next action.
-- `routes/browser.ts` (new, mounted at `/api/browser`, behind the global
-  `requireAuth`): `GET /frame/:chatId/:frameId` (PNG from memory,
-  `private, max-age=1y, immutable`) and `GET /status/:chatId`.
-
-**Client**
-
-- `useChat` — per-chat `browserFrame` accumulator in `bgStreams` (mirrored to
-  `liveBrowserFrame` state while displayed), fed by `onBrowserFrame` (new
-  `StreamCallbacks` member + `browser_frame` SSE case in `client.ts`); resync
-  adopts `payload.browser.latestFrame` (null clears back to derived); hydration
-  on chat switch follows the `modelProgress` pattern.
-- `useBrowserViewer` — `pickViewerFrame(live, derived)`: live wins when present,
-  else the Phase 1 derivation. This is the merge that makes "live is always the
-  freshest visual" true: **delta from §5** — explicit `browser_screenshot`s now
-  also push to the ring and publish a live event (their bytes already exist, so
-  it costs a uuid + SSE frame; deliberately not subscriber-gated or throttled).
-  Without this, a message-row `timestamp` (turn-start for the streaming
-  placeholder) could lose a timestamp comparison against an action frame and
-  show a stale image.
-- `ChatView` — passes `liveBrowserFrame`; viewer mounts while any `browser_*`
-  tool runs (`frame || browserToolActive`), showing the connecting placeholder;
-  consent probe (§5.3): while a browser tool runs and nothing is captured yet,
-  status is polled every 2s and `pendingConsent` swaps the placeholder copy to
-  the "allow remote debugging" prompt hint. App.tsx plumbs the state through.
-- `BrowserViewer` — `frame: BrowserViewerFrame | null` renders a spinner
-  placeholder (consent copy when flagged); `img onError` shows "Frame expired —
-  waiting for the next browser action" when a live URL outlives its ring entry.
-
-**Tests**: server `browser-frames.test.ts` (7: storage/eviction/per-chat throttle
-reset/clear/summary shape); client +`pickViewerFrame` (4) and null-frame/consent
-placeholder (2). Full suites green: server 950, client 69, both builds clean.
-
-**Field verification still open**: attach-consent hint and mid-turn reconnect
-restore need a real Chrome session to confirm end-to-end.
+1. `fullPage` shots: the card crops to the top (`object-cover object-top`), which reads well at
+   card size; the open question is the *lightbox* — letterbox the full frame or add a scroll/fit
+   mode for tall pages?
+2. Do we ever need to prune/clean the in-memory ring beyond session sweep? No — bounded.

@@ -270,7 +270,7 @@ Because the return type changes, every caller updates. The blast radius is
 intentional — it forces each extraction path to decide how subject flows to
 storage:
 
-| Caller | File:line (approx) | Subject handling |
+| Caller | File | Subject handling |
 |---|---|---|
 | `extractInChunks` | memory-extraction.ts | Per-chunk: stamp subject onto each `ExtractedFact` before saving |
 | Immediate batch | memory-extraction.ts | Stamp subject onto facts before `saveImmediateFacts` |
@@ -308,26 +308,26 @@ stamp-and-forward pattern works without changing `dedupAndSave`'s signature —
 | `memory-storage.ts` | Add `subject` column migration; include `subject` in `addMemory` INSERT + value list, `updateMemory` set-clauses, `searchMemories`/`getMemoryById`/`getAllMemories`/`getMemoriesByChatId`/`getMemoriesFromChat`/`getDelayedMemoriesByChatId`/`searchMemoriesRaw`/`findSimilarMemoryCandidates`/`findDuplicates` SELECT + result mapping; `loadMemoryStore`/`saveMemoryStore` for synthesis roundtrip |
 | `memory-extraction.ts` | Update `EXTRACTION_INSTRUCTIONS`, `DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS`, `PRE_COMPACTION_INSTRUCTIONS`, and mid-turn pulse instructions to request subject; update `buildImmediateBatchHeader` + `buildMidTurnBatchHeader` schema strings to describe `{subject, memories}` wrapper; change `parseExtractionResponse` return type to `ParsedExtraction`; add `subject?: string` to `ExtractedFact`; thread subject through `extractInChunks` → `ExtractChunkedResult.subjects[]` → every caller (immediate, mid-turn, pre-compaction, delayed); stamp `fact.subject` before `saveExtractedMemory`/`dedupAndSave`; pass project name to extraction prompt for project-scoped chats |
 | `memory-context.ts` | Update `formatRetrievedMemoryForContext` to prepend `(subject: ...)` line when `memory.subject` is non-empty |
+| `memory-extraction-observability.ts` | Surface the run subject on extraction run results (`subject?: string` on `ExtractionResults`, described as "Subject line from the extraction wrapper, providing conversational context"); the debug panel renders it |
 
 ### `search_memory` tool results
 
-`memory-tools.ts` has its own result formatter (lines ~204-215) that does not
-use `formatRetrievedMemoryForContext`. For consistency with the injected
-context, that formatter should also prepend the subject line when present —
-otherwise the agent's passive/recalled context shows subjects but its explicit
-tool searches do not, an asymmetry that could confuse retrieval decisions.
+`memory-tools.ts` has its own result formatter that does not use
+`formatRetrievedMemoryForContext`; it prepends the same `(subject: …)` line
+when a subject is present — the agent's passive/recalled context and its
+explicit tool searches must stay symmetric, or the asymmetry could confuse
+retrieval decisions.
 
 ### `updateMemory` patch path
 
-`memory-storage.ts:612` builds its SET clause field-by-field with explicit
-`if (updates.X !== undefined)` checks. Add an `if (updates.subject !==
-undefined)` clause so the generic update path can write subject (even though
-extraction is the primary writer, `updateMemory` is the shared patch surface
-and will silently drop subject without this).
+`memory-storage.ts`'s `updateMemory` builds its SET clause field-by-field with
+explicit `if (updates.X !== undefined)` checks. It must accept `subject` or
+the shared patch path silently drops it (even though extraction is the primary
+writer, `updateMemory` is the shared patch surface).
 
 ### Synthesis reflections
 
-`system-chat.ts:160` instructs the agent to call
+`system-chat.ts` instructs the agent to call
 `save_memory(category="reflection", importance=7-9)` during synthesis Phase 3.
 These go through `dedupAndSave` with `sourceType: 'explicit'` and will have
 `subject: ''`. This is a known gap — synthesis reflections would benefit from
@@ -336,17 +336,27 @@ has no subject parameter by design (user-authored memories are explicit).
 Accepted for v1; revisit if synthesis reflections surface as confusing in
 practice.
 
+### Search representation
+
+The subject **is** part of the search representation. `buildMemoryIndexText(text,
+subject)` (`memory-storage.ts`) prepends the subject (when present) to the
+memory text, and that combined form is:
+
+- the embedding input for every extraction save and for embedding migration —
+  subject-only topic keywords participate in vector search;
+- the reranker document in both `memory-context.ts` (retrieval) and
+  `passive-memory-recall.ts` (passive recall);
+- full-text searchable — `fts_memories` is declared
+  `fts5(id UNINDEXED, text, subject, ...)`, with triggers keeping both columns
+  in sync.
+
+Rationale: the subject is short, topical, and orthogonal to the fact, so
+including it enriches recall without corrupting ranking.
+
 ### No changes needed
 
 - `memory-tools.ts` `save_memory` tool definition — user-authored memories are explicit, no subject parameter
 - Client/UI components — subject is injected server-side into the LLM prompt; it does flow through API responses typed as `string`
-- `fts_memories` — indexes `text` only; subject stays out of the FTS index
-
-### Subsequently changed (resolved against the original design)
-
-- **`memory-extraction-observability.ts`** — subject *is* surfaced in observability after all (`subject?: string` on `ExtractionResults`, described as "Subject line from the extraction wrapper, providing conversational context"), and the debug panel renders it.
-- **Embedding/search** — the subject **is** part of the search representation. `buildMemoryIndexText(text, subject)` prepends it, precisely so subject-only topic keywords participate in vector search. The original concern that this would corrupt vector search did not hold: the subject is short, topical, and orthogonal to the fact.
-- **Reranker input** — reranker documents are built with `buildMemoryIndexText(text, subject)` in both `memory-context.ts` and `passive-memory-recall.ts`. This is now the implemented behaviour; the open question below is closed.
 
 ## Open Questions
 
@@ -354,11 +364,9 @@ practice.
 
 2. **Subject quality monitoring** — The extraction model may produce vague subjects ("coding discussion") or subjects that restate the memory text. Worth observing after deployment; the extraction prompt is the lever.
 
-3. ~~**Reranker input**~~ — **RESOLVED.** Reranker documents include the subject via `buildMemoryIndexText`.
+3. **Passive recall injection** — Mid-turn passive recall injects memories. Should it include subjects? Likely yes — same `formatRetrievedMemoryForContext` function handles both paths, so this is automatic once the formatter is updated.
 
-4. **Passive recall injection** — Mid-turn passive recall injects memories. Should it include subjects? Likely yes — same `formatRetrievedMemoryForContext` function handles both paths, so this is automatic once the formatter is updated.
-
-5. **Cross-chunk subject coherence** — Per-chunk subjects could diverge across a single delayed extraction run (chunk 1: "Debugging the parser", chunk 2: "Refactoring the test suite"). The agent sees subjects from all chunks at injection time. This is the intended behavior — chunks cover different content — but worth watching whether the agent finds it disorienting. Grouping at injection (open question #1) would compound this if subjects vary, so the two questions interact.
+4. **Cross-chunk subject coherence** — Per-chunk subjects could diverge across a single delayed extraction run (chunk 1: "Debugging the parser", chunk 2: "Refactoring the test suite"). The agent sees subjects from all chunks at injection time. This is the intended behavior — chunks cover different content — but worth watching whether the agent finds it disorienting. Grouping at injection (open question #1) would compound this if subjects vary, so the two questions interact.
 
 ## Risks
 

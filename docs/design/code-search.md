@@ -1,48 +1,15 @@
 # Code Search — structural code navigation for Porrima
 
-**Status:** Phases 0–1 implemented — model-level `code_search` tool (dark
+**Status:** Phases 0–1 implemented — the model-level `code_search` tool (dark
 behind `PORRIMA_CODE_SEARCH=1`) and the kernel projection (same flag, riding
 the live kernel-tools flag). Extends the kernel-codemode design: it is the
 concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
-its own feature). First gate run (10-14): **FAIL — flag stays dark**;
-battery v3 (three-arm surface isolation) designed in §4.2 — S1
-(model-level `code=`) and S2 (description v3) **shipped 10-15**; **probe run
-B1 complete 10-15** (arm B, 9/9) — snippet mode live (22/53 calls), T2's
-residual swamp identified as a task-definition gap, not a surface gap;
-results in [code-search-probe-b1.md](code-search-probe-b1.md). **T2 redefined 10-15** (the exclusion stated; 4-rep smoke confirms the
-contradiction dead, T2 demoted to diagnostic per §4.2). **Battery v3 complete 10-16** (54 runs): both verdict lines print FAIL,
-each solely on T3's comparability clause (every measured surface axis —
-aggregate turns/tokens, completion guard, per-task correctness — wins or ties
-for the on-arms under human grading; the strict gate's one fc flag is a
-verified detector-wording artifact).
-**T3 redefined in v4** (10-16): AST semantics, scope
-pinned outside the harness file (peek channel closed); the v4-B probe (arm B
-× 3) censored 0/3 on selection, not truth → **v4.1 strict A** — the class is
-one engine pattern, truth 280; **probe B3 complete 10-16: 2/3 completed
-(T3's first-ever on-arm completions), 3/3 reps reached the exact truth —
-tool-path r2 ran the designed sequence: snippet-test of the wildcard class
-(one match, the interpolated; all exclusions held), full scan (count in the
-summary), pagination for per-file attribution, and a count-mode control scan
-over the excluded scripts scope — 5 iterations; parser-path r3 also landed
-280 with the line-106 occurrence explicitly excluded; r1 hit the truth
-mid-run and censored in its verification loop. **Battery v4 complete 10-16**
-(second 54 runs, T3 at v4.1): both lines print FAIL — this time tokens/turns
-genuinely lose (cheap off-arm draw; verification cost as the on-arm tax) while
-the substance record is the program's cleanest: 38/38 completed rows
-human-correct, zero real false conclusions, T3 completed honestly for the first
-time (arm C, 2/3, exact 280), and the run caught its own T6 oracle undercount
-— truth 1,406 not 1,398; comments are match-significant children in block
-patterns. **Instrument repaired 10-16** (vela, verified): the T6 oracle is
-now field-based (truth re-frozen at 1,406; the comment-significance fact
-pinned in the executor header + Risk-6 bump list) and the fc detector is
-modifier-tolerant — both gate lines reprint with the fc axis honest
-(ok/ok); verdicts unchanged. Record:
-[code-search-battery-v4.md](code-search-battery-v4.md) §10. Next design steps drafted 10-16:
-§3.4 `code_outline` design (kernel-first; engine has no napi outline API — executor-side
-walk) + the density readout protocol in kernel-codemode §4.9 — the program's remaining
-questions are now instrumented or designed, pending the dogfood window and the canary.
-**Date:** 2026-10-16
+its own feature). Phase 2 (`code_outline`) is designed — §3.4, kernel-first.
+Rollout is gated on the §4.2 battery program; battery runs to date: **FAIL —
+the surface stays dark** (results recorded in
+[../records/code-search-probe-b1.md](../records/code-search-probe-b1.md) and
+[../records/code-search-battery-v4.md](../records/code-search-battery-v4.md)).
 
 ## 1. Problem
 
@@ -226,10 +193,10 @@ Outside the pi ecosystem:
   match context expanded to the parent syntax node's range, match headers
   carrying **symbol breadcrumbs** (`### impl Foo for Bar › fn baz › L1278`).
   Reported eval impact: better diffs, fewer tool failures, fewer turns.
-  Stated future work: an "elision" output mode. (Verified 10-14: the shipped
-  `grep_tool` carries `max_ancestor_lines`/`context_lines` knobs — PR #64954 —
-  and a 2048-byte snippet cap centered on the match — PR #62166. The
-  enrichment line is actively developed, not a one-off experiment.)
+  Stated future work: an "elision" output mode. The shipped
+  `grep_tool` carries `max_ancestor_lines`/`context_lines` knobs (PR #64954)
+  and a 2048-byte snippet cap centered on the match (PR #62166) — the
+  enrichment line is actively developed, not a one-off experiment.
 
 **5. CI / rule-system role** (non-agentic). ast-grep as a repository rule
 engine — `sgconfig.yml`, YAML rules with validation, `ast-grep test`
@@ -266,7 +233,7 @@ directly, the precomputed-map lineage), and no built-in surface in
 Cursor/Copilot/Codex/opencode — the ripgrep lineages of codemode §2–3. The
 non-ast-grep structural-navigation lineages are named in the next section.
 
-### Adjacent lineages — structural navigation without ast-grep (round 5, 10-14)
+### Adjacent lineages — structural navigation without ast-grep
 
 The adoption survey covers ast-grep's own shapes. Three adjacent lineages
 answer the same underlying need — navigate code by structure, not text — with
@@ -455,7 +422,7 @@ Phase 0 refuses non-local workspaces with a message naming the phase.
 
 ### 3.2 The model-level tool
 
-**Name:** `code_search`. **Surface (shipped):**
+**Name:** `code_search`. **Surface:**
 
 ```
 code_search(pattern, code?, path?, globs?, lang?, maxMatches?, skip?)
@@ -553,7 +520,7 @@ choose (§4).
 
 **Description** carries the pattern cheatsheet and worked examples — the
 on-ramp for pattern syntax lives where the tool is, because the failure mode
-(cost #1) is authoring, not calling. Shipped content:
+(cost #1) is authoring, not calling. Content:
 
 - `function $NAME($$$ARGS) { $$$ }` — the complete-node form.
 - **Patterns must be complete nodes**: a bodiless parameterized pattern
@@ -581,7 +548,7 @@ on-ramp for pattern syntax lives where the tool is, because the failure mode
   a bare identifier named `$`. Three dollars plus a name is the list syntax.
 - Language coverage statement (the five languages; rg for the rest).
 
-### 3.3 The kernel projection — Phase 1 (shipped 10-14)
+### 3.3 The kernel projection — Phase 1
 
 One conditional row on the dispatcher's exposure list
 (`createKernelToolDispatcher`), same projection pattern as the other Phase A
@@ -615,16 +582,16 @@ deliberate:
   the wire until the final result. This is the codemode thesis in the
   concrete place §2.5 named. Honest cost: every iteration is a fresh parse of
   the scoped tree — the loop is free in *context*, not in CPU; at measured
-  cost (~0.05 s over all of `server/src` on the dev box: ~55 ms `findInFiles`,
-  ~45 ms `parseFiles` over 295 files, while `rg` stays
-  ~10× faster wall-clock, the precision-not-speed framing of §2 holding) a
+  cost (~0.05 s over all of `server/src`: ~55 ms `findInFiles`, ~45 ms
+  `parseFiles` over 295 files, while `rg` stays ~10× faster wall-clock, the
+  precision-not-speed framing of §2 holding) a
   ten-iteration refine pass stays well under a second, and scoping keeps it
   there. The auto-detect path caches one compiled pattern per language, so
   loop iterations pay parse cost, never recompile cost.
 - **Snippet testing without the filesystem** (the `parse`/`pattern` napi
   path): `code=` switches the same tool to snippet mode — test a pattern
   against a string the program built, not just files. The
-  `test_match_code_rule` MCP tool, in-kernel. Shipped shape:
+  `test_match_code_rule` MCP tool, in-kernel. Shape:
   `runCodeSearchOnSnippet({pattern, code, lang?, maxMatches?, skip?})` →
   `{matches (file = "(snippet)"), totalMatches, lang, truncated, hint?}`;
   `lang` defaults to ts (the house language) and the resolved language rides
@@ -642,7 +609,7 @@ headroom over the executor's own 120 s deadline so the executor's more useful
 timeout message ("narrow `path`…") wins the race instead of the generic
 abort text.
 
-### 3.4 Orientation — `code_outline` (designed 10-16, kernel-first)
+### 3.4 Orientation — `code_outline` (kernel-first)
 
 `ast-grep outline` (text: `line: signature` per top-level symbol; `--json`:
 `{path, language, items: [{symbolType, name, range, signature, astKind,
@@ -651,13 +618,13 @@ next" vs "where is this". It opens the project-context orientation seam
 noted in codemode §2.5 (outline entry → range-read → transform, without full
 file reads). The field treats it as worth a tool (@juvio15's
 `ast_grep_outline` "map a file before you read it", Gemini CLI's `ast_read`,
-Serena's `get_symbols_overview` as its most-praised feature) and the battery
-program adds the local evidence: every T2/T6 drowning rep enumerated files by
-parsing or paginated scanning and **never oriented first** — a symbol map is
-the affordance that bounds "what shapes exist here" before a
+Serena's `get_symbols_overview` as its most-praised feature); the battery
+evidence points the same way — drowning reps **never oriented first**
+([../records/code-search-battery-v4.md](../records/code-search-battery-v4.md))
+— and a symbol map is the affordance that bounds "what shapes exist here" before a
 pattern-verification loop starts (the §3.3 loop's first step, generalized).
 
-**Engine fact (verified 10-16, on the pinned 0.50.0):** `@ast-grep/napi`
+**Engine fact (on the pinned 0.50.0):** `@ast-grep/napi`
 exports `Lang kind parse pattern parseAsync findInFiles
 registerDynamicLanguage parseFiles` + the five language tags + node classes —
 **there is no outline API**; `sg outline` is CLI-only. So outline is an
@@ -724,7 +691,7 @@ separate jobs, sharing the executor and the gate; the MCP six-tool precedent
 countable truth, so outline gets **no gate slot** — any v5+ orientation task
 is diagnostic-only (T2/T4/T6 treatment): read on tokens-to-first-correct-
 identification, never in the flip aggregate, and the battery is structurally
-blind to kernel-side outline use (run_python masking — §4.1 caveat). The
+blind to kernel-side outline use (run_python masking — §4.2 caveat). The
 real evaluation is the usage census: does mapping-before-reading change the
 enumeration reflex the batteries kept watching?
 
@@ -795,29 +762,27 @@ than missing recall (§2).
 known ground truth: (1) find all call sites of a chosen function; (2) count
 single-parameter function declarations under a **closed shape list** (plain
 and async `function name(oneParam) {…}` only — arrows, methods, generators,
-and overload signatures excluded, non-test files only; the open-ended
-"which function definitions" phrasing sent *both* arms into
-build-your-own-parser spirals, so the question is as closed as the oracle.
-**v3 redefinition (probe B1):** the closed list omitted one class —
-return-type-annotated signatures. The model found that class (750 matches)
-as readily as the literal one (4) and drowned reconciling the two in
-every arm, v2 and v3 probe alike. The v3 prompt states the exclusion,
-and the contradiction mode is confirmed dead: a 4-rep smoke (10-15, arm B)
-saw 2 reps reach the correct 4 in-scan after snippet-verifying the
-exclusion — the first correct T2 answer in any on-arm history — both then
-drowning in *over-verification* (a raw cross-check of a shape rg cannot
-cheaply express; the answer's complement class is the 750 typed
-declarations any enumeration exposes), and 1 rep skipping the tool into
-the script swamp outright (adoption variance, the v2 mode). 0/4 completed.
-T2 is therefore **demoted to a diagnostic probe** (like T4): excluded from
-the flip aggregate; graded on adoption, drowning mode, and
-correctness-when-completed. Its v2 rows are a null baseline, not a surface
-signal);
-(3) count `console.log` calls whose first argument **starts with** a
-template literal — the prompt's semantics are pinned to the oracle's
-textual starts-with reading (backtick first after the paren, modulo
-whitespace, concatenations included), because the is-vs-starts-with
-ambiguity otherwise makes correct answers ungradeable; (4) a deliberate
+and overload signatures excluded, non-test files only, and the
+return-type-annotated exclusion *stated* in the prompt; the question is as
+closed as the oracle, because the open-ended "which function definitions"
+phrasing sent *both* arms into build-your-own-parser spirals and an implicit
+exclusion does not survive the enumeration reflex — the model finds the
+typed class as readily as the literal one and drowns reconciling). T2 is a
+**diagnostic probe** (like T4): excluded from the flip aggregate; graded on
+adoption, drowning mode, and correctness-when-completed — even with the
+exclusion stated it is expected to censor in the two named modes,
+over-verification (a raw cross-check of a shape rg cannot cheaply express;
+the answer's complement class is the typed-declaration mass any enumeration
+exposes) and adoption variance (a rep skipping the tool into the script
+swamp outright);
+(3) count `console.log` calls whose sole argument is a complete template
+literal — the current v4.1 "strict A" form (§4.2): one engine pattern, truth
+frozen at 280, same single shape for the off arm. The prompt's semantics
+must be pinned to what the oracle can read — the original textual
+starts-with reading (backtick first after the paren, modulo whitespace,
+concatenations included) was pinned because the is-vs-starts-with ambiguity
+otherwise makes correct answers ungradeable, and that phrasing later proved
+epistemically unresolvable (§4.2); (4) a deliberate
 false-absence probe — a query whose answer lives in a `.py` file, checking
 the model honors the coverage note instead of concluding absence — graded
 on **correctness/fc only**, since the on-arm correctly does *not* use the
@@ -827,7 +792,10 @@ full §3.3 kernel shape earns a dedicated case once kernel adoption shows up
 in the wild). The runner is
 `server/src/scripts/eval-code-search.ts`: it drives real headless turns on
 project chats bound to the repo and takes a foreground turn-gate lease per
-run. Eval chats carry the `eval[` title prefix, which doubles as the
+run. Pre-flight rule: launch only from a clean working tree (`git status`
+empty) with the committed oracles re-executed against the live tree —
+build artifacts materialized mid-battery silently poison the engine-derived
+oracle tasks (learned from a contamination incident). Eval chats carry the `eval[` title prefix, which doubles as the
 delayed-extraction firewall — the scheduler's candidate query skips such
 chats, so transcripts never enter the memory system even with a stray server
 alive (an eval-time misconception extracted into a durable memory would
@@ -853,7 +821,10 @@ non-zero commitments suppress it).
 **Metrics** — Porrima already records the raw material (request-log,
 model-stats): turns to answer, tokens spent on search calls, tool-error rate,
 and **false-conclusion rate** (a wrong answer delivered confidently — the
-failure the census exists to prevent). Run the battery with the flag off
+failure the census exists to prevent). Read `iterations` beside `toolCalls`
+when comparing arms — a single (first) message can batch 21–24 parallel
+calls, so call counts alone overstate turn cost unless the iteration read
+shows the fan-out. Run the battery with the flag off
 (bash+rg baseline) and on; `--reps 3` minimum for gate decisions (single-run
 medians are noise). Per-task gate lines are diagnostics; the **flip verdict
 is the battery-level aggregate**: summed per-task median turns and tokens
@@ -870,56 +841,29 @@ alone — and that line is a **nudge, not the mechanism**: the feature must
 not depend on AGENTS.md being load-bearing, which is why the battery
 measures schema-only discovery in the first place.
 
-**Results (first gate run, 10-14; Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp, reps 3,
-both arms complete, 30 runs):** verdict **FAIL — the flag stays dark.**
-Aggregate over the efficiency tasks: turns 15 → 21, tokens 43.2k → 49.1k
-(summed per-task medians); completion rate 11/15 on both arms; zero false
-conclusions across 60 runs in two gate runs; the T4 probe passes both. The
-human-graded appendix tells the rest of the story: the on-arm is never less
-correct and its answers are consistently richer (AST-cross-verified counts,
-line-level breakdowns; its one completed T3 run is the only answer in the
-battery to identify the string-literal false positive inside the oracle's
-textual count — a tool-description example line, demonstrating the
-AST-vs-text boundary live). The efficiency loss decomposes into: (1) schema
-cost where the tool is correctly unused (T4, +7%); (2) additive
-verification — the model wields code_search *on top of* rg rather than
-instead of it, and pays for line-numbered payloads on counting questions
-(the `maxMatches=1` hint went unused; the model wants the lines); (3)
-non-adoption where the task's semantics are textual rather than structural
-(T3: adoption 0/6 across both gates — starts-with-backtick is a ripgrep
-question, the model correctly prefers text tools, then over-verifies into
-parser-building swamps on *both* arms). T2 proved non-discriminative: 0/3
-off completed, 1/3 on completed and wrong — the closed shape list did not
-contain the model's enumeration reflex. Adoption where the shape is
-AST-native is solid: T5 3/3, T1 2/3, plus a correct coverage-note-routed
-cross-check on T4. **The verdict is model-scoped** — a 27B quant with a
-strong write-your-own-parser prior; the battery reruns as the model floor
-changes. **The kernel projection (§3.3) is untested by this battery** —
-kernel-side adoption rides under `run_python` in transcript metrics; the
-kernel dispatch telemetry (`kernel_tool_stats`, kernel-codemode §4.9)
-records it directly, so future runs can measure the projection's density
-thesis without transcript surgery.
+### 4.2 Battery v3 — surface isolation
 
-### 4.2 Battery v3 — surface isolation (design, 10-15)
-
-The first gate run's verdict is model-scoped, but that scope was measured
+The first gate run's verdict is model-scoped — runs to date: **FAIL, the
+surface stays dark** ([../records/code-search-probe-b1.md](../records/code-search-probe-b1.md),
+[../records/code-search-battery-v4.md](../records/code-search-battery-v4.md)) —
+but that scope was measured
 only in the hardest configuration the feature could ship in: schema-only
 discovery, no nudge, no cheap pattern-test path at the model level. A
-10-15 re-analysis of the 60-run jsonl (`byTool` per run) shows the
+re-analysis of the first gate run's rows (`byTool` per run) shows the
 efficiency loss decomposes into components the surface can address — and
 the field's actual bet is guided positioning, not what the battery
 measured.
 
-**Evidence (60-run re-analysis).** Adoption is task-shaped, not
-model-fixed: T5 (pure syntax two-count) is on-arm 6/6 with *fewer*
-iterations (median 5 → 3.5) and zero false conclusions — the off arm had
-one. T3 (textual semantics) is on-arm 0/6 with a +55% token cost (20.5k →
-31.8k) at zero adoption — pure consideration cost: the tool was *considered*
-on a task it cannot answer. The T2 swamp exists on *both* arms (off arm:
-17 iterations, 36.6k tokens, pure bash+python; on arm: code_search **and**
-run_python and bash in the same runs) — counting phrasing invites
-scripting regardless of the tool, and the on arm pays the additive-
-verification price.
+**Evidence (re-analysis of the first gate run's rows).** Adoption is
+task-shaped, not model-fixed: T5 (pure syntax two-count) is adopted on-arm
+with *fewer* iterations and zero false conclusions — the off arm had one.
+T3 (textual semantics, at the old wording) saw zero on-arm adoption at pure
+consideration cost — the tool was *considered* on a task it cannot answer.
+The T2 swamp exists on *both* arms (the off arm drowns in pure
+bash+python; the on arm uses code_search **and** run_python and bash in the
+same runs) — counting phrasing invites scripting regardless of the tool,
+and the on arm pays the additive-verification price. Per-run figures are in
+the records: [../records/code-search-probe-b1.md](../records/code-search-probe-b1.md).
 
 **The self-probe.** The T2 closed shape is expressible in a *single*
 pattern: `function $NAME($ARG) { $$ }` matched exactly the countable class
@@ -946,7 +890,7 @@ as designed, not a defect of the model.
 
 **Surface changes (prerequisites — the battery cannot run v3 without both).**
 
-- **S1 — `code=` at the model level.** *(implemented 10-15.)* The
+- **S1 — `code=` at the model level.** The
   executor's snippet path (`runCodeSearchOnSnippet`, §3.3) already exists;
   the model-level handler routes `code` there and the schema gains the
   parameter. Snippet results have no scope census, so the model-level
@@ -954,14 +898,11 @@ as designed, not a defect of the model.
   (`renderSnippetText`: shared match-line idiom with `renderText`, and the
   honest zero — *"a zero here is a pattern problem, not an absence"*).
   The snippet path takes no workspace, parity with the kernel dispatcher.
-  The honest-zero text earned its keep on day one: the first version of the
-  S1 tests typed `$$` for `$$$` in a pattern — the §7 Risk 1 silent-outcome
-  trap — and the projection's pattern-problem line is what surfaced it.
   The single highest-leverage change: it converts the one behavior the
   weights cannot self-resolve (unverified pattern coverage) into a ~200 ms
   tool call.
-- **S2 — description v3.** *(implemented 10-15 — the candidate text below
-  is the shipped text.)* A diff against the prior §3.2 text (measured
+- **S2 — description v3** (the candidate text below is the shipped text).
+  A diff against the prior §3.2 text (measured
   before/after — the gate's aggregate eats the delta):
   - *add* — the snippet nudge: "If you are unsure a pattern will match,
     test it first against a snippet: pass `code=` with a small example —
@@ -995,49 +936,36 @@ as designed, not a defect of the model.
   in production. The line's own ~25 tokens sit inside C's numbers.
 
 **Tasks.** T1/T4/T5 byte-identical to v2 (comparability with the recorded
-numbers). **T2 redefined in v3** (probe B1, §4.1): the v2 prompt never
-stated the typed-return exclusion the oracle's complete-node form
-implements — the model found the typed class (750) as readily as the
-literal one (4) and every arm drowned in the reconciliation, so T2-as-
-written is unanswerable by an honest model and a known null in all arms.
-T2's v2 rows are a null baseline (and the v2 T2 oracle was already
-non-comparable between gate runs — pre-fix "6 definitions" vs post-fix
-"4 declarations", the e31a12fb glob fix landing between them). The v3
-redefinition is smoke-confirmed against a 4-rep arm-B run (10-15):
-contradiction mode dead (2 reps reached the correct 4 in-scan), but T2
-still censors 0/4 in two remaining named modes — over-verification (the
-complement class makes any honest raw cross-check a swamp) and adoption
-variance (1 rep skipped the tool). **T2 is diagnostic in the v3 battery**
-(excluded from the flip aggregate, like T4): adoption, drowning mode,
-correctness-when-completed. **T3 redefined
-in v4** (10-16, battery v3 evidence): the textual starts-with semantics were
-epistemically unresolvable — line-based grep (268), the textual oracle (375),
-`-o` counting (482), and AST parses (514) disagree by design; the oracle
-counted a tool-description string occurrence that any AST reader rejects;
-and the single completion in 15 runs peeked at the harness source from inside
-its own scan scope. v4 flipped to AST semantics with a scope pin
-(`!server/src/scripts`) that drops the harness's own calls and closes the
-peek channel; the string-occurrence false positive vanishes structurally
-(engine-matched call nodes only — census: 0 in agent-tools.ts). **v4-B** —
-stipulated template-START class, oracle = whole-call scan plus a deterministic
-leftmost-token filter (NOT pattern enumeration: the referee showed
-concatenation patterns miss left-nested chains) — froze truth **336 of 438**
-and was probed arm-B × 3 (probe-b2, 10-16): 0/3 completed, but the failure
-changed character — the stipulation made the truth computable (one rep's own
-AST parser stated the exact 336 mid-run, censored by its verification loop,
-not by disagreement), while selection stayed on the parser affordance
-("AST semantics" phrasing; 2/3 runs never touched `code_search`) and the one
-rep that enumerated patterns undercounted live (3 vs census 19, left-nested
-chains). **v4.1 = strict A**, the demotion the probe's decision rule
-promised: the class whose whole semantics IS one engine pattern —
+numbers). **T2 is diagnostic in the battery** (excluded from the flip
+aggregate, like T4): adoption, drowning mode, correctness-when-completed.
+Its prompt states the return-type exclusion the oracle's complete-node form
+implements — with the exclusion left implicit the model finds the
+typed-return class as readily as the literal one and every arm drowns
+reconciling the two, making T2-as-then-written unanswerable by an honest
+model. Even with the exclusion stated, T2 is expected to censor in two
+named modes — over-verification (the complement class makes any honest raw
+cross-check a swamp) and adoption variance (a rep may skip the tool into
+the script path outright). **T3's current spec (v4.1, "strict A"):** the
+class whose whole semantics IS one engine pattern —
 `console.log(`$$$X`)` — sole argument a complete template literal,
 interpolated included; freeze truth **280**; one snippet-verifiable scan at
-model level, same single shape for the off arm. T3's mandate is now
-comparability, not asymmetry — both v3 gates printed FAIL solely on T3's
-comparability clause. **Probe B3 ran (10-16): 2/3
-completed, 3/3 reached 280 — strict-A is battery-ready; the open question
-transfers to arm A's completion on this class, which the next battery
-settles.** The v3-T3 and v4-B rows are superseded, not baselines.
+model level, same single shape for the off arm. T3's mandate is
+comparability, not asymmetry. The durable why: textual starts-with
+semantics proved epistemically unresolvable — line-based grep, textual
+oracles, `-o` counting, and AST parses disagree by design on that phrasing;
+an oracle that counts a tool-description string occurrence makes correct
+answers ungradeable; and a scan scope containing the harness itself lets a
+run peek at its own oracle. So T3 carries AST semantics with a scope pin
+(`!server/src/scripts`): engine-matched call nodes only — the
+string-occurrence false positive vanishes structurally — and the harness's
+own calls out of the count, closing the peek channel. One oracle lesson
+from the intermediate stipulated variant stays: never derive a
+concatenation-class truth by pattern enumeration (concatenation patterns
+miss left-nested chains) — the referee is a whole-call scan plus a
+deterministic leftmost-token filter. The definition arc and per-probe
+outcomes are recorded in
+[../records/code-search-battery-v4.md](../records/code-search-battery-v4.md)
+§7.
 **T6 — diagnostic probe** (excluded from the flip aggregate,
 like T4; runs on all three arms × 3 reps — the nudge gate's
 question applies to T6's trap handling): *"Count `if` statements (without else) whose consequent is
@@ -1052,17 +980,17 @@ trap applies to the oracle author as always. **Fixture audit before
 freeze — both forms must exist in server/src with non-zero instances
 (no vacuous witness); if the brace-less form is absent, swap the task.**
 
-**Protocol — probe first (complete 10-15).** T1+T2+T5 × 3 reps on arm B
-only (9 runs, ~26 min). Results in
-[code-search-probe-b1.md](code-search-probe-b1.md): the T2 swamp collapsed
-as a *verification* problem (tokens halved, `run_python` out 3/6 → 0/3,
-pattern uncertainty solved on the first scan) and the residual failure is
-a **task-definition gap, not a surface gap** — the model found the
-typed-return class (750) as readily as the literal one (4) and drowned in
-the reconciliation. Snippet mode is used with judgment (22 of 53 calls,
-zero on unambiguous T1). The behavior moved: selection is not the binding
-constraint. T2 was redefined accordingly (see Tasks above); the full
-battery runs as designed.
+**Protocol — probe before battery.** Before spending the 45-run three-arm
+battery, run a cheap probe: T1+T2+T5 × 3 reps (9 runs) on arm B only — the
+sharpest-signal tasks, on the arm where a task-definition gap separates
+cleanly from a surface gap. The probe's decision rule: *if the behavior
+does not move, selection — not verification — is the binding constraint*,
+and the full battery is not yet worth its cost. The first probe's outcome —
+the T2 swamp collapsing as a *verification* problem, with the residual
+failure identified as a **task-definition gap, not a surface gap** (which is
+why T2 is defined diagnostic above) — is recorded in
+[../records/code-search-probe-b1.md](../records/code-search-probe-b1.md);
+the full battery runs as designed.
 
 **Gates — two verdict lines, one decision.**
 
@@ -1082,7 +1010,7 @@ battery runs as designed.
     — an open question for the measured data, not a law.
   - **B passes** (regardless of C) → flip; routing already rides the
     description, and no external line is needed at all.
-  - **both fail** → the model-scoped verdict stands as written; the line
+  - **both fail** → the model-scoped verdict stands (caveats below); the line
     holds until the model floor moves (the Qwen4 canary is the clock), and
     the surface stays dark.
 - A passing arm C validates the routing instruction as a *prompt* surface;
@@ -1098,16 +1026,37 @@ battery runs as designed.
   demand metric and the battery cannot both be treated as frozen facts.
 - **Adversarial counting prompts:** v2's closed shape lists make the
   counting tasks harder than the wild; a v3 pass there may overstate
-  adoption. T4's probe remains the honest signal — and it already passes
-  both arms.
-- **Kernel projection:** still not battery-measurable (transcript
-  surgery); `kernel_tool_stats` records the rule-loop density from real
-  post-flip usage. Battery v3 does not change this.
+  adoption. T4's probe remains the honest signal.
+- **Kernel projection (§3.3) is untested by this battery:** kernel-side
+  adoption rides under `run_python` in transcript metrics; the kernel
+  dispatch telemetry (`kernel_tool_stats`, kernel-codemode §4.9) records it
+  directly, so the projection's density thesis is measurable post-flip
+  without transcript surgery. No battery arm changes this.
+- **The verdict is model-scoped:** every gate figure measures the deployed
+  model floor — runs to date against a 27B quant with a strong
+  write-your-own-parser prior — and the battery reruns as the floor changes.
+- **Baseline-draw variance:** 3-rep medians can swing ~2.5× across
+  batteries on identical task definitions (arm A's T5 median read ~25.9k
+  tokens in one battery and ~10.1k in the next; the aggregate is dominated
+  by T5+T1, and an incomparable T3 contributes nothing), so cross-battery
+  comparisons of absolute figures need care — the load-bearing reads are
+  within-battery arm comparisons.
 
 **Not in v3 (scope fence):** no new model, no outline tasks (phase 2 is a
 separate feature with its own design section), no Phase G, no MCP/skill
 paths (superseded by the kernel-composition thesis, §2.5), no changes to
 the censoring or aggregate machinery.
+
+**Open battery-design decisions (for the next battery):** T3 comparability —
+off-arm completion has not landed on this class under any T3 definition
+tried (the parse-it-right reflex costs more than the turn budget allows);
+the options are demoting T3 to diagnostic like T2 (the aggregate becomes
+T1+T5 — a mechanism change, a doc-owner call), raising its budget (same
+class of change), or accepting the locked comparability clause as the
+accurate signal that this task, as posed, cannot complete in arm A on the
+current model. And the time budget vs parallel-turn bursts: low-iteration
+turns have hit the 600 s wall inside a parallel-call burst, so wall-clock
+budget tuning is iteration-blind today.
 
 ## 5. Dependency placement
 
@@ -1162,11 +1111,11 @@ the censoring or aggregate machinery.
 | phase | scope | gates |
 |---|---|---|
 | **0** | model-level `code_search`: executor (napi, local), scope census + coverage reporting, tool definition, budgets, gating, tests | implemented; dark behind `PORRIMA_CODE_SEARCH=1` |
-| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | **implemented** — exposure gated on `PORRIMA_CODE_SEARCH=1` per dispatcher construction; structured values ride the `value_json` wire flag (driver decodes to a real dict); e2e-pinned through the registry seam |
-| **2** | `code_outline` — **designed §3.4 (10-16)**, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); battery evidence (T2/T6 never-orient-first) + design in §3.4; model-level exposure gated on the §4.9 density readout (kernel-codemode) |
+| **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | implemented; exposure gated on `PORRIMA_CODE_SEARCH=1` (structured-values rationale in §3.3) |
+| **2** | `code_outline` — **designed §3.4**, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); evidence + design in §3.4; model-level exposure gated on the §4.9 density readout (kernel-codemode) |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
 | **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
-| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.1 eval battery**, not on the flip alone — first gate run 10-14: **FAIL, flag stays dark** (§4.1 Results; model-scoped verdict, kernel projection untested); **battery v3 designed §4.2** (S1 model-level `code=` + S2 description v3 as prerequisites; arms A/B/C with the strict gate B-vs-A and nudge gate C-vs-A decision matrix) |
+| **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.2 battery verdict** (harness and gates in §4.1), not on the flip alone; runs to date recorded in [../records/code-search-probe-b1.md](../records/code-search-probe-b1.md) and [../records/code-search-battery-v4.md](../records/code-search-battery-v4.md) — **FAIL, surface stays dark** (model-scoped verdict; kernel projection untested); arms A/B/C with the strict gate B-vs-A and nudge gate C-vs-A decision matrix in §4.2 |
 
 ## 7. Risks
 
@@ -1175,7 +1124,7 @@ the censoring or aggregate machinery.
    — and the silence is not always a clean zero: a bodiless parameterized
    pattern (`function $N($A)`) plausibly matches *something* (TS overload
    signatures), sending the model into a verify-the-contradiction spiral
-   (observed live in the §4.1 shakeout). Mitigations: the cheatsheet
+   (observed in battery runs; records). Mitigations: the cheatsheet
    in the tool description (§3.2 — including the bodiless-declaration trap),
    the advisory regex-shape note on
    zero-match results (§3.2 — fires only at absence, so valid-but-
@@ -1205,9 +1154,9 @@ the censoring or aggregate machinery.
    front, and the qualified-absence phrasing (§3.2) makes "no matches" read
    as "no matches *among what was scanned*." The alias table itself is a
    drift surface in BOTH directions — the engine's extension set is wider
-   than the five language names, and Phase 0 shipped a table too narrow
-   (scanned `.mjs`/`.mts`/`.scss` files reported unscanned, false "no X
-   files in scope" errors) — so it is pinned by a test that queries the live
+   than the five language names, and a too-narrow language table reports
+   scanned files (`.mjs`/`.mts`/`.scss`) as unscanned, with false "no X
+   files in scope" errors — so it is pinned by a test that queries the live
    engine (§3.1 fact 1). Residual: the census walk approximates (not
    replicates) ignore-crate semantics; discrepancies fail safe by
    under-reporting skips.
@@ -1220,17 +1169,18 @@ the censoring or aggregate machinery.
    §3.1 fact 3). Mitigation: version-pinned, executor isolated in one module,
    engine facts pinned in the module header and re-verified on every bump —
    the drift-pin test makes the extension-set fact self-checking.
-   Battery v4 added one to the bump-verify list: comment-significance in
-   block patterns (the T6 oracle undercount — its frozen pattern form
-   structurally refused `if { /* c */ return }` blocks; field-based
-   enumeration is the oracle's form now).
+   Comment-significance in block patterns is on the re-verify-on-bump list:
+   comments are match-significant children in block patterns, so oracles of
+   that shape take the field-based enumeration form (the T6-oracle-undercount
+   discovery narrative lives in
+   [../records/code-search-battery-v4.md](../records/code-search-battery-v4.md) §6).
 7. **Staleness: none by design** — fresh parse per call. The risk is the
    inverse (someone later adding a cache); the design brief says the cache is
    how this feature goes wrong.
 
 ## 8. Future directions
 
-- **`code_outline`** (§3.4, designed 10-16) — kernel-first orientation, then a decision about
+- **`code_outline`** (§3.4) — kernel-first orientation, then a decision about
   a model-level surface gated on the §4.9 density readout. Now staged as phase 2 (§6), ahead of remote: the
   orientation signal from the field (Serena's `get_symbols_overview`,
   @juvio15's outline tool, `sg outline`) is the strongest in this family.

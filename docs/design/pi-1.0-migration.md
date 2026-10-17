@@ -1,17 +1,13 @@
 # pi 1.0 Migration — Harness Removal, Shared Process Supervisor, Tool-Output Store
 
-**Status**: T0–T4 LANDED (T4 kernel P2/P3 — 10-05; 889-suite green). T2 live-verified 10-04 22:27 restart: the first post-restart request evaluated only ~295 tokens against the pre-restart 0.85.1-era KV cache (~130k-token context) — wire byte-identity confirmed by the cache itself; per-turn deltas (0.9–2.7k tokens) confirm turn-prefix stability. Warm-hit confirmation pending first post-warm turn (prompt-debug `warm=missing` until then). All tracks landed.
-**Date**: 2026-10-04
+**Status**: completed — all tracks (T0–T4) landed; post-migration check confirmed
+wire-byte-identical prefixes hit the pre-migration KV cache (see §7).
+**Completed**: 2026-10-05 (T0–T4)
 **Scope**: `@earendil-works/pi-agent-core` 0.85.1 → 1.0.2 and
 `@earendil-works/pi-ai` 0.85.1 → 1.0.2.
 **Related**: [session-python-kernel.md](session-python-kernel.md) — the kernel
 plan consumes the process supervisor (§3) and spill store (§4) defined here.
 This doc is the upstream migration; the kernel doc is the downstream feature.
-**Reviewed**: 10-04 — verified against the 1.0.2 tarballs and the upstream
-changelog (harness removal, `finishTurn`, `TranscriptContext`, the `onUpdate`
-seam, version coupling) and the Porrima codebase; line-reference drift fixed
-(§2.2, §2.3, §5.2) and prime-agent manager-study hardening folded in
-(§3.3, §3.5). Summarized in §9.
 
 ## 1. Why this is one migration
 
@@ -139,9 +135,8 @@ diverges (the same failure mode as "Tool Result Wire Shape" in
 - New low-level `runAgentLoop`/`runAgentLoopContinue` emit-sink variants;
   Porrima's local `runAgentLoop` wrapper (`agent-loop-runner.ts`) is
   unaffected.
-- Node ≥ 22.19.0 (since 0.75.0). The server runtime is `/usr/bin/node`
-  v22.22.2 (the systemd unit's `ExecStart`); dev shells see nvm's v24.18.1.
-  Both satisfy the engine.
+- Node ≥ 22.19.0 (since 0.75.0) — the engine requirement the server runtime must
+  satisfy.
 - TypeBox: Porrima has no independent pin — `Type` is imported through pi-ai's
   re-export, so pi-ai 1.0.2's `typebox@1.3.27` moves with the upgrade and
   cannot conflict.
@@ -250,7 +245,8 @@ export function createOutputCapture(opts: {
    instead of shell exit + silence, and post-fence output stays readable via
    the handle. Porrima keeps exit + stdio grace for T1 because its bash result
    is one-shot — there is no handle from which to read post-fence output — but
-   the fence is the fix if the `cmd &` parity test shows lost output.
+   if the exit+grace semantics are ever observed to lose output, the fence is
+   the designed fix.
 4. **Capture/spill**: bounded tail window (`maxBytes`, `maxLines`,
    `retain: "tail"`); spill starts at first truncation and includes the
    pre-truncation prefix; spill writes pause the pipes on backpressure (pi:
@@ -266,12 +262,12 @@ export function createOutputCapture(opts: {
 6. **Windows**: pi used `taskkill /T /F`; Porrima is Linux/systemd-first.
    Keep a single `process.platform === "win32"` branch or document
    Linux-only — a decision, not a blocker.
-7. **Oversized-stream poisoning** (10-04 review, prime-agent
+7. **Oversized-stream poisoning** (prime-agent
    `startup.rs:313-341`): when a stream exceeds its frame/window bound, the
    reader keeps draining and discarding while the failure is raised — a child
    blocked writing into a full pipe must not deadlock the kill/repair path.
    Applies to the kernel's protocol reader and to any bounded capture.
-8. **Per-child teardown isolation** (10-04 review): every supervised child's
+8. **Per-child teardown isolation**: every supervised child's
    kill is individually bounded; one wedged child never blocks the others or
    `killAllSupervised()` (prime-agent's per-kernel failure isolation,
    `live_kernels.rs`).
@@ -512,6 +508,10 @@ Notes:
 
 ## 7. Acceptance checklist
 
+Post-landing result: the checklist passed — the first post-restart request
+evaluated ~295 tokens against the pre-restart KV cache, confirming wire
+byte-identity; per-turn deltas confirmed turn-prefix stability.
+
 - Bash: timeout, abort, daemonized grandchild, huge output spill +
   `read_file` paging, merged output ordering, exitCode mapping, no orphan
   group after abort or server SIGKILL (supervisor journal + startup sweep,
@@ -549,28 +549,6 @@ Notes:
 | Spill path in result text breaks replay | Deterministic short ids; no timestamps; shared footer formatter |
 | pi moves again in 1.x | Keep the supervisor and a transcript shim as the only pi-facing seams; the rest of Porrima imports types only |
 | Mixing pi-ai 1.0 with agent-core 0.85 | Bump both together; agent-core 1.0.2 requires pi-ai ^1.0.2 |
-
-## 9. Review revisions (10-04)
-
-Verified against the 1.0.2 tarballs and the upstream changelog: the
-harness-removal text, the `finishTurn` migration (guard form included),
-`AgentContext` reduced to `{messages, tools?}`, the unchanged
-`AgentTool.execute(…, signal?, onUpdate?)` / `tool_execution_update` seam,
-`dist/` containing only agent/agent-loop/proxy/stream-fn/types, and the
-agent-core 1.0.2 ↔ pi-ai 1.0.2 dependency coupling all hold. Every Porrima
-line claim re-verified against the codebase; none materially wrong. Revisions
-applied inline:
-
-1. Line-reference drift fixed: `chat.ts:2895`/`:2907` for the `"length"`
-   detection (§2.2), `llm-stream.ts:3,44-47` for `StreamFn` (§2.3),
-   `openai-compat-provider.ts:1173-1183` for the downgrade-to-user loop (§5.2).
-2. `getInitialSystemMessage` added to the helper list — §5.2 uses it (§2.3).
-3. Non-interactive env list completed to prime-agent's full 14 variables
-   (added `CLICOLOR=0`, `FORCE_COLOR=0`; §3.5).
-4. Supervisor hardening folded in from the prime-agent manager study:
-   oversized-stream poisoning and per-child teardown isolation (§3.3.7-8),
-   head+tail capture recorded as a considered divergence from pi parity
-   (§3.3.4).
 
 ## References
 

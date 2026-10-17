@@ -1,52 +1,34 @@
 # Memory Context Persistence — Surviving the Process That Owns the Cache
 
-**Status**: Design (v1.3 — verified against live code; §10 adds compaction re-roll fix)
-**Author**: quje
-**Date**: 2026-08-25 (revised 2026-08-26)
-
-v1.1 changes: call-site inventory verified exhaustively (two sites the v1
-inventory missed: `automation-runner.ts:214`, `agent-snapshots.ts:270`);
-fourth write point added (`markMemoryDeltaInjected`); row-level global
-invalidation added (a v1 correctness gap — post-restart global corpus
-changes would silently land on zero chats); non-write-site decisions
-recorded (snapshot restore, skip path, `getMemoryContextIds` ordering);
-Phase 2 sub-case analysis and the dirty-state leak question added.
-
-v1.2 changes: Phase 2 warm-queue timing check completed against live code
-(commit 78edd8c).
-
-v1.3 changes: Phase 1 verified LIVE in production (hydrate/persist/dirty
-fall-through all present). KV-cache hit-rate forensics from llama-server
-logs (08-26) established that the dominant remaining prefix invalidation is
-**compaction-time Case 1 re-rolls**, not restarts — see §10 for the fix:
-clobber guard + soft reset, with hysteresis re-roll deferred behind it.
+**Status**: Phase 1 implemented (frozen-prefix persistence) plus the §10
+compaction re-roll fix and the §11 project-context snapshot; Phase 2
+(cache-warm stop-re-roll, §4.4) and Fix C (§10.5) outstanding.
 
 ## 1. Problem
 
-Two incidents on 08-25 produced the identical symptom — a full cold prefill across a
+Two incidents produced the identical symptom — a full cold prefill on a
 chat's next turn — with opposite causality:
 
-- **05:42:21** — the llama-server process died (glibc heap corruption, first ever).
-  Server-side KV loss. Every chat's next turn owed a full prefill. Unavoidable.
-- **02:30:32** — porrima restarted 79 seconds earlier (an Asa deploy, 02:29:13).
-  Client-side prefix rewrite. The prefill was **avoidable** — the server still held
-  99% of the usable state.
+- The llama-server process died (glibc heap corruption). Server-side KV loss.
+  Every chat's next turn owed a full prefill. Unavoidable.
+- porrima restarted moments before a chat's next turn while llama-server kept
+  serving. Client-side prefix rewrite. The prefill was **avoidable** — the
+  server still held 99% of the usable state.
 
-The 02:30:32 case, in full:
-
-| Time | Event |
-|---|---|
-| 02:22:43 | Turn for chat 9df35ad4. `full retrieval: 1 memories frozen in system prompt`. Prompt A (hash 60c30f4c5337, system prompt 21,737 ch). Full prefill — owed (first turn after a 02:21 porrima restart). |
-| 02:27:32 | Client disconnects. Slot 1 released, prompt A's state (73,399 tok) still in VRAM. No compaction (58.5% < 80%). |
-| 02:29:13 | porrima restart (deploy bce0e5e). `contextState` Map dies with the process. |
-| 02:30:32 | Next turn, same chat. `full retrieval: 2 memories frozen in system prompt`. Prompt B (hash 735649d13c5c, +986 ch in system prompt). |
-| 02:30:32.508 | llama.cpp: `selected slot by LRU` — slot 1's 99%-similar state was **invisible to selection**. |
-| 02:30:32.712 | Full cold prefill, 73,077 tokens. Slot 0's displaced state FIFO-evicts a 4,706 MiB pool entry to make room. |
+The restart case, in full: a turn ran with `full retrieval: 1 memories frozen
+in system prompt` (prompt A) and paid a cold prefill it owed from an earlier
+restart; the client disconnected and prompt A's ~73k-token slot state stayed
+resident in VRAM; porrima restarted and the `contextState` Map died with the
+process; the next turn, same chat, re-retrieved — `full retrieval: 2 memories
+frozen` (prompt B, a different system prompt); llama.cpp reported `selected
+slot by LRU` — prompt A's 99%-similar state was **invisible to selection**;
+and a full cold prefill of ~73k tokens ran, the displaced state FIFO-evicting
+a multi-GiB pool entry to make room.
 
 The discriminating log line for forensics: a `[memory-context] full retrieval: N
 memories frozen in system prompt` immediately preceding a cold prefill means the
 *client* rewrote the prefix. No such line before a cold prefill means the *server*
-lost state. From now on, "who owes the prefill" is a two-way question.
+lost state. "Who owes the prefill" is a two-way question.
 
 ### Why the prefill happened: the LCP math
 
@@ -54,7 +36,7 @@ Slot reuse in b10164 gates on `sim = LCP(resident, new) / new > 0.50` (strict;
 `server-context.cpp:1566/1568`; `--slot-prompt-similarity 0.50` in the running
 config). The frozen-memories section sits **between** the stable prefix and the
 conversation history (`systemPrompt = stablePrefix + frozenMemoriesSection`,
-memory-context.ts:1027). The 1↔2 memory flip changed the section, so the LCP between
+memory-context.ts). The 1↔2 memory flip changed the section, so the LCP between
 prompt A and prompt B stops at the section boundary — the stable prefix alone,
 ≈ 7,000 tokens of 73,077 ≈ **0.096**. Five times under the gate. The resident state
 that a re-roll would have reused in ~4 tokens of prefill was walked past.
@@ -63,7 +45,7 @@ that a re-roll would have reused in ~4 tokens of prefill was walked past.
 
 Under `--cache-idle-slots` + `--kv-unified`, every task launch saves all idle slots'
 state to the 32 GiB RAM pool and clears them (`server-context.cpp:2398–2416`). Prompt
-A's state entered the pool milliseconds after the 02:30:32 launch. It can never be
+A's state entered the pool milliseconds after the re-roll launch. It can never be
 restored: pool entries are only eligible at `LCP ≥ 25%` of the entry's own length
 (`server-task.cpp:1761`, `// don't trash large prompts`), and any future prompt for
 this chat shares ≈ 9.5% with it. It is dead weight until FIFO eviction
@@ -73,21 +55,21 @@ one.**
 
 ### Root cause
 
-`buildSplitAugmentedPrompt` (memory-context.ts:970) has three cases:
+`buildSplitAugmentedPrompt` (memory-context.ts) has three cases:
 
-- **Case 1** (L1021): no in-memory state → full retrieval → reranker rolls fresh →
+- **Case 1**: no in-memory state → full retrieval → reranker rolls fresh →
   whole set frozen into the system prompt.
-- **Case 2** (L1050): state, not dirty → `stablePrefix + frozenMemoriesSection`,
+- **Case 2**: state, not dirty → `stablePrefix + frozenMemoriesSection`,
   byte-identical.
-- **Case 3** (L1056): state, dirty → re-retrieve, diff against
+- **Case 3**: state, dirty → re-retrieve, diff against
   `frozenIds ∪ deltaIds`, append **new** memories as a tail delta.
 
 Case 1's precondition is documented as "first turn or post-compaction" but
 **implemented as "no state in the Map."** Process death is indistinguishable from a
 first turn. The frozen set is a pure function of (query, corpus) at roll time — the
-corpus is durable (SQLite), the roll is not, and the reranker (0.6B, 8082) is
-non-deterministic on borderline scores. Same query, same 21→15 candidate set, same
-corpus, top set flipped (08-25 02:22→02:30: 1 frozen → 2 frozen).
+corpus is durable (SQLite), the roll is not, and the reranker (Qwen3-Reranker-0.6B) is
+non-deterministic on borderline scores. Same query, same candidate set, same
+corpus, top set flipped — 1 memory frozen on one roll, 2 on the next.
 
 The design is internally consistent *within a live process*: the frozen section is
 byte-stable and new memories tail in as deltas. The bug is that the consistency
@@ -96,7 +78,7 @@ does not.
 
 ### Prior evidence the problem is known
 
-`cache-warm.ts:294` already fights this with a local workaround — the comment says
+`cache-warm.ts` already fights this with a local workaround — the comment says
 it verbatim: *"Freeze the current memory context into the system prompt now, so the
 later send path reuses the same prompt instead of doing a fresh retrieval that shifts
 the entire prefix and misses the warmed slot."* It calls `resetMemoryContext` + fresh
@@ -114,7 +96,7 @@ the symptom and worsens the warm's hit rate; the fix below removes the need for 
 | Conversation history | SQLite `chat_messages` | ✓ |
 | Base system prompt | SQLite `chats.systemPrompt` | ✓ |
 | `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable (AGENTS.md caveat: §11) |
-| **Frozen set (ids + section text)** | **process Map** (memory-context.ts:134) | **✗ ← the bug** |
+| **Frozen set (ids + section text)** | **process Map** (`contextState`) | **✗ ← the bug** |
 | `deltaIds` | process Map | ✗ (minor: dedup only) |
 | `promptCache` / `stablePrefixCache` / `promptBreakdownCache` | process Maps | ✗ (derived, cheap) |
 
@@ -155,12 +137,12 @@ constraint: no prompt reordering, vanilla cache semantics is ground truth.
 ### E. Restart llama-server alongside porrima
 
 Rejected. Converts an avoidable, per-chat cost into a universal one — every chat
-cold-prefills, which is exactly what the 05:42 heap crash did. The cache is the
-asset; the process is disposable.
+cold-prefills, which is exactly what a server-side cache-loss event does. The
+cache is the asset; the process is disposable.
 
 ### F. Do nothing / budget it
 
-Rejected. Asa deploys porrima several times a day; each deploy re-pays a 73k-token
+Rejected. The user deploys porrima several times a day; each deploy re-pays a 73k-token
 prefill (≈ 2–3 min GPU on a 3-slot server, serialized behind the turn gate) for
 **every active chat**, plus manufactures multi-GiB pool orphans. The cost scales
 with the number of live chats and the deploy cadence. Measured, not theoretical.
@@ -191,8 +173,8 @@ Helpers exported from memory-storage.ts: `getMemoryContextState(chatId)`,
 
 ### 4.2 Service changes (memory-context.ts, ~60–80 lines)
 
-**Hydrate — Case 1 entry (L1021).** Between the `skipMemoryRetrieval`
-early-return (L1016) and the state read (L1018):
+**Hydrate — Case 1 entry.** Between the `skipMemoryRetrieval`
+early-return and the state read:
 
 ```
 if (chatId && !contextState.has(chatId)) {
@@ -208,28 +190,34 @@ if (chatId && !contextState.has(chatId)) {
 The `restored frozen set` log line is the forensic canary that replaces
 `full retrieval` as the post-restart signature. A DB read failure warns and
 falls through to a Case 1 re-roll (bookkeeping must never break a build).
-The `skipMemoryRetrieval` path must **not** hydrate: it returns bare
-`stablePrefix` with no frozen section, so hydrated state would wrongly
-suppress passive-recall injections for memories that are not in the prompt.
+The `skipMemoryRetrieval` path (automation/system runs) **hydrates and
+retains**: it serves `stablePrefix` plus the hydrated frozen section
+byte-exact — these runs are follow-up messages whose chat's cached prefix must
+survive — but never establishes or writes state, since a first-run freeze would
+re-roll against a synthetic, non-conversational query.
 
-**Persist — five write points:**
+**Persist — write points:**
 
-1. Case 1, after `contextState.set` (L1030) — the freeze.
-2. Case 3, after delta update (L1066–1069) — new `deltaIds`, `dirty=0`.
-3. `invalidateMemoriesCache` (L140) — `dirty=1` on the Map entry; **fall
+1. Case 1, after `contextState.set` — the freeze.
+2. Case 3, after delta update — new `deltaIds`, `dirty=0`.
+3. `invalidateMemoriesCache` — `dirty=1` on the Map entry; **fall
    through to the row when the Map entry is absent** (post-restart, before
    first hydration). Without this, an extraction-driven invalidate that lands
    after a restart evaporates, and the later hydration restores a stale
    `dirty=0`.
-4. `invalidateAllMemoriesCaches` (L151) — `dirty=1` on all Map entries **plus
-   a bulk `UPDATE ... SET dirty=1` on all rows.** This is the v1 gap: after a
-   restart the Map is empty, so a global corpus change (synthesis, global
-   extraction) would land on zero chats — and v1's behavior only "healed" that
-   via the full re-roll this fix removes.
-5. `markMemoryDeltaInjected` (L179) — passive recall (mid-turn and post-turn,
-   passive-memory-recall.ts:449/600) mutates `state.deltaIds`. Without this
+4. `invalidateAllMemoriesCaches` — `dirty=1` on all Map entries **plus
+   a bulk `UPDATE ... SET dirty=1` on all rows.** A Map-only mark is not
+   enough: after a restart the Map is empty, so a global corpus change
+   (synthesis, global extraction) would land on zero chats — and the full
+   re-roll that used to "heal" that is exactly what persistence removes.
+5. `markMemoryDeltaInjected` — passive recall (mid-turn and post-turn,
+   passive-memory-recall.ts) mutates `state.deltaIds`. Without this
    point, a restart after an injection restores stale `delta_ids` and the next
    Case 3 re-injects memories already present in the history as delta rows.
+6. **Delivery-receipt claim rule.** Case 3 itself claims nothing: `deltaIds`
+   grows only in `commitMemoryDelta`, called after the save that makes the
+   delta durable. An uncommitted delta leaves `dirty` set, so the next build
+   re-retrieves and delivers it instead of treating it as injected.
 
 All persist calls are wrapped in try/catch → `console.warn`: a bookkeeping
 write must never kill a turn. `dirty` is semantically "corpus changed since
@@ -237,29 +225,30 @@ last retrieval for this chat" — a property of (chat, corpus), not of process
 lifetime. Worst case after restore is one extra Case 3 delta at the tail —
 prefix-safe.
 
-**Reset — `resetMemoryContext` (L161).** Also `DELETE` the row. Only chat
-deletion (chat-deletion.ts) and cache-warm preparation (cache-warm.ts:294)
+**Reset — `resetMemoryContext`.** Also `DELETE` the row. Only chat
+deletion (chat-deletion.ts) and cache-warm preparation (cache-warm.ts)
 funnel through this function — one place to keep the durable state honest.
-**Revised (10-05):** compaction switched to `softResetMemoryContext` (Fix B,
-§10.4), and the system-chat ×2 / automation-runner resets were removed —
-synthesis, wake, cross-chat, and automation runs are follow-up messages in a
-persistent chat and retain the frozen section (see §10.4 revision note).
+Compaction uses `softResetMemoryContext` (Fix B, §10.4); follow-up runs —
+synthesis, wake, cross-chat, and automation runs — are messages in a
+persistent chat and retain the frozen section; no hard reset happens on
+those paths.
 
-**Non-write sites (deliberate, v1.1):**
+**Non-write sites (deliberate):**
 
-- `resetAllMemoryContextCaches` (L213, called from agent-snapshots.ts:270
-  after a snapshot restore) — clears the Map only, **no row operations.** The
+- `resetAllMemoryContextCaches` (called from agent-snapshots.ts after a
+  snapshot restore) — clears the Map only, **no row operations.** The
   rows live inside the memory DB file, so they time-travel with the corpus and
   arrive consistent with the restored state. Wiping them would force re-rolls
   across all chats — the exact cost this fix eliminates.
-- `getMemoryContextIds` (L171, read-only) — safe without hydration of its own:
-  every turn path builds (and thus hydrates) before the passive-recall engine
-  first runs. On the `skipMemoryRetrieval` path an empty dedup set is
-  *correct*, since the prompt contains no frozen section.
+- `getMemoryContextIds` (read-only) — safe without hydration of its own:
+  every turn path, including the `skipMemoryRetrieval` path, builds (and thus
+  hydrates) before the passive-recall engine first runs. The dedup set
+  therefore matches what the prompt actually carries: the hydrated frozen
+  ids when a row exists, empty otherwise.
 
-**`invalidateAllCaches` (L197) — behavior change.** Currently deletes
+**`invalidateAllCaches` — behavior change.** Currently deletes
 `contextState` → next turn re-rolls. Sole caller: project workspace change
-(projects.ts:143). Change to clear only the *derived* caches
+(projects.ts). Change to clear only the *derived* caches
 (`stablePrefixCache`, `promptCache`, `promptBreakdownCache`) and keep the frozen
 state. Rationale: a workspace change rewrites AGENTS.md → `stablePrefix` changes →
 the prefill is owed anyway; re-rolling the frozen set on top adds an orphan and a
@@ -272,52 +261,43 @@ stays valid.)
 | Case | Behavior |
 |---|---|
 | First deploy, no rows | Case 1 as today; row written. One-time re-roll per active chat on its next turn after deploy — the cost this doc eliminates *going forward*, unavoidable for existing chats. Deploy at a quiet time. |
-| Case 1 retrieval fails | No state established → no row → next turn retries. Unchanged (L1040). |
+| Case 1 retrieval fails | No state established → no row → next turn retries. Unchanged. |
 | Fresh chat, restart before first turn | No row → Case 1. Correct. |
 | Frozen memory deleted/superseded while frozen | **No validation on hydrate.** Current Case 2 semantics already tolerate stale frozen content until compaction; changing that would be a separate behavior change with its own prefix cost. Log a warning when `frozen_ids` don't resolve against the corpus (observability only). |
 | `skipMemoryRetrieval` (automation/system runs) | Hydrates the row when the Map is empty and retains the frozen section byte-exact in the prompt. Never establishes or writes state. |
-| Chat deletion | `resetMemoryContext` already called (chat-deletion.ts:24) → row deleted. |
+| Chat deletion | `resetMemoryContext` already called (chat-deletion.ts) → row deleted. |
 | Concurrent writers | N/A — single porrima process under systemd. If that ever changes, this table needs a write lock; noted, not solved. |
 | System chat | Same table, `SYSTEM_CHAT_ID`. Synthesis/wake runs are follow-up messages: they retain the frozen section and never reset. |
 | Automation run in a chat that has a row | No reset; the run hydrates the frozen section and delivers new memories as a delta, so the target's cached prefix survives. |
-| Snapshot restore (agent-snapshots.ts:270) | `resetAllMemoryContextCaches` clears the Map only; rows time-travel with the memory DB file and are consistent with the restored corpus. No row wipe. |
+| Snapshot restore (agent-snapshots.ts) | `resetAllMemoryContextCaches` clears the Map only; rows time-travel with the memory DB file and are consistent with the restored corpus. No row wipe. |
 | Restart after a passive-recall injection | `markMemoryDeltaInjected` persists `delta_ids` (write point 5) → no double injection on the next Case 3. |
 | Global corpus change after restart, before any turn | `invalidateAllMemoriesCaches` bulk-updates rows (write point 4) → later hydration restores `dirty=true` → Case 3 delta, prefix-safe. |
 
 ### 4.4 Secondary change (Phase 2): cache-warm stops re-rolling
 
 With persistence, the send path restores the *user's actual* frozen section, so
-cache-warm's `resetMemoryContext` + fresh Case 1 (cache-warm.ts:294) is no longer
-needed for alignment — and for established chats it is actively harmful (warms a
+cache-warm's `resetMemoryContext` + fresh Case 1 is no longer needed for
+alignment — and for established chats it is actively harmful (warms a
 re-rolled prompt the user's next turn won't match). Dropping the reset makes the
 warm bake `stablePrefix + restored frozen section` = the user's actual next-turn
-prompt = a warm that can actually hit. One-line change; the warm-queue timing
-check against the send path was completed 08-25:
+prompt = a warm that can actually hit. One-line change.
 
-**Timing check (verified 08-25 against live code):** the send path
-(send/resume/repair/edit in chat.ts) acquires the turn gate; warm does not — it
-is gated only by the warm-queue mutex, `llm-activity.waitForIdle`, and deferral
-while synthesis/wake/automation is active. `isCacheWarmOrLlamaRuntimeBusy`
-covers the reverse direction: the scheduler yields to a busy warm. Residual
-window: an interactive turn arriving after the idle check and before the
-prefill POST runs concurrently with the warm. Bounded, not corrupting: a Case 2
-build is row-read-only and the frozen section is invariant under Case 3, so the
-warm bakes `stablePrefix + frozen section` — a byte-prefix of the concurrent
-turn's Case 3 prompt (worst case a warm miss; best case the turn rides the
-warmed prefix) — and the dirty mark (line 309) preserves the "next turn
-retrieves for the new message" contract either way.
+**Warm-lease invariant.** Warm prefills are never dispatched concurrently with
+a turn: `drainQueue` acquires the same turn lease real turns use for the whole
+prefill (kind `cache-warm`, background priority, 60s heartbeat), and a
+foreground turn preempts a running background warm via
+`preemptBackgroundWarms()` — a send arriving mid-warm queues at the gate and
+renders the explicit queued state instead of the warm's prefill progress.
+`isCacheWarmOrLlamaRuntimeBusy` covers the reverse direction: the scheduler
+yields to a busy warm. (Without the lease — gating the warm only by the
+warm-queue mutex and `llm-activity.waitForIdle` — an interactive turn arriving
+between the idle check and the prefill POST would overlap the warm. The
+overlap is bounded and non-corrupting, since the warm bakes a byte-prefix of
+whatever the concurrent turn builds, but the gate lease closes it outright;
+lease plus preemption keeps user priority without the priority inversion a
+bare yield-to-waiters deferral would introduce.)
 
-**Resolved (09-12):** `drainQueue` now acquires the same turn lease real turns
-use for the whole prefill (kind `cache-warm`, background priority, 60s
-heartbeat) and a foreground turn preempts a running background warm via
-`preemptBackgroundWarms()`. The residual window above is closed — the warm is
-never dispatched concurrently with a turn, and a send arriving mid-warm queues
-at the gate and renders the explicit queued state instead of the warm's prefill
-progress. (The old options were "accept" or the ~5-line yield-to-waiters
-deferral; the gate lease plus preemption keeps user priority without the
-priority inversion.)
-
-**Sub-case analysis (v1.1).** The change is dropping the `resetMemoryContext`
+**Sub-case analysis.** The change is dropping the `resetMemoryContext`
 call only; the trailing `invalidateMemoriesCache` stays, which preserves the
 "next real turn still retrieves for the new prompt" contract:
 
@@ -327,23 +307,19 @@ call only; the trailing `invalidateMemoriesCache` stays, which preserves the
 | dirty | Case 3 — same system prompt (delta discarded by warm) | dirty again → Case 3 | ✓ |
 | no state (fresh / post-compaction) | Case 1 roll, as today | Case 1 re-roll against new query | ~same as today |
 
-**Open question at implementation time:** warm on a *dirty* state runs Case 3
-against the old messages and consumes the results into `deltaIds` — but the
-delta rows are never sent (warm bakes only the system prompt). Those memories
-are then "marked injected" without being in context. The leak is bounded
-(top-8 of the old query, topically recent) and the lean is accept-it; the
-alternative is a read-only warm mode, which is a real code-path change. Also
-check: warm's Case 3 retrieval runs `updateAccessMetadata`, inflating access
-stats for memories the user never saw — minor, same class.
+**Dirty-state leak (closed by the claim model).** Warm on a *dirty* state runs
+Case 3 against the old messages and its delta rows are never sent (warm bakes
+only the system prompt). Under the delivery-receipt model (§4.2, write point 6)
+this leaks nothing: Case 3 claims nothing, so the discarded delta stays
+unclaimed — `dirty` stays set and the next real turn retrieves and delivers
+it. (The pre-claim-model alternative — a read-only warm mode — was rejected: a
+real code-path change to bound a leak that the claim model eliminates at the
+root.) Warm's Case 3 retrieval does run `updateAccessMetadata`, inflating
+access stats for memories the user never saw — minor, accepted.
 
-**Resolved (10-01):** the delivery-receipt model closes this. Case 3 claims
-nothing; `deltaIds` grows only in `commitMemoryDelta`, which routes call after
-the save that makes the delta durable. Under the Phase-2 variant above, warm's
-discarded Case 3 delta would be left unclaimed (`dirty` stays set), so the next
-real turn retrieves and delivers it; the `updateAccessMetadata` inflation for
-an uncommitted delta remains minor. Note the reset is still in the code
-(cache-warm.ts:298), so warm currently always takes Case 1 — this is the safety
-net for when Phase 2 lands, not a live behavior change.
+Phase 2 has not landed; warm still always takes Case 1 via its reset (the
+`resetMemoryContext` call in cache-warm.ts). The above is the safety net for
+when Phase 2 lands, not a live behavior change.
 
 ## 5. What this does NOT fix (scope)
 
@@ -351,10 +327,10 @@ net for when Phase 2 lands, not a live behavior change.
   legitimately → the prefill is owed, payer ≠ editor. That externality is the
   turn-engine's territory (activity-based timeout, false-success detection), not
   this one.
-- **Server-side loss.** Crashes and evictions are unavoidable; the 05:42 heap
-  corruption remains an open watch item regardless.
-- **Compaction re-roll nondeterminism.** Was deferred as "owed; see option C" —
-  reopened and addressed in v1.3, see §10 (fix lives in a separate change).
+- **Server-side loss.** Crashes and evictions are unavoidable; server-side
+  cache-loss events remain an open watch item regardless.
+- **Compaction re-roll nondeterminism.** Deferred as "owed; see option C",
+  then addressed in §10 (fix lives in a separate change).
 
 ## 6. Test plan
 
@@ -372,7 +348,8 @@ net for when Phase 2 lands, not a live behavior change.
 6. `resetMemoryContext` → row gone; next build is Case 1.
 7. `invalidateAllCaches` → derived caches cleared, **row and Map state
    intact**; next build is Case 2.
-8. `skipMemoryRetrieval` → no hydration (row not read); hydrate failure
+8. `skipMemoryRetrieval` → hydrates and retains the persisted section
+   byte-exact — no retrieval, no state established or written; hydrate failure
    (DB throw) → warn + Case 1 fallback.
 9. `commitMemoryDelta` no-ops on empty ids or missing live state — a failed
    retrieval must not be recorded clean.
@@ -397,14 +374,17 @@ Storage-level (real SQLite, tmpdir home): upsert/get/delete round-trip,
 only on genuine first turns and post-compaction turns. Any mid-conversation
 occurrence is the fix failing — the line is the tripwire.
 
-## 7. Rollout
+## 7. Rollout state
 
-- **Phase 1 (one PR):** table + migration in memory-storage.ts, hydrate/persist/
-  reset in memory-context.ts, `invalidateAllCaches` behavior change, log lines,
-  unit tests. ~100 lines total.
-- **Phase 2 (separate, small):** cache-warm reset removal, after timing check.
-- **Phase 3 (optional, deferred):** hysteresis on compaction re-rolls to reduce
-  orphan production — only if pool occupancy forensics show orphans mattering.
+- **Phase 1** — table + migration in memory-storage.ts, hydrate/persist/reset
+  in memory-context.ts, `invalidateAllCaches` behavior change, log lines:
+  implemented, together with the §10 compaction re-roll fix (Fix A + B land as
+  one change — Fix A alone rots once Fix B removes most Case 1 arrivals) and
+  the §11 project-context snapshot.
+- **Phase 2** — cache-warm reset removal (§4.4): outstanding; separate change.
+- **Phase 3** — hysteresis on compaction re-rolls to reduce orphan production
+  (Fix C, §10.5): deferred; only if pool occupancy forensics show orphans
+  mattering.
 - **Verification order:** system chat first (its turns are self-observable: the
   verifying turn's own `cached_tokens` is the measurement), then a user chat.
 
@@ -432,30 +412,25 @@ prompts, anything that says "recompute is cheap" while the thing being protected
 lives on the other side of a process boundary. When you see it, this doc is the
 template.
 
-## 10. Compaction re-roll fix (v1.3 — closes §5's third scope item)
+## 10. Compaction re-roll fix
 
-### 10.1 Forensics that motivated reopening the scope item
+### 10.1 Why the scope item was reopened
 
-KV-cache hit-rate reconstruction from llama-server INFO logs (08-26, GPU 27B
-server): per-request reuse = `release n_tokens` − total `prompt processing`
-tokens. Hits were 94–100% everywhere except bursts that correlate exactly with
-compaction cycles and frozen-set flips. The worst offenders:
-
-| Time | Hit | Event |
-|---|---|---|
-| 06:35 | 7% | synthesis compaction cycle 2 rewrote history |
-| 13:46 | 2% | post-compaction Case 1 re-roll (`11 filtered` by threshold) |
-| 14:24 / 14:41 | 48% / 53% | agent-chat mid-turn overflow → compaction |
-| 16:15 | 4% | post-compaction re-roll landed on **0 frozen** (clobber class) |
-
-Every miss was followed by recovery to 94–99% on the next turn — the damage is
-one large cold prefill per event, plus one manufactured pool orphan each.
-
-Meanwhile Phase 1 shipped (9fa10f4) and restart-triggered flips disappeared
-from the logs; §7's verification confirmed hydration works (byte-exact,
-`LCP sim 0.995`). The remaining `full retrieval:` lines between genuine first
-turns were all **post-compaction**. So the §5 item "Compaction re-roll
-nondeterminism — owed" is now the dominant avoidable cost and gets a design.
+After Phase 1, post-compaction re-rolls became the dominant avoidable prefix
+invalidation, including the clobber-to-zero class. KV-cache hit-rate
+reconstruction from llama-server INFO logs (per-request reuse = `release
+n_tokens` − total `prompt processing` tokens) put hits at 94–100% everywhere
+except bursts that correlate exactly with compaction cycles and frozen-set
+flips — the worst events being a synthesis compaction rewrite, post-compaction
+Case 1 re-rolls thinned below threshold, mid-turn overflow
+compactions, and a re-roll that landed on **0 frozen** memories (the clobber
+class). Every miss was followed by recovery to 94–99% on the next turn — the
+damage is one large cold prefill per event, plus one manufactured pool orphan
+each. Restart-triggered flips disappeared once Phase 1 landed, and §7's
+verification confirmed hydration works (byte-exact, `LCP sim 0.995`). The
+remaining `full retrieval:` lines between genuine first turns were all
+**post-compaction**. So the §5 item "Compaction re-roll nondeterminism —
+owed" is now the dominant avoidable cost and gets a design.
 
 ### 10.2 Root cause chain
 
@@ -466,8 +441,8 @@ nondeterminism — owed" is now the dominant avoidable cost and gets a design.
 3. The retrieval pipeline applies the relevance threshold pre-freeze; a
    reranker variance dip (or topic-anchor dampening after topic drift) can
    return an empty or near-empty set, which then unconditionally overwrites a
-   good row. Observed twice overnight (00:13:23, 03:47:49) and again at
-   16:15 — the hysteresis series 5→4→0→3 in one night.
+   good row. Observed repeatedly overnight — a 5→4→0→3 flip series in one
+   night.
 4. Each flip breaks LCP at the section boundary (~0.096 sim per §1 math),
    walks past a warm slot, and manufactures an orphan entry in the pool.
 
@@ -486,11 +461,11 @@ no row, log
 
 Rationale: an empty retrieval is evidence of query/anchor failure, not corpus
 emptiness. Freezing zero memories was exactly how an empty section became
-canonical (00:13:23, 03:47:49): once the row existed, Case 2 held it until
+canonical: once the row existed, Case 2 held it until
 the next compaction. Skipping establishment means the next build retries full
 retrieval with that turn's query, mirroring the existing retrieval-error path.
 
-Structural note (v1.3 revision while implementing): post-Phase-1 hydration
+Structural note: post-Phase-1 hydration
 promotes any surviving row to state **before** Case 1 runs, so a Case 1
 arrival structurally has no prior section to retain — "retain previous" is
 unreachable there. The effective protection against the clobber class is this
@@ -513,26 +488,25 @@ export function softResetMemoryContext(chatId: string): void
 - If no Map entry exists, hydrate from the row first so a soft reset never
   resurrects state from nothing (no-op when no row exists).
 
-Then switch the **post-compaction** `resetMemoryContext` call sites to it.
-Site inventory requires per-call verification, but the class is: call sites
-that run inside or immediately after a compaction flow where the conversation
-history is rewritten but the chat continues. Keep hard `resetMemoryContext`
-(row delete + full re-roll) for:
+Then switch the **post-compaction** `resetMemoryContext` call sites to it —
+the class is: call sites that run inside or immediately after a compaction
+flow where the conversation history is rewritten but the chat continues.
+Keep hard `resetMemoryContext` (row delete + full re-roll) for exactly two
+callers:
 
 - **Chat deletion** (chat-deletion.ts) — nothing left to preserve.
 - **Cache-warm preparation** (cache-warm.ts) — the warm owns the rebuilt
   prefix; Phase 2 (§4.4) proposes dropping this too.
 
-**Revised (10-05):** the original list kept hard resets for "zeitgeist
-rewrites" (a mislabel — those were the system-chat automation entry points,
-system-chat.ts ×2) and for automation starts. Both are wrong under follow-up
-semantics: every automation run, cross-chat wake, synthesis cycle, and wake
-cycle is a message in a persistent chat whose cached prefix must survive.
-Resetting deleted the row; the late-freeze guard then locked an empty section
-and rewrote the head of a warm prefix — reproduced live as a ~154k-token full
-re-prefill. The `skipMemoryRetrieval` build now hydrates and retains the
-frozen section byte-exact instead. Workspace changes only clear derived
-caches (`invalidateAllCaches`), never the frozen state.
+Hard resets anywhere else are wrong under follow-up semantics: every
+automation run, cross-chat wake, synthesis cycle, and wake cycle is a
+message in a persistent chat whose cached prefix must survive. (An earlier
+keep-list retained hard resets for "zeitgeist rewrites" — a mislabel for the
+system-chat automation entry points in system-chat.ts — and for automation
+starts; resetting there deleted the row and forced the following build to
+re-roll the head of a warm prefix.) The `skipMemoryRetrieval` build hydrates and
+retains the frozen section byte-exact instead. Workspace changes only clear
+derived caches (`invalidateAllCaches`), never the frozen state.
 
 Effect: post-compaction turns become Case 3 delta builds against compacted
 history. Section string survives compaction byte-exact → prefix holds from
@@ -545,11 +519,11 @@ accumulate across many cycles. The existing valve handles it —
 re-roll (Fix C). Expected cadence ≈ once/day/chat, which matches the budget
 set aside for compaction re-rolls.
 
-**Revised (10-17):** `softResetMemoryContext` also drops the per-chat
-`stablePrefixCache` entry **unconditionally** (previously the entry was only
-dropped as a side effect of `applyProjectContextLanding` when an AGENTS.md
-snapshot row existed). Mid-conversation block writes (agent-tool and UI)
-now defer their stable-prefix cost to compaction: no invalidation at write
+`softResetMemoryContext` also drops the per-chat `stablePrefixCache` entry
+**unconditionally** — the drop is not tied to the project-context landing in
+`applyProjectContextLanding`, so it applies even when no AGENTS.md snapshot
+row exists. Mid-conversation block writes (agent-tool and UI) defer their
+stable-prefix cost to compaction: no invalidation at write
 time (the editing chat already carries the new content in its transcript),
 and the post-compaction rebuild reads CURRENT block bytes exactly when the
 in-context tool call gets cut. The rebuild is byte-identical when nothing
@@ -587,19 +561,13 @@ Unit additions:
    nor row exists.
 4. Post-compaction build after soft reset → Case 3 delta line (no
    `full retrieval:`).
-5. Regression: hard reset still deletes row (deletion/automation/zeitgeist).
+5. Regression: hard reset still deletes row (chat deletion, cache-warm prep).
 
 Canary update (standing): `full retrieval: N memories frozen` legitimate only
 at genuine first turns and delta-valve re-rolls; `full retrieval: 0 memories`
 should be extinct.
 
-### 10.7 Rollout
-
-Single PR: Fix A + B together (A alone rots once B removes most Case 1
-arrivals; both are small). Phase 2 (cache-warm stop-re-roll) stays separate
-per §7 sequencing.
-
-## 11. Follow-up: the project-context snapshot (deferred AGENTS.md)
+## 11. The project-context snapshot (deferred AGENTS.md)
 
 The §2 inventory marked `stablePrefix` as "✓ rebuildable" — deterministic from
 durable inputs. That held only while nobody edits AGENTS.md between sessions.
@@ -664,7 +632,7 @@ Deferred content applies where the prompt is reprocessed (or re-warmed)
 anyway:
 
 - `softResetMemoryContext` (every compaction path) → `applyProjectContextLanding`:
-  drop row + Map entry, and (10-17) drop the cached stable prefix entry
+  drop row + Map entry, and drop the cached stable prefix entry
   unconditionally — mid-conversation block edits land here too. Runs before
   the no-state early-return, since a chat with no memory context still
   compacted.
@@ -683,7 +651,7 @@ to compaction.
 
 - Only the PROJECT SECTION defers. AGENTS.md edits arrive with no event at
   all, which is why they get the deferral treatment. Block edits likewise
-  defer (10-17): agent-tool and UI writes are not invalidated at write time;
+  defer: agent-tool and UI writes are not invalidated at write time;
   they land at each chat's next compaction (the soft reset re-reads the
   blocks) and at synthesis. The per-automation backstop clear and
   synthesis's global invalidation remain as healers for headless writes and

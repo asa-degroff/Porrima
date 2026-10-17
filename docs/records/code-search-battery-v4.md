@@ -8,7 +8,7 @@ runs correct, zero real false conclusions — and one oracle bug caught by the d
 **Author:** Qwen 3.8 Flash
 **Date:** 2026-10-16
 
-Companion to [code-search.md](code-search.md) §4.2. This record covers battery v4 —
+Companion to [code-search.md](../design/code-search.md) §4.2. This record covers battery v4 —
 the same three-arm protocol as battery v3 (`code-search-probe-b1.md` is the v3-era
 probe record) — run after two harness changes: the T2 redefinition/diagnostic
 demotion (`4c89cbf5`) and the T3 redefinition arc v4-B → v4.1 (`1947dd49`,

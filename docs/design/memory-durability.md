@@ -1,6 +1,6 @@
 # Memory Durability: Session vs Durable Scoping
 
-Status: Phase 1 implemented (2026-09-12); phases 2–4 pending. Date: 2026-09-12.
+Status: Phase 1 implemented; Phases 2–4 design.
 
 Related: [memory-system.md](../memory-system.md), [memory-blocks.md](../memory-blocks.md).
 
@@ -12,7 +12,7 @@ state** — current step, open branches, mid-experiment values, "next step is X"
 hashes from the active workstream. They matter inside their origin thread (especially
 after compaction) and are noise everywhere else.
 
-Live-store evidence (2026-09-12): ~19.5k memories, 87% rated importance ≥ 6 (the scale
+Live-store evidence: ~19.5k memories, 87% rated importance ≥ 6 (the scale
 is compressed and non-discriminative), ~60% never selected by a retrieval pipeline, and
 ~250–390 memories/day written.
 
@@ -43,8 +43,8 @@ forward in new memories instead of mutating session rows (see "Not in v1").
 
 ## Phase 1 — Field, extraction prompt, parser, observability
 
-No retrieval behavior change. Goal: collect a few days of labels and verify the rubric
-before touching ranking.
+Phase 1 changes no retrieval or ranking behavior: labels are collected and the rubric is
+validated against real extraction traffic before any ranking policy lands.
 
 ### 1.1 Types (`server/src/types.ts`)
 
@@ -159,9 +159,9 @@ function mergeDurability(existing: MemoryDurability, incoming: MemoryDurability)
 Call `updateMemory` only when the value changes.
 
 Observability (`memory-extraction-observability.ts`): `ExtractionParsedFact` gains
-`durability?: string`; every `facts.map(...)` run-complete site includes it (immediate
-~line 3184, mid-turn/pre-compaction ~4417, delayed ~4843). Optionally add per-run
-durable/session counters to `getExtractionMetrics()`.
+`durability?: string`; the run-complete `facts.map(...)` sites in `runImmediateBatch`,
+`processPreCompactionJob`, and `extractDelayedMemories` all include it. Optionally add
+per-run durable/session counters to `getExtractionMetrics()`.
 
 ### 1.4 Other creation sites
 
@@ -187,10 +187,6 @@ durable/session counters to `getExtractionMetrics()`.
 - Add a durability chip to `MemoryDebugPanel` parsed-facts rows so labels can be eyeballed
   live.
 - Update `docs/memory-system.md` categories/extraction sections.
-
-**Ship gate:** run a few days with no ranking change. Check the durable/session split
-(expected roughly 60–80% durable), spot-check mislabels, tune the rubric if one class
-swallows the other.
 
 ---
 
@@ -316,9 +312,9 @@ the end of each chat's delayed-extraction pass.
 
 Consolidation rides the existing delayed-extraction pass rather than using its own idle
 timer. The 30-minute inactivity signal is activity-adaptive: it marks natural session
-boundaries, so busy days produce several consolidations and quiet days produce one. The
-12-hour framing assumed consolidation must wait for task completion, but that is not
-required here — session memories stay intact and consolidated outputs are supersedable,
+boundaries, so busy days produce several consolidations and quiet days produce one. An
+alternative 12-hour framing assumed consolidation must wait for task completion, but that
+is not required here — session memories stay intact and consolidated outputs are supersedable,
 so an early consolidation is correctable rather than damaging. The definition shifts from
 "summarize the finished task" to "distill what this session window added in durable form."
 
@@ -469,12 +465,16 @@ No schema change: `loadMemoryStore` already returns the field after phase 1.
 
 ## Rollout Gates
 
-1. Phase 1 merges with **no ranking change**. Observe durability distribution 3–5 days;
-   tune rubric if needed.
-2. Phase 2 merges with default ×0.3. Tune from `[memory-retrieval]` logs and spot-check
-   that same-chat post-compaction continuity is intact.
-3. Phase 3 after labels are trustworthy.
-4. Phase 4 after phase 2/3 data exists.
+- **Phase 1 gate — label quality:** with no ranking change in effect, the observed
+  durable/session split lands roughly where the rubric expects (≈60–80% durable) and
+  spot-checks show neither class swallowing the other; tune the extraction rubric
+  against mislabels before proceeding.
+- **Phase 2 gate — ranking safety:** retrieval logs show cross-chat session memories
+  still reachable when genuinely relevant but ranked below durable peers, and
+  same-chat post-compaction continuity is intact; tune the multiplier from
+  `[memory-retrieval]` logs, starting at the ×0.3 default.
+- **Phase 3 gate:** consolidation lands only once the durability labels are trusted.
+- **Phase 4 gate:** synthesis integration lands only once phase 2/3 data exists.
 
 ## Not in v1
 
@@ -490,11 +490,12 @@ No schema change: `loadMemoryStore` already returns the field after phase 1.
 
 ## Open Decisions
 
-1. Field naming: `durability: durable | session` (recommended) vs `temporal_scope:
-   long_term | session`.
-2. Cross-chat multiplier default: 0.3 (matches cross-project) vs softer 0.5.
-3. Consolidation output cap: max 3 durable memories per delayed pass (recommended),
+1. Cross-chat multiplier default: 0.3 (matches cross-project) vs softer 0.5.
+2. Consolidation output cap: max 3 durable memories per delayed pass (recommended),
    default-on with the delayed pass — needs a call.
-4. `save_memory` exposing `durability` to the agent (recommended yes) vs always durable.
-5. Whether consolidation is default-on at launch or behind a setting default-off for the
+3. Whether consolidation is default-on at launch or behind a setting default-off for the
    first week.
+
+The field naming (`durability: durable | session`, not `temporal_scope`) and agent
+exposure (`save_memory`'s optional `durability` parameter, default `"durable"`) are
+settled by the shipped design — see §1.1 and §1.4.

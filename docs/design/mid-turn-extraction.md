@@ -1,8 +1,6 @@
 # Mid-Turn Extraction
 
-**Status**: Design  
-**Author**: quje  
-**Date**: 2026-06-28
+**Status**: Implemented
 
 ## Problem
 
@@ -18,16 +16,16 @@ Extract incrementally during agent turns, triggered by accumulated *signal token
 
 ### Key Principles
 
-- **Signal over volume**: Trigger on post-formatting signal tokens, not raw completion tokens. A 20KB `read_file` result is not signal — it's truncated to 500 chars for extraction. The counter reflects what the extraction model will actually process.
+- **Signal over volume**: Trigger on post-formatting signal tokens, not raw completion tokens. A 20KB `read_file` result is not signal — it's truncated to 500 chars for extraction. The estimate reflects what the extraction model will actually process.
 - **Session continuity**: Mid-turn pulses and turn-completion extraction share the same immediate extraction session. The KV cache prefix (system prompt + accumulated history) carries across all calls within a turn.
 - **Marker-based strategy shift**: The extraction model receives `[MID-TURN]` or `[TURN COMPLETE]` markers in the user prompt, telling it whether to extract concrete facts from a segment or synthesize patterns from the full exchange.
-- **Pre-compaction bypass**: When mid-turn pulses have already covered the context about to be compacted, skip the pre-compaction extraction entirely. Only extract the delta gap if one exists.
+- **Pre-compaction continuity**: the flush always runs on every compaction and shares the pulses' extraction session, so it continues from the pulses' cached prefix rather than extracting from scratch. (A bypass variant was considered; it required an extraction-cursor field the shipped design does not have.)
 
 ## Architecture
 
-### Token Counter
+### Signal Token Estimate
 
-Accumulates *estimated extraction signal tokens* per agent turn, using the same truncation rules that `formatMessageContentForExtraction` applies:
+Estimates *extraction signal tokens* for streamed turn content, using the same truncation rules that `formatMessageContentForExtraction` applies:
 
 | Content type | Token estimate |
 |---|---|
@@ -36,7 +34,7 @@ Accumulates *estimated extraction signal tokens* per agent turn, using the same 
 | Bulk tool result (`read_file`, `web_fetch`, `bash`, `run_python`, `list_files`, `read_pdf`) | ~250 tokens (500 chars / 2, matching `EXTRACT_TOOL_RESULT_MAX`) |
 | Non-bulk tool result | `min(length / 2, 500)` |
 
-The counter resets after each extraction pulse. Threshold: **6000 signal tokens** (configurable). Short turns that never cross the threshold get only the turn-completion extraction.
+The estimate is not an accumulating counter: it is computed over the **uncovered window** — the cursors into the turn's streamed content mark what the last pulse covered (see Integration Point; a skipped or failed pulse rolls the cursors back so its window is counted again). Threshold: **6000 signal tokens** (configurable). Short turns that never cross the threshold get only the turn-completion extraction.
 
 ### Session Flow
 
@@ -79,9 +77,9 @@ Both markers go in the user prompt, not the system prompt, keeping the system pr
 
 ### Pre-Compaction: no bypass
 
-`preCompactionFlush` runs on **every** compaction — there is no bypass. The `lastExtractedMessageIndex` / `chat.extractionState` design was never implemented; no such field exists anywhere in the codebase.
+`preCompactionFlush` runs on **every** compaction. The mid-turn pulses and the pre-compaction flush share **one extraction session**, so the flush continues from the pulses' cached prefix rather than re-evaluating cold. Only non-substantive rows are filtered before the call (compaction summaries, out-of-context rows, system rows, synthesis rows, automation prompts).
 
-What delivers the intended KV benefit instead is session continuity: the mid-turn pulses and the pre-compaction flush share **one extraction session**, so the flush continues from the pulses' cached prefix rather than re-evaluating cold. Only non-substantive rows are filtered before the call (compaction summaries, out-of-context rows, system rows, synthesis rows, automation prompts).
+A bypass variant — skipping the flush when the pulses already covered the context about to be compacted — was considered; it required an extraction-cursor field the shipped design does not have, and session continuity delivers the intended KV benefit anyway.
 
 ### Content Format
 
@@ -99,15 +97,14 @@ The user message included in each pulse is the original user message that trigge
 
 The trigger lives in `routes/chat.ts` (`maybeDispatchMidTurnPulse`), **not** in `agent-loop-runner.ts`.
 
-The signal window is **cursor-derived** rather than a token counter: the trigger tracks offsets into `fullText` / `thinkingText` / `allToolCalls` / `allToolResults`. After a tool result is appended:
-1. Advance the cursors past the new content
-2. Estimate signal tokens for the newly-uncovered span
-3. If that span meets the token threshold **or** estimated context usage crosses `DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO` (0.65) → trigger a pulse
-4. The pressure branch also requires a +0.05 step latch that re-arms only after the ratio falls back out of the zone. Without it, one tool round-trip trivially exceeds the token floor and the 0.65–0.85 band would fire at nearly every iteration boundary — each costing a 4B CPU extraction call plus a session dialogue pair that prunes and re-prefills at the 8-pair cap
+The signal window is **cursor-derived**: the trigger tracks offsets into `fullText` / `thinkingText` / `allToolCalls` / `allToolResults`, and at each check point (tool result appended, continuation boundary):
+1. Estimate signal tokens for the span not yet covered by the cursors
+2. If that span meets the token threshold **or** estimated context usage crosses `DEFAULT_MID_TURN_EXTRACTION_CONTEXT_RATIO` (0.65) → dispatch a pulse
+3. The pressure branch is bounded by a +0.05 step latch that re-arms only after the ratio falls back out of the zone. Without it, one tool round-trip trivially exceeds the token floor and the 0.65–0.85 band would fire at nearly every iteration boundary — each costing a 4B CPU extraction call plus a session dialogue pair that prunes and re-prefills at the 8-pair cap
 
-Because the window is cursor-derived, a failed or timed-out pulse simply rolls its cursors back and the next pulse retries the same content.
+The cursors advance **optimistically** at dispatch (the agent loop continues immediately while the extraction model works in the background); a failed or timed-out pulse rolls them back, and a pulse that consumed only a FIFO slice of the window rewinds to the slice end — so the next pulse retries or completes the uncovered content. Being cursor-derived, rollback needs no accumulator. At most one pulse is in flight; further crossings coalesce into it.
 
-The extraction call is synchronous (runs through `withExtractionMutex`) but bounded by a timeout. If the mutex doesn't release in time, the pulse is skipped — the next pulse or turn completion will cover the content.
+The pulse's save path serializes through `withExtractionMutex` like immediate extraction, and the whole pulse is bounded by a wall-clock timeout (`midTurnExtractionTimeoutMs`). If the mutex doesn't release in time, the pulse is skipped — the agent loop is never blocked — and the next pulse or turn completion covers the content.
 
 ### Extraction Model Mutex
 
@@ -123,7 +120,7 @@ Memories extracted by mid-turn pulses are tagged with the current `turnId` (or m
 
 | Concern | Resolution |
 |---|---|
-| Agent loop latency | Extraction is CPU-bound (separate model). Mutex adds 2-5s under normal load. 15s timeout prevents indefinite blocking. |
+| Agent loop latency | Extraction is CPU-bound (separate model) and pulses run in the background — the agent loop never blocks on one. Each pulse is bounded by a wall-clock timeout (`midTurnExtractionTimeoutMs`: default 120 000 ms, floor 15 000 ms); an expired pulse is skipped and its cursors roll back, so nothing waits indefinitely. |
 | KV cache invalidation | System prompt is stable. Session history accumulates within a turn. Cache carries across all pulses. New turn = new session (existing behavior). |
 | Duplicate memories | Session history gives the extraction model context of what it already extracted. Vector dedup at save time catches remaining overlap. Supersession handling for delayed extraction. |
 | Pre-compaction quality loss | Mid-turn pulses use the general extraction prompt, not the task-state-focused pre-compaction prompt. Accepted: the flush always runs and shares the pulses' extraction session, so it continues from their cached prefix. |
@@ -131,10 +128,10 @@ Memories extracted by mid-turn pulses are tagged with the current `turnId` (or m
 
 ## Configuration
 
-- `extractionMidTurnThreshold`: Signal tokens before a mid-turn pulse fires. Default: 6000.
-- `extractionMidTurnTimeoutMs`: Max time to wait for the extraction mutex. **Default: 120000 (2 min)**; range 15000–900000. The upper bound must stay in sync with the client Settings modal cap.
+- `midTurnExtractionThreshold`: Signal tokens before a mid-turn pulse fires. Default: 6000; range 500–32000.
+- `midTurnExtractionTimeoutMs`: Max wall-clock time for a pulse (extraction-mutex wait included) before it is skipped and rolled back. **Default: 120000 (2 min)**; range 15000–900000. The upper bound must stay in sync with the client Settings modal cap.
 
-Both configurable via Settings, persisted to settings.
+Both configurable via Settings, persisted to settings. There is no enable toggle — mid-turn extraction runs on every chat turn once the threshold or pressure trigger fires.
 
 ## Files Affected
 
@@ -149,4 +146,3 @@ Both configurable via Settings, persisted to settings.
 ## Open Questions
 
 - Should the extraction model see the user message repeated in every pulse, or only in the first pulse (to save tokens)? Current design repeats it for context, but it adds redundant prefill. The KV cache handles this if the user message is identical across pulses within a turn — but only if it appears at the same position in the dialogue, which it won't (it's in a new user-role message each time). Alternative: include it only in the first pulse and rely on session history for context in subsequent pulses.
-- Should mid-turn extraction be opt-in or default? Default-on feels right for the compaction bypass benefit, but adds extraction cost to all turns.

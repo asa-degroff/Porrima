@@ -1,15 +1,6 @@
 # In-Kernel Tool Composition — codemode for the session kernel
 
-**Status:** Revised draft (10-13 review). Research rounds 1–3 complete (prior art §2–3, structural navigation §2.5). **Phase A complete and flagged ON 10-13** — protocol v2 + full Tier 1 dispatch + spill references + §4.6 notice + gated capability line (§4.10); live behind `PORRIMA_KERNEL_TOOLS=1`.
-**Date:** 2026-10-12
-**Reviewed**: 10-13 — present-tense claims verified against shipped code (`python-kernel.ts`, `porrima_kernel.py`, `agent-tools.ts`, `turn-gate.ts`); the §4.1 protocol claim was false and §4.1's permission claim hides a deadlock. Revisions rework §4.1/§4.3/§4.4/§4.7, add §4.8 (protocol v2) and §4.9 (dispatch mechanics), and are summarized in §9.
-**Reviewed (2nd pass, 10-13, quje)**: post-revision verification against source. Line citations confirmed against `server/python/porrima_kernel.py` (1750 lines) — note `server/dist/python/porrima_kernel.py` is a stale 948-line pre-`_driver_hash` build with different line numbers; verify against source, not the dist copy. One citation corrected: the §4.8 interrupt-path range `:1606-1667` (the stdin request dispatcher) → `:443-516` (`_request_interrupt`/`_schedule_escalation`, where the `call_soon_threadsafe` cancel pattern actually lives). The "parent §2.1" `host_request` citation confirmed: the parent documents prime-agent's event set (`ready, stdout/stderr, result, display, host_request, error, done`) and the exact-match handshake rule it cites (§4.3). The §4.9 claims (`getAgentTools` `:553`, `ToolSideEffects` `:200`, `withMutationLock` `:28-41` + `:917/:927/:946/:965`, `SEQUENTIAL_TOOL_NAMES` `:457-463`, `SYSTEM_CHAT_EXCLUDED_TOOLS` `:453`) all verified against `agent-tools.ts`.
-**Reviewed (3rd pass, 10-13, quje)**: post-slice-0 refresh + research round 3 folded in. Slice 0 grew the driver 1750 → 1909 lines and shifted every anchor: §4.8's `_read_requests` `:1670` → `:1829`, `_serve` `:1686-1713` → `:1845-1874`, the §4.1 v1-claim citation `:1686` → `:1845`, interrupt block `:443-516` → `:589-664` (all re-verified against source). The stale-dist note is now structurally moot — the build `rm -rf dist/python` before copying (ac614204, §4.10). Round 3: structural-navigation research (§2.5), the Tier 1 `code_search` row (§4.3), §7 Q9, §8 sources; no architecture change.
-**Reviewed (4th pass, 10-13, quje): implementation verification of slice 0 (d51eb847).** Every §4.8/§4.9/§4.10 claim verified at line level against driver + manager + agent-tools: pending-call table + owners (driver `:189-253`), reader demux via `call_soon_threadsafe` that never joins the serial queue (`:1748-1753`), strict-JSON args with the 8 MiB cap raising `KernelToolError` in-cell, `tool_cancel` on cell death + finally-block reaps (job `:888`, execute `:959`), namespace rebuilt per execute with `__doc__` + `tools.list()`, `tools` in the snapshot skip-list; manager side: injected `KernelToolDispatcher` seam (manager never imports the registry — dependency stays acyclic, as §4.10 claims), the exposure list riding the execute request (`:1369/:1427`, registered `:1389/:1458`), one serial per-kernel FIFO that never enters the `workspace:<label>` queue (rule named in code, test-proven under `asyncio.gather`), server-side per-cell budgets (env, 64 default) + 120 s per-call timeout racing an `AbortController` (a signal-ignoring dispatcher cannot wedge the FIFO), 2M-char inline cap with `truncated` + `total_chars` on the frame, background ack re-key onto the driver-minted jobId (`:886-891`), teardown on settle/protocol-failure/exit/dispose, and the `read_file`-only dispatcher using the configured 256 KiB cap, not the context-scaled clamp (§4.1, as specified). Referee: `python-kernel.test.ts` 43/43 (kernel tools 8/8) + `tsc --noEmit` clean. No discrepancies.
-**Reviewed (5th pass, 10-13, agent): slice 1 (bash dispatch) landed; citations refreshed.** The `bash` docstring entry inserted mid-table in the driver shifts every later driver anchor **+6** (`_serve` `:1845`→`:1851`, `_read_requests` `:1829`→`:1835`, serial region `:1845-1874`→`:1851-1880`, interrupt path `:589-664`→`:595-670`, reader-demux region `:1748-1753`→`:1754-1759`, finally-block reaps job `:888`→`:894` / execute `:959`→`:965`); the manager's timeout constants shift later anchors **+8** (dispatcher consts `:1369/:1427`→`:1377/:1435`, registrations `:1389/:1458`→`:1397/:1466`, ack re-key `:886-891`→`:894-899`); the agent-tools dispatcher insert shifts registry anchors (`getAgentTools` `:553`→`:608`, `ToolSideEffects` `:200`→`:202`, `withMutationLock` `:28-41`→`:30-43`, lock keys `:917/:927/:946/:965`→`:972/:982/:1001/:1020`, `SEQUENTIAL` `:457-463`→`:459-465`, `SYSTEM_CHAT_EXCLUDED` `:453`→`:455`). Superseding notes on the 4th pass: the dispatcher is now **`read_file` + `bash`** (the "read_file-only" wording is historical), `bash` dispatch deliberately skips `withMutationLock` — the §4.9 rule pinned as an e2e regression (`agent-tools-kernel-tools.test.ts`: real kernel + real `run_python` lock, fake adapter), and per-call timeouts became per-tool (`bash: 300 s` model-level ceiling, generic `120 s`; explicit `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` wins for all). `code_search` (§4.3 row) remains a model-level tool that does not exist yet — nothing to dispatch. Referee: slice-1 5/5, kernel-tools 8/8, full server suite 119 files green.
-**Reviewed (6th pass, 10-13, quje): implementation verification of slice 1 (546546ba).** Dispatcher's bash path verified at line level: routes to `workspace.bash(args, signal, { chatId })` (shared spill store) and deliberately skips `withMutationLock` with the rule named at the skip site; the read_file branch simplified to the adapter's string `content` (type-safe — the adapter contract is `{content: string}`, the old array-join was dead code). Per-tool timeouts verified: `kernelToolTimeoutMs(tool)` — explicit `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` wins for every tool, otherwise bash 300 s / generic 120 s. The deadlock proof is a genuine e2e: `agent-tools-kernel-tools.test.ts` fakes only the workspace adapter, runs the real manager + the real `run_python` mutation lock; the proof test resolves `tools.bash` while the calling execute holds `workspace:<label>`, and the file header pins the regression property (re-entering that queue deadlocks and fails loud). The other four cases verified: non-zero exit → `KernelToolError` carrying the output with the namespace intact, tier-2 names absent (AttributeError, not discouraged), args passed through untouched, chatId spill opt-in asserted. Every 5th-pass anchor citation re-verified against source (driver 1915 lines; manager and agent-tools anchors as stated). Referee: 48/48 across both kernel test files + `tsc --noEmit` clean. No discrepancies. Still dark; zero schema bytes (no description change in the commit).
-**Reviewed (7th pass, 10-13, agent): slice 2 landed; Phase A feature-complete, flag-on ready.** Tier 1 dispatch is complete (`list_files`, `web_search`/`web_fetch`, the five memory reads, `read_pdf` + figure→path shaping — all projections onto the executors the model-level tools use); spill references ship (local kernels: >1 Mi values to the tool-output store with `{path, head, total_chars, spilled}` dicts — full-file byte-equality proven; remote: inline-capped marker, no spill written — proven); the §4.6 notice rides `archiveAndIndex`'s return (both summary dialects through one choke point; `persistMidTurnHandoff` verified content-pure, D6 intact); the `run_python` capability line is import-gated on `kernelToolsEnabled()` — flag-off servers carry the original description bytes, flag-on busts exactly once at the flip deploy. Slice-1-era citations re-measured against source (driver 1915→1966 lines; agent-tools 1641; manager 1705) and the body updated in place — `_serve` `:1902-1931`, interrupt path `:646-721`, registry keys `:1058/:1068/:1087/:1106`, `getAgentTools` `:694`, manager ack region `:910-915`. Slice-2 tests: 7 new cases across `python-kernel.test.ts` (spill round-trip with byte-equality, remote inline cap + no-spill, remote job-delivery view) and `agent-tools-kernel-tools.test.ts` (web routing, memory routing with chat scope, full `dir(tools)` enumeration, gated promo line). Referee: 120 files, 1045 tests green; tsc clean; dist driver in sync (1966).
-**Reviewed (8th pass, 10-13, quje): slice-2 verification + first production traffic.** Slice-2 claims verified at line level: the 11-tool surface (five memory reads via `executeMemoryTool` with the chat's scope, web via `executeWebTool`, `read_pdf` via `executeReadPdf` + `shapeReadPdfKernelResult` figure→path shaping, tier 2 absent-by-construction); spill references (local only, >1 Mi → tool-output store `kernel-<call8>.txt`, cell gets `{path, head(4096), total_chars, spilled}`, spill failure degrades to truncation-with-marker); the unconditional `toolDispatchers.delete` of the dead request-id entry (a real leak fix on the background ack path); the §4.6 notice appended at the single `archiveAndIndex` choke point — deterministic, replay-stable, no-op summaries stay empty; the capability line import-gated on `kernelToolsEnabled()`, **confirmed present in my own live prefix after the flip deploy** — the one intentional bust, as designed. Referee: `smoke-kernel-tools.ts` 13/13 (run live by me, 5.7 s — real embedding+reranker+network stack), 55/55 across the two kernel test files, `tsc --noEmit` clean. **First production traffic (this chat's kernel):** discovery surface live (11 tools, `__doc__` as designed); the pipeline-density case works (bash→read→compute in one model round-trip); the two instruments (bash `wc -l` vs Python `splitlines`) agree modulo convention — all four codemode source files lack a trailing newline, so the doc's anchor counts are `wc`-based (e.g. driver 1966 = 1967 lines); error contract live (`KernelToolError` in-cell, namespace survives); oversized bash result: the dispatcher value is a head(10 KB)+tail window (≤100 KB, `BASH_OUTPUT_WINDOW_BYTES`, workspace.ts:34) plus a footer carrying the full-copy path in the shared store, and the full 300 KB copy was read back in-kernel via `open()` — noting the smoke commit's "window cap is 10 KB" figure is imprecise (100 KB total window; 10 KB is the head portion). Because every Tier 1 tool except the un-capped `list_files` windows below 1 MiB at its adapter, the manager's 1 MiB spill tier is currently a safety net for un-windowed tools, not a live path (it is proven at manager level by the controlled-dispatcher tests). Memory routing hits the live retrieval stack with chat scope. Phase A is verified end-to-end; the dark-launch contract held at every stage.
+**Status:** Phase A implemented and live behind `PORRIMA_KERNEL_TOOLS=1`; Phases B–D design.
 
 ## 1. Problem
 
@@ -24,7 +15,7 @@ Porrima already runs a persistent per-chat Python kernel
 ([session-python-kernel.md](session-python-kernel.md)): state survives across calls and
 across server restarts (dill restore), background jobs run under a box-wide cap of 8 with
 a 4-slot LRU, the interrupt ladder maps stop-button → job abort, and large outputs spill
-to disk. System-chat and remote-SSH kernels (P4a, dark) use the same protocol.
+to disk. System-chat and remote-SSH kernels (P4a) use the same protocol.
 
 What the kernel cannot do is call Porrima's tools. `run_python` is the only tool that
 crosses into it; everything else — `web_fetch`, `read_file`, `search_memory`, `bash` —
@@ -35,7 +26,7 @@ The "pipe output into input" pattern is structurally impossible today.
 
 **Goal:** a feature-complete in-kernel execution mode in which the model can call
 Porrima's tools from inside one program, so intermediate values stay in kernel memory
-and only the final result crosses the wire. Asa's acceptance bar: it should be able to
+and only the final result crosses the wire. The acceptance bar: it should be able to
 **replace isolated bash calls**, not sit beside them.
 
 ### Non-goals
@@ -49,19 +40,19 @@ and only the final result crosses the wire. Asa's acceptance bar: it should be a
 - **No second runtime.** No JS interpreter. The composition language is the kernel's own
   Python — one substrate, not two.
 - **No model-surface changes in Phase A.** The change is additive first; surface
-  shrinkage is a later, evidence-gated decision (§5 Phase D). (10-13 review: Phase A does
-  spend one capability line in the `run_python` *description* — description text, not a
-  new or removed tool; batched per §4.9.)
+  shrinkage is a later, evidence-gated decision (§5 Phase D). Phase A does spend one
+  capability line in the `run_python` *description* — description text, not a new or
+  removed tool, and batched per §4.9.
 - **No subagent spawning in Phase 1.** The prime-agent `rlm.spawn` equivalent (recursive
   child agents callable from code) is out of scope; the seam is noted where it would
   land (§4.7) but not built.
 
-## 2. Prior art (research rounds 1–3)
+## 2. Prior art
 
-Rounds 1–2 covered five lineages; round 3 (§2.5) covered structural navigation — a fourth
-axis the codemode survey missed. Full detail with sources lives in the archived project
-memory blocks ("Codemode Prior Art — Lineages", "Round 2" — out of active context since
-10-13, still searchable) and §8; this section is the design-relevant distillation.
+Five lineages, plus structural navigation (§2.5) — a fourth axis the codemode survey
+missed. Full detail with sources lives in the archived project
+memory blocks ("Codemode Prior Art — Lineages", "Round 2" — out of active context, still
+searchable) and §8; this section is the design-relevant distillation.
 
 **"Codemode" conflates two separable ideas** — (A) in-language *tool composition*
 (pipe outputs to inputs without round-tripping through model context) and (B) *persistent
@@ -120,9 +111,9 @@ discipline. Its surface contract ("tools exposed to the model: `bash`, `edit`,
 `python_repl`") is the strongest endorsement in the survey for the minimal-surface
 end-state.
 
-### 2.5 Structural navigation — ast-grep and the repository-map lineage (round 3, 10-13)
+### 2.5 Structural navigation — ast-grep and the repository-map lineage
 
-Round 3 covered a fourth axis the codemode survey never touched: **structural code
+A fourth axis the codemode survey never touched: **structural code
 navigation** — tools that understand code structure rather than match text. None of the
 five lineages exposed it as a first-class tool; they all ride on ripgrep/read + shell.
 
@@ -172,11 +163,11 @@ criterion. `sg outline` opens a project-context orientation seam (outline entry 
 range-read by byte offset → transform, without full file reads). Structural rewriting
 lands in Tier 2 by construction (file mutation → provenance gate).
 
-**Round 4 (10-13):** the adoption survey — which agent harnesses actually use
+**Adoption survey:** which agent harnesses actually use
 ast-grep and in what shape (prompting layer, skills, MCP, harness-native tools
 in the pi ecosystem / PraisonAI / Gemini CLI / Zed's syntax-enriched grep, and
-the CI ratchet-gate role) — lives in [code-search.md](code-search.md), its
-round-4 section, with the design refinements it validated (pagination,
+the CI ratchet-gate role) lives in [code-search.md](code-search.md),
+with the design refinements it validated (pagination,
 parse-error reporting, pattern pre-validation).
 
 ## 3. Design axes, and where Porrima sits
@@ -199,13 +190,12 @@ That is what this document designs.
 
 A namespaced `tools.*` module is injected into the kernel namespace. Each entry is a
 host tool from the server's tool registry, invoked over a **reverse RPC channel — a
-kernel-initiated request answered by a server-initiated response**. (10-13 review: the
-first draft said "the existing kernel↔server request/response protocol", which is false —
-v1 is strictly server-initiated: every line on the kernel's stdin is a request consumed
-serially by `_serve` (`porrima_kernel.py:1902`), every stdout line is an event correlated
-to a server request id, and `host_request` appears nowhere in the shipped driver or
-manager. This direction is new mechanism on both sides; §4.8 is its spec, and it is
-Phase A's real design object, not an aside.) Message shapes, roughly:
+kernel-initiated request answered by a server-initiated response**. This direction is
+not in v1: v1 is strictly server-initiated — every line on the kernel's stdin is a
+request consumed serially by `_serve` (`porrima_kernel.py`), every stdout line is an
+event correlated to a server request id, and `host_request` appears nowhere in the
+driver or manager — so it is new mechanism on both sides. §4.8 is its spec, and it is
+Phase A's real design object, not an aside. Message shapes, roughly:
 
 ```
 kernel → server:  tool_call { call_id, tool, args }
@@ -229,7 +219,7 @@ Properties:
   (`allow_nan=False`) with a size cap on the `tool_call` frame, mirroring v1's
   kernel→server frame rules (parent §4.3).
 - **Results are raw, not context-budgeted.** The registry's `wrapResult` truncation
-  (`createWrapResult`/`getMaxToolResultChars`, `agent-tools.ts:218-232` — 15% of the
+  (`createWrapResult`/`getMaxToolResultChars` in `agent-tools.ts` — 15% of the
   context window, floor 8k chars) exists to protect *model context*; kernel results
   never enter context, so kernel dispatch must not reuse it. Large results spill to disk
   with the existing tool-output-store pattern; the in-kernel value becomes a reference
@@ -244,11 +234,11 @@ Properties:
 - **Serialized dispatch; the workspace lock is never re-entered** (§4.9). Kernel-originated
   calls execute on one per-kernel FIFO on the server. Without this rule the acceptance-bar
   case deadlocks on the design as first written: `run_python`'s execute holds
-  `withMutationLock('workspace:<label>')` for the whole call (`agent-tools.ts:1106`), the
-  lock is a non-reentrant FIFO promise queue (`:32-45`), and nested `bash`/`write_file`/
-  `edit_file` acquire the same key (`:1087`/`:1058`/`:1068`). The FIFO also supplies, for
+  `withMutationLock('workspace:<label>')` for the whole call,
+  `withMutationLock` is a non-reentrant FIFO promise queue, and nested
+  `bash`/`write_file`/`edit_file` acquire the same key. The FIFO also supplies, for
   kernel-origin calls, the serialization `SEQUENTIAL_TOOL_NAMES` gives the model loop
-  (`:469-475`) — which a cell's `asyncio.gather` of tool calls otherwise bypasses.
+  — which a cell's `asyncio.gather` of tool calls otherwise bypasses.
 - **Budgets.** Caps enforced **in the server-side dispatcher** — a wedged or buggy loop
   cannot be trusted to count itself — scoped per `(chat, cell | job)`, with a global
   in-flight cap and a per-call timeout, all config-driven (implementation settings, same
@@ -259,7 +249,7 @@ Properties:
   would contend with them.
 - **Construction is turn-free** (§4.9). The registry is built per turn today, closing
   over turn callbacks (`ToolSideEffects` — artifact, visual, ask-user, browser-frame —
-  and `onUpdate`, `agent-tools.ts:212, 694`). Kernel dispatch needs a dedicated
+  and `onUpdate`, both in `agent-tools.ts`). Kernel dispatch needs a dedicated
   construction path with side effects explicitly deferred and chat-type gating
   (`SYSTEM_CHAT_EXCLUDED_TOOLS`) applied the same way; a background job runs with no live
   turn to attach to by construction.
@@ -290,11 +280,11 @@ identity weight and need provenance rather than exclusion.
 
 | tool | density rationale |
 |---|---|
-| `bash` | Asa's acceptance bar; codex nests `shell_command`, prime-agent keeps it model-level but full-host |
+| `bash` | the acceptance bar (§1); codex nests `shell_command`, prime-agent keeps it model-level but full-host |
 | `read_file`, `list_files` | pagination loops; output spilling already handled |
-| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md) — Phases 0–1 implemented: model tool dark behind `PORRIMA_CODE_SEARCH=1`; this row shipped (dispatcher exposure + structured `value_json` projection + `code=` snippet mode)** |
+| `code_search` (ast-grep wrapper) | structural queries — pattern → matches with byte offsets; the query→loop→transform case; read-only; §2.5. Model-level wrapper separable from protocol v2; remote = the binary-availability carve-out. **Design: [code-search.md](code-search.md)** — the kernel projection rides the exposure list (§4.10) and adds the structured `value_json` wire flag plus the `code=` snippet mode |
 | `web_search`, `web_fetch` | the flagship token-piping case |
-| `read_pdf` | heavy payloads, in-code processing; Phase A (10-13 review: pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
+| `read_pdf` | heavy payloads, in-code processing; Phase A (pure read, heaviest payload case) — image parts spill to file paths, never bytes (§4.9) |
 | `search_memory`, `search_conversation`, `read_archived_context` | research pipelines; non-destructive |
 | `list_memory_blocks`, `read_memory_block` | block navigation without round-trips |
 
@@ -337,12 +327,12 @@ late Phase B/Phase C (§5).
 
 Kernel-originated tool calls must be attributable end to end:
 
-- **Record:** every kernel-origin call carries `source: { kind: "kernel", chat_id, job_id, call_id }` — the codex `ToolCallSource::CodeMode { cell_id }` equivalent. The record's destination (10-13 review, since the registry is turn-scoped and jobs outlive turns): the originating `run_python` row's `details` for foreground cells (collected before the call settles), and a job-sidecar record for background jobs. `details` never re-enters model context (parent §4.6 wire-shape rule), so nested activity is human-only observability and the token savings hold.
-- **Chat display:** the tool call renders under its originating `run_python` call (nested grouping), so the transcript shows *the program called this*, not just *the agent called this*. Phase A ships the record flat (details only, no UI work); nested rendering is Phase B's UI half.
+- **Record:** every kernel-origin call carries `source: { kind: "kernel", chat_id, job_id, call_id }` — the codex `ToolCallSource::CodeMode { cell_id }` equivalent. The record's destination — the registry is turn-scoped and jobs outlive turns — is the originating `run_python` row's `details` for foreground cells (collected before the call settles), and a job-sidecar record for background jobs. `details` never re-enters model context (parent §4.6 wire-shape rule), so nested activity is human-only observability and the token savings hold.
+- **Chat display:** the tool call renders under its originating `run_python` call (nested grouping), so the transcript shows *the program called this*, not just *the agent called this*. Phase A keeps the record flat (details only, no UI work); nested rendering is Phase B's UI half.
 - **Request viewer:** wire-level capture (request-viewer.md) already records per-turn LLM traffic; foreground kernel-origin activity joins the same per-turn view. Background jobs have no turnId to join on — request ids are `${turnId}:${iteration}` — so job-originated activity correlates by `(chatId, job_id)` and the viewer needs a jobs axis (Phase B).
-- **Extraction:** no new path, by construction. (10-13 review: the first draft said kernel-origin results "must flow through the same path — they are the model's observations either way", which contradicts §1. Nested results are kept *out* of model context; they are precisely not the model's observations. Routing them through extraction would donate back the tokens this design exists to save.) Extraction observes exactly what the model does — the outer cell result. Tier-2 *writes* are server-side operations whose records carry the `source` field directly; nothing needs to re-enter context.
+- **Extraction:** no new path, by construction. Nested results are kept *out* of model context — they are precisely not the model's observations, so routing them through extraction would donate back the tokens this design exists to save. Extraction observes exactly what the model does — the outer cell result. Tier-2 *writes* are server-side operations whose records carry the `source` field directly; nothing needs to re-enter context.
 
-Tier 2 ships only with this seam — a memory write that cannot be attributed to a
+Tier 2 is gated on this seam — a memory write that cannot be attributed to a
 program is an identity-level defect, not a convenience gap.
 
 ### 4.5 Yield / resume semantics
@@ -363,20 +353,20 @@ cell_id, explicit model-visible status strings: "Script running with cell ID …
 ### 4.6 Post-compaction kernel notice
 
 Prime Agent emits an explicit notice after compaction that **the kernel state survived**
-(their `ipython_state` / `CompactionKernelProbe`). Porrima currently stays silent — the
-model may re-query state that is still alive in the kernel. One-line feature, Phase A:
+(their `ipython_state` / `CompactionKernelProbe`). Without such a notice the model may
+re-query state that is still alive in the kernel. Phase A adds one:
 append a short kernel-state-persistence notice to the compaction summary.
 
-**Shipped (slice 2, §4.10):** one concat at `archiveAndIndex` — the single choke point
+**Implementation shape:** one concat at `archiveAndIndex` — the single choke point
 both compaction paths (pre-send and turn-end) return their summary through — so the two
-dialects cannot drift and the mid-turn path gets it via the summary row it inserts
-anyway. The handoff-row writer (`persistMidTurnHandoff`) stays content-pure: D6's
-contract (route owns content, writer owns shape) is untouched.
+summary dialects cannot drift, and the mid-turn path gets it via the summary row
+`truncateChatHistory` inserts. The handoff-row writer (`persistMidTurnHandoff`) stays
+content-pure: D6's contract (route owns content, writer owns shape) is untouched.
 
 ### 4.7 Guardrails
 
 - **Untrusted data.** Web and browser content is data, not instructions (opencode's
-  explicit rule). The precise exposure, stated honestly (10-13 review): fetched content
+  explicit rule). The precise exposure: fetched content
   cannot bypass permissions — the server enforces them regardless of call origin — but it
   can **steer a program that no longer requires the model's per-call judgment**. The named
   vector is bulk cross-chat reads: `search_conversation` / `read_archived_context` reach
@@ -396,10 +386,11 @@ contract (route owns content, writer owns shape) is untouched.
   descendants. The protocol message shape in §4.1 is deliberately generic enough that
   this extends without rework.
 
-### 4.8 Protocol v2 — the reverse RPC channel (10-13 review)
+### 4.8 Protocol v2 — the reverse RPC channel
 
-The mechanism §4.1 replaced a false claim with, specified. This is the load-bearing new
-machinery of Phase A; the rest of §4.1 is policy on top of it. Prime-agent's v1 protocol
+This is the load-bearing new machinery of Phase A — Phase A is honestly scoped as
+"protocol v2 + dispatch semantics + policy on top," not "one new message type"; the
+rest of §4.1 is policy on top of it. Prime-agent's v1 protocol
 ships this direction as `host_request` (parent §2.1); Porrima's v1 deliberately did not
 implement it, so both sides gain new code and the protocol number becomes **v2**.
 
@@ -409,17 +400,20 @@ Kernel side (`porrima_kernel.py`):
   writes one `tool_call` frame onto the event stream, and awaits an asyncio future
   resolved by the matching response. The await is a suspension point, so L1/L2 interrupt
   semantics carry over unchanged.
-- A **demux in the stdin reader** (`_read_requests`, `:1886`): server→kernel lines are
+- A **demux in the stdin reader** (`_read_requests`): server→kernel lines are
   requests *or* responses. Responses (`tool_result` for a `call_id` in the pending table)
-  must **not** join the request queue — `_serve` is serial (`:1902-1931`) and a cell
+  must **not** join the request queue — `_serve` is serial, so a cell
   awaiting its own response would deadlock behind it. They resolve futures via
-  `call_soon_threadsafe`, the pattern the interrupt path already uses (`:646-721`).
+  `call_soon_threadsafe`, the pattern the interrupt path
+  (`_request_interrupt`/`_schedule_escalation`) already uses.
 - **Cancellation:** L1/L2 settle a cell that is awaiting a call — the pending future
-  fails locally, and the server must abort the in-flight execution (§4.8 server side) or
+  fails locally, and the server must abort the in-flight execution (§4.8, server side) or
   a stopped cell leaves a `bash` or `write_file` running with nobody waiting: a side
   effect the model believes was stopped.
-- **Strict JSON both directions:** args serialize `allow_nan=False` with a size cap; an
-  unserializable or oversized payload raises into the calling cell, never a corrupt line
+- **Strict JSON both directions:** args serialize `allow_nan=False` with a size cap on
+  the encoded frame (`_TOOL_ARGS_CAP`, 8 Mi chars); exceeding it — or any unserializable
+  payload — raises `KernelToolError` into the calling cell, with the actionable
+  steer to write the payload to a file and pass its path, never a corrupt line
   (same rule as v1's frame caps).
 
 Server side (`python-kernel.ts`):
@@ -444,17 +438,17 @@ Server side (`python-kernel.ts`):
 ### 4.9 Server-side dispatch (the Phase A mechanics under the policy)
 
 - **Construction.** `getAgentTools(chatId, effects, contextWindow, project, chatType,
-  timeMarker)` (`agent-tools.ts:694`) is turn-scoped: closures over `ToolSideEffects`
-  (`:212`) and the loop's `onUpdate`. Kernel dispatch needs a sibling builder —
+  timeMarker)` (`agent-tools.ts`) is turn-scoped: closures over `ToolSideEffects`
+  and the loop's `onUpdate`. Kernel dispatch needs a sibling builder —
   `getKernelToolSurface(...)` — drawing the same registry entries with the same
   chat-type gating, side effects deferred, and streaming wired into the calling cell's
   output path (the parent §4.6 constraint holds: partials are live-only, never
   persisted). The §4.3 allowlist is then a name filter applied to that surface — not a
   parallel list that can drift from the registry.
 - **Lock semantics.** The deadlock chain §4.1's bullet names: foreground `run_python`
-  holds `workspace:<label>` (`agent-tools.ts:1106`) while nested `bash`/`write_file`/
-  `edit_file` try to acquire the same key (`:1087`/`:1058`/`:1068`) through the
-  non-reentrant queue (`:32-45`). Background has the dual: the job already escaped the
+  holds `workspace:<label>` while nested `bash`/`write_file`/
+  `edit_file` try to acquire the same key through the
+  non-reentrant `withMutationLock` queue. Background has the dual: the job already escaped the
   lock by accepted policy (parent §4.7), and a job's nested `bash` queueing behind the
   label lock a same-chat foreground cell holds can strand a cell that is waiting on job
   output. Rule: **kernel-origin dispatch runs on the per-kernel FIFO and never enters
@@ -476,14 +470,15 @@ Server side (`python-kernel.ts`):
   affordance, stated in the kernel API doc. Per-call delivery into the remote workspace
   is a Phase C item, following the `deliverJobOutput` pattern.
 - **Budget counters** live here: `(chat, cell | job)` call counts, global in-flight cap,
-  per-call timeout. Exceeding any is a clean tool error with an actionable message
+  per-call timeout — the timeout races the dispatcher call, so a dispatcher that ignores
+  its `AbortSignal` cannot wedge the per-kernel FIFO. Exceeding any is a clean tool error with an actionable message
   (split across turns / background-ify / reduce scope) — a silent failure would teach
   the model to retry the same program.
-- **API documentation lives kernel-side** (answering the placement half of §7.6):
+- **API documentation lives kernel-side** (answering the placement half of §7 Q6):
   `tools.__doc__` plus a `tools.list()` reflection over the constructed surface. The
   model-facing copy is one capability line in the `RUN_PYTHON` description ("the kernel
   exposes `tools.*` callables — see `help(tools)` in a cell"), batched with any other
-  pending schema change the way remote-kernel.md §4.9 batched its description flip.
+  pending schema change the way remote-python-kernel.md §4.9 batches its description flip.
   Putting the full API in the system prompt would spend permanent prefix bytes on the
   thing Phase D exists to earn back.
 
@@ -503,33 +498,32 @@ fire-and-forget after the wire response — telemetry never fails or slows a
 dispatch — and is disabled under `NODE_ENV=test` so protocol tests never
 pollute the store (`PORRIMA_KERNEL_STATS=1/0` overrides).
 
-**Density readout protocol — `code_search` (pre-registered 10-16, before the
-traffic exists).** The transcript program (code-search.md §4.1–§4.2; battery
-records) established a behavioral law across five probe/battery rounds:
+**Density readout protocol — `code_search` (pre-registered before the traffic
+exists, so the questions cannot drift toward whatever the data shows).** The
+transcript program (code-search.md §4.1–§4.2) established a behavioral law:
 *single-shot queries go to the tool, aggregation goes to scripts* — and the
-kernel projection is the half of the thesis the battery structurally cannot
-see. `cell_id` makes loop density directly observable without transcript
+kernel projection is the half of the thesis the transcript program structurally
+cannot see. `cell_id` makes loop density directly observable without transcript
 surgery; the dogfood window (flag ON for real local work — an operator
 choice, distinct from the §4.1 flip) reads against these frozen questions:
 
 1. **Chain depth.** Dispatches sharing `(chat_id, cell_id)`: the density
    thesis *fires* at median ≥ 2 `code_search` dispatches per cell — the
    signature cell shape is snippet(`code=`) → file-scan → refined-scan,
-   `structured=1` throughout (the §3.3 loop taken in variables). Median 1
+   `structured=1` throughout (the code-search.md §3.3 loop taken in variables). Median 1
    with nonzero volume means the kernel is being used as a one-shot call
    site — the loop is not being taken.
 2. **Substitution (paired, transcript-side).** Stats cannot see raw Python
    — `open()` + regex never dispatches — so a qualitative pass over the
    week's `run_python` programs asks whether text-munging enumerate/count
-   loops are shrinking against the battery-era parser-archaeology baseline
-   (TS-API/Babel scratch scripts, battery v3/v4 T2/T3/T6). The claim is
-   substitution of raw scripting by `tools.code_search`, not dispatch
-   volume alone.
+   loops are shrinking against the recorded baseline of hand-rolled
+   parser-API scratch scripts. The claim is substitution of raw scripting
+   by `tools.code_search`, not dispatch volume alone.
 3. **Wire-shape health.** `error`/`refused` rates against the model-level
-   record (zero real false conclusions across 108 runs); `truncated`/
-   `spilled` counts on large match pages (aggregation-in-variables
-   working); `duration_ms` against §2's measured ~50 ms/scan — a
-   ten-iteration refine pass staying sub-second is part of the promise.
+   tool's own record; `truncated`/`spilled` counts on large match pages
+   (aggregation-in-variables working); `duration_ms` against the
+   ~50 ms/scan cost measured in code-search.md §2 — a ten-iteration refine
+   pass staying sub-second is part of the promise.
 4. **Verdict shapes, pre-declared.** (a) Depth ≥ 2 + substitution: the
    density case holds — Phase D's shrink gate gets its first real input
    and `code_outline` (code-search.md §3.4) ships on the same demand
@@ -538,24 +532,23 @@ choice, distinct from the §4.1 flip) reads against these frozen questions:
    re-read before adding any surface. (c) Both dark: the default never
    got reached in real work; nothing new gets designed until the canary.
 
-**Instruments (10-16).** Q1's *shape* half needs the args route + pattern
-identity, which the store did not carry — `code_search` ok samples now write
-a compact tag into the free `detail` field: ``snippet|scan pat:<hex8>`` (the
-same `code`-present route check the executors branch on; an 8-hex sha256
-digest of the pattern — chain joins on the digest, raw args stay unstored).
-`codeSearchShapeTag` in `kernel-tool-stats.ts`, wired at both ok record sites
-in `python-kernel.ts`, pinned by format/stability tests; error/refusal
-`detail` untouched, rows from before the tag simply read as untagged. The
-window computes with `npx tsx src/scripts/readout-kernel-density.ts
-[--days N] [--json]` — read-only against both stores, prints the four
-questions plus the verdict-shape echoes (it reports, it does not judge;
-Q2's substitution pass stays the transcript listing the checklist half
-surfaces).
+**Instruments.** Q1's *shape* half needs the args route + pattern identity, which
+the stats store does not carry by default — a `code_search` ok sample writes a
+compact tag into the free `detail` field: ``snippet|scan pat:<hex8>`` (the same
+`code`-present route check the executors branch on; an 8-hex sha256 digest of the
+pattern — chain joins on the digest, raw args stay unstored). The tag is built by
+`codeSearchShapeTag` in `kernel-tool-stats.ts`, wired at both ok record sites in
+`python-kernel.ts`; error/refusal `detail` is untouched, and rows written without
+a tag simply read as untagged. The window computes with
+`npx tsx src/scripts/readout-kernel-density.ts [--days N] [--json]` — read-only
+against both stores, prints the four questions plus the verdict-shape echoes (it
+reports, it does not judge; Q2's substitution pass stays the transcript listing
+the checklist half surfaces).
 
-### 4.10 Phase A implementation notes — slices 0–2 (10-13)
+### 4.10 Implementation shape
 
-What landed when slice 0 shipped, including the two places implementation refined
-the design:
+How the design is shaped across registry, manager, and driver — including the
+places where the shape refines §4.9:
 
 - **Dispatcher is an injected seam, not a manager-owned builder.** `KernelToolDispatcher`
   (`{tools, call(tool, args, signal)}`) is defined in `python-kernel.ts` and
@@ -575,71 +568,44 @@ the design:
 - **Gate**: `PORRIMA_KERNEL_TOOLS=1` (server env) → `kernelToolsEnabled()`; when
   off, the namespace is never sent and arriving `tool_call` frames find no live
   dispatcher and are refused. The `run_python` description's capability line
-  (§5 Phase A's one schema-bust item) is **shipped but gated identically**
-  (slice 2): constant built at import with `kernelToolsEnabled()` appended, so
-  flag-off servers carry the original bytes and the bust happens exactly once,
-  at the flip deploy.
-- **Budget knobs** (env): `PORRIMA_KERNEL_TOOL_CALLS_MAX=64` per (chat, cell|job);
+  (§5 Phase A's one schema-bust item) is gated identically — the constant is built
+  at import with `kernelToolsEnabled()` appended, so flag-off servers carry the
+  original description bytes and flag-on busts the frozen prefix exactly once.
+- **Budgets** (env knobs): `PORRIMA_KERNEL_TOOL_CALLS_MAX=64` per (chat, cell|job);
   `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` — when set explicitly it wins for every tool,
   otherwise per-tool defaults apply (`bash: 300 s` matching the model-level ceiling,
-  generic `120 s`); response values inline up to 2M chars with the §4.1 truncation
-  marker (`truncated` + `total_chars` on the frame). Spill references remain
-  later-slice work; `read_file`'s configured cap (256 KiB default) and `bash`'s
-  adapter-side spill (opts.chatId → the shared tool-output store, footer riding in
-  the value string) sit inside the inline bound.
+  generic `120 s`). Response values ride the wire inline up to 2M chars with the §4.1
+  truncation marker (`truncated` + `total_chars` on the frame); `read_file`'s
+  configured cap (256 KiB default) and `bash`'s adapter-side spill (`opts.chatId` →
+  the shared tool-output store, footer riding in the value string) sit inside that
+  bound.
+- **Spill references.** Values over 1 MiB on a local kernel write the full text to
+  the shared tool-output store (`kernel-<call8>.txt`, 64/chat + 24 h retention
+  inherited) and the cell receives a dict `{'path', 'head', 'total_chars', 'spilled'}`
+  — `head` a 4096-char preview — to stream from; remote kernels keep the inline 2M cap
+  + marker (§4.9 carve-out),
+  with the P4b job-delivery path covering hosts that own delivery. A spill failure
+  degrades to truncation-with-marker rather than losing the value.
+- **`read_pdf` figures.** Base64 image parts never ride the wire — they land in the
+  tool-result-images store and the value lists on-disk paths
+  (`shapeReadPdfKernelResult`).
+- **Every Tier 1 entry is a projection onto the model-level executor**, not a second
+  implementation: `list_files` goes through the workspace adapter,
+  `web_search`/`web_fetch` through `executeWebTool`,
+  `search_memory`/`search_conversation`/`read_archived_context`/`list_memory_blocks`/
+  `read_memory_block` through `executeMemoryTool` with the chat's scope, `read_pdf`
+  through `executeReadPdf`, `bash` through the adapter's `bash` with the chat's spill
+  opt-in. The allowlist is the dispatcher's `tools` list — §4.3's hard-allowlist as
+  mechanism, so a tier-2 name is absent from the namespace (`AttributeError` before
+  any RPC).
 - **Background jobs**: the ack re-keys the dispatcher from the execute id onto the
   driver-minted jobId — a job composing tool calls outside its turn is a
-  first-class, tested path (that's what the budgets are for).
-- **Deferred within §4.9's design** (recorded, not forgotten): partial streaming
-  of nested-call output into the cell's live view (`onUpdate` is not wired to
-  kernel dispatch yet — nested results arrive complete; the §4.6 partials
-  live-only rule applies whenever it lands).
-- **Tests** (`python-kernel.test.ts`, "kernel tools (protocol v2)"): round-trip,
-  flag-off invisibility, dispatcher rejection → `KernelToolError` in the cell, L1
-  abort of an in-flight dispatch with namespace survival, FIFO strict serialization
-  under `asyncio.gather`, server-side budget stop, background dispatch keyed on the
-  jobId, and kernel-exit cleanup with an outstanding call.
-- **Tests** (`agent-tools-kernel-tools.test.ts`, slice 1 — real kernel + real
-  `run_python` lock, only the adapter faked): the §4.9 deadlock proof (a
-  foreground cell's `tools.bash` resolving while `run_python` holds
-  `workspace:<label>` — if dispatch ever re-enters that queue the case fails loud),
-  read_file routing through the registry seam, non-zero exit → thrown tool error
-  carrying the output with the namespace intact, tier-2 names absent from the
-  namespace (AttributeError before any RPC), and arg passthrough to the adapter's
-  own limits.
-- **Driver build**: `npm run build` now `rm -rf dist/python` before copying (the
-  plain `cp -r` nested a stale copy and left dist serving a 948-line v1 driver —
-  the second-pass review's trap, now structurally fixed).
-
-- **Slice 2 (tier-1 completion + flag-on):** the full §4.3 Tier 1 surface now
-  dispatches — `list_files` (adapter), `web_search`/`web_fetch` (`executeWebTool`),
-  `search_memory`/`search_conversation`/`read_archived_context`/`list_memory_blocks`/
-  `read_memory_block` (`executeMemoryTool` with the chat's scope), `read_pdf`
-  (`executeReadPdf` + figure shaping below). All are projections onto the executors
-  the model-level tools already use; allowlist = the dispatcher's `tools` list (§4.3's
-  hard-allowlist as mechanism, proven by `AttributeError` on tier-2 names).
-  **Spill references shipped:** values over 1 Mi on a local kernel write the full text
-  to the shared tool-output store (`kernel-<call8>.txt`, 64/chat + 24 h retention
-  inherited) and the cell receives a dict `{'path', 'head', 'total_chars', 'spilled'}`
-  to stream from; remote kernels keep the inline 2 M cap + marker (§4.9 carve-out),
-  the P4b job-delivery path is covered for hosts that own delivery.
-  **`read_pdf` figures:** base64 image parts never ride the wire — they land in the
-  tool-result-images store and the value lists on-disk paths (`shapeReadPdfKernelResult`).
-  **§4.6 notice:** appended at the `archiveAndIndex` choke point (both summary
-  dialects; mid-turn inherits via the summary row `truncateChatHistory` inserts).
-  **Capability line:** gated on `kernelToolsEnabled()` at import — ships with the
-  flag; the description bust rides the flip deploy exactly once.
-  Slice-2 tests: local spill round-trip (dict + full file + 4096 head), remote
-  inline-capped marker (no spill written), remote job delivery view, full-surface
-  `dir(tools)` enumeration, web/memory routing incl. chat-scope threading, gated
-  description assertion.
-- **Remaining after the flip (slice 3+):** budget placement in UI settings (env
-  knobs live meanwhile), nested-call partial streaming
-  (§4.9), remote per-call spill delivery (Phase C), and the tier-2 provenance
-  seam (Phase B). (`code_search` — §4.3 row / §7 Q9 — is no longer remaining:
-  Phases 0–1 implemented per [code-search.md](code-search.md), dark behind
-  `PORRIMA_CODE_SEARCH=1`; its kernel projection introduced the `value_json`
-  structured-value wire flag.)
+  first-class path (that's what the budgets are for). The dead request-id entry is
+  dropped unconditionally, not only when the re-key happens; otherwise a job whose
+  ack never re-keys leaks its dispatcher for the kernel's lifetime.
+- **Deferred within §4.9's design**: partial streaming of nested-call output into the
+  cell's live view (`onUpdate` is not wired to kernel dispatch — nested results
+  arrive complete; the §4.6 partials live-only rule applies whenever it lands).
 
 ## 5. Staging
 
@@ -658,11 +624,10 @@ redundant, and it ships per-chat opt-in with an A/B, not as a global flip.
 
 **Remote kernels (P4a):** the SSH-session kernel speaks the same protocol, so the RPC
 half of tier 1 is structurally available there with no extra work; remote `bash`/file
-semantics are unchanged. (10-13 review: "no design change needed" was too strong — the
-serialization half needs the §4.9 carve-out: server-local spill references are
-unreadable from a host kernel, so remote Phase A is inline-capped results with explicit
-truncation markers, and per-call spill delivery follows the `deliverJobOutput` pattern
-in Phase C.)
+semantics are unchanged. The serialization half needs the §4.9 carve-out: server-local
+spill references are unreadable from a host kernel, so remote Phase A is inline-capped
+results with explicit truncation markers, and per-call spill delivery follows the
+`deliverJobOutput` pattern in Phase C.
 
 ## 6. Risks
 
@@ -684,18 +649,20 @@ in Phase C.)
 
 1. **Tier 1 set** — confirm the exact list. In particular: should `list_files` expose
    glob patterns in-kernel (it does at model level), and is `read_pdf` Phase A or B?
-   → Review lean (10-13): `read_pdf` is Phase A (marked §4.3) with the image-as-path rule
+   → Answered: `read_pdf` is Phase A (marked §4.3) with the image-as-path rule
    of §4.9. The `list_files` glob question is a tool-surface question, not a kernel one —
    the projection should mirror what the model has; divergence there is drift, not design.
 2. **Budget numbers** — per-`(chat, cell | job)` call cap, global in-flight cap,
    per-call timeout defaults. The CPU-contention argument and the server-side
    enforcement point are settled (§4.1/§4.9); the numbers are not.
-   → Slice 0 ships starting defaults as env knobs (`64` calls / `120 s` per call,
-   §4.10); treat them as placeholders to tune with usage, not as the decision.
+   → Answered: defaults are set in §4.10 (env knobs — `64` calls per
+   `(chat, cell | job)`, and per-tool timeouts where an explicit
+   `PORRIMA_KERNEL_TOOL_TIMEOUT_MS` wins over bash `300 s` / generic `120 s`);
+   treat them as placeholders to tune with usage, not as the decision.
 3. **Memory writes** — ship tier-2 memory writes *only* with the provenance seam, or is
-   there an earlier safe slice (e.g. `save_memory` with an explicit `source` field in the
+   there an earlier safe increment (e.g. `save_memory` with an explicit `source` field in the
    memory row itself)?
-   → Review lean (10-13): the earlier slice is right. The `source` field on the row is the
+   → Answered: the earlier increment is right. The `source` field on the row is the
    schema half of §4.4 and is cheap; the *record* is the seam, nested *rendering* is a
    Phase-B nicety. A memory write that cannot be attributed is the defect; a memory write
    whose attribution isn't pretty is not.
@@ -707,7 +674,7 @@ in Phase C.)
 6. **API naming + discoverability** — `tools.*` flat namespace vs per-domain namespaces
    (codex's IndirectNamespacePrefixes / opencode's `search` builtin)? Static API
    description block in the kernel docs vs lazy discovery as the catalog grows?
-   → Review lean (10-13): flat `tools.*` at Phase-A scale; the discovery mechanism is
+   → Answered: flat `tools.*` at Phase-A scale; the discovery mechanism is
    kernel-side reflection (`tools.__doc__`, `tools.list()` — §4.9), not a prompt block,
    and not a `search` builtin until the catalog outgrows a ~10-name docstring. Per-domain
    namespaces can be layered on a flat namespace later without breakage; the reverse is
@@ -716,7 +683,7 @@ in Phase C.)
    surface it as a model-level `ask_user`. Should the program explicitly yield with a
    "waiting-for-user" state (ties to §4.5), or is that the model's problem after the
    program returns?
-   → Review lean (10-13): the program returns a structured "needs user decision" value
+   → Answered: the program returns a structured "needs user decision" value
    and the model calls `ask_user` next. No surveyed system blocks code on a human, a
    program that awaits a human is a cell that holds the turn lease hostage (§4.5), and
    this costs no new mechanism. The §4.5 yield/resume question is about *computation*
@@ -724,12 +691,12 @@ in Phase C.)
 8. **Bash parity** — should kernel-origin `bash` calls keep identical output handling as
    model-level bash (rolling in-memory window, spill to /tmp at 50 KB), or do kernel
    programs get the raw stream (they can buffer themselves)?
-   → Review lean (10-13): raw-with-cap + spill reference (as §4.1/§4.9 shape it). The
+   → Answered: raw-with-cap + spill reference (as §4.1/§4.9 shape it). The
    rolling window and 50 KB spill exist to protect *model context*; kernel callers
    bypass that by construction, so copying the model path's constraints would cargo-cult
    the wrong layer's reason.
- 9. **Structural navigation (round 3)** — does a model-level `code_search` wrapper
-    (ast-grep CLI) ship as an additive tool independent of the Phase A slices (it
+ 9. **Structural navigation** — does a model-level `code_search` wrapper
+    (ast-grep CLI) ship as an additive tool independent of Phase A (it
     doesn't touch protocol v2), and when does the in-kernel projection follow (the
     exposure list, §4.10)? One tool or two (`code_search` vs `code_outline`)? Is `sg`
     a dependency in the onboarding profiles (remote hosts = the Phase C shape)? Pattern-
@@ -737,20 +704,19 @@ in Phase C.)
     lives kernel-side" principle applied to `llms-full.txt` (on demand, zero prompt
     bytes)? And is `sg outline` a per-project context-orientation feature (a different
     seam — noted here, designed separately)?
-    → Lean (10-13): ship the model-level wrapper first — cheap, separable, and it
+    → Answered: ship the model-level wrapper first — cheap, separable, and it
     shrinks the model's rg→read loops immediately; the in-kernel projection follows as
     a Tier 1 row on the existing exposure list; `code_outline`/project-orientation
-    deferred as its own feature.
-    → Designed (10-13): answered in [code-search.md](code-search.md) — the
+    deferred as its own feature. Specified in [code-search.md](code-search.md) — the
     two-projection staging (model-level phase 0 gated on its own flag, kernel
     projection phase 1), outline deferred kernel-first (§3.4 there),
     `@ast-grep/napi` as the dependency with the CLI fallback (note the `sg`
-    name collision on Enceladus — §5 there), and the default-shift framing for
+    name collision — §5 there), and the default-shift framing for
     the tool-set fit question (§4 there).
 
 ## 8. Sources
 
-Prior art (rounds 1–2, all read at primary source except where noted):
+Prior art (all read at primary source except where noted):
 
 - Cloudflare: blog.cloudflare.com/code-mode/ (origin, isolates, token-piping argument);
   developers.cloudflare.com/agents/tools/codemode/how-it-works/ (durable runtime, replay,
@@ -772,10 +738,10 @@ Prior art (rounds 1–2, all read at primary source except where noted):
   deepwiki.com/cline/cline/8.2 (terminal modes — corroborated via source trace);
   github.com/anthropics/claude-code/issues/9881 (no official interactive shell);
   github.com/knot0-com/repl-scratchpad (tmux-backed Python REPL skill, print contract)
-- ast-grep (round 3): ast-grep.github.io (introduction; advanced/prompting — official
+- ast-grep: ast-grep.github.io (introduction; advanced/prompting — official
   AI-usage guide; reference/cli/outline; blog: optimize-ast-grep, tree-sitter-rust-
   rewrite — all read); github.com/ast-grep/ast-grep-mcp (official experimental MCP, read)
-- Repository-map lineage (round 3): aider.chat 2023-10-22 repomap post + aider.chat
+- Repository-map lineage: aider.chat 2023-10-22 repomap post + aider.chat
   /docs/repomap.html; agentpatterns.ai/context-engineering/repository-map-pattern
   (distillation, corroborated); vadim.blog "Claude Code Doesn't Index Your Codebase"
   (corroborated); LlamaIndex CodeNodeParser (tree-sitter RAG chunking — corroborated,
@@ -785,51 +751,4 @@ Porrima: [session-python-kernel.md](session-python-kernel.md),
 [remote-python-kernel.md](remote-python-kernel.md),
 [request-viewer.md](request-viewer.md),
 [turn-engine.md](turn-engine.md).
-
-## 9. Revisions (10-13 review)
-
-Code-verified review of every present-tense claim against `python-kernel.ts`,
-`porrima_kernel.py`, `agent-tools.ts`, `turn-gate.ts` (all 33 tool names in §4.3 exist;
-the survey claims held). Five corrections, one sharpening — none change the architecture:
-the tiers, split criteria, and staging stand.
-
-1. **The §4.1 protocol claim was false — §4.8 is new.** v1 has no kernel-initiated
-   request direction (`host_request` absent from driver and manager; every stdin line is
-   a server→kernel request, serially consumed by `_serve`). The reverse RPC *is* Phase
-   A's mechanism, now specified: pending-call table, reader demux, cancellation registry,
-   strict-JSON args, v2 handshake semantics.
-2. **§4.1's permission claim hid a deadlock — §4.9 is new.** Foreground `run_python`
-   holds `workspace:<label>` for its whole call; the lock queue is non-reentrant; nested
-   `bash`/`write_file`/`edit_file` acquire the same key. The acceptance-bar case
-   (`tools.bash` from a cell) deadlocks without the new rule: per-kernel dispatch FIFO,
-   label queue never entered.
-3. **The registry is turn-scoped construction.** `getAgentTools` closes over
-   turn-bound `ToolSideEffects` and `onUpdate`; kernel dispatch needs
-   `getKernelToolSurface` with side effects deferred (§4.9).
-4. **§4.4's extraction bullet contradicted §1's thesis** — nested results are *not* the
-   model's observations, by construction. Rewritten; records land in `details`
-   (foreground) / job sidecar (background), human-only surfaces.
-5. **§5's remote claim was wrong on serialization.** Server-local spill paths are
-   unreadable from host kernels (P4b's solved problem); Phase-A remote is inline-capped,
-   delivery is Phase C.
-6. **§4.7 sharpened:** what the kernel changes is oversight *density*, not permissions.
-   Named vector: fetched content steering bulk cross-chat archive reads with no
-   per-call judgment.
-7. Minor: budgets re-scoped from "per-turn" to server-enforced `(chat, cell | job)`
-   counters (jobs have no turn); kernel results freed from `wrapResult` context
-   truncation; Phase A's one description line made explicit; image results spill to
-   paths; review leans recorded on §7 questions 1, 3, 6, 7, 8.
-
-Phase A is now honestly scoped as "protocol v2 + dispatch semantics + policy on top,"
-not "one new message type."
-
-**Addendum (10-13, post-review): slice 0 landed.** Protocol v2 reverse RPC, the
-per-kernel FIFO dispatcher, server-enforced budgets, and the `read_file` round-trip
-ship dark behind `PORRIMA_KERNEL_TOOLS=1`; the implementation refinements (§4.10)
-are recorded. Slice 1 (`bash` + lock-rule proof) is next.
-
-**Round 3 (10-13, quje): structural navigation.** ast-grep + repository-map research
-folded in as §2.5, with a Tier 1 `code_search` row (§4.3), §7 Q9 (model-level-first
-lean), and §8 sources. No architecture change; the only interaction with slice 0 is the
-exposure-list mechanism (§4.10) the in-kernel projection would ride.
 

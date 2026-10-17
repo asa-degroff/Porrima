@@ -1,9 +1,11 @@
 # Turn Engine — Unifying the Context-Pressure Path
 
-**Status**: Design. **§3 ("Current state") is a historical snapshot as of Aug 23 and is not the current file layout.** Deltas D1–D6 shipped (D3 flipped and D4–D6 landed 10-12); **D7 is parked by design** and Phase 4 stays deferred per §4.7 — see the table below.
-**pi 1.0 note**: `shouldStopAfterTurn` references below describe the pre-1.0 hook; it is implemented today via pi-agent-core's `finishTurn` (see [pi-1.0-migration.md](pi-1.0-migration.md) §5.3).
-**Author**: quje
-**Date**: 2026-08-23
+**Status**: Design + implementation record. **§3 is a frozen snapshot of the
+pre-refactor state (Aug 23), not the current file layout.** Deltas D1–D6 are in
+force; **D7 is parked by design**; Phase 4 stays deferred per §4.7 — see the
+table in §5.
+**pi 1.0 note**: Wherever this doc says `shouldStopAfterTurn`, the live pi-agent-core
+hook is `finishTurn` (see [pi-1.0-migration.md](pi-1.0-migration.md) §5.3).
 
 ## 1. Problem
 
@@ -21,24 +23,24 @@ The cost is not line count. It is that **every compaction fix must be reasoned
 about in 2–3 dialects, and the dialects have already drifted in ways that
 produced incidents**:
 
-- **Aug 22, 7-minute pre-send wait.** End-of-turn read raw `finalUsage`
+- **7-minute pre-send wait.** End-of-turn read raw `finalUsage`
   (84.8% of window); the refined estimate said 85.3%. End-of-turn stayed quiet,
-  the compaction landed at pre-send — while the user was already waiting on the
+  the compaction instead fired at pre-send — while the user was already waiting on the
   round-trip. Pure estimator asymmetry between the two routes.
-- **14-day forensics (Aug 09–23).** Main-route end-of-turn fired **0×**;
+- **14-day forensics.** Main-route end-of-turn fired **0×**;
   pre-send fired 10× (7 of them system-chat cycle starts). System-chat
   end-of-turn fired 3×, twice of them with the window already **>100%**. The
   main-route
   check was structurally blind (ran before the continuation loops, on a
   pre-continuation snapshot) — a placement divergence from system-chat's
-  post-turn check. Fixed Aug 23, but the fix lived in one route only.
-- **Aug 23 fix cycle (8 fixes).** Fixes landed across `compaction.ts`,
+  post-turn check. Since fixed — but the fix lived in one route only.
+- **The fix cycle behind §3's snapshot (8 fixes).** Fixes spanned `compaction.ts`,
   `chat.ts`, `system-chat.ts`, and a new `context-high-water.ts`. The refined
   end-of-turn estimate (fix 6) reached `chat.ts` but **not** the headless
   paths. The high-water floor (fix 4) was explicitly threaded through
   `chat-turn-runner` because headless turns would otherwise never feed it —
   i.e. the fix had to *know* the runner's internals to reach them.
-- **Known open gap (Aug 22).** Headless compaction paths omit the
+- **Known open gap.** Headless compaction paths omit the
   pre-compaction extraction flush — the one place where skipping the flush has
   identity-level stakes (memories extracted from removed context are lost).
 - **Frozen-prefix staleness.** After a headless mid-turn compaction, the
@@ -65,7 +67,7 @@ config" in review, then behaves as two different systems in production.
    resume-context rebuild live once; per-route resume event handling stays put.
 4. **Every behavioral delta is explicit, named, and verified** — no silent
    "unification" that changes trigger timing or handoff semantics.
-5. **The Aug 23 fixes stay live.** Phase 0 pins current behavior as named
+5. **The fixes above stay pinned.** Phase 0 pins current behavior as named
    regression tests *before* any code moves.
 
 ### Non-goals
@@ -236,17 +238,14 @@ not pass by default:
   median delta > 2% of window).
 - **Fail**: either condition. A consistent bias means the estimator's *model*
   is wrong for that workload, not noisier — investigate before any flip
-  (see §8.2).
+  (see §8, Risk 2).
 
-**Verdict (09-03): PASS — D1 flipped.** The production shadow log
-(Aug 24 – Sep 03, 10.5 days) holds 277 samples — far past the sample floor
-(≥15 anchored turns AND ≥5 days). `delta=0` on every line (the numbers agree
-by construction on the usage-anchor path, as §4.2 predicted);
-`fire=both` 19, `fire=none` 258, zero `fire=legacy`/`fire=unified` — zero
-trigger-outcome divergence, zero directional bias. All three pass criteria
-met. The one unobserved corner (no-usage iteration → path 3/char) is pinned
-in the `comparePressureShadow` fixtures and now guarded by an explicit loud
-log in `chat-turn-runner.ts`.
+**Verdict:** D1 flipped after the shadow log showed zero divergence — no
+trigger-outcome differences, no directional bias; `midTurnPressureDecision`
+owns the mapping and shadow mode is retired.
+The one corner the shadow data could not observe (no-usage iteration →
+path 3/char) is pinned in the `comparePressureShadow` fixtures and guarded by an
+explicit loud log in `chat-turn-runner.ts`.
 
 This is the same "trust the artifact over memory" discipline as the
 high-water fix: we don't guess which estimate is closer, we watch them
@@ -266,10 +265,11 @@ evaluateTurnGuards({
 }): GuardResult
 ```
 
-(The original design also carried a duplicate-tool-call dedup guard — a
-streak ≥ 3 of identical JSON tool-call signatures aborted the loop. It was
-removed after production showed false alarms on legitimate repeated calls,
-e.g. consecutive `bash` invocations.)
+**No duplicate-tool-call dedup guard.** An earlier design carried one — a
+streak ≥ 3 of identical JSON tool-call signatures aborting the loop — and it
+was explicitly rejected: it produced false alarms on legitimate repeated calls
+(consecutive `bash` invocations). Do not re-add it as a "guard"; identical
+calls are legal behavior.
 
 Both routes' `turn_end` handlers call this and emit their own warnings
 (SSE `event: warning` vs `emitter.emitWarning`) — the *decision* is shared,
@@ -310,8 +310,8 @@ interface EndOfTurnOptions {
   triggerRatio?: number;   // default END_OF_TURN_COMPACTION_TRIGGER_RATIO (0.80)
   onCompacting?: () => void;          // SSE: compacting event
   keepalive?: () => void;             // SSE: ping loop wrapper (chat.ts only)
-  preFlush?: (chat) => Promise<void>; // preCompactionFlush — chat.ts today;
-                                      // headless from phase 2 (delta D4)
+  preFlush?: (chat) => Promise<void>; // preCompactionFlushHook — every caller
+                                       // including headless (delta D4)
   onCompacted?: (r: { removedCount: number; remainingCount: number })
                => Promise<void> | void; // prompt rebuild, skill re-injection,
                                         // stale-usage clear, event emission
@@ -324,7 +324,7 @@ Internally: `endOfTurnNeedsCompaction` → (if needed) optional keepalive wrap �
 `awaitMidTurnPulse` (chat.ts passes a settler; headless none) →
 `truncateChatHistory(chat, cw, force, emit*, preFlush)` → `saveChat(chat,
 {allowTruncation: true})` → `onCompacted` → **always** log the negative path
-(the Aug 23 fix that made the 0-fire gap visible — this becomes structural,
+(what made the 0-fire gap visible — this becomes structural,
 not per-route diligence).
 
 Adoption:
@@ -345,14 +345,35 @@ GPU-bound turn interleave and invalidate the measurement. If anyone later
 "optimizes" the check out of the leased region, pre-send reverts to measuring
 a stale pre-compaction context — the drift this doc exists to prevent.
 
-The 0.85→0.80 move for headless is deliberate and defensible: the rationale
+**Pre-compaction flush (D4, in force).** The flush is the shared
+`preCompactionFlushHook` in `memory-extraction.ts`, wired at **every** headless
+compaction site — synthesis/wake/automation pre-send and end-of-turn, plus
+headless mid-turn in `chat-turn-runner.ts`. The scoping axis is the *type of chat
+being compacted*, not the transport: in-chat reminders and cross-chat wakes run
+through the headless runner on the *target's agent chat* (`automation-runner.ts`
+passes `chatType: liveChat.type`) — those chats carry a live, KV-warm extraction
+session, so the flush there continues a warm prefix and closes a genuine memory
+hole. On the system chat itself, `isSubstantiveForPreCompactionExtraction`
+self-scopes the flush near-zero (synthesis rows tagged, automation boilerplate
+filtered) — except user rows typed into the system chat and assistant-side
+automation findings, which ARE substantive. Two constraints the original sketch
+predated, both handled: the flush runs while **holding the global turn-gate
+lease** (§8 Risk 4 — the watch item is foreground gate wait), and headless turns
+stream with HTTP frame parity, so `SynthesisEmitter.emitCompacting()` emits the
+same `compacting` SSE frame the HTTP route uses (resync mirrors the state until
+the next real event).
+
+The 0.85→0.80 move for synthesis/wake is deliberate and defensible: the rationale
 for 0.80 is "this check runs while nobody is waiting for a response that
-could have been compacted cheaper now" — true for synthesis/wake (autonomous,
-next cycle is minutes-to-hours away) and for automations (next run is
-scheduled). The >100% system-chat end-of-turn fires in the forensics are the
-argument from the other side: char-only estimates were *under*-reading
+could have been compacted cheaper now" — true for autonomous work whose next
+cycle is minutes-to-hours away. The >100% system-chat end-of-turn fires in §1 are
+the argument from the other side: char-only estimates were *under*-reading
 headless context, and the refined estimate + earlier trigger both move in the
-safe direction. Pre-send stays 0.85 as backstop everywhere.
+safe direction. Automations keep **0.85** — their cadence puts the pre-send
+backstop close behind, so the earlier trigger buys little (the §9 Q1 rule settled
+it from gate data); D3 changes their *placement*, not their threshold: a run that
+finishes over the trigger compacts at the end of that run instead of making the
+next run wait in pre-send. Pre-send stays 0.85 as backstop everywhere.
 
 ### 4.5 Mid-turn — `runMidTurnCompactionCycles()` + `persistMidTurnHandoff()`
 
@@ -394,26 +415,35 @@ the route decides whether to resume. Honest assessment: this phase shares less
 than it looks like — the win is that handoff shape, cycle accounting, and the
 flush/rebuild hooks can no longer drift, not that lines move en masse.
 
-**Handoff shape vs content (delta D6, revised).** Two things were being
-unified that only one of which needs to be. The KV-critical part is the *row
+**Deliberate non-extraction (final shape).** The loop skeleton itself
+(`runMidTurnCompactionCycles`) is **not** extracted — that is the Phase-3 scope
+decision (§6), recorded here so the interface sketch above reads as the rationale
+for what IS shared (the row writer, the flush/rebuild hooks, the cap value), not
+as an open to-do. With handoff shape and the cap unified, the remaining loop
+duplication is transport mechanics (SSE reconnect/`ask_user`/crash state vs
+headless persist modes and `getFollowUpMessages`), not compaction semantics —
+merging the loop would recreate the Phase-4 `TurnState` risk profile (§4.7) with
+no correctness payoff.
+
+**Handoff shape vs content (delta D6).** Two things were being conflated; only
+one needs to be unified. The KV-critical part is the *row
 shape* — `_isSystemMessage / _isMidTurnCompaction / _compactionRemovedCount /
-_compactionCycle` — and `persistMidTurnHandoff` unifies that: one function
-writes the row, so the routes can't drift on what the resumed KV prefix sees.
-(Landed 10-12 as described — the writer lives in `turn-compaction.ts`, both
-routes call it, and both content policies below shipped unchanged.)
+_compactionCycle` — and `persistMidTurnHandoff` unifies that: the writer lives in
+`turn-compaction.ts`, both routes call it, and they cannot drift on what the
+resumed KV prefix sees.
 The *content policy* (which progress text and which tool calls go into the
 handoff message body) is a genuine per-route choice and **is not unified**:
 `buildHandoff` stays a first-class per-route callback. Head framing carries
 the turn's plan/goal; tail framing carries its latest state. Both are
 defensible — head's plan framing is real continuity value, and tail's recency
 is what "continue from where you left off" points at — and the design does
-not force an answer. Ship state: HTTP keeps its current policy (head 5000
-chars + all tool calls + 10 fresh memories), headless keeps its own (tail
-5000 + last 15 calls). Any future content change is gated on a proper A/B —
+not force an answer. In force: HTTP (head 5000
+chars + all tool calls + 10 fresh memories), headless
+(tail 5000 + last 15 calls). Any future content change is gated on a proper A/B —
 several representative long turns (≥3, spanning short-loop and
-long-tool-chain profiles), not one. (The original draft recommended tail
-everywhere; review showed that traded one real value for another under a thin
-gate. Withdrawing it.)
+long-tool-chain profiles), not one. Unifying content on tail framing was
+considered and rejected — it trades plan-continuity for recency under a thin
+gate.
 
 ### 4.6 What stays where (the no-change list)
 
@@ -447,19 +477,19 @@ Each is a named change with a verification gate. None are silent.
 
 | # | Delta | Route | Risk | Gate |
 |---|---|---|---|---|
-| D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2), then flip — **Done 09-03** (verdict above; `midTurnPressureDecision` owns the mapping, shadow retired) |
-| D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week — **Done 09-03** (synthesis + wake adopt `runEndOfTurnCompaction` with the usage anchor; the negative-path log now covers headless) |
-| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | first 1 week: log-only (decision computed and logged, not executed), then enable — **log-only live 09-03** (`logOnly` gate; the gate-week logs settle 0.80 vs 0.85 before the one-line flip); **flipped 10-12: executes at 0.85** (§9 Q1 verdict applied to the gate-week data; the `logOnly` flag was removed with the flip) |
-| D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | extraction-server load watch; this is a *fix*, not a preference — **LANDED 10-12**: the hook moved from `chat.ts` to `memory-extraction.ts` as the shared `preCompactionFlushHook` and is wired at every headless compaction site (synthesis/wake/automation pre-send + end-of-turn, headless mid-turn in `chat-turn-runner`). Scoping (applied same day, post system-chat redesign): the axis that matters is the **type of the chat being compacted, not the transport**. In-chat reminders and cross-chat wakes run through the headless runner on the *target's agent chat* (`automation-runner.ts` passes `chatType: liveChat.type`) — those chats carry a live, KV-warm extraction session, so the flush there continues a warm prefix and closes a genuine memory hole. On the system chat itself, `isSubstantiveForPreCompactionExtraction` self-scopes the flush near-zero (synthesis rows tagged, automation boilerplate filtered) — except user rows typed into the system chat and assistant-side automation findings, which ARE substantive. Costs the doc predated, both handled: the flush runs while **holding the global turn-gate lease** (§5 D3 note — watch item stays live), and headless turns stream with HTTP frame parity (10-05 `2e0314dc`), so `SynthesisEmitter.emitCompacting()` now emits the same `compacting` SSE frame the HTTP route uses (resync mirrors the state until the next real event) |
-| D5 | Headless mid-turn max cycles 3 → 5 | headless | longer synthesis phases run longer | synthesis duration stats — **LANDED 10-12** at 5. Gate data (journal Aug 25 – Oct 11): headless cycle distribution 116/12/6 — geometric tail, 6 runs REACHED the old cap; the "removed nothing — ending turn" bail never fired (every cycle made real progress); HTTP's own tail shows the extra cycles doing rescue work (162/30/6/3/3, a single max-exhaustion in 7 weeks). Bounded cost: ≤2 extra compact+flush cycles under the global lease on tail runs. Cap-hit is no longer silent headless (warns like HTTP's exhaustion log, with the EOT next-line-of-defense framing) so the next cap question is answerable from logs |
-| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none on ship — content unchanged | row bytes identical on both routes; any content change later gated on ≥3 long-turn A/B — **LANDED 10-12**. `persistMidTurnHandoff()` in `turn-compaction.ts` now owns the row shape and its save; `chat.ts` and `chat-turn-runner.ts` both call it. Placement semantics preserved exactly (headless pushes at the tail; HTTP passes its captured index for the rebase-safe splice), and content remains each route's own handoff body — the row writer takes finished text, so `buildHandoff`-style per-route content policy is untouched and any future change still rides the A/B gate. Full loop merger (`runMidTurnCompactionCycles`) deliberately NOT extracted with it — see the Phase 3 note below |
-| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | **PARKED by design** (was "off by default; system-chat decides" — the decision to keep it unlanded is the design's own: value is bounded, see below). Risk framing is stale in the safer direction (10-12): since `6593feea` the retained-frozen-prefix + Case-3-delta model IS the system-chat invariant across cycles ("like any other follow-up message"), and the automation runner already delivers rebuild deltas through the hidden-row + `commitMemoryDelta` pattern. A D7 rebuild would therefore be a soft reset + delta on the existing contract, not a prefix-semantics change — cheap to add IF a long single phase ever shows mid-run staleness; D4's landed flush makes extracted memories from mid-turn compaction sit undelivered until the next run's build, which is the concrete scenario to watch for. |
+| D1 | Headless mid-turn trigger acts on the unified estimator | headless | trigger timing shifts | shadow week (§4.2) → flip: `midTurnPressureDecision` owns the trigger mapping; shadow mode is retired |
+| D2 | Headless end-of-turn: refined estimate + 0.80 trigger | synthesis, wake | compacts earlier | forensics >100% cases as regression tests; watch end-of-turn fire rate for 1 week. Synthesis + wake run on `runEndOfTurnCompaction` with the usage anchor; the negative-path log covers headless |
+| D3 | Automations gain an end-of-turn check | automations | new behavior, none before | automations execute end-of-turn at **0.85** (`COMPACTION_TRIGGER_RATIO`), decided by the §9 Q1 rule from log-only gate data; no `logOnly` flag exists anymore |
+| D4 | Headless compaction runs `preCompactionFlush` | headless | closes the identity-level gap (memories from removed context); adds extraction latency to headless compaction | the shared `preCompactionFlushHook` in `memory-extraction.ts`, wired at every headless compaction site — synthesis/wake/automation pre-send + end-of-turn, and headless mid-turn in `chat-turn-runner.ts` (§4.4) |
+| D5 | Mid-turn max cycles 3 → 5, both routes | headless | longer synthesis phases run longer | both routes cap at 5 — gate data showed a tail that reached the old cap. Cap-hit warns in headless too (HTTP-exhaustion-log style, with the end-of-turn next-line-of-defense framing) so the next cap question is answerable from logs; bounded cost of ≤2 extra compact+flush cycles under the global lease on tail runs |
+| D6 | Mid-turn handoff **shape** unified (one row writer); **content** stays per-route (HTTP: head+all-tools+memories, headless: tail+last-15) | both | none — content unchanged | `persistMidTurnHandoff()` in `turn-compaction.ts` owns the row shape and its save; `chat.ts` and `chat-turn-runner.ts` both call it. Row bytes identical on both routes; placement semantics preserved (headless pushes at the tail, HTTP splices at its captured index). The row writer takes finished text, so per-route `buildHandoff` content policy is untouched and any content change rides the ≥3-long-turn A/B gate. The full loop merger (`runMidTurnCompactionCycles`) is deliberately not extracted — §4.5 / §6 Phase 3 |
+| D7 | (opt-in) Headless mid-turn compaction may rebuild the system prompt | headless, via `onCompacted` | changes synthesis KV/prefix behavior; frozen-prefix semantics shift | **PARKED by design** — keeping it unshipped is itself the decision: the value is bounded (see below). The risk framing is stale in the safer direction: the retained-frozen-prefix + Case-3-delta model IS the system-chat invariant across cycles (the rebuild rides "like any other follow-up message"), and the automation runner already delivers rebuild deltas through the hidden-row + `commitMemoryDelta` pattern. A D7 rebuild would therefore be a soft reset + delta on the existing contract, not a prefix-semantics change — cheap to add IF a long single phase ever shows mid-run staleness; D4's flush makes memories extracted from mid-turn compaction sit undelivered until the next run's build, which is the concrete scenario to watch for |
 
 D7's value is deliberately bounded: each synthesis or wake run rebuilds before
 its phases (a retrieval-skipped rebuild that retains the chat's existing frozen
 section) at system-chat.ts:1050, 1398,
 so frozen-prefix staleness only bites *within* a single long run that
-compacts mid-turn. "Off by default" stays correct; the hook exists for the day
+compacts mid-turn. Staying unshipped stays correct; the hook exists for the day
 a long single phase shows it matters.
 
 ## 6. Migration plan
@@ -467,9 +497,9 @@ a long single phase shows it matters.
 Each phase ships independently, keeps the wire format, and lands behind the
 existing test suite. Order is by payoff-to-risk.
 
-**Phase 0 — Pin current behavior. (Done Aug 23:
-`server/src/__tests__/compaction-forensics.test.ts`, 7 tests.)** Convert the
-14-day forensics into named regression tests *before* code moves: the 84.8/85.3
+**Phase 0 — pin current behavior as named regression tests**
+(`server/src/__tests__/compaction-forensics.test.ts`). Convert the
+14-day forensics into named tests *before* code moves: the 84.8/85.3
 dead-band case (table row for `endOfTurnNeedsCompaction`), the end-of-turn
 negative-path log assertion, the pre-send fire cases, the >100% system-chat
 cases, the scaleFactor clamp and degenerate-defang tests (already in
@@ -481,10 +511,8 @@ anchor/exact/char plumbing collapses to the call; observation recording stays
 via `onObservation`; the SSE iteration payload fields map 1:1 from the return
 type). Headless `shouldStopAfterTurn` adopts in **shadow mode** (§4.2).
 Guards extracted; both routes' dedup/cap blocks delegate. Exit criteria:
-suite green, one week of clean shadow logs, then the D1 flip.
-**(Done Aug 23–24; D1 flipped 09-03 — the shadow passed on 277 samples /
-10.5 days, §4.2 verdict; the headless check now acts on
-`midTurnPressureDecision`.)**
+suite green, one week of clean shadow logs, then the D1 flip
+(the verdict that gated this phase is recorded once, in §4.2).
 
 **Phase 2 — End-of-turn.** `runEndOfTurnCompaction` in `turn-compaction.ts`.
 `chat.ts` adopts (no behavior change — the block moves). System-chat
@@ -492,22 +520,17 @@ synthesis/wake adopt (D2, D4). Automation adopts log-only (D3), flips after a
 week. Exit criteria: the three forensics regression tests pass against the
 new code path; negative-path logs appear from all four call sites.
 
-**Phase 3 — Mid-turn.** `persistMidTurnHandoff` +
-`runMidTurnCompactionCycles`. Both routes adopt; D5, D7 (opt-in, off). D6
+**Phase 3 — Mid-turn.** `persistMidTurnHandoff` + the shared cap
+(D5 → 5 in both routes). Both routes adopt; D7 stays parked (§5). D6
 ships as shape-only unification — row writer shared, content policy per-route
-and unchanged. Exit criteria: handoff row bytes identical on *both* routes
-(shared shape + each route's existing content), cycle logs unchanged in
-shape.
-**Landed 10-12, scoped**: D5 and D6 shipped, and the exit criteria hold —
-the row is now produced by exactly one function, so shape drift is
-structurally impossible. `runMidTurnCompactionCycles` (the full loop
-skeleton) was deliberately NOT extracted: with D4/D6 landed, the remaining
-loop duplication is transport mechanics (SSE reconnect/`ask_user`/crash
-state vs headless persist modes and `getFollowUpMessages`), not compaction
-semantics — merging it would recreate the Phase-4 `TurnState` risk profile
-(§4.7) with no correctness payoff. The cycle LOG shapes already match
-(`<prefix> mid-turn compaction cycle N`); the cap and the handoff row — the
-two things the design named as deltas — are unified.
+and unchanged. The full `runMidTurnCompactionCycles` loop merger is
+intentionally **out of scope** — rationale in §4.5; what Phase 3 shares are
+the two things the design named as deltas: the row and the cap.
+Exit criteria: handoff row bytes identical on *both* routes
+(shared shape + each route's existing content), the row produced by exactly
+one function so shape drift is structurally impossible, and cycle logs
+unchanged in shape (the `<prefix> mid-turn compaction cycle N` forms already
+match across routes).
 
 **Phase 4 — TurnState.** Deferred per §4.7.
 
@@ -529,13 +552,14 @@ two things the design named as deltas — are unified.
   `aborted: true`.
 - **Shadow logs**: a test that the legacy and unified paths both compute and
   log during shadow mode.
-- Existing suite (361 tests) green at every phase; `tsc --noEmit` clean;
+- Existing suite green at every phase; `tsc --noEmit` clean;
   dist build before each porrima.service restart (the usual discipline).
 
 ## 8. Risks
 
-1. **Fresh fixes regressing.** The Aug 23 fixes are days old and load-bearing
-   (MTP live, long turns in production). Mitigation: Phase 0 pinning is not
+1. **Fresh fixes regressing.** Recently-landed fixes are the ones most likely to be
+   regressed by consolidation, and these are load-bearing (MTP live, long
+   turns in production). Mitigation: Phase 0 pinning is not
    optional; every phase's exit criteria include the named regression tests.
 2. **Shadow mode hiding a real divergence.** If unified and legacy disagree
    systematically in one direction for headless, the estimator model is wrong
@@ -550,14 +574,13 @@ two things the design named as deltas — are unified.
    before/after on a recorded turn.
 4. **D4 latency.** Headless compaction now waits for the extraction flush.
    Synthesis is the long-turn workhorse; a slow extraction server extends
-   compaction stalls. Mitigation: the flush already has its timeout; watch
-   `system-chat` cycle durations in the week after D4 lands. Restated
-   10-12: the flush runs while holding the **global turn-gate lease**, so
+   compaction stalls. Mitigation: the flush already has its timeout. The
+   flush runs while holding the **global turn-gate lease**, so
    the watch item is foreground gate wait, not just background cycle
-   duration — and headless turns stream (HTTP parity since 10-05), so
+   duration — and headless turns stream with HTTP frame parity, so
    attached viewers experience the stall directly; the emitter's
-   `compacting` frame landed with D4. **Watch item is live**: follow gate
-   wait + cycle durations in the flush week; the substantive filter keeps
+   `compacting` frame is part of D4. **Monitor** gate
+   wait + cycle durations; the substantive filter keeps
    system-chat sites near-zero, so the load to expect is where headless
    runs compact *agent* chats (reminders/wakes).
 5. **Scope creep toward runner merger.** The shape of this design invites
@@ -578,14 +601,13 @@ two things the design named as deltas — are unified.
    exceeds 0.90 (headroom exists; the earlier check just does the same work
    cheaper). **Choose 0.85** if ≥10% sit in the band — at hourly cadence the
    pre-send backstop is close enough that the extra compactions buy little.
-   **Resolved (10-12): 0.85, and the check executes.** Gate week (Sep 20 –
-   Oct 11) logged 25 decision lines — past the sample floor — with 8 fires
-   (80.5, 81.9, 82.5, 82.9, 83.1, 85.2, 94.1, 104.3). Band share 5/25 = 20%
-   ≥ 10% → the rule chooses 0.85; the 0.80 branch was also disqualified by
-   the two >0.90 fires. Note both >0.90 cases (94.1%, and the 104.3%
-   overflow that sat computed-not-executed until the next run's pre-send)
-   fire at 0.85 too — executing is what moves them from *next run's wait*
-   to *this run's quiet tail*, which was the point of the check. Call site
+   **Resolved: 0.85, and the check executes.** The gate week cleared the sample
+   floor, put ≥10% of turns in the (0.80, 0.85] band, and included fires above
+   0.90 → the rule chooses 0.85; the 0.80 branch was disqualified by the >0.90
+   fires regardless. Note the >0.90 cases — overflows that would otherwise sit
+   computed-not-executed until the next run's pre-send — fire at 0.85 too;
+   executing is what moves them from *next run's wait* to *this run's quiet
+   tail*, which was the point of the check. Call site
    passes `triggerRatio: COMPACTION_TRIGGER_RATIO`; synthesis/wake keep the
    0.80 default (D2).
 2. Where does the memory section of the headless mid-turn handoff come from,
@@ -593,10 +615,10 @@ two things the design named as deltas — are unified.
    system-chat's memory model is the frozen prefix. Leaning: leave it out for
    system-chat (the prefix already carries stable memories; the handoff
    carries turn progress), and `buildHandoff` stays the seam if that changes.
-   **Resolved with D6 (10-12): left out.** The shared writer takes finished
+   **Resolved: left out.** The shared writer takes finished
    text, so the seam is intact by construction — the content decision stays
-   per-route and any change rides the D6 ≥3-long-turn A/B gate. (D4 changes
+   per-route and any change rides the D6 ≥3-long-turn A/B gate. D4 changes
    the calculus slightly: mid-turn flush memories now wait for the next
    run's build rather than riding the handoff — the concrete trigger for
    revisiting is that gap biting in a long phase, which is also D7's watch
-   scenario.)
+   scenario.

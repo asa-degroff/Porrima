@@ -121,7 +121,7 @@ The primitive itself does: **collect removed → await `onBeforeArchive` (the me
 
 The memory-context reset and prompt rebuild are **caller-owned aftermath**, not part of the primitive:
 
-1. **Soft reset** (`softResetMemoryContext`): clears `deltaIds`, marks dirty. `frozenIds` and the frozen memories section are retained **byte-exact** — the next build is a Case 3 delta, not a Case 1 freeze. A hard `resetMemoryContext` is no longer used after compaction; it survives only for chat deletion and cache-warm preparation. Automation and system-chat runs are follow-up messages in a persistent chat — they retain the frozen set (`skipMemoryRetrieval` builds hydrate and keep the section byte-exact) instead of resetting it. (Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 sequence was observed in one night — which broke the prefix at the section boundary and orphaned the KV pool each time.)
+1. **Soft reset** (`softResetMemoryContext`): clears `deltaIds`, marks dirty. `frozenIds` and the frozen memories section are retained **byte-exact** — the next build is a Case 3 delta, not a Case 1 freeze. A hard `resetMemoryContext` is no longer used after compaction; it survives only for chat deletion and cache-warm preparation. Automation and system-chat runs are follow-up messages in a persistent chat — they retain the frozen set (`skipMemoryRetrieval` builds hydrate and keep the section byte-exact) instead of resetting it. (Re-rolling the frozen set at compaction was pure nondeterminism — a 5 → 4 → 0 → 3 sequence observed repeatedly — which broke the prefix at the section boundary and orphaned the KV pool each time.)
 2. **Rebuild** (`buildSplitAugmentedPrompt`): re-retrieves, so memories just extracted by the flush are eligible.
 
 One consequence of the stale-`usage` strip is easy to miss: immediately after any compaction the estimator has **no** usage anchor, so `selectedPath` falls back to `char_estimate` and only the 0.95 hard cap is live until the next provider call reports usage.
@@ -144,7 +144,7 @@ This is the outer serialization point: automation runs acquire the turn lease *b
 
 ## Live Streams & Reconnect (`live-streams.ts`)
 
-The SSE registry that makes a turn reconnectable. Buffer replay has been **retired entirely** (the old up-to-10 MB per-turn buffer and its `?replay` parameter are gone) — reconnection is snapshot-based, not replay-based.
+The SSE registry that makes a turn reconnectable. Reconnection is snapshot-based, not replay-based.
 
 - **Resync snapshot contract**: each stream owner installs a `buildResync` hook that returns the current state to splice into a reconnecting client. Three owners: the chat route's queue state, its turn tail, and the headless `SynthesisEmitter`. This is why `/api/chat/reconnect/:chatId` works for the system chat too.
 - **Pending turn intents**: registered synchronously at request entry, so `POST /api/chat/stop` can abort a turn that is still doing pre-stream work (prompt construction, memory retrieval, pre-send compaction) and has no live stream yet.

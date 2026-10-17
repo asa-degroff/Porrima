@@ -1,11 +1,6 @@
 # Per-Turn Request Viewer (design plan)
 
-Status: **implemented (P1–P3)** — 2026-10-08. §7 records what shipped and the deltas
-from the original plan.
-
-Decisions locked (2026-10-07): viewer is scoped to the **currently-selected chat only** (no
-global/cross-chat browse in v1); retention default **50 requests/chat**; response capture is
-**structured content blocks only** — raw SSE chunk capture is out of scope for v1.
+**Status:** implemented (P1–P3).
 
 ## 1. Problem
 
@@ -58,16 +53,33 @@ point is always the chat's header button, never a global page).
   cached tokens + hit ratio, duration, status badge (`in progress` / `done` / `error` /
   `aborted` / `fallback`), and a divergence canary ⚠ where replay-vs-wire digests differ.
   Rows append live while the modal is open.
-- **Expanded entry**:
+- **Modal structure (invariant): one scroll container for the whole modal** (the body's
+  `flex-1 overflow-y-auto`). Expanded entries must not nest their own scroll containers —
+  per-section `max-h-[Nvh] overflow-y-auto` boxes inside the body make scrolling confusing.
+  Content is a tree whose layers grow/shrink inline: request entry (accordion row, chevron)
+  → section nodes → wire messages → message content. Section nodes are `<details>` trees
+  (`TreeNode`) and **children mount only while open**, so collapsed sections cost nothing.
+  The Context tab follows the same rule: system prompt and tool schemas render inline with
+  no inner scroll caps; tool definitions are tree nodes.
+- **Expanded entry** (section nodes: `Request` — message list, open by default;
+  `Tool definitions sent`; `Response` — open by default, per-block thinking nodes nested
+  inside; `Raw wire JSON`):
   - **Request**: the actual wire `messages` array rendered per role (system / user /
     assistant / tool), collapsible bodies, tool results with full content, images shown as
-    references. A "delta since previous request" toggle is a powerful affordance given our
-    prefix architecture (iteration N ≈ iteration N-1 + appended rows).
+    references. The list is **tail-truncated**: only the last `MESSAGE_TAIL = 8` messages
+    render inline (each iteration re-sends the whole transcript and the tail is what gets
+    inspected); the prefix collapses into one `N earlier messages · <role breakdown>` node
+    that expands in place with true wire-array indices preserved, so an expanded view
+    matches the raw array. Live in-progress refreshes keep following the tail as rows
+    append. (A "delta since previous request" toggle — powerful given the prefix
+    architecture, iteration N ≈ iteration N-1 + appended rows — is a P4 extra, §5, not a
+    v1 feature.)
   - **Response**: accumulated **structured content blocks** — thinking, text, tool calls with
     parsed arguments, usage, timings, cached-token report. Raw SSE-chunk capture is explicitly
-    out of scope for v1 (revisit only if parsing quirks need forensics). For the *currently
-    streaming* entry, show the live partial response from the deltas the client is already
-    receiving — no extra SSE traffic.
+    out of scope (revisit only if parsing quirks need forensics). An in-progress entry shows
+    the request plus `Response still streaming…`; its final body lands with the entry's own
+    `llm_request_end`. (Live partial-response rendering from deltas the client already
+    receives is P4, §5.)
   - **Raw**: the full JSON request body (`{model, messages, tools, stream_options, id_slot,
     cache_prompt, chat_template_kwargs}`) and accumulated response — pretty-printed, copyable.
 - Header strip: request count, total tokens this session, "Clear" button. (v1 records
@@ -95,8 +107,9 @@ The replacement for the old system prompt viewer, showing what the model is *pri
 
 - Delete `promptModal` state, `openPromptViewer`, and the "Rendered Agent Context" modal from
   `ChatView.tsx` (L440, 519-531, 863-869, 1176-1234) and `fetchRenderedPrompt` from
-  `api/client.ts`. Keep `GET /api/chats/:id/rendered-prompt` as the Context tab's data source,
-  upgraded to return sections + tool schemas + persisted prompt (see §4).
+  `api/client.ts`. `GET /api/chats/:id/rendered-prompt` is **replaced** by
+  `GET /api/chats/:id/context-view`, the Context tab's data source (sections + tool schemas +
+  persisted prompt; see §4) — single caller, clean cutover, old route removed.
 
 ## 4. Architecture
 
@@ -113,13 +126,19 @@ complete wire truth exists per request:
   `llamaPromptDebugChatId` passthrough (`llm-stream.ts:104-106`) for chatId, per-loop
   `iterationCount` (`llm-stream.ts:50,95`) for the request ordinal, `state.toolLoopId` /
   headless `turnId` (`chat.ts:1270`, `chat-turn-runner.ts:444`) for the turn. Add a
-  `llamaRequestId = ${turnId}:${iteration}` alongside the existing chatId option — do **not**
+  `llamaRequestId = ${turnId}:${iteration}` alongside the existing chatId option and thread
+  the options per call (`llm-stream.ts` → provider), with the turn resolved through an
+  injected `getTurnId` at both entry points (chat route: `state.toolLoopId`; headless
+  runner: its `turnId` — parity). Start capture is gated on the request carrying an
+  explicit `llamaRequestId` + `llamaPromptDebugChatId` — only real chat turns pass both, so
+  warm/extraction/title skip recording without any filtering at read time. Do **not**
   use pi-agent-core's `prepareRequest` hook for the primary capture: it fires pre-
   `convertMessages` and would miss the true wire shape.
 - **Invariant: capture is a pure side-channel.** It must not alter, reorder, or reserialize
   anything in the outgoing body — byte-identical prefixes are the KV-cache contract
-  (docs/memory-system.md, key-patterns.md). Recording must be async post-hoc, never blocking
-  the stream.
+  (docs/memory-system.md, key-patterns.md). Recording is async post-hoc, never blocking
+  the stream, and every recorder call is wrapped in try/catch. End capture runs at the
+  `done` push and in the error path (aborted/error status), keeping partial content.
 - Tag `purpose`: `chat` | `warm` | `extraction` | `title`. In v1 the recorder **only stores
   `chat` turns** — cache-warm bodies are byte-clones of live bodies and extraction/title calls
   belong to background inference, so they skip recording entirely to keep `porrima.db` lean.
@@ -152,15 +171,21 @@ CREATE TABLE llm_requests (
   would otherwise grow quadratically. Store long immutable strings (system prompt, individual
   message contents, tool arrays, response bodies) in
   `llm_request_blobs(hash TEXT PRIMARY KEY, text TEXT)` with `request_json` referencing hashes
-  (same sha1-12 approach as `digestPromptPayload`). Storage collapses to "first copy + pointers";
-  the viewer rehydrates the full body on read. Optionally compress blob text (gzip via the
-  existing deps) later if needed.
-- **Retention:** **50 stored requests per chat** (`MAX_REQUESTS_PER_CHAT = 50`), reusing the
-  `pruneOldRuns` pattern from `model-stats.ts`. Fixed constant in v1 — a settings knob is
-  deferred until usage shows a need. Cascade cleanup from `chat-deletion.ts`. Blobs are
-  vacuumed by reference count on prune.
-- The **latest live request** for a chat is also mirrored into the in-memory `promptCache`
-  replacement (persisted system prompt survives restart — fixes the current `cached:false` bug).
+  (sha1 full-hex digests, `INSERT OR IGNORE`). Storage collapses to "first copy + pointers";
+  the viewer rehydrates the full body on read.
+- **Retention:** **50 stored requests per chat** (`MAX_REQUESTS_PER_CHAT = 50`), pruned on
+  every insert by the ordering key `(timestamp DESC, iteration DESC)` — the same key orders
+  the list — reusing the `pruneOldRuns` pattern from `model-stats.ts`. Fixed constant — a
+  settings knob is deferred until usage shows a need. Cascade cleanup from
+  `chat-deletion.ts` (`clearLlmRequests`). Blobs are vacuumed by remaining reference count
+  on a throttle (every 20 inserts, plus on explicit clear), not on every prune.
+- **Restart hygiene:** rows left `in_progress` by a crash are marked `aborted` at module
+  init.
+- **Restart-safe system prompt for the Context tab.** `getLatestRecordedSystemPrompt(chatId)`
+  reads the system prompt off the chat's latest recorded request; `context-view` resolves
+  request log → in-memory prefix cache → base+skills fallback and reports the origin in a
+  `source` field. The prompt survives restarts, so a cold-cache dead end after a restart is
+  not possible.
 
 ### Live streaming to the client
 
@@ -169,23 +194,33 @@ watching):
 
 - Emit lightweight ID events on the existing chat SSE: `llm_request_start` `{requestId, turnId,
   iteration, model, messageCount, toolNames[]}` at dispatch and `llm_request_end` `{requestId,
-  status, usage, durationMs, cachedTokens}` at finalization (emitted from recorder callbacks via
-  the same registry pattern as `recordModelStats`, `chat.ts:2008-2066`).
-- The open modal listens (extend `processSSEEvent` in `api/client.ts:637-739`), then fetches
-  detail lazily via the API when an entry is selected or expanded. This mirrors how
-  `ModelStatsModal` reacts to the `iteration` event with `statsVersion` instead of carrying
-  payloads.
+  status, usage, durationMs, cachedTokens}` at finalization. The recorder exposes a module-level
+  subscription (`onLlmRequestEvent(handler)`); each transport registers **one module-level
+  forwarder** that writes the id frames to the chat's live stream — `chat.ts` at module scope,
+  silently skipped when nobody is streaming. No per-request callbacks are threaded through the
+  provider just for notification.
+- **Refresh contract:** the open modal receives the latest `LlmRequestLogEvent` as a fresh
+  object per event (not a version counter). The list refetches on **every** event (summaries
+  only — cheap); an **expanded** entry refetches its detail only when its *own* `end` lands
+  (refetching on every event would re-download and re-parse the full rehydrated body for
+  rows that didn't change); the Context tab refetches on `start`, when the latest recorded
+  system prompt may have changed. Detail is otherwise fetched lazily via the API when an
+  entry is selected or expanded — mirroring how `ModelStatsModal` reacts to events instead
+  of carrying payloads.
 - Reconnect/live-stream (`live-streams.ts` attach frames) gets the events for free because they
   ride the same stream.
 
 ### API endpoints (new `routes/request-log.ts`, mounted `/api/llm-requests`)
 
-- `GET /api/llm-requests?chatId=&purpose=&limit=` — list (summaries, newest first).
+- `GET /api/llm-requests?chatId=&limit=` — list (summaries, newest first). `chatId` is
+  **required** — the request viewer is per-chat by design (§6).
 - `GET /api/llm-requests/:id` — rehydrated full request/response.
-- `DELETE /api/llm-requests?chatId=` — clear.
-- `GET /api/chats/:id/context-view` — Context tab payload (upgraded `rendered-prompt`: system
-  prompt, section breakdown w/ tokens, tool definitions with schemas, delta state).
-- `POST /api/chats/:id/context-view/rendered` — optional on-demand chat-template render.
+- `DELETE /api/llm-requests?chatId=` — clear (also runs the blob vacuum).
+- `GET /api/chats/:id/context-view` — Context tab payload: system prompt (with `source`),
+  section breakdown w/ tokens, tool definitions with parameter schemas, delta state.
+  **Replaces** `GET /api/chats/:id/rendered-prompt`, which is removed.
+- The on-demand chat-template render (`POST …/rendered`) is not exposed in v1 — the
+  rendered-template view is a P4 extra (§5).
 
 ### Client
 
@@ -204,110 +239,45 @@ watching):
 
 1. **P1 — Server recorder**: `request-log.ts` service, `llm_requests` + blobs tables, provider
    capture with purpose/chatId/turnId threading, retention + deletion cascade, list/detail
-   endpoints. (Testable without UI; cross-link `requestDigest` to `model_stats`.)
+   endpoints, `RequestViewerModal`-free end-to-end smoke (`server/src/scripts/smoke-request-log.ts`,
+   self-cleaning, run against a scratch chatId). Invariant: the smoke script **refuses to run
+   without `PORRIMA_DATA_DIR`** (per the memory-tools test isolation pattern) so it can never
+   hit the live DB. (Testable without UI; cross-link `requestDigest` to `model_stats`.)
 2. **P2 — Requests tab**: header button swap, `RequestViewerModal` list + expanded
-   request/response/raw views, SSE id events + lazy fetch, live in-progress entries from
-   existing deltas. Remove the old prompt modal.
+   request/response/raw views, SSE id events + lazy fetch, in-progress entries (row shows
+   `in progress`; the response body lands with the entry's own `llm_request_end`). Remove
+   the old prompt modal.
 3. **P3 — Context tab**: section breakdown with token attribution, tool schemas endpoint,
-   delta state; retire `rendered-prompt` fallback path.
+   delta state; `GET /:id/context-view` replaces the `rendered-prompt` route (removed).
 4. **P4 — Extras** (nice-to-have, separate decisions): on-demand rendered-template view,
-   request-to-request diff view, export/share JSON, settings-tunable retention, canary
-   linkage to kv-prefix digests. (Cross-chat/global browsing was considered and deferred by
-   the v1 scope decision.)
+   the "delta since previous request" toggle on the expanded entry (the request-to-request
+   diff view), live partial-response rendering inside the in-progress row, export/share
+   JSON, settings-tunable retention, canary linkage to kv-prefix digests. (Cross-chat/global
+   browsing was considered and deferred by the scope decision in §6.)
 
-## 6. Resolved decisions & remaining questions
+## 6. Decisions & remaining questions
 
-Resolved (2026-10-07):
-- **Scope:** per-chat only — the modal is reachable solely from the selected chat's header.
-  No global/cross-chat browser; no separate sidebar entry for automations/system chats in v1
-  (system chats are viewable by opening them like any chat).
-- **Retention:** 50 requests/chat, hard-coded constant initially; settings-tunable retention is
-  a later refinement if needed.
-- **Fidelity:** structured content blocks for responses; raw SSE chunk capture out of scope.
-- **Recorded traffic:** chat-turn requests only (`purpose='chat'`); warm/extraction/title skip
-  the recorder.
+- **Scope:** the viewer shows the **currently-selected chat only** — the modal is reachable
+  solely from that chat's header (agent and system chats both work; automations/headless
+  turns are included since they flow through the same provider). No global/cross-chat
+  browse; no separate sidebar entry for automations/system chats (system chats are viewable
+  by opening them like any chat).
+- **Capture point:** the provider choke point — the only place the complete wire truth
+  exists per request. pi-agent-core's `prepareRequest` hook was rejected: it fires
+  pre-`convertMessages` and would miss the true wire shape.
+- **Retention:** 50 requests per chat, hard-coded constant (`MAX_REQUESTS_PER_CHAT`);
+  settings-tunable retention is a later refinement if usage shows a need.
+- **Fidelity:** structured content blocks for responses; raw SSE chunk capture out of
+  scope (revisit only if parsing quirks need forensics).
+- **Recorded traffic:** chat-turn requests only (`purpose='chat'`); warm/extraction/title
+  skip the recorder entirely to keep `porrima.db` lean.
+- **Transport:** id events ride the existing chat SSE (`llm_request_start`/
+  `llm_request_end`), not polling; no raw bodies over SSE; details are fetched lazily.
+- **Storage dedup:** blob dedup over gzip — repeated system prompts and transcript bodies
+  dominate the payloads, so dedup gives near-linear storage; gzip is a one-liner but
+  storage still grows with the re-sent transcript.
 
 Remaining questions:
 - Tool-result truncation in stored request/response bodies: suggest **store-full +
-  display-truncate** (reranker-stats precedent caps raw text; the blob-dedup scheme keeps full
-  storage cheap since transcript rows are re-sent from cache).
-- Blob dedup vs simple gzip for v1 — dedup is more code but near-linear storage; gzip is a
-  one-liner. Could ship gzip first and migrate to dedup behind the same read path.
-  → **Shipped as blob dedup** (`llm_request_blobs`, sha1 full-hex, `INSERT OR IGNORE`).
-
-## 7. Implementation notes (shipped 2026-10-08)
-
-What shipped, by file:
-
-- `server/src/services/request-log.ts` — recorder + storage (porrima.db: `llm_requests`,
-  `llm_request_blobs`), `MAX_REQUESTS_PER_CHAT = 50` prune on insert, throttled blob vacuum
-  (every 20 inserts + on clear), in-progress rows marked `aborted` at init, event emitter,
-  `getLatestRecordedSystemPrompt` (restart-safe Context tab).
-- `server/src/services/llm-stream.ts` — `SafeStreamHooks.getTurnId`; per-call
-  `llamaRequestId/llamaRequestTurnId/llamaRequestIteration` options threaded to the provider.
-- `server/src/services/openai-compat-provider.ts` — `getRequestRecordMeta`; start capture
-  after `buildOpenAICompatChatBody`/`buildCacheMetadata` (gated on explicit
-  `llamaPromptDebugChatId` + request id = real chat turns only, so warm/extraction/title skip
-  recording); end capture at `done` push and in the error path (aborted/error status, partial
-  content kept). All recorder calls try/catch — pure side channel.
-- `server/src/routes/chat.ts` — `getTurnId: () => state.toolLoopId`; module-level
-  `onLlmRequestEvent` forwarder writing `llm_request_start` / `llm_request_end` frames to the
-  chat's live stream (skips silently when nobody is streaming).
-- `server/src/services/chat-turn-runner.ts` — headless parity: `getTurnId: () => turnId`.
-- `server/src/routes/request-log.ts` + `index.ts` mount `/api/llm-requests` — list (`?chatId=`
-  required), detail (rehydrated), delete (per-chat clear).
-- `server/src/routes/chats.ts` — `GET /:id/context-view` **replaces** `/:id/rendered-prompt`
-  (route removed): prompt resolved request-log → in-memory cache → base+skills fallback, with
-  `source` field, `PromptSectionBreakdown`, and tools incl. parameter schemas.
-- `server/src/services/agent-tools.ts` — `getAgentToolDefinitions` now returns `parameters`.
-- `server/src/services/chat-deletion.ts` — `clearLlmRequests` on delete.
-- Client: `api/client.ts` (fetchers + types + SSE cases; `fetchRenderedPrompt` removed),
-  `hooks/useChat.ts` (latest `LlmRequestLogEvent` state, returned), `App.tsx`
-  (prop threading), `ChatView.tsx` (header `Prompt` → `Requests`; old modal deleted),
-  `components/RequestViewerModal.tsx` (Requests + Context tabs, lazy detail fetch, per-role
-  collapsible message blocks, raw JSON + copy, section token grid, tool schemas, Clear).
-- `server/src/scripts/smoke-request-log.ts` — `npx tsx src/scripts/smoke-request-log.ts`
-  end-to-end smoke (self-cleaning; run against a scratch chatId).
-
-Deltas from plan:
-- Old plan said keep `rendered-prompt` upgraded — actually replaced by `context-view`
-  (single caller, cleaner cutover).
-- "Delta since previous request" toggle and live partial-response rendering inside the
-  in-progress row are deferred to P4 (v1 in-progress rows show the request + `Response still
-  streaming…`, refreshed to the final response on the `llm_request_end` bump).
-- Retention ordering key is `(timestamp DESC, iteration DESC)`; the id is `${turnId}:${iteration}`.
-
-UX redesign (2026-10-08), same day as P1–P3: the v1 expanded entry nested scroll containers
-inside the modal body (message list, message bodies, response blocks, raw JSON, and the
-Context tab each had their own `max-h-[Nvh] overflow-y-auto` box), which made scrolling
-confusing. The modal now enforces **one scroll container** (the body's `flex-1 overflow-y-auto`)
-as an invariant, and content is a tree whose layers grow/shrink inline:
-
-- request entry (accordion row, chevron) → section nodes → wire messages → message content.
-- Section nodes are `<details>` trees (`TreeNode`): `Request` (message list, open by default),
-  `Tool definitions sent`, `Response` (open by default, per-block thinking nodes nested inside),
-  `Raw wire JSON` — children mount only while open, so collapsed sections cost nothing.
-- The wire message list is **tail-truncated**: only the last `MESSAGE_TAIL = 8` messages render
-  inline (each iteration re-sends the whole transcript and the tail is what gets inspected);
-  the prefix collapses into one `N earlier messages · <role breakdown>` node that expands
-  in place, with true wire-array indices preserved. Live in-progress refreshes keep following
-  the tail as rows append.
-- Context tab follows the same rule: system prompt and tool schemas render inline with no inner
-  scroll caps; tool definitions became tree nodes.
-
-Post-review refinements (2026-10-09, review of the three launch commits):
-
-- **Targeted live refresh.** The modal now receives the latest
-  `LlmRequestLogEvent` (fresh object per event) instead of a version counter.
-  The list refetches on every event (summaries only — cheap); the expanded
-  entry refetches only when its **own** `end` lands (previously every event
-  re-downloaded and re-parsed the full rehydrated body); the Context tab
-  refreshes only on `start`, when the latest recorded system prompt may have
-  changed. (`useChat` state, `App.tsx`/`ChatView.tsx` threading, modal effect.)
-- **Suite coverage.** `src/__tests__/request-log.test.ts` (14 tests,
-  `PORRIMA_DATA_DIR` isolation per the memory-tools pattern): id-only events,
-  newest-first listing, blob dedup counts + exact rehydration, 50/chat
-  retention, targeted blob vacuum, latest-system-prompt defensive branches,
-  chat scoping, in-process routes, and restart hygiene (in_progress → aborted
-  via module re-init). The smoke script now refuses to run without
-  `PORRIMA_DATA_DIR` so it can never hit the live DB.
+  display-truncate** (reranker-stats precedent caps raw text; the blob-dedup scheme keeps
+  full storage cheap since transcript rows are re-sent from cache).

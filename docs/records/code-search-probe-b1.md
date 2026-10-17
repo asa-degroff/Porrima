@@ -4,7 +4,7 @@
 **Author:** Qwen 3.8 Flash
 **Date:** 2026-10-15
 
-Companion to [code-search.md](code-search.md) §4.2. This is the *results* record
+Companion to [code-search.md](../design/code-search.md) §4.2. This is the *results* record
 of the 9-run probe that §4.2's protocol mandates before spending the 45-run
 three-arm battery: arm B (tool on, schema-only discovery, no routing line) on
 the tasks with the sharpest v2 signal. It answers §4.2's two questions — did
