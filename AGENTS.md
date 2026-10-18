@@ -306,3 +306,5 @@ Release and onboarding:
 - [Onboarding & Installation](docs/onboarding-installation.md) — Install profiles and host probes
 - [Release Notes 0.4.0](docs/release-notes-0.4.0.md)
 - [Setup & Deployment](docs/setup.md) — Prerequisites, development, production, systemd
+
+Documentation style: Do not write provenance information, experiment or test results, or changelogs in architecture or design documents. Writing must meet the requirements for ASD-STE100 Simplified Technical English. 
