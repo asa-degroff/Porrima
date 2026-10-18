@@ -256,6 +256,7 @@ const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string;
   { id: "brave", label: "Brave Search", description: "Results from the Brave Search API." },
   { id: "exa", label: "Exa", description: "Results from the Exa search API." },
   { id: "tavily", label: "Tavily", description: "Results from the Tavily search API." },
+  { id: "deepseek", label: "DeepSeek Search", description: "Results from the DeepSeek search API (ranked, with authority tier)." },
 ];
 
 const RETRIEVAL_DEPTH_OPTIONS: Array<{ id: RetrievalDepthProfile; label: string; description: string }> = [
@@ -635,6 +636,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
+  const [deepseekApiKey, setDeepseekApiKey] = useState(settings.deepseekApiKey || "");
   const [defaultWebSearchProvider, setDefaultWebSearchProvider] = useState<WebSearchProvider>(coerceWebSearchProvider(settings.defaultWebSearchProvider));
   const [imageCapPreset, setImageCapPreset] = useState<ImageCapPreset>(coerceImageCapPreset(settings.imageCapPreset));
   // llama.cpp server settings
@@ -2171,6 +2173,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
       tavilyApiKey: tavilyApiKey.trim(),
+      deepseekApiKey: deepseekApiKey.trim(),
       defaultWebSearchProvider,
       imageCapPreset,
       llamacppEnabled,
@@ -5367,6 +5370,24 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   Required for Tavily-powered web search. Get a key at{" "}
                   <a href="https://app.tavily.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                     app.tavily.com
+                  </a>
+                </p>
+              </div>
+            {/* DeepSeek key */}
+            <div className="space-y-2">
+                <label className="block text-sm text-white/50">DeepSeek API Key</label>
+                <input
+                  type="password"
+                  value={deepseekApiKey}
+                  onChange={(e) => setDeepseekApiKey(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  placeholder="sk-..."
+                  autoComplete="off"
+                />
+                <p className="text-white/30 text-xs">
+                  Required for DeepSeek Search. Get a key at{" "}
+                  <a href="https://platform.deepseek.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                    platform.deepseek.com
                   </a>
                 </p>
               </div>

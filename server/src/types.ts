@@ -458,6 +458,7 @@ export interface Settings {
   braveApiKey: string;
   exaApiKey: string;
   tavilyApiKey: string;
+  deepseekApiKey: string;
   /** The web_search provider. The tool schema is built per turn for this
    *  provider; a change is a one-time context prefix break on the next turn. */
   defaultWebSearchProvider?: WebSearchProvider;

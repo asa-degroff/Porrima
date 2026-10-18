@@ -526,7 +526,7 @@ export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
  *  preference — persisted with the settings blob, never consumed server-side. */
 export type ThinkingDisplayMode = "start" | "end" | "interleaved";
 
-export type WebSearchProvider = "brave" | "exa" | "tavily";
+export type WebSearchProvider = "brave" | "exa" | "tavily" | "deepseek";
 export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
 
 export interface Settings {
@@ -536,6 +536,7 @@ export interface Settings {
   braveApiKey: string;
   exaApiKey: string;
   tavilyApiKey: string;
+  deepseekApiKey: string;
   defaultWebSearchProvider?: WebSearchProvider;
   theme?: Theme;
   customTheme?: CustomTheme;

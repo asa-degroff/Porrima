@@ -1403,6 +1403,7 @@ const DEFAULT_SETTINGS: Settings = {
   braveApiKey: "",
   exaApiKey: "",
   tavilyApiKey: "",
+  deepseekApiKey: "",
   defaultWebSearchProvider: "brave",
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,

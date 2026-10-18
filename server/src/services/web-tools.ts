@@ -11,7 +11,7 @@ import { appDataPath } from "./paths.js";
 import { findChromePath } from "./chrome.js";
 
 const MAX_CONTENT_LENGTH = 250_000;
-const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily"] as const;
+const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily", "deepseek"] as const;
 
 // --- Web fetch cache ---
 
@@ -246,12 +246,33 @@ function tavilyWebSearchTool(): Tool {
   };
 }
 
+function deepseekWebSearchTool(): Tool {
+  return {
+    name: "web_search",
+    description:
+      "Search the web via DeepSeek Search. Returns ranked results with a model-oriented summary, " +
+      "authority tier, and relevance score. need_content includes full page text per result.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query (max 128 chars). Supports operators: site:, -site:, -term, \"phrase\", lang:, after:, before:" }),
+      count: Type.Optional(
+        Type.Integer({
+          description: "Number of results (1-50, default 10)",
+          minimum: 1,
+          maximum: 50,
+        })
+      ),
+      need_content: Type.Optional(Type.Boolean({ description: "Include full page content per result (search+fetch in one call; default false)" })),
+    }),
+  };
+}
+
 /** Build the web_search definition for the selected provider. The builder
  *  output is deterministic: same provider, same bytes — the KV prefix
  *  stability invariant the tool surface depends on. */
 export function buildWebSearchTool(provider: WebSearchProvider): Tool {
   if (provider === "exa") return exaWebSearchTool();
   if (provider === "tavily") return tavilyWebSearchTool();
+  if (provider === "deepseek") return deepseekWebSearchTool();
   return braveWebSearchTool();
 }
 
@@ -333,6 +354,12 @@ async function getTavilyApiKey(): Promise<string> {
   return settings.tavilyApiKey || "";
 }
 
+async function getDeepSeekApiKey(): Promise<string> {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
+  const settings = await getSettings();
+  return settings.deepseekApiKey || "";
+}
+
 /** The authoritative search provider: the Settings selection. Missing or
  *  invalid values fall back to brave. */
 export function resolveWebSearchProvider(
@@ -371,6 +398,9 @@ async function executeWebSearch(
   }
   if (provider === "tavily") {
     return executeTavilySearch(args, signal);
+  }
+  if (provider === "deepseek") {
+    return executeDeepSeekSearch(args, signal);
   }
 
   return executeBraveSearch(args, signal);
@@ -645,6 +675,108 @@ async function executeTavilySearch(
     return { content: sections.join("\n\n"), isError: false };
   } catch (e: any) {
     return { content: `Tavily Search failed: ${e.message}`, isError: true };
+  }
+}
+
+const DEEPSEEK_CONTENT_CAP = 4_000;
+
+async function executeDeepSeekSearch(
+  args: Record<string, any>,
+  signal?: AbortSignal,
+): Promise<{ content: string; isError: boolean }> {
+  const apiKey = await getDeepSeekApiKey();
+  if (!apiKey) {
+    return {
+      content:
+        "DeepSeek Search is unavailable: no API key configured. Add one in Settings or set the DEEPSEEK_API_KEY environment variable.",
+      isError: true,
+    };
+  }
+
+  const query = normalizeString(args.query);
+  if (!query) {
+    return { content: "Missing required parameter: query", isError: true };
+  }
+  if (query.length > 128) {
+    return {
+      content: "query must be 128 characters or fewer — split the search into a shorter, focused query.",
+      isError: true,
+    };
+  }
+
+  const count = Math.min(50, Math.max(1, args.count || 10));
+  const needContent = args.need_content === true;
+
+  try {
+    const response = await fetch("https://api.deepseek.com/v1/tools/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ query, count, need_content: needContent }),
+      signal,
+    });
+
+    if (response.status === 429) {
+      return {
+        content: "DeepSeek Search rate limit exceeded (5 requests/second). Wait a moment and retry.",
+        isError: true,
+      };
+    }
+    if (response.status === 402) {
+      return {
+        content: "DeepSeek account has insufficient balance. Top up the account, then retry.",
+        isError: true,
+      };
+    }
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        content: `DeepSeek Search API error: ${response.status} ${response.statusText} — ${errorText.slice(0, 500)}`,
+        isError: true,
+      };
+    }
+
+    const data = await response.json();
+    const results = data.results || [];
+
+    if (results.length === 0) {
+      return { content: "No search results found.", isError: false };
+    }
+
+    const formatted = results
+      .map((r: any, i: number) => {
+        const parts: string[] = [];
+        parts.push(`${i + 1}. **${r.title || "(no title)"}**`);
+        parts.push(`   ${r.url}`);
+
+        const meta: string[] = [];
+        if (r.site_name) meta.push(r.site_name);
+        if (r.date) meta.push(String(r.date).slice(0, 10));
+        if (typeof r.authority === "number") meta.push(`authority ${r.authority}`);
+        if (typeof r.rerank_score === "number") meta.push(`relevance ${r.rerank_score.toFixed(1)}/3`);
+        if (meta.length > 0) {
+          parts.push(`   — ${meta.join(", ")}`);
+        }
+
+        if (r.summary) {
+          parts.push(`   ${r.summary}`);
+        }
+
+        if (needContent && r.content) {
+          const text = String(r.content);
+          const capped = text.length > DEEPSEEK_CONTENT_CAP ? " (truncated)" : "";
+          parts.push(`   Content${capped}:\n   ${text.slice(0, DEEPSEEK_CONTENT_CAP).trim()}`);
+        }
+
+        return parts.join("\n");
+      })
+      .join("\n\n");
+
+    return { content: formatted, isError: false };
+  } catch (e: any) {
+    return { content: `DeepSeek Search failed: ${e.message}`, isError: true };
   }
 }
 
