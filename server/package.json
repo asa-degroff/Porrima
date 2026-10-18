@@ -10,6 +10,7 @@
     "analyze:token-estimates": "tsx src/scripts/analyze-token-estimates.ts"
   },
   "dependencies": {
+    "@ast-grep/lang-python": "0.0.6",
     "@ast-grep/napi": "0.50.0",
     "@earendil-works/pi-agent-core": "^1.0.2",
     "@earendil-works/pi-ai": "^1.0.2",

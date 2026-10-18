@@ -390,7 +390,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
       {
         code: [
           "try:",
-          '    await tools.code_search(pattern="def $F()", lang="python")',
+          '    await tools.code_search(pattern="fn $F()", lang="rust")',
           '    print("no-raise")',
           "except Exception as e:",
           '    print(type(e).__name__, "not supported" in str(e))',

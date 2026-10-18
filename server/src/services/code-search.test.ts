@@ -19,7 +19,7 @@ import { execFile } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 import { createRequire } from "module";
-import { runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled } from "./code-search.js";
+import { runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, passesGlobs, regexShapeHint, resolveWorkspacePath, LANGUAGE_ALIASES, codeSearchEnabled, ensureCodeSearchEngine, loadDynamicLanguage } from "./code-search.js";
 import { LocalWorkspaceAdapter } from "./workspace.js";
 import type { WorkspaceAdapter } from "./workspace.js";
 
@@ -58,6 +58,14 @@ async function gitFixtures() {
     "    return 1",
     "",
   ].join("\n"));
+  // Phase G: python is a loaded grammar package, so it is SCANNED. Ruby is not
+  // in the table and stays the unsupported-language witness for the census.
+  await writeFile(join(src, "services", "svc.rb"), [
+    "def helper",
+    "  1",
+    "end",
+    "",
+  ].join("\n"));
   await writeFile(join(src, "styles.css"), ".a { color: red }\n");
   // The engine's extension set is broader than the five language names
   // (js→mjs/cjs, ts→mts/cts, html→htm/xhtml, css→scss): the census must
@@ -83,6 +91,14 @@ beforeAll(async () => {
     napiAvailable = false;
   }
   if (!napiAvailable) return;
+  try {
+    // Load the engine once so the dynamic grammar packages register and the
+    // alias table is complete for every test.
+    ensureCodeSearchEngine();
+  } catch {
+    napiAvailable = false;
+    return;
+  }
   try {
     await gitFixtures();
   } catch (e: any) {
@@ -203,11 +219,15 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
   it("zero match is qualified by the scope census: unscanned languages are named, not invisible", async () => {
     const res = await runCodeSearch({ pattern: "interface $NAME { $$$ }" }, localWs(FIXTURE));
     expect(res.totalMatches).toBe(0);
-    // The napi silently never visits svc.py — the census must surface it so
-    // absence is not read as coverage.
-    expect(res.unscanned.py).toBe(1);
+    // svc.rb has no grammar package — the census must surface it so absence
+    // is not read as coverage. svc.py is covered since phase G (python).
+    expect(res.unscanned.rb).toBe(1);
+    expect(res.unscanned.py).toBeUndefined();
     expect(res.skippedTotal).toBeGreaterThan(0);
-    expect(res.skipped.some((s) => s.file === "src/services/svc.py")).toBe(true);
+    expect(res.skipped.some((s) => s.file === "src/services/svc.rb" && /language not supported/.test(s.reason))).toBe(true);
+    // svc.py is scanned. A TS-shape pattern does not apply to the python
+    // grammar; that is a per-file scan error, never a coverage skip.
+    expect(res.skipped.some((s) => s.file === "src/services/svc.py" && /language not supported/.test(s.reason))).toBe(false);
     expect(res.text).toMatch(/not scanned/);
     expect(res.text).toMatch(/narrow|mis-scoped/);
   });
@@ -223,7 +243,8 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(res.unscanned.mjs).toBeUndefined();
     expect(res.unscanned.mts).toBeUndefined();
     expect(res.unscanned.scss).toBeUndefined();
-    expect(res.unscanned.py).toBe(1); // the honest skip is still honest
+    expect(res.unscanned.py).toBeUndefined(); // phase G: the python package is loaded
+    expect(res.unscanned.rb).toBe(1); // the honest skip is still honest
     expect(res.skipped.some((s) => s.file.endsWith(".mjs") || s.file.endsWith(".mts") || s.file.endsWith(".scss"))).toBe(false);
     // Explicit lang: .mjs counts toward javascript coverage — no false scope error.
     const js = await runCodeSearch({ pattern: fnPattern, lang: "js", path: "src" }, localWs(FIXTURE));
@@ -239,10 +260,10 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     // the census must never claim coverage the engine doesn't provide (or
     // deny coverage it does).
     const CANDIDATES = [
-      // expected scanned (the 0.50.0 inference set)
-      "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "html", "htm", "xhtml", "css", "scss",
-      // expected NOT scanned
-      "py", "vue", "svelte", "less", "sass", "json", "md",
+      // expected scanned (the 0.50.0 inference set + loaded grammar packages)
+      "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "html", "htm", "xhtml", "css", "scss", "py",
+      // expected NOT scanned (no grammar package loaded for these)
+      "rb", "vue", "svelte", "less", "sass", "json", "md",
     ];
     await rm(DRIFT_DIR, { recursive: true, force: true });
     await mkdir(DRIFT_DIR, { recursive: true });
@@ -253,6 +274,7 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
           ? "<template><div></div></template>\n"
           : ext === "json" ? "{}\n"
           : ext === "md" ? "# x\n"
+          : ext === "py" ? "def probe():\n    return 1\n"
           : "function probe() { return 1; }\n";
       await writeFile(join(DRIFT_DIR, `f.${ext}`), body);
     }
@@ -349,13 +371,13 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
     expect(regexShapeHint("function $NAME($$$ARGS) { $$$ }")).toBeNull();
   });
 
-  it("rejects languages outside the napi's five with the support list", async () => {
+  it("rejects languages the engine cannot load, and accepts a loaded grammar package", async () => {
     await expect(
-      runCodeSearch({ pattern: fnPattern, lang: "python" }, localWs(FIXTURE)),
+      runCodeSearch({ pattern: fnPattern, lang: "ruby" }, localWs(FIXTURE)),
     ).rejects.toThrow(/not supported/);
     expect(LANGUAGE_ALIASES.ts).toBe("typescript");
     expect(LANGUAGE_ALIASES.jsx).toBe("javascript");
-    expect(LANGUAGE_ALIASES.py).toBeUndefined();
+    expect(LANGUAGE_ALIASES.py).toBe("python"); // phase G: loaded grammar package
   });
 
   it("errors cleanly on missing paths", async () => {
@@ -391,6 +413,69 @@ describe.runIf(napiAvailable)("code_search executor (Phase 0)", () => {
       if (prev === undefined) delete process.env.PORRIMA_CODE_SEARCH_MAX_CHARS;
       else process.env.PORRIMA_CODE_SEARCH_MAX_CHARS = prev;
     }
+  });
+});
+
+describe.runIf(napiAvailable)("code_search dynamic languages (phase G)", () => {
+  it("loads the python grammar package: aliases and support list", () => {
+    ensureCodeSearchEngine();
+    // Both the short alias and the language name resolve; "py" also serves as
+    // the census extension entry (mirroring the package's own extension list).
+    expect(LANGUAGE_ALIASES.py).toBe("python");
+    expect(LANGUAGE_ALIASES.python).toBe("python");
+  });
+
+  it("scans python files: explicit lang, short alias, and auto-detect", async () => {
+    const pattern = "def $F($$$ARGS): $$$BODY";
+    const explicit = await runCodeSearch({ pattern, lang: "python", path: "src" }, localWs(FIXTURE));
+    const helper = explicit.matches.find((m) => m.file === "src/services/svc.py");
+    expect(helper).toBeDefined();
+    expect(helper!.metaVariables?.F).toBe("helper");
+    expect(explicit.scannedFiles).toBeGreaterThanOrEqual(1);
+
+    const alias = await runCodeSearch({ pattern, lang: "py", path: "src" }, localWs(FIXTURE));
+    expect(alias.totalMatches).toBe(explicit.totalMatches);
+
+    const auto = await runCodeSearch({ pattern, path: "src" }, localWs(FIXTURE));
+    expect(auto.matches.some((m) => m.file.endsWith(".py"))).toBe(true);
+    expect(auto.unscanned.py).toBeUndefined();
+  });
+
+  it("snippet mode parses a dynamic language too (no filesystem)", () => {
+    const res = runCodeSearchOnSnippet({
+      pattern: "def $F($$$ARGS): $$$BODY",
+      code: "def f(a):\n    return a\n",
+      lang: "py",
+    });
+    expect(res.lang).toBe("python");
+    expect(res.totalMatches).toBe(1);
+    expect(res.matches[0].metaVariables?.F).toBe("f");
+  });
+
+  it("guard: a missing or incomplete grammar package is skipped, never registered", () => {
+    // A package that does not exist.
+    const missing = loadDynamicLanguage("nope", { packageName: "@ast-grep/lang-nope", aliases: [] });
+    expect(missing).toBeNull();
+    // A package whose library file does not exist (the native register call
+    // would abort the process on this input — the guard must reject it first).
+    const badPath = loadDynamicLanguage(
+      "bad",
+      { packageName: "fake", aliases: ["bad"] },
+      () => ({ libraryPath: "/nonexistent/parser.so", extensions: ["bad"] }),
+    );
+    expect(badPath).toBeNull();
+    // A package with an incomplete export.
+    const badShape = loadDynamicLanguage(
+      "bad",
+      { packageName: "fake", aliases: [] },
+      () => ({ extensions: ["bad"] }),
+    );
+    expect(badShape).toBeNull();
+    // The real package loads and carries its own extensions list.
+    const python = loadDynamicLanguage("python", { packageName: "@ast-grep/lang-python", aliases: ["py"] });
+    expect(python).not.toBeNull();
+    expect(python!.registration.extensions).toContain("py");
+    expect(python!.registration.libraryPath.length).toBeGreaterThan(0);
   });
 });
 
@@ -441,7 +526,7 @@ describe.runIf(napiAvailable)("code_search snippet projection (Phase 1, §3.3)",
 
   it("rejects unsupported languages and no-code-content patterns; garbage parses tolerantly", () => {
     expect(() =>
-      runCodeSearchOnSnippet({ pattern: "def $F()", code: "def f(): pass", lang: "python" }),
+      runCodeSearchOnSnippet({ pattern: "def $F()", code: "def f(): pass", lang: "ruby" }),
     ).toThrow(/not supported/);
     expect(() => runCodeSearchOnSnippet({ pattern: ";;;", code: "x" })).toThrow(/no code content/);
     // The engine is the referee: garbage compiles and simply matches nothing.
@@ -518,6 +603,10 @@ describe("gating and definition surface", () => {
       expect(def.description).toMatch(/text content \(string literals, character order\)/);
       expect(def.description).toMatch(/do not write a script to count what a pattern can match/);
       expect(def.description).toMatch(/test it first against a snippet/);
+      // Phase G: the coverage statement names python, and the lang parameter
+      // lists its alias.
+      expect(def.description).toMatch(/Covers TypeScript, TSX, JavaScript\/JSX, HTML, CSS, and Python/);
+      expect(JSON.stringify(def.parameters)).toMatch(/ts, tsx, js, jsx, html, css, py/);
       // Schema exposes the snippet parameter (S1).
       expect(JSON.stringify(def.parameters)).toContain('"code"');
     } finally {

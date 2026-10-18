@@ -6,6 +6,9 @@ the live kernel-tools flag). Extends the kernel-codemode design: it is the
 concrete design behind the §4.3 Tier 1 `code_search` row and answers §7 Q9
 (model-level wrapper first, in-kernel projection second, outline deferred as
 its own feature). Phase 2 (`code_outline`) is designed — §3.4, kernel-first.
+Phase G grammar coverage is implemented for Python — `@ast-grep/lang-python`
+registers at executor init (§5); one dependency and one registration entry
+extend the language set further.
 Rollout is gated on the §4.2 battery program; battery runs to date: **FAIL —
 the surface stays dark** (results recorded in
 [../records/code-search-probe-b1.md](../records/code-search-probe-b1.md) and
@@ -330,16 +333,30 @@ pattern per language); `findInFiles(lang, {paths, matcher, languageGlobs?},
 callback)` discovers and parses files in Rust and delivers matched `SgNode`s;
 `parseFiles` parses a file list. Language arguments are plain strings
 (`sg.Lang` is populated at runtime in 0.50.0, but names only the bundled
-five; the executor never reads it).
+five; the executor never reads it). `registerDynamicLanguage` takes one
+registration per language — `{name: {libraryPath, extensions,
+languageSymbol, expandoChar}}` — and adds grammars from the
+`@ast-grep/lang-*` packages; a registered language then behaves like a
+bundled one.
 
 Four binding properties shape the executor, each load-bearing:
 
 1. **The napi bundle supports five languages** — typescript, tsx, javascript
    (jsx alias), html, css — and silently never visits files whose extension
-   infers anything else. **The extension set is broader than the language
-   names**: js/mjs/cjs/jsx → JavaScript,
-   ts/mts/cts → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss →
-   Css. The executor's alias table mirrors the engine's inference set —
+   infers anything else. Dynamic grammars extend the set at init (phase G,
+   §5; Python is registered): the executor resolves each `@ast-grep/lang-*`
+   package, registers it, and adds the language to the alias table only after
+   registration succeeded. **Registration is unsafe by itself** — it loads
+   the library at once, and a missing or unloadable library panics the native
+   addon and aborts the whole process (not catchable in JavaScript). The
+   loader therefore guards every package (`require` + `existsSync` + a glibc
+   check on Linux) and skips the ones that fail; a skipped package stays out
+   of the alias table, so its files remain honestly `unscanned` (§5).
+   **The extension set is broader than the language
+   names**: js/mjs/cjs/jsx → JavaScript, ts/mts/cts → TypeScript, tsx → Tsx,
+   html/htm/xhtml → Html, css/scss → Css, plus each registered package's
+   extensions (py → Python). The executor's alias table mirrors the engine's
+   inference set —
    a stale table mis-reports *scanned* files as unscanned (and can emit a
    false "no X files in scope" scope error), the coverage-honesty inversion
    the census exists to prevent; a drift-pin test asks the live engine which
@@ -392,7 +409,7 @@ over-wide scope.
 **Coverage: the scope census.** A zero-match result is only honest if the
 caller knows what the engine could not see. The executor walks the scope
 itself (ignore-aware, pruning VCS/dependency/build directories) and
-aggregates by extension: files outside the five-language set become `unscanned`
+aggregates by extension: files outside the scanned-language set become `unscanned`
 counts and `skipped` entries, never invisible gaps. The census is metadata,
 never the scan; its cost is one directory walk with no parsing, and discrepancies
 fail safe (under-report skips, never over-claim coverage). With an explicit
@@ -462,11 +479,12 @@ fixes cost #3 at the surface: the expected outcome stops being a failure. Two
 refinements make absence *honest*, not just clean:
 
 - When the census found files the engine cannot visit (or scan errors), the
-  zero-match text names them — "N file(s) in scope are not scanned (.py×12,
-  .go×3) — code_search covers ts/tsx/js/jsx/html/css; for other languages use
-  rg via bash" plus "coverage is partial — narrow `path` before concluding
-  absence." Absence-over-partial-coverage is exactly where the model
-  over-concludes.
+  zero-match text names them — "N file(s) in scope are not scanned (.go×3,
+  .rs×2) — code_search covers typescript/tsx/javascript/html/css/python; for
+  other languages use rg via bash" plus "coverage above is partial — narrow
+  `path` before concluding absence." The coverage list is the alias table, so
+  a registered grammar appears in it under its own name. Absence-over-
+  partial-coverage is exactly where the model over-concludes.
 - With an explicit `lang` and zero files of that language in scope, the result
   says so — a scope error reported as such, not as a result.
 
@@ -546,7 +564,8 @@ on-ramp for pattern syntax lives where the tool is, because the failure mode
 - Plain text with no metavariables is a **literal** exact-node match.
 - The classic trap: `$` is *not* a multi-element metavariable — it parses as
   a bare identifier named `$`. Three dollars plus a name is the list syntax.
-- Language coverage statement (the five languages; rg for the rest).
+- Language coverage statement — the registered languages (Python included);
+  rg for the rest.
 
 ### 3.3 The kernel projection — Phase 1
 
@@ -725,8 +744,8 @@ removal:
 
 | surface | today | after `code_search` |
 |---|---|---|
-| **searching code (ts/tsx/js/jsx/html/css)** | `bash(command="rg -n ...")` — regex authoring, text output, exit-1-on-no-match | **`code_search`** — pattern authoring, structured index, clean 0-match value |
-| **searching other languages** (python, go, rust, …) | `bash` + `rg` | unchanged — `code_search` names them as unscanned and points at `rg` |
+| **searching code (ts/tsx/js/jsx/html/css/py)** | `bash(command="rg -n ...")` — regex authoring, text output, exit-1-on-no-match | **`code_search`** — pattern authoring, structured index, clean 0-match value |
+| **searching other languages** (go, rust, …) | `bash` + `rg` | unchanged — `code_search` names them as unscanned and points at `rg` |
 | **searching text/non-code** (logs, configs, binaries, remote) | `bash` + `rg` | unchanged — `rg` stays *the* tool for text search |
 | **reading** | `read_file` | unchanged — search→read is still the loop; `code_search` replaces the *search half* with structure |
 | **orientation** | `list_files` (+ ad hoc `ls` via bash) | unchanged at model level now; `code_outline` designed, kernel-first (§3.4) |
@@ -741,7 +760,7 @@ flags? how do I parse the output? did it actually look?"). It adds a
 capability class (structure) while keeping the surface flat. Nothing is
 removed from `bash`: the escape hatch for everything `code_search` doesn't
 cover — regex, non-code, binaries, other languages, and hosts where the napi
-platform matrix doesn't reach.
+or grammar-package prebuild matrix doesn't reach.
 
 **Sequencing with the kernel:** the model-level tool is separable from
 protocol v2 by construction (it is just another registry tool + executor) and
@@ -1020,10 +1039,11 @@ the full battery runs as designed.
 
 **Couplings and caveats.**
 
-- **T4 × Phase G:** adding python grammar (§5, phase G) flips T4's ground
-  truth from "none, route to rg" to "N found" — the battery's oracle is
-  coupled to the language-coverage decision; the census's `unscanned`
-  demand metric and the battery cannot both be treated as frozen facts.
+- **T4 × Phase G:** the Python grammar is registered (§5, phase G), so T4's
+  ground truth for Python files is "N found", not "none, route to rg". The
+  battery's oracle changes when language coverage changes; the census's
+  `unscanned` demand metric and the battery cannot both be treated as frozen
+  facts.
 - **Adversarial counting prompts:** v2's closed shape lists make the
   counting tasks harder than the wild; a v3 pass there may overstate
   adoption. T4's probe remains the honest signal.
@@ -1060,12 +1080,7 @@ budget tuning is iteration-blind today.
 
 ## 5. Dependency placement
 
-- **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds).
-  Platform support, per the pinned version's *published artifacts* (the npm
-  README's support table lags them): Windows
-  x64/arm64/x32, macOS x64/arm64, **Linux x64 gnu, Linux x64 musl, Linux
-  arm64 gnu, Linux arm64 musl**. Enceladus (Ubuntu x64) is covered, and
-  0.50.0 has no local-platform gap at all. The
+- **`@ast-grep/napi@0.50.0` as a server dependency** (native prebuilds). The
   `@ast-grep/cli` binary via the onboarding profiles remains a supported
   execution path — now primarily for remote hosts (phase 3(a)) and as
   insurance against prebuild regressions on future bumps, not for local
@@ -1073,19 +1088,32 @@ budget tuning is iteration-blind today.
 - **The five-language ceiling — and its cheap escape route.** The napi bundle
   visits typescript, tsx, javascript, html, css — and only those (extension
   set per §3.1 fact 1, which is wider than the five names). v1 deliberately
-  ships at the ceiling: the scope census (§3.1) makes it visible in every
-  result rather than silently wrong, and `rg` via bash covers the rest. But
-  raising it is now a dependency addition, not a research project:
+  shipped at the ceiling, with the scope census (§3.1) making it visible in
+  every result rather than silently wrong, and `rg` via bash covering the
+  rest. Raising it was a dependency addition, not a research project:
   ast-grep publishes official **`@ast-grep/lang-*` packages** (the
   ast-grep/langs monorepo) — prebuilt tree-sitter grammars made exactly for
-  the napi's `registerDynamicLanguage` — so python coverage is `npm install
-  @ast-grep/lang-python` + one register call + alias-table entries (the
-  drift-pin test then guards the table). Caveats: per-platform native dynamic
-  libraries, a postinstall script (pnpm ≥ 10 needs `--allow-build`
-  allowlisting; npm runs it by default), and prebuild availability per
-  grammar. **On the plan** (§6, phase G), demand-gated — the census's
-  `unscanned` counts *are* the demand metric. The CLI (28+ languages) remains
-  the fallback of last resort.
+  the napi's `registerDynamicLanguage`. **Python ships this way** (phase G,
+  §6): `@ast-grep/lang-python` is a server dependency, and its package
+  exports the ready registration — the prebuild path, the extension (`.py`),
+  the language symbol, and the expando character (the engine's stand-in for
+  `$` in grammars where `$` is not a legal identifier character; Python uses
+  `µ`). The executor registers every loadable package in one native call at
+  init, then extends the alias table (the drift-pin test guards the result);
+  each further language is one dependency plus one registration-table entry,
+  and the extension list stays with the package — one source of truth.
+
+  Two caveats are load-bearing. **Platform reach:** the grammar packages
+  publish fewer prebuilds than the napi — Linux X64/ARM64, macOS X64/ARM64,
+  and Windows X64 — and the Linux library links `libc.so.6`, so musl hosts
+  skip it. **Registration abort:** a missing or unloadable library panics the
+  native addon and aborts the process, so nothing may reach
+  `registerDynamicLanguage` unverified — the loader checks each package
+  first and registers only the loadable ones (§3.1 fact 1); a skipped package
+  leaves its language honestly `unscanned`, and the prebuild resolves at
+  require time (the package's postinstall step only builds from source when
+  no prebuild matches). The CLI (28+ languages) remains the fallback of last
+  resort.
 - **Field position.** The napi route is rare but not unprecedented (§2
   novelty note): the pi wrappers mostly shell to the CLI (six-step resolver
   chains, TLS-only auto-download, `sg` name collisions are exactly what a
@@ -1114,7 +1142,7 @@ budget tuning is iteration-blind today.
 | **1** | kernel dispatcher row + JSON projection + snippet-testing path (`code=` over `parse`/`pattern`) | implemented; exposure gated on `PORRIMA_CODE_SEARCH=1` (structured-values rationale in §3.3) |
 | **2** | `code_outline` — **designed §3.4**, kernel-first | **ahead of remote:** the field's orientation signal is strong and strengthening — @juvio15's rich outline tool, Serena's `get_symbols_overview` as its most-praised feature, `sg outline` first-class with JSON/NDJSON (§2 adjacent lineages); evidence + design in §3.4; model-level exposure gated on the §4.9 density readout (kernel-codemode) |
 | **3** | remote carve-out (b): adapter-read + in-process parse; (a) host binary only if measured slow | the remote-kernel test bench (P4 smoke pattern); after outline, which serves every local session |
-| **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, re-run the drift pin | demand-driven, any time after phase 0 — lands when the census's `unscanned` counts show a language worth covering (python the expected first); each language is one package + table entries + one register call |
+| **G** | **grammar coverage** via the official `@ast-grep/lang-*` prebuilt grammar packages (§5): register dynamic languages, extend the alias table, extend the drift pin | **implemented for Python** (`@ast-grep/lang-python`; dark with the rest, `PORRIMA_CODE_SEARCH=1`) — each further language is one package + one registration-table entry, gated on a prebuild loadable by the host; demand-driven, the census's `unscanned` counts show which language is worth covering next |
 | **4** | the one-line default shift in AGENTS.md / tool guidance — a nudge, not the mechanism (discovery must work from the schema/description alone; the feature never leans on AGENTS.md being load-bearing) | **gated on the §4.2 battery verdict** (harness and gates in §4.1), not on the flip alone; runs to date recorded in [../records/code-search-probe-b1.md](../records/code-search-probe-b1.md) and [../records/code-search-battery-v4.md](../records/code-search-battery-v4.md) — **FAIL, surface stays dark** (model-scoped verdict; kernel projection untested); arms A/B/C with the strict gate B-vs-A and nudge gate C-vs-A decision matrix in §4.2 |
 
 ## 7. Risks
@@ -1147,14 +1175,16 @@ budget tuning is iteration-blind today.
    (§5), the test suite's skip-not-fail prebuild probe, and remote hosts
    sidestepping both via phase 3(b) until (a) is earned. oh-my-pi's
    own-addon route is demonstrated insurance.
-4. **Coverage illusion** — a five-language engine returning a clean zero over
-   a polyglot repo *is the false absence this design exists to prevent*.
+4. **Coverage illusion** — an engine over a fixed language set returning a
+   clean zero over a polyglot repo *is the false absence this design exists
+   to prevent*.
    Mitigation: the scope census (§3.1) names every unscanned file and
-   extension in the result, the description tells the model the ceiling up
-   front, and the qualified-absence phrasing (§3.2) makes "no matches" read
+   extension in the result, the tool description names the covered languages
+   up front (the bundled five plus each registered grammar), and the
+   qualified-absence phrasing (§3.2) makes "no matches" read
    as "no matches *among what was scanned*." The alias table itself is a
    drift surface in BOTH directions — the engine's extension set is wider
-   than the five language names, and a too-narrow language table reports
+   than the language names, and a too-narrow language table reports
    scanned files (`.mjs`/`.mts`/`.scss`) as unscanned, with false "no X
    files in scope" errors — so it is pinned by a test that queries the live
    engine (§3.1 fact 1). Residual: the census walk approximates (not
@@ -1184,13 +1214,14 @@ budget tuning is iteration-blind today.
   a model-level surface gated on the §4.9 density readout. Now staged as phase 2 (§6), ahead of remote: the
   orientation signal from the field (Serena's `get_symbols_overview`,
   @juvio15's outline tool, `sg outline`) is the strongest in this family.
-- **Grammar coverage** — now a planned phase (§6 G) via the official
-  `@ast-grep/lang-*` prebuilt grammar packages + `registerDynamicLanguage`
-  (§5); `languageGlobs` (`findInFiles` parsing `*.vue`/`*.svelte` as HTML,
+- **Grammar coverage** — phase G (§6 G): Python is registered through
+  `@ast-grep/lang-python`; each further language is one package plus one
+  registration entry (§5). `languageGlobs` (`findInFiles` parsing
+  `*.vue`/`*.svelte` as HTML,
   etc.) is a partial reach-extension for embedded syntaxes, worth trying
   before full grammar packages for those cases. The census makes the current
   ceiling explicit wherever it sits, and its `unscanned` counts are the
-  demand signal that schedules this phase.
+  demand signal that schedules the next language.
 - **LSP semantics** (§2 adjacent lineages) — if usage shows demand for
   reference-grade navigation ("what calls this symbol, *exactly*", rename-
   aware), the path is a language-server adapter (tsserver first — already on

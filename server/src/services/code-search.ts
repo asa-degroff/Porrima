@@ -1,70 +1,5 @@
-/**
- * Code search — structural code navigation via ast-grep.
- * Design: docs/design/code-search.md (§3); Phase 0 is the model-level tool,
- * Phase 1 is the kernel projection — the dispatcher row in
- * agent-tools.ts rides this same executor and returns the structured shape
- * (`CodeSearchResult` minus `text`) plus the snippet path below.
- *
- * Execution: in-process `@ast-grep/napi` (version-pinned in server/package.json)
- * — no subprocess, no shell-quoting surface. File scans are local-workspace
- * only; the remote carve-out (adapter-read + in-process parse) is a later
- * phase. The snippet path (runCodeSearchOnSnippet) touches no filesystem and
- * therefore works on remote kernels too.
- *
- * Engine facts this executor is written against (@ast-grep/napi 0.50.0):
- * - Language arguments are plain strings. (`sg.Lang` IS populated at runtime in
- *   0.50.0, but names only the bundled five; the executor never reads it.)
- * - The napi bundle supports five languages: typescript, tsx, javascript (jsx
- *   alias), html, css. `findInFiles`/`parseFiles` silently skip files whose
- *   extension infers anything else; the CLI covers more. Coverage is therefore
- *   the executor's job: a scope census (ignore-aware walk) reports every file
- *   the engine cannot visit, so a zero-match result is never silently partial.
- * - The engine's EXTENSION set is broader than the five language names:
- *   js/mjs/cjs/jsx → JavaScript, ts/mts/cts
- *   → TypeScript, tsx → Tsx, html/htm/xhtml → Html, css/scss → Css.
- *   LANGUAGE_ALIASES must mirror it — a stale table mis-reports SCANNED files
- *   as unscanned, the coverage-honesty inversion the census exists to
- *   prevent. The drift-pin test in
- *   code-search.test.ts queries the live engine and compares.
- * - `pattern()` never throws: tree-sitter parses tolerantly, so garbage
- *   patterns compile and match nothing. Static validity is undecidable (any
- *   token parses as an identifier in some grammar) — pre-validation is the
- *   regex-shape heuristic and the no-code-content class only; everything else
- *   gets a truthful zero-match.
- * - Match nodes carry no file path; it lives at `node.getRoot().filename()`
- *   (absolute when the scan scope is absolute).
- * - `range()` is 0-based; the model-facing text is 1-based.
- * - Patterns must be complete nodes: a bodiless parameterized pattern
- *   (`function $NAME($$$ARGS)`) matches only bodiless DECLARATIONS (e.g. TS
- *   overload signatures), never definitions — exact parameter shapes need
- *   the body slot (`function $NAME($ARG) { $$$ }`). The partial prefix
- *   `function $NAME` matches every function definition (typed, generic,
- *   async).
- * - Multi-element bindings include separator nodes; `join("")` reconstructs
- *   the source span. `getMatch(name)` returns the single-binding node,
- *   `getMultipleMatches(name)` the list.
- * - `findInFiles`/`parseFiles` honor `.gitignore` (the same ignore crate as
- *   the CLI); explicitly requested paths override ignores.
- * - The `findInFiles` callback fires once per file with matches (or error);
- *   `parseFiles` fires once per visited file. Neither reports a files-scanned
- *   figure — the scope census supplies it. And callbacks can still be in the
- *   libuv queue when the promise resolves: the resolved number is how many
- *   files WILL deliver. Reading early is silently partial (observed: full,
- *   short, and zero-match deliveries for one identical query) — the executor
- *   drains to the resolved count before returning. Upstream-known: ast-grep's
- *   "Performance Tip for napi usage" page documents the race and ships the
- *   same counted-callback workaround — re-check it on every version bump.
- * - Comments are SIGNIFICANT children in block pattern matching in this
- *   binding: `if ($C) { return $R; }` structurally refuses blocks whose
- *   first child is a comment (leading-comment-then-return blocks, the T6
- *   forensics shape) — battery v4: 8 misses, all comment-first; three
- *   independent model ASTs agreed on the field-based count. Statement
- *   census counts must enumerate fields (walk + comment filter), not
- *   match block patterns. Re-verify on every version bump (Risk 6).
- * - `context` is not in the Phase 0 schema: the index-not-payload rendering
- *   stands on its own (docs §3.2).
- */
 import { createRequire } from "module";
+import { existsSync } from "fs";
 import { access, readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
 import { isAbsolute, join, relative, resolve } from "path";
@@ -77,24 +12,23 @@ import type { WorkspaceAdapter } from "./workspace.js";
 // nothing at import time.
 const requireNapi = createRequire(import.meta.url);
 let napiModule: any | null = null;
-function sg(): any {
-  if (!napiModule) napiModule = requireNapi("@ast-grep/napi");
-  return napiModule;
-}
 
 export function codeSearchEnabled(): boolean {
   return process.env.PORRIMA_CODE_SEARCH === "1";
 }
 
-// --- Languages: the napi's actual support set ---
+// --- Languages: the engine's support set ---
 
-export const NAPI_LANGUAGES = ["typescript", "tsx", "javascript", "html", "css"] as const;
+/** The five bundled languages. A dynamic grammar package adds one name here
+ *  after it registers (registerDynamicLanguages below). */
+export const NAPI_LANGUAGES: string[] = ["typescript", "tsx", "javascript", "html", "css"];
 
-// Extension/alias → canonical napi language, case-insensitive. The extension
-// half MUST mirror the engine's own inference set (module header; verified
-// empirically on 0.50.0 and pinned by the drift test in code-search.test.ts):
-// js/mjs/cjs/jsx, ts/mts/cts, tsx, html/htm/xhtml, css/scss. The bare language
-// names are also accepted as `lang` parameter aliases.
+// Extension/alias → canonical language, case-insensitive. The bundled entries
+// MUST mirror the engine's own inference set (module header; pinned by the
+// drift test in code-search.test.ts): js/mjs/cjs/jsx, ts/mts/cts, tsx,
+// html/htm/xhtml, css/scss. The bare language names are also accepted as
+// `lang` parameter aliases. registerDynamicLanguages adds one entry for each
+// loaded package's extensions and aliases.
 export const LANGUAGE_ALIASES: Record<string, string> = {
   ts: "typescript",
   mts: "typescript",
@@ -112,6 +46,118 @@ export const LANGUAGE_ALIASES: Record<string, string> = {
   css: "css",
   scss: "css",
 };
+
+// --- Dynamic languages (phase G) ---
+// The official @ast-grep/lang-* packages add grammars to the napi at runtime.
+// Each table entry is one language: the npm package and the `lang` aliases.
+// The extension list comes from the package itself (one source of truth).
+// One registerDynamicLanguage call registers every loadable package.
+//
+// SAFETY: registerDynamicLanguage loads the library at once, and a load
+// failure panics the native addon. The process aborts, and JavaScript cannot
+// catch it. Guard every package before registration and skip the ones that
+// fail. A skipped package stays out of LANGUAGE_ALIASES, so the census reports
+// its files as unscanned.
+//
+// One extension belongs to one language: do not list two packages that claim
+// the same extension.
+const DYNAMIC_LANGUAGE_PACKAGES: Record<string, { packageName: string; aliases: readonly string[] }> = {
+  python: { packageName: "@ast-grep/lang-python", aliases: ["py"] },
+};
+
+export interface DynamicLanguageSpec {
+  packageName: string;
+  aliases: readonly string[];
+}
+
+export interface LoadedDynamicLanguage {
+  name: string;
+  registration: {
+    libraryPath: string;
+    extensions: string[];
+    languageSymbol?: string;
+    expandoChar?: string;
+  };
+}
+
+/** True when this host can load the prebuilt grammars. The prebuilds link
+ *  libc.so.6, so a musl Linux host must skip them: a failed load aborts the
+ *  process (see the safety note above). Without a positive glibc answer,
+ *  skip. */
+function grammarPrebuildsLoadable(): boolean {
+  if (process.platform !== "linux") return true; // macOS/Windows prebuilds carry their own libc
+  try {
+    const header = (process as any).report?.getReport?.()?.header;
+    return Boolean(header?.glibcVersionRuntime);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load one grammar package and build its registration. Returns null when the
+ * package is absent, incomplete, or its library file is missing. `requirePkg`
+ * is injectable for tests. Never pass a null result to
+ * registerDynamicLanguage — the native layer is not defensive.
+ */
+export function loadDynamicLanguage(
+  name: string,
+  spec: DynamicLanguageSpec,
+  requirePkg: (id: string) => any = requireNapi,
+): LoadedDynamicLanguage | null {
+  if (!grammarPrebuildsLoadable()) return null;
+  try {
+    const pkg = requirePkg(spec.packageName);
+    const libraryPath = typeof pkg?.libraryPath === "string" ? pkg.libraryPath : "";
+    const extensions = Array.isArray(pkg?.extensions)
+      ? pkg.extensions.filter((e: unknown): e is string => typeof e === "string" && e.length > 0)
+      : [];
+    if (!libraryPath || extensions.length === 0 || !existsSync(libraryPath)) return null;
+    const registration: LoadedDynamicLanguage["registration"] = { libraryPath, extensions };
+    if (typeof pkg.languageSymbol === "string") registration.languageSymbol = pkg.languageSymbol;
+    if (typeof pkg.expandoChar === "string") registration.expandoChar = pkg.expandoChar;
+    return { name, registration };
+  } catch {
+    return null;
+  }
+}
+
+/** Register every loadable grammar package (one native call), then extend
+ *  LANGUAGE_ALIASES and NAPI_LANGUAGES. Runs once, from sg(). */
+function registerDynamicLanguages(napi: any): void {
+  const loaded: { name: string; spec: DynamicLanguageSpec; entry: LoadedDynamicLanguage }[] = [];
+  for (const [name, spec] of Object.entries(DYNAMIC_LANGUAGE_PACKAGES)) {
+    const entry = loadDynamicLanguage(name, spec);
+    if (entry) loaded.push({ name, spec, entry });
+    else console.warn(`[code_search] grammar package for "${name}" is not loadable on this host; its files stay unscanned.`);
+  }
+  if (loaded.length === 0) return;
+  const registrations: Record<string, LoadedDynamicLanguage["registration"]> = {};
+  for (const { name, entry } of loaded) registrations[name] = entry.registration;
+  napi.registerDynamicLanguage(registrations);
+  // The tables gain a language only after its registration succeeded. An
+  // extension entry must never claim coverage the engine lacks.
+  for (const { name, spec, entry } of loaded) {
+    for (const key of [name, ...spec.aliases, ...entry.registration.extensions]) {
+      LANGUAGE_ALIASES[key.toLowerCase()] = name;
+    }
+    if (!NAPI_LANGUAGES.includes(name)) NAPI_LANGUAGES.push(name);
+  }
+}
+
+function sg(): any {
+  if (!napiModule) {
+    napiModule = requireNapi("@ast-grep/napi");
+    registerDynamicLanguages(napiModule);
+  }
+  return napiModule;
+}
+
+/** Load the engine and register the dynamic grammars (idempotent). Exported
+ *  so tests can initialize the alias table without a search call. */
+export function ensureCodeSearchEngine(): void {
+  sg();
+}
 
 // --- Types ---
 
@@ -521,8 +567,8 @@ async function discover(
           fileRel = relativize(root, toAbs(String(fileRoot.filename()), scopeAbs));
         } catch { fileRel = "(unknown)"; }
         let matches: any[];
+        const langName = LANGUAGE_ALIASES[fileExtension(fileRel)];
         try {
-          const langName = LANGUAGE_ALIASES[fileExtension(fileRel)];
           let cfg = langName ? compiledByLang.get(langName) : undefined;
           if (langName && cfg === undefined) {
             cfg = s.pattern(langName, rawPattern);
@@ -530,7 +576,15 @@ async function discover(
           }
           matches = cfg ? fileRoot.root().findAll(cfg) : fileRoot.root().findAll(rawPattern);
         } catch (e: any) {
-          errors.push({ file: fileRel, reason: `pattern rejected for this file: ${String(e.message).slice(0, 200)}` });
+          errors.push({
+            file: fileRel,
+            // Name the language: a pattern that is fine for the intended
+            // grammar can fail to apply to another one (e.g. a TS shape over
+            // python). The file was parsed but not searched with this pattern.
+            reason: langName
+              ? `pattern does not apply to ${langName}: ${String(e.message).slice(0, 200)}`
+              : `pattern rejected for this file: ${String(e.message).slice(0, 200)}`,
+          });
           return;
         }
         collectFrom(fileRel, matches);
@@ -595,6 +649,10 @@ export async function runCodeSearch(
     throw new CodeSearchError("pattern is empty or contains no code content.");
   }
 
+  // Load the engine first. Registration adds the dynamic grammar languages to
+  // LANGUAGE_ALIASES, and language resolution below reads that table.
+  const s = sg();
+
   // Language resolution.
   let lang: string | null = null;
   if (params.lang) {
@@ -615,7 +673,6 @@ export async function runCodeSearch(
   // nudge fires exactly where the over-conclusion risk lives (absence).
   const regexHint = regexShapeHint(pattern);
 
-  const s = sg();
   let compiled: object | null = null;
   if (lang) {
     try {
@@ -748,6 +805,9 @@ export function runCodeSearchOnSnippet(
   if (typeof params.code !== "string") {
     throw new CodeSearchError("code must be a string.");
   }
+  // Load the engine first: dynamic grammar registration extends the alias
+  // table read below (same order as the file path).
+  const s = sg();
   const langKey = (params.lang ?? "ts").toLowerCase();
   const lang = LANGUAGE_ALIASES[langKey];
   if (!lang) {
@@ -756,7 +816,6 @@ export function runCodeSearchOnSnippet(
     );
   }
 
-  const s = sg();
   const root = s.parse(lang, params.code);
   let nodes: any[];
   try {

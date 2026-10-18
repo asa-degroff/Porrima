@@ -96,7 +96,7 @@ const CODE_SEARCH_TOOL: Tool = {
   description:
     "Structurally search code with AST patterns (ast-grep) — matches syntax, not text: function shapes, call sites, assignments. " +
     "Default for syntax-structural questions; if the answer depends on text content (string literals, character order), not syntax, use rg via bash — and do not write a script to count what a pattern can match: the pattern is the script. " +
-    "Covers TypeScript, TSX, JavaScript/JSX, HTML, and CSS; files in other languages are reported as unscanned — use rg via bash for those. " +
+    "Covers TypeScript, TSX, JavaScript/JSX, HTML, CSS, and Python; files in other languages are reported as unscanned — use rg via bash for those. " +
     "Patterns are code, not regex: $NAME binds a single node, $$$NAME binds a list of nodes. " +
     "A pattern is a complete node (`function $NAME($$$ARGS) { $$$ }`) or a partial prefix of one — `function $NAME` matches ANY function definition (typed, generic, async). " +
     "For an exact parameter list use the body slot too (`function $NAME($ARG) { $$$ }`) — a bodiless parameterized pattern (`function $NAME($ARG)`) matches only bodiless declarations like TS overload signatures, NOT definitions. " +
@@ -108,7 +108,7 @@ const CODE_SEARCH_TOOL: Tool = {
     pattern: Type.String({ description: "AST pattern (code, not regex — $NAME single node, $$$NAME node list)" }),
     code: Type.Optional(Type.String({ description: "Test the pattern against a constructed snippet instead of scanning files — matches this code only (path/globs ignored). Verify a pattern before scanning: a zero match here means the pattern is wrong, not that the code is absent" })),
     path: Type.Optional(Type.String({ description: "Workspace-relative root to search (default: whole workspace)" })),
-    lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css. Default: auto-detect from file extensions — files outside these languages are reported as unscanned" })),
+    lang: Type.Optional(Type.String({ description: "Language alias: ts, tsx, js, jsx, html, css, py. Default: auto-detect from file extensions — files outside these languages are reported as unscanned" })),
     globs: Type.Optional(Type.Array(Type.String(), { description: "Glob filter, gitignore semantics; '!' prefix excludes; later globs win (e.g. ['*.ts', '!*.test.ts'])" })),
     maxMatches: Type.Optional(Type.Integer({ description: "Max matches to return (default 50, max 1000). For a pure count use maxMatches=1 — the summary line still reports totalMatches across all matches", minimum: 1, maximum: 1000 })),
     skip: Type.Optional(Type.Integer({ description: "Skip the first N matches for pagination (default 0)", minimum: 0 })),

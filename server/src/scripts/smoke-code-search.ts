@@ -23,8 +23,13 @@ console.log("\n--- await tools.* (auto-detect) ---\n" + r2.text);
 const r3 = await runCodeSearch({ pattern: "function (broken", lang: "ts" }, ws);
 console.log("\n--- garbage pattern (tolerant parse → clean absence) ---\n" + r3.text);
 
-const r4 = await runCodeSearch({ pattern: "def $F($$$ARGS)" }, ws);
-console.log("\n--- python pattern (census reports unscanned languages) ---\n" + r4.text);
+// Phase G: the python grammar package is loaded, so python files are scanned.
+// The census no longer holds .py back; unscanned entries now name languages
+// without a grammar package.
+const r4 = await runCodeSearch({ pattern: "def $F($$$ARGS): $$$BODY", lang: "py", path: "server/python", maxMatches: 3 }, ws);
+console.log("\n--- python function defs (grammar package) ---\n" + r4.text);
+if (r4.scannedFiles === 0) console.log("ERROR: python files were not scanned");
+if (r4.unscanned.py !== undefined) console.log("ERROR: .py still reported as unscanned");
 
 for (const [label, p, expect] of [
   ["trivial", ";;;", /no code content/],
