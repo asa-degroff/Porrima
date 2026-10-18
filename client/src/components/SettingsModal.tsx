@@ -97,7 +97,7 @@ const SECTIONS = [
   { id: 'ssh', label: 'Remote Hosts' },
   { id: 'persona', label: 'Persona' },
   { id: 'user-doc', label: 'About You' },
-  { id: 'api-keys', label: 'API Keys' },
+  { id: 'api-keys', label: 'Search' },
   { id: 'vision', label: 'Vision' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
@@ -5282,9 +5282,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             </div>
           </div>
 
-          {/* API Keys Section */}
+          {/* Search Section */}
           <div id="api-keys" className="space-y-3 pt-2 border-t border-white/10">
-            <h3 className="text-sm font-medium text-white/70">API Keys</h3>
+            <h3 className="text-sm font-medium text-white/70">Search</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Web Search Provider</label>
               <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
