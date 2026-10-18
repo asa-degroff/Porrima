@@ -325,13 +325,13 @@ async function runPromptAutomation(
       visuals,
     });
     const { getSettings } = await import("./chat-storage.js");
-    const { timeMarkerIntervalMinutes } = await getSettings();
+    const settings = await getSettings();
     // Keep the tool surface byte-identical to interactive turns: tool schemas
     // render into the system prompt, so filtering ask_user out here shifted the
     // tools block and forced a full re-prefill on every automation ↔ user
     // transition. The schema stays; only the executor is headless-safe.
     const tools = withHeadlessAskUser(
-      getAgentTools(task.chatId, effects, contextWindow, undefined, chatType, createTimeMarkerState(timeMarkerIntervalMinutes))
+      await getAgentTools(task.chatId, effects, contextWindow, undefined, chatType, createTimeMarkerState(settings.timeMarkerIntervalMinutes))
     );
 
     const compactionResult = await truncateBeforeSend(

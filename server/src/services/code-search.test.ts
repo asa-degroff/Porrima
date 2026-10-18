@@ -578,14 +578,14 @@ describe("gating and definition surface", () => {
     delete process.env.PORRIMA_CODE_SEARCH;
     expect(codeSearchEnabled()).toBe(false);
     const off = await import("./agent-tools.js");
-    expect(off.getAgentToolDefinitions().some((t) => t.name === "code_search")).toBe(false);
+    expect((await off.getAgentToolDefinitions()).some((t) => t.name === "code_search")).toBe(false);
 
     process.env.PORRIMA_CODE_SEARCH = "1";
     expect(codeSearchEnabled()).toBe(true);
     // FILESYSTEM_TOOLS is built at module scope (house pattern: the
     // kernel-tools capability line) — a query-param import re-evaluates it.
     const on = await import(new URL("./agent-tools.ts?codesearch=1", import.meta.url).href);
-    const def = on.getAgentToolDefinitions().find((t: { name: string }) => t.name === "code_search");
+    const def = (await on.getAgentToolDefinitions()).find((t: { name: string }) => t.name === "code_search");
     expect(def).toBeDefined();
     expect(def!.description).toMatch(/complete node/);
     expect(def!.parameters).toBeDefined();
@@ -596,7 +596,7 @@ describe("gating and definition surface", () => {
     process.env.PORRIMA_CODE_SEARCH = "1";
     try {
       const on = await import(new URL("./agent-tools.ts?codesearch=s2", import.meta.url).href);
-      const def = on.getAgentToolDefinitions().find((t: { name: string }) => t.name === "code_search")!;
+      const def = (await on.getAgentToolDefinitions()).find((t: { name: string }) => t.name === "code_search")!;
       // The v2 complement framing is gone; the v3 boundary replaces it.
       expect(def.description).not.toMatch(/use when the answer depends on the language/);
       expect(def.description).toMatch(/Default for syntax-structural questions/);
@@ -618,7 +618,7 @@ describe("gating and definition surface", () => {
     process.env.PORRIMA_CODE_SEARCH = "1";
     try {
       const on = await import(new URL("./agent-tools.ts?codesearch=s1", import.meta.url).href);
-      const tools = on.getAgentTools("test-chat", { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} });
+      const tools = await on.getAgentTools("test-chat", { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} });
       const tool = tools.find((t: any) => t.name === "code_search");
       expect(tool).toBeDefined();
       const ac = new AbortController();

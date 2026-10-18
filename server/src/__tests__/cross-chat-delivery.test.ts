@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "../types.js";
 
+
 async function loadModules(homeDir: string) {
   vi.resetModules();
   vi.doMock("os", async (importOriginal) => {
@@ -291,7 +292,7 @@ describe("schedule_chat_message tool", () => {
     const modules = await loadModules(homeDir);
     const { getAgentTools } = await import("../services/agent-tools.js");
     const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-    const tools = getAgentTools("origin", effects, 32768, undefined, "agent", null);
+    const tools = await getAgentTools("origin", effects, 32768, undefined, "agent", null);
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
     return { ...modules, byName };
   }

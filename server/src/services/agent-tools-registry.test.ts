@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { getAgentToolDefinitions, getAgentTools, type ToolSideEffects } from "./agent-tools.js";
 
+// getAgentTools reads the web-search provider from settings; pin it so the
+// suite never opens the live data dir and the web_search schema is
+// deterministic (brave).
+vi.mock("./chat-storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-storage.js")>();
+  return { ...actual, getSettings: vi.fn(async () => ({ defaultWebSearchProvider: "brave" })) };
+});
+
+
 // Spy on the kernel boundary so timeout-resolution tests never spawn a
 // real kernel process.
 vi.mock("./python-kernel.js", async (importOriginal) => {
@@ -18,9 +27,9 @@ const effects: ToolSideEffects = {
 };
 
 describe("agent tool registry", () => {
-  it("keeps metadata and runtime chat-type gating aligned", () => {
-    const systemDefinitions = getAgentToolDefinitions("system").map((tool) => tool.name);
-    const systemRuntime = getAgentTools("system", effects, 32768, undefined, "system").map((tool) => tool.name);
+  it("keeps metadata and runtime chat-type gating aligned", async () => {
+    const systemDefinitions = (await getAgentToolDefinitions("system")).map((tool) => tool.name);
+    const systemRuntime = (await getAgentTools("system", effects, 32768, undefined, "system")).map((tool) => tool.name);
 
     expect(systemDefinitions).toEqual(systemRuntime);
     expect(systemDefinitions).not.toContain("ask_user");
@@ -38,13 +47,13 @@ describe("agent tool registry", () => {
     // be present too — python_jobs is the only completion read between
     // scheduled runs and the only model-reachable kill/wedge escape.
     expect(systemDefinitions).toContain("python_jobs");
-    expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_reminder");
-    expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("schedule_chat_message");
-    expect(getAgentToolDefinitions("agent").map((tool) => tool.name)).toContain("list_chats");
+    expect((await getAgentToolDefinitions("agent")).map((tool) => tool.name)).toContain("schedule_reminder");
+    expect((await getAgentToolDefinitions("agent")).map((tool) => tool.name)).toContain("schedule_chat_message");
+    expect((await getAgentToolDefinitions("agent")).map((tool) => tool.name)).toContain("list_chats");
   });
 
-  it("serializes mutating tools while retaining parallel reads", () => {
-    const byName = new Map(getAgentTools("chat-1", effects).map((tool) => [tool.name, tool]));
+  it("serializes mutating tools while retaining parallel reads", async () => {
+    const byName = new Map((await getAgentTools("chat-1", effects)).map((tool) => [tool.name, tool]));
 
     expect(byName.get("write_file")?.executionMode).toBe("sequential");
     expect(byName.get("run_python")?.executionMode).toBe("sequential");
@@ -55,7 +64,7 @@ describe("agent tool registry", () => {
 
   it("normalizes ask_user preset answers before notifying the route", async () => {
     const onAskUser = vi.fn();
-    const tools = getAgentTools("chat-1", { onArtifact: () => {}, onVisual: () => {}, onAskUser });
+    const tools = await getAgentTools("chat-1", { onArtifact: () => {}, onVisual: () => {}, onAskUser });
     const ask = tools.find((t) => t.name === "ask_user")!;
 
     // Trim, dedupe, drop non-strings/empties, cap at 6.
@@ -79,7 +88,7 @@ describe("agent tool registry", () => {
   it("resolves run_python timeout defaults by execution path", async () => {
     const { executeInKernel } = await import("./python-kernel.js");
     const spy = executeInKernel as unknown as ReturnType<typeof vi.fn>;
-    const py = getAgentTools("chat-1", effects).find((t) => t.name === "run_python")!;
+    const py = (await getAgentTools("chat-1", effects)).find((t) => t.name === "run_python")!;
 
     // Background with no timeout defaults to the background ceiling.
     await py.execute("t1", { code: "1", background: true });
@@ -102,7 +111,7 @@ describe("agent tool registry", () => {
   it("routes system-chat run_python through the persistent kernel", async () => {
     const { executeInKernel } = await import("./python-kernel.js");
     const spy = executeInKernel as unknown as ReturnType<typeof vi.fn>;
-    const py = getAgentTools("system", effects, 32768, undefined, "system")
+    const py = (await getAgentTools("system", effects, 32768, undefined, "system"))
       .find((t) => t.name === "run_python")!;
 
     await py.execute("t1", { code: "1", background: true });
@@ -114,8 +123,8 @@ describe("agent tool registry", () => {
     expect(resultText).not.toContain("stateless mode in this chat type");
   });
 
-  it("keeps p5 guidance out of the repeated tool schema", () => {
-    const tools = getAgentTools("chat-1", effects);
+  it("keeps p5 guidance out of the repeated tool schema", async () => {
+    const tools = await getAgentTools("chat-1", effects);
     const artifactSchemas = tools
       .filter((tool) => tool.name === "create_artifact" || tool.name === "update_artifact")
       .map((tool) => JSON.stringify(tool));
@@ -124,14 +133,20 @@ describe("agent tool registry", () => {
     expect(artifactSchemas.join("\n")).not.toContain("randomSeed");
   });
 
-  it("uses bounded web schemas and domain-neutral pagination", () => {
-    const byName = new Map(getAgentTools("chat-1", effects).map((tool) => [tool.name, tool]));
-    const searchSchema = byName.get("web_search")?.parameters as any;
+  it("uses provider-specific web schemas and domain-neutral pagination", async () => {
+    const byName = new Map((await getAgentTools("chat-1", effects)).map((tool) => [tool.name, tool]));
+    const searchTool = byName.get("web_search")!;
+    const searchSchema = searchTool.parameters as any;
     const fetchTool = byName.get("web_fetch")!;
     const fetchSchema = fetchTool.parameters as any;
 
-    expect(searchSchema.properties.provider.enum).toEqual(["brave", "exa", "tavily"]);
-    expect(searchSchema.properties.providerOptions.additionalProperties).toBe(false);
+    // brave is the pinned settings provider: only its parameters reach the
+    // schema, and the multi-provider surface (provider / providerOptions) is
+    // gone.
+    expect(Object.keys(searchSchema.properties).sort()).toEqual(["count", "query"]);
+    expect(searchSchema.properties.provider).toBeUndefined();
+    expect(searchSchema.properties.providerOptions).toBeUndefined();
+    expect(searchTool.description).toContain("Brave");
     expect(fetchSchema.properties.offset.minimum).toBe(0);
     expect(fetchSchema.properties.limit.maximum).toBe(50000);
     expect(fetchTool.description).not.toContain("file path");

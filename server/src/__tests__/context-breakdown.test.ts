@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Chat, ChatMessage } from "../types.js";
 import { computeContextBreakdown } from "../services/context-breakdown.js";
 import { setCachedAugmentedPrompt } from "../services/memory-context.js";
+
+// getAgentTools reads the web-search provider from settings; pin it so the
+// suite never opens the live data dir and the web_search schema is
+// deterministic (brave).
+vi.mock("../services/chat-storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/chat-storage.js")>();
+  return { ...actual, getSettings: vi.fn(async () => ({ defaultWebSearchProvider: "brave" })) };
+});
+
 
 function testChat(messages: ChatMessage[], contextWindow = 32768): Chat {
   return {
@@ -17,7 +26,7 @@ function testChat(messages: ChatMessage[], contextWindow = 32768): Chat {
 }
 
 describe("computeContextBreakdown", () => {
-  it("classifies conversation content into user, assistant, thinking, and tool rows", () => {
+  it("classifies conversation content into user, assistant, thinking, and tool rows", async () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Hello there, how are you today?", timestamp: 1 },
       {
@@ -31,7 +40,7 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
 
     const byKey = Object.fromEntries(result.rows.map((r) => [r.key, r.tokens]));
     expect(byKey.userMessages).toBeGreaterThan(0);
@@ -42,34 +51,34 @@ describe("computeContextBreakdown", () => {
     expect(byKey.framing).toBeGreaterThan(0);
   });
 
-  it("counts hidden system rows as memory, not conversation", () => {
+  it("counts hidden system rows as memory, not conversation", async () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "## Updated context — my newly recalled memories:\n- likes tea", timestamp: 1 },
       { role: "user", content: "Hi", timestamp: 2 },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
     const memoryDelta = result.rows.find((r) => r.key === "memoryDelta");
     expect(memoryDelta).toBeDefined();
     expect(memoryDelta!.tokens).toBeGreaterThan(0);
     expect(memoryDelta!.group).toBe("memory");
   });
 
-  it("skips out-of-context messages", () => {
+  it("skips out-of-context messages", async () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "visible message", timestamp: 1 },
       { role: "user", content: "hidden message that should not count", timestamp: 2, _outOfContext: true },
     ];
 
-    const withHidden = computeContextBreakdown(testChat(messages), 32768);
-    const withoutHidden = computeContextBreakdown(testChat([messages[0]]), 32768);
+    const withHidden = await computeContextBreakdown(testChat(messages), 32768);
+    const withoutHidden = await computeContextBreakdown(testChat([messages[0]]), 32768);
 
-    const user = (r: ReturnType<typeof computeContextBreakdown>) =>
+    const user = (r: Awaited<ReturnType<typeof computeContextBreakdown>>) =>
       r.rows.find((x) => x.key === "userMessages")?.tokens ?? 0;
-    expect(user(withHidden)).toBe(user(withoutHidden));
+    expect(user(await withHidden)).toBe(user(await withoutHidden));
   });
 
-  it("scales input rows to the real usage anchor and reports real output", () => {
+  it("scales input rows to the real usage anchor and reports real output", async () => {
     const realInput = 10_000;
     const realOutput = 250;
     const messages: ChatMessage[] = [
@@ -82,7 +91,7 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.estimated).toBe(false);
     expect(result.outputTokens).toBe(realOutput);
@@ -95,18 +104,18 @@ describe("computeContextBreakdown", () => {
     expect(result.totalTokens).toBe(realInput + realOutput);
   });
 
-  it("falls back to estimates when no usage anchor exists", () => {
+  it("falls back to estimates when no usage anchor exists", async () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "first message, no response yet", timestamp: 1 },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
     expect(result.estimated).toBe(true);
     expect(result.outputTokens).toBe(0);
     expect(result.inputTokens).toBeGreaterThan(0);
   });
 
-  it("ignores usage at or before the last compaction summary when anchoring", () => {
+  it("ignores usage at or before the last compaction summary when anchoring", async () => {
     // The pre-compaction reply's usage reflects the pre-compaction context
     // size — anchoring on it would inflate every row against the shrunken
     // current context. The summary itself carries usage too (defensive: it is
@@ -129,14 +138,14 @@ describe("computeContextBreakdown", () => {
       { role: "user", content: "continue", timestamp: 4 },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.usage).toBeNull();
     expect(result.estimated).toBe(true);
     expect(result.inputTokens).toBeLessThan(95_000);
   });
 
-  it("anchors on the latest reply strictly after the last compaction summary", () => {
+  it("anchors on the latest reply strictly after the last compaction summary", async () => {
     const realInput = 40_000;
     const realOutput = 120;
     const messages: ChatMessage[] = [
@@ -156,14 +165,14 @@ describe("computeContextBreakdown", () => {
       },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
 
     expect(result.estimated).toBe(false);
     expect(result.inputTokens).toBe(realInput);
     expect(result.outputTokens).toBe(realOutput);
   });
 
-  it("reports cold sections when the rendered prompt is cached but no section breakdown was captured", () => {
+  it("reports cold sections when the rendered prompt is cached but no section breakdown was captured", async () => {
     // Simulates a resumed prompt re-cached after a restart (or a
     // stable-prefix fallback): rendered-prompt cache warm, breakdown cache
     // empty. The cold-cache footnote must fire instead of silently inflating
@@ -172,18 +181,18 @@ describe("computeContextBreakdown", () => {
     setCachedAugmentedPrompt(chatId, "a warm cached prompt without sections");
     const chat: Chat = { ...testChat([]), id: chatId };
 
-    const result = computeContextBreakdown(chat, 32768);
+    const result = await computeContextBreakdown(chat, 32768);
 
     expect(result.promptCached).toBe(false);
   });
 
-  it("counts compaction summaries separately from normal assistant text", () => {
+  it("counts compaction summaries separately from normal assistant text", async () => {
     const messages: ChatMessage[] = [
       { role: "assistant", content: "Summary of earlier compacted work.", timestamp: 1, _isCompactionSummary: true },
       { role: "user", content: "continue", timestamp: 2 },
     ];
 
-    const result = computeContextBreakdown(testChat(messages), 32768);
+    const result = await computeContextBreakdown(testChat(messages), 32768);
     const summary = result.rows.find((r) => r.key === "compactionSummary");
     expect(summary).toBeDefined();
     expect(summary!.tokens).toBeGreaterThan(0);

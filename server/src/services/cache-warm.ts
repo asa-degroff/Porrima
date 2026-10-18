@@ -358,7 +358,7 @@ async function buildWarmTools(
 ): Promise<ReturnType<typeof getAgentTools> | undefined> {
   if (!chat) return undefined;
   const project = chat.projectId ? await getProject(chat.projectId) : null;
-  const tools = getAgentTools(
+  const tools = await getAgentTools(
     chat.id,
     NOOP_TOOL_EFFECTS,
     contextWindow,
@@ -738,7 +738,7 @@ export async function warmNewAgentChatBaselineCache(
     piModel.contextWindow = effectiveContextWindow;
     piModel.id = normalizedModelId;
     piModel.reasoning = modelSupportsReasoning(model);
-    const tools = getAgentTools(
+    const tools = await getAgentTools(
       NEW_AGENT_CHAT_BASELINE_CACHE_ID,
       NOOP_TOOL_EFFECTS,
       effectiveContextWindow,

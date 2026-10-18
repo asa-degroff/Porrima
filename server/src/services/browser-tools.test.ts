@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getAgentToolDefinitions, getAgentTools, type ToolSideEffects } from "./agent-tools.js";
 import { BROWSER_TOOLS, executeBrowserTool } from "./browser-tools.js";
 import type { ToolCall } from "@earendil-works/pi-ai";
+
+// getAgentTools reads the web-search provider from settings; pin it so the
+// suite never opens the live data dir and the web_search schema is
+// deterministic (brave).
+vi.mock("./chat-storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-storage.js")>();
+  return { ...actual, getSettings: vi.fn(async () => ({ defaultWebSearchProvider: "brave" })) };
+});
+
 
 const effects: ToolSideEffects = {
   onArtifact: () => {},
@@ -16,15 +25,15 @@ function call(name: string, args: Record<string, any>): ToolCall {
 }
 
 describe("browser tool registry", () => {
-  it("registers all six browser tools in sequential mode", () => {
-    const byName = new Map(getAgentTools("chat-1", effects).map((tool) => [tool.name, tool]));
+  it("registers all six browser tools in sequential mode", async () => {
+    const byName = new Map((await getAgentTools("chat-1", effects)).map((tool) => [tool.name, tool]));
     for (const name of BROWSER_TOOL_NAMES) {
       expect(byName.get(name)?.executionMode, name).toBe("sequential");
     }
   });
 
-  it("exposes browser tools in agent chat definitions", () => {
-    const names = getAgentToolDefinitions("agent").map((tool) => tool.name);
+  it("exposes browser tools in agent chat definitions", async () => {
+    const names = (await getAgentToolDefinitions("agent")).map((tool) => tool.name);
     for (const name of BROWSER_TOOL_NAMES) {
       expect(names).toContain(name);
     }

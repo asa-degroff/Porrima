@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readFile, rm } from "fs/promises";
 import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
-import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
+import { buildWebTools, executeWebTool, resolveWebSearchProvider, type WebSearchProvider } from "./web-tools.js";
 import { BROWSER_TOOLS, executeBrowserTool } from "./browser-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
 import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
@@ -515,9 +515,13 @@ function toolIsAvailable(name: string, chatType?: string): boolean {
 
 /** Get tool definitions for display/metadata only. `parameters` is the
  *  TypeBox JSON schema — the request viewer's Context tab shows the same
- *  surface the model sees (wire tools come from convertTools over these). */
-export function getAgentToolDefinitions(chatType?: string): { name: string; description: string; parameters?: unknown }[] {
-  const allTools = [...MEMORY_TOOLS, ...WEB_TOOLS, ...BROWSER_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
+ *  surface the model sees (wire tools come from convertTools over these).
+ *  The web_search schema is provider-specific; the selected provider is read
+ *  from settings here, the same source getAgentTools uses. */
+export async function getAgentToolDefinitions(chatType?: string): Promise<{ name: string; description: string; parameters?: unknown }[]> {
+  const settings = await getSettings().catch(() => undefined);
+  const webSearchProvider = resolveWebSearchProvider(settings);
+  const allTools = [...MEMORY_TOOLS, ...buildWebTools(webSearchProvider), ...BROWSER_TOOLS, ...AUTOMATION_TOOLS, ...FILESYSTEM_TOOLS, ...SKILL_TOOLS];
   return allTools
     .filter((tool) => toolIsAvailable(tool.name, chatType))
     .map((t) => ({ name: t.name, description: t.description, parameters: (t as { parameters?: unknown }).parameters }));
@@ -758,10 +762,18 @@ function wrapToolsWithNormalizedContent(tools: AgentTool[]): AgentTool[] {
   });
 }
 
-export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string, timeMarker?: TimeMarkerState | null): AgentTool[] {
+export async function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string, timeMarker?: TimeMarkerState | null): Promise<AgentTool[]> {
   const workspacePromise = getWorkspaceForProject(project);
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
+  // The web_search schema is provider-specific: the selected provider's
+  // parameters render into the prefix. Every construction path (HTTP,
+  // headless, warm, estimates) goes through this function and reads the same
+  // settings snapshot, which keeps the surface byte-identical across
+  // transports. A settings change is a deliberate one-time prefix break — the
+  // kv-prefix diagnostics log names both tool sets when the digest changes.
+  const settings = await getSettings().catch(() => undefined);
+  const webSearchProvider = resolveWebSearchProvider(settings);
   const artifactReviewUpdateCounts = new Map<string, number>();
 
   const automaticUpdateCountForCreate = (id: string) => artifactReviewUpdateCounts.get(id) ?? 0;
@@ -789,7 +801,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   }
 
   // Web tools
-  for (const tool of WEB_TOOLS) {
+  for (const tool of buildWebTools(webSearchProvider)) {
     tools.push({
       ...tool,
       label: tool.name,

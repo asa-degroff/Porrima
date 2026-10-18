@@ -32,7 +32,7 @@ async function callTool(
   id: string,
   args: Record<string, unknown>,
 ) {
-  const tool = getAgentTools("chat-1", effects).find((candidate) => candidate.name === name);
+  const tool = (await getAgentTools("chat-1", effects)).find((candidate) => candidate.name === name);
   if (!tool) throw new Error(`Missing tool: ${name}`);
   return tool.execute(id, args);
 }
@@ -52,7 +52,7 @@ describe("agent artifact update tool", () => {
   it("registers only one update_artifact executor", async () => {
     const { getAgentTools } = await loadAgentTools();
     const { effects } = createEffects();
-    const tools = getAgentTools("chat-1", effects);
+    const tools = await getAgentTools("chat-1", effects);
 
     expect(tools.filter((tool) => tool.name === "update_artifact")).toHaveLength(1);
   });

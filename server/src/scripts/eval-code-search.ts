@@ -501,7 +501,7 @@ async function runArm(opts: { arm: "a" | "b" | "c"; tasks: number[]; reps: numbe
       try {
         const effects = createEmitterSideEffects(emitter, { artifacts: [], visuals: [] });
         const tools = withHeadlessAskUser(
-          getAgentTools(chatId, effects, contextWindow, project, "agent", createTimeMarkerState(timeMarkerIntervalMinutes)),
+          await getAgentTools(chatId, effects, contextWindow, project, "agent", createTimeMarkerState(timeMarkerIntervalMinutes)),
         );
         // The flag is per-process; prove the arm's surface here rather than
         // trusting the env alone.

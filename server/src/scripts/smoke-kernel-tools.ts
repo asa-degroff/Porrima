@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const { disposeKernel } = await import("../services/python-kernel.js");
 
   const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-  const tools = getAgentTools(chatId, effects, 32768, root, "agent");
+  const tools = await getAgentTools(chatId, effects, 32768, root, "agent");
   const runPython = tools.find((t) => t.name === "run_python");
   if (!runPython) throw new Error("run_python missing from the tool surface");
 
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
   );
 
   // Gated capability line must be in the runtime definition when the flag is on.
-  const defs = getAgentToolDefinitions("agent");
+  const defs = await getAgentToolDefinitions("agent");
   const desc = defs.find((d) => d.name === "run_python")?.description ?? "";
   if (desc.includes("await tools.") && desc.includes("help(tools)")) {
     console.log("  PASS  run_python description advertises tools.* (gated)");

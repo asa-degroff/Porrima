@@ -1,4 +1,6 @@
 import type { ToolSideEffects } from "./agent-tools.js";
+import { getSettings } from "./chat-storage.js";
+import { resolveWebSearchProvider } from "./web-tools.js";
 import { withHeadlessAskUser } from "./headless-tools.js";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
@@ -1054,7 +1056,7 @@ export async function runSystemSynthesis(options?: {
     });
 
     const tools = withHeadlessAskUser(
-      getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
+      await getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
     );
 
     // --- Pre-send compaction keeps history bounded ---
@@ -1401,7 +1403,7 @@ export async function runWakeCycle(options?: {
       visuals,
     });
     const tools = withHeadlessAskUser(
-      getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
+      await getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system", await createSystemTimeMarker())
     );
 
     // Pre-send compaction

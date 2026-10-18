@@ -635,9 +635,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
-  const [braveSearchEnabled, setBraveSearchEnabled] = useState(settings.braveSearchEnabled ?? true);
-  const [exaSearchEnabled, setExaSearchEnabled] = useState(settings.exaSearchEnabled ?? false);
-  const [tavilySearchEnabled, setTavilySearchEnabled] = useState(settings.tavilySearchEnabled ?? false);
   const [defaultWebSearchProvider, setDefaultWebSearchProvider] = useState<WebSearchProvider>(coerceWebSearchProvider(settings.defaultWebSearchProvider));
   const [imageCapPreset, setImageCapPreset] = useState<ImageCapPreset>(coerceImageCapPreset(settings.imageCapPreset));
   // llama.cpp server settings
@@ -2174,9 +2171,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
       tavilyApiKey: tavilyApiKey.trim(),
-      braveSearchEnabled,
-      exaSearchEnabled,
-      tavilySearchEnabled,
       defaultWebSearchProvider,
       imageCapPreset,
       llamacppEnabled,
@@ -5289,7 +5283,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
           <div id="api-keys" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">API Keys</h3>
             <div className="space-y-2">
-              <label className="block text-sm text-white/50">Default Web Search Provider</label>
+              <label className="block text-sm text-white/50">Web Search Provider</label>
               <Dropdown triggerClassName={SETTINGS_TRIGGER_CLASS}
                 state={webSearchProviderDd}
                 panelClassName="left-0 right-0 top-full mt-1"
@@ -5318,27 +5312,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                 ))}
               </Dropdown>
               <p className="text-white/30 text-xs">
-                Default for the web_search tool when not overridden by the agent.
+                The web_search tool uses this provider. Changing it updates the
+                tool's parameters on the next turn (one-time context re-prefill).
               </p>
             </div>
-            {/* Provider enable toggles */}
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
-                <input type="checkbox" checked={braveSearchEnabled} onChange={(e) => setBraveSearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
-                Brave Search
-              </label>
-              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
-                <input type="checkbox" checked={exaSearchEnabled} onChange={(e) => setExaSearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
-                Exa
-              </label>
-              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
-                <input type="checkbox" checked={tavilySearchEnabled} onChange={(e) => setTavilySearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
-                Tavily
-              </label>
-            </div>
-            {/* Brave key — shown when enabled */}
-            {braveSearchEnabled && (
-              <div className="space-y-2">
+            {/* Brave key */}
+            <div className="space-y-2">
                 <label className="block text-sm text-white/50">Brave Search API Key</label>
                 <input
                   type="password"
@@ -5355,10 +5334,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </a>
                 </p>
               </div>
-            )}
-            {/* Exa key — shown when enabled */}
-            {exaSearchEnabled && (
-              <div className="space-y-2">
+            {/* Exa key */}
+            <div className="space-y-2">
                 <label className="block text-sm text-white/50">Exa Search API Key</label>
                 <input
                   type="password"
@@ -5375,10 +5352,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </a>
                 </p>
               </div>
-            )}
-            {/* Tavily key — shown when enabled */}
-            {tavilySearchEnabled && (
-              <div className="space-y-2">
+            {/* Tavily key */}
+            <div className="space-y-2">
                 <label className="block text-sm text-white/50">Tavily Search API Key</label>
                 <input
                   type="password"
@@ -5395,7 +5370,6 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   </a>
                 </p>
               </div>
-            )}
           </div>
 
           {/* Vision — how images are sized before they reach the vision model.

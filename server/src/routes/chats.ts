@@ -203,7 +203,7 @@ router.get("/:id/context-view", async (req, res) => {
     }
   }
 
-  const tools = getAgentToolDefinitions(chat.type);
+  const tools = await getAgentToolDefinitions(chat.type);
   const sections = getCachedPromptBreakdown(chat.id) ?? null;
 
   res.json({ systemPrompt, source, sections, tools });
@@ -226,7 +226,7 @@ router.get("/:id/context-breakdown", async (req, res) => {
   }
   const contextWindow = getEffectiveContextWindow(chat, model);
 
-  res.json(computeContextBreakdown(chat, contextWindow));
+  res.json(await computeContextBreakdown(chat, contextWindow));
 });
 
 // Delete a chat

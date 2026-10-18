@@ -74,7 +74,7 @@ async function cleanupOldCache(): Promise<void> {
   }
 }
 
-type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
+export type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
 const TAVILY_SEARCH_DEPTHS = ["basic", "advanced", "fast", "ultra-fast"] as const;
 const TAVILY_TOPICS = ["general", "news", "finance"] as const;
@@ -148,58 +148,118 @@ function pickAllowedBooleanOrString<T extends string>(
 
 // --- Tool definitions ---
 
-const WEB_SEARCH_TOOL: Tool = {
-  name: "web_search",
-  description:
-    "Search the web. Uses the configured default provider unless `provider` is supplied as an override. Supports Brave Search, Exa, and Tavily. Provider-specific knobs (e.g. Exa searchType/contents, Tavily searchDepth/topic/timeRange/includeAnswer/includeRawContent) go in the `providerOptions` object — the server validates them per provider.",
-  parameters: Type.Object({
-    query: Type.String({ description: "Search query" }),
-    count: Type.Optional(
-      Type.Integer({
-        description: "Number of results (1-20, default 5)",
-        minimum: 1,
-        maximum: 20,
-      })
-    ),
-    provider: Type.Optional(Type.Enum(WEB_SEARCH_PROVIDERS, { description: "Optional provider override; omit to use the configured default" })),
-    startPublishedDate: Type.Optional(
-      Type.String({ description: "Exa/Tavily: earliest publication or update date", format: "date" })
-    ),
-    endPublishedDate: Type.Optional(
-      Type.String({ description: "Exa/Tavily: latest publication or update date", format: "date" })
-    ),
-    includeDomains: Type.Optional(
-      Type.Array(Type.String(), { description: "Exa/Tavily: domains to include in results" })
-    ),
-    excludeDomains: Type.Optional(
-      Type.Array(Type.String(), { description: "Tavily only: domains to exclude from results" })
-    ),
-    providerOptions: Type.Optional(
-      Type.Object({
-        searchType: Type.Optional(Type.Enum(["auto", "neural", "keyword", "hybrid", "fast", "deep", "deep-lite", "deep-reasoning", "magic", "instant"] as const)),
-        searchDepth: Type.Optional(Type.Enum(TAVILY_SEARCH_DEPTHS)),
-        topic: Type.Optional(Type.Enum(TAVILY_TOPICS)),
-        timeRange: Type.Optional(Type.Enum(TAVILY_TIME_RANGES)),
-        includeAnswer: Type.Optional(Type.Union([Type.Boolean(), ...TAVILY_ANSWER_MODES.map((value) => Type.Literal(value))])),
-        includeRawContent: Type.Optional(Type.Union([Type.Boolean(), ...TAVILY_RAW_CONTENT_MODES.map((value) => Type.Literal(value))])),
-        contents: Type.Optional(Type.Object({
-          text: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
-            maxCharacters: Type.Optional(Type.Integer({ minimum: 1 })),
-            includeHtmlTags: Type.Optional(Type.Boolean()),
-          }, { additionalProperties: false })])),
-          highlights: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
-            query: Type.Optional(Type.String()),
-            numSentences: Type.Optional(Type.Integer({ minimum: 1 })),
-            highlightsPerUrl: Type.Optional(Type.Integer({ minimum: 1 })),
-          }, { additionalProperties: false })])),
-          summary: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
-            query: Type.Optional(Type.String()),
-          }, { additionalProperties: false })])),
-        }, { additionalProperties: false })),
-      }, { additionalProperties: false, description: "Provider-specific Exa or Tavily options" })
-    ),
-  }),
-};
+// --- web_search schema builders (provider-specific) ---
+//
+// The web_search schema renders into the system prompt prefix, so it is built
+// per turn for the provider selected in Settings: only the active provider's
+// parameters reach the model. There is no `provider` override and no
+// `providerOptions` object — the settings value is authoritative, and a
+// settings change is a deliberate one-time prefix break (the kv-prefix
+// diagnostics log names both tool sets when the surface changes).
+
+const EXA_SEARCH_TYPES = ["auto", "neural", "keyword", "hybrid", "deep"] as const;
+
+const WEB_SEARCH_QUERY = Type.String({ description: "Search query" });
+const WEB_SEARCH_START_DATE = Type.Optional(
+  Type.String({ description: "Earliest publication or update date (YYYY-MM-DD)", format: "date" })
+);
+const WEB_SEARCH_END_DATE = Type.Optional(
+  Type.String({ description: "Latest publication or update date (YYYY-MM-DD)", format: "date" })
+);
+const WEB_SEARCH_INCLUDE_DOMAINS = Type.Optional(
+  Type.Array(Type.String(), { description: "Domains to include in results" })
+);
+const EXA_CONTENTS_SCHEMA = Type.Optional(Type.Object({
+  text: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+    maxCharacters: Type.Optional(Type.Integer({ minimum: 1 })),
+    includeHtmlTags: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false })])),
+  highlights: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+    query: Type.Optional(Type.String()),
+    numSentences: Type.Optional(Type.Integer({ minimum: 1 })),
+    highlightsPerUrl: Type.Optional(Type.Integer({ minimum: 1 })),
+  }, { additionalProperties: false })])),
+  summary: Type.Optional(Type.Union([Type.Boolean(), Type.Object({
+    query: Type.Optional(Type.String()),
+  }, { additionalProperties: false })])),
+}, { additionalProperties: false, description: "Content to return per result: page text, query-relevant highlights, or AI summaries" }));
+
+function webSearchCount(max: number) {
+  return Type.Optional(
+    Type.Integer({
+      description: `Number of results (1-${max}, default 5)`,
+      minimum: 1,
+      maximum: max,
+    })
+  );
+}
+
+function braveWebSearchTool(): Tool {
+  return {
+    name: "web_search",
+    description: "Search the web via Brave Search. Returns numbered results with title, URL, and snippet.",
+    parameters: Type.Object({
+      query: WEB_SEARCH_QUERY,
+      count: webSearchCount(20),
+    }),
+  };
+}
+
+function exaWebSearchTool(): Tool {
+  return {
+    name: "web_search",
+    description:
+      "Search the web via Exa. Returns numbered results with title, URL, and highlights. " +
+      "searchType selects the search mode (auto by default). contents requests page text, " +
+      "highlights, or AI summaries for the returned results.",
+    parameters: Type.Object({
+      query: WEB_SEARCH_QUERY,
+      count: webSearchCount(50),
+      startPublishedDate: WEB_SEARCH_START_DATE,
+      endPublishedDate: WEB_SEARCH_END_DATE,
+      includeDomains: WEB_SEARCH_INCLUDE_DOMAINS,
+      searchType: Type.Optional(Type.Enum(EXA_SEARCH_TYPES, { description: "Search mode: auto (default), neural, keyword, hybrid, deep" })),
+      contents: EXA_CONTENTS_SCHEMA,
+    }),
+  };
+}
+
+function tavilyWebSearchTool(): Tool {
+  return {
+    name: "web_search",
+    description:
+      "Search the web via Tavily. Returns numbered results with title, URL, and content, plus an " +
+      "optional synthesized answer. Supports news and finance topics, freshness windows, and domain filters.",
+    parameters: Type.Object({
+      query: WEB_SEARCH_QUERY,
+      count: webSearchCount(20),
+      searchDepth: Type.Optional(Type.Enum(TAVILY_SEARCH_DEPTHS, { description: "Search depth (basic by default)" })),
+      topic: Type.Optional(Type.Enum(TAVILY_TOPICS, { description: "Vertical: general (default), news, finance" })),
+      timeRange: Type.Optional(Type.Enum(TAVILY_TIME_RANGES, { description: "Freshness window, e.g. day, week, month, year" })),
+      startPublishedDate: WEB_SEARCH_START_DATE,
+      endPublishedDate: WEB_SEARCH_END_DATE,
+      includeDomains: WEB_SEARCH_INCLUDE_DOMAINS,
+      excludeDomains: Type.Optional(Type.Array(Type.String(), { description: "Domains to exclude from results" })),
+      includeAnswer: Type.Optional(Type.Boolean({ description: "Include a synthesized answer" })),
+      includeRawContent: Type.Optional(Type.Boolean({ description: "Include full page content per result" })),
+    }),
+  };
+}
+
+/** Build the web_search definition for the selected provider. The builder
+ *  output is deterministic: same provider, same bytes — the KV prefix
+ *  stability invariant the tool surface depends on. */
+export function buildWebSearchTool(provider: WebSearchProvider): Tool {
+  if (provider === "exa") return exaWebSearchTool();
+  if (provider === "tavily") return tavilyWebSearchTool();
+  return braveWebSearchTool();
+}
+
+/** The full web tool surface for one provider: provider-specific web_search
+ *  plus the static web_fetch. */
+export function buildWebTools(provider: WebSearchProvider): Tool[] {
+  return [buildWebSearchTool(provider), WEB_FETCH_TOOL];
+}
 
 const WEB_FETCH_TOOL: Tool = {
   name: "web_fetch",
@@ -224,8 +284,6 @@ const WEB_FETCH_TOOL: Tool = {
     limit: Type.Optional(Type.Integer({ description: "Characters to return (default 10000, max 50000)", minimum: 1000, maximum: 50000 })),
   }),
 };
-
-export const WEB_TOOLS: Tool[] = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL];
 
 // --- Execution ---
 
@@ -275,34 +333,38 @@ async function getTavilyApiKey(): Promise<string> {
   return settings.tavilyApiKey || "";
 }
 
-async function getDefaultWebSearchProvider(): Promise<WebSearchProvider> {
-  const settings = await getSettings();
-  const provider = normalizeString(settings.defaultWebSearchProvider);
+/** The authoritative search provider: the Settings selection. Missing or
+ *  invalid values fall back to brave. */
+export function resolveWebSearchProvider(
+  settings: { defaultWebSearchProvider?: unknown } | null | undefined,
+): WebSearchProvider {
+  const provider = normalizeString(settings?.defaultWebSearchProvider);
   if (!isWebSearchProvider(provider)) return "brave";
-  // Respect enabled flags — if the configured default is disabled, fall back
-  const enabled: WebSearchProvider[] = [
-    ...(settings.braveSearchEnabled ? ["brave" as const] : []),
-    ...(settings.exaSearchEnabled ? ["exa" as const] : []),
-    ...(settings.tavilySearchEnabled ? ["tavily" as const] : []),
-  ];
-  if (enabled.includes(provider)) return provider;
-  // Default provider is disabled — use first enabled, or brave
-  return enabled.length > 0 ? enabled[0] : "brave";
+  return provider;
 }
 
 async function executeWebSearch(
   args: Record<string, any>,
   signal?: AbortSignal,
 ): Promise<{ content: string; isError: boolean }> {
+  const settings = await getSettings().catch(() => undefined);
+  const provider = resolveWebSearchProvider(settings);
+
+  // Pre-refactor calls carried a `provider` override (with nested
+  // providerOptions). The settings value is now authoritative: a conflicting
+  // override is rejected so the model self-corrects on the retry; a matching
+  // one is harmless, and nested providerOptions keys still resolve through
+  // pickOption in the executors (top-level wins).
   const requestedProvider = normalizeString(args.provider);
-  if (requestedProvider !== undefined && !isWebSearchProvider(requestedProvider)) {
+  if (
+    requestedProvider !== undefined &&
+    (!isWebSearchProvider(requestedProvider) || requestedProvider !== provider)
+  ) {
     return {
-      content: `Unsupported web search provider: ${requestedProvider}. Use one of: ${WEB_SEARCH_PROVIDERS.join(", ")}.`,
+      content: `"provider" is no longer a parameter of web_search — the tool uses ${provider} as selected in Settings. Retry without it.`,
       isError: true,
     };
   }
-
-  const provider = requestedProvider || await getDefaultWebSearchProvider();
 
   if (provider === "exa") {
     return executeExaSearch(args, signal);

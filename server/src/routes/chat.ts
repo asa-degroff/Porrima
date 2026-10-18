@@ -916,11 +916,11 @@ const NOOP_TOOL_EFFECTS: ToolSideEffects = {
 // Build a tool schema list suitable for compaction size-estimation only.
 // The returned schemas are identical to what execution would use (same
 // chatType gating), so estimateToolSchemaTokens sees the real wire cost.
-function toolsForEstimate(
+async function toolsForEstimate(
   chat: Chat,
   contextWindow: number,
   project?: Project | string,
-): unknown {
+): Promise<unknown> {
   return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, project, chat.type);
 }
 
@@ -2193,7 +2193,7 @@ async function handleChatStream(
     // Created per handleChatStream so steering shares the gate while a
     // follow-up (new stream) restarts the "since turn start" reference.
     const timeMarker = createTimeMarkerState(settings.timeMarkerIntervalMinutes);
-    const agentTools = getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker);
+    const agentTools = await getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type, timeMarker);
 
     // Build agent context. The system prompt travels through
     // createAgentLoopConfig's convertToLlm wrapper (pi-agent-core 1.0 carries
@@ -4676,7 +4676,7 @@ router.post("/", async (req, res) => {
         for (const s of allSkills) skillsCache.set(s.name, s);
         compactSystemPrompt = buildSkillAugmentedPrompt(compactSystemPrompt, chat.activeSkills, skillsCache);
       }
-      compactTools = toolsForEstimate(chat, contextWindow, compactProject);
+      compactTools = await toolsForEstimate(chat, contextWindow, compactProject);
 
       // The flush runs as a pre-archive hook so removed messages are
       // extracted (continuing the cached extraction session) before archiving;
@@ -4987,7 +4987,7 @@ router.post("/", async (req, res) => {
             systemPrompt,
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
-            toolsForEstimate(chat, effectiveContextWindow),
+            await toolsForEstimate(chat, effectiveContextWindow),
             { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed (resume)"),
             turnRequestSignal(res),
@@ -5030,7 +5030,7 @@ router.post("/", async (req, res) => {
             const estimatedTokens = await estimatePostCompactionTokens(
               chat,
               systemPrompt,
-              toolsForEstimate(chat, effectiveContextWindow),
+              await toolsForEstimate(chat, effectiveContextWindow),
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
@@ -5243,7 +5243,7 @@ router.post("/", async (req, res) => {
             systemPrompt,
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
-            toolsForEstimate(chat, effectiveContextWindow),
+            await toolsForEstimate(chat, effectiveContextWindow),
             { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed"),
             turnRequestSignal(res),
@@ -5294,7 +5294,7 @@ router.post("/", async (req, res) => {
             const estimatedTokens = await estimatePostCompactionTokens(
               chat,
               systemPrompt,
-              toolsForEstimate(chat, effectiveContextWindow),
+              await toolsForEstimate(chat, effectiveContextWindow),
             );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
@@ -6058,7 +6058,7 @@ router.post("/edit", async (req, res) => {
           const estimatedTokens = await estimatePostCompactionTokens(
             chat,
             systemPrompt,
-            toolsForEstimate(chat, effectiveContextWindow),
+            await toolsForEstimate(chat, effectiveContextWindow),
           );
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,

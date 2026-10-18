@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationTask, Chat } from "../types.js";
 
+
 async function loadModules(homeDir: string) {
   vi.resetModules();
   vi.doMock("os", async (importOriginal) => {
@@ -110,7 +111,7 @@ describe("in-chat reminder: tool destination", () => {
         await chatStorage.createChat(makeChat("system", "System", "system"));
         const { getAgentTools } = await import("../services/agent-tools.js");
         const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-        const tools = getAgentTools("origin", effects, 32768, undefined, "agent", null);
+        const tools = await getAgentTools("origin", effects, 32768, undefined, "agent", null);
         const automationStorage = await import("../services/automation-storage.js");
         return { chatStorage, automationStorage, byName: new Map(tools.map((t: any) => [t.name, t])) };
       })();
@@ -140,7 +141,7 @@ describe("in-chat reminder: tool destination", () => {
         await chatStorage.createChat(makeChat("deploy", "Deploy Watch"));
         const { getAgentTools } = await import("../services/agent-tools.js");
         const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-        const tools = getAgentTools("origin", effects, 32768, undefined, "agent", null);
+        const tools = await getAgentTools("origin", effects, 32768, undefined, "agent", null);
         const automationStorage = await import("../services/automation-storage.js");
         return { chatStorage, automationStorage, byName: new Map(tools.map((t: any) => [t.name, t])) };
       })();
@@ -179,7 +180,7 @@ describe("in-chat reminder: tool destination", () => {
         await chatStorage.createChat(makeChat("deploy-beta", "Deploy Beta"));
         const { getAgentTools } = await import("../services/agent-tools.js");
         const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-        const tools = getAgentTools("origin", effects, 32768, undefined, "agent", null);
+        const tools = await getAgentTools("origin", effects, 32768, undefined, "agent", null);
         return { chatStorage, byName: new Map(tools.map((t: any) => [t.name, t])) };
       })();
 
@@ -211,7 +212,7 @@ describe("in-chat reminder: tool destination", () => {
         await chatStorage.createChat(makeChat("system", "System", "system"));
         const { getAgentTools } = await import("../services/agent-tools.js");
         const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
-        const tools = getAgentTools("system", effects, 32768, undefined, "system", null);
+        const tools = await getAgentTools("system", effects, 32768, undefined, "system", null);
         const automationStorage = await import("../services/automation-storage.js");
         return { chatStorage, automationStorage, byName: new Map(tools.map((t: any) => [t.name, t])) };
       })();

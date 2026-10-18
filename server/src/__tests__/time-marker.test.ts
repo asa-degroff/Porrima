@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyTimeMarker, createTimeMarkerState } from "../services/time-marker.js";
 import { wrapToolsWithTimeMarker } from "../services/agent-tools.js";
 import { formatAgentClock } from "../services/time-format.js";
+
+// getAgentTools reads the web-search provider from settings; pin it so the
+// suite never opens the live data dir and the web_search schema is
+// deterministic (brave).
+vi.mock("../services/chat-storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/chat-storage.js")>();
+  return { ...actual, getSettings: vi.fn(async () => ({ defaultWebSearchProvider: "brave" })) };
+});
+
 
 /**
  * The clock's zone is the system zone (presentation detail), so exact
@@ -185,7 +194,7 @@ describe("getAgentTools time-marker integration", () => {
     const { getAgentTools } = await import("../services/agent-tools.js");
     // Loop started 20 minutes ago, 15-minute interval → gate already open.
     const state = createTimeMarkerState(15, Date.now() - 20 * MIN)!;
-    const tools = getAgentTools("probe-chat", noopEffects as any, 32768, undefined, "agent", state);
+    const tools = await getAgentTools("probe-chat", noopEffects as any, 32768, undefined, "agent", state);
     const bash = tools.find((t) => t.name === "bash");
     expect(bash).toBeDefined();
     const result = await bash!.execute("tc-1", { command: "echo marker-probe" } as any);
@@ -197,7 +206,7 @@ describe("getAgentTools time-marker integration", () => {
   it("leaves results untouched while the loop is younger than the interval", async () => {
     const { getAgentTools } = await import("../services/agent-tools.js");
     const state = createTimeMarkerState(15, Date.now())!;
-    const tools = getAgentTools("probe-chat", noopEffects as any, 32768, undefined, "agent", state);
+    const tools = await getAgentTools("probe-chat", noopEffects as any, 32768, undefined, "agent", state);
     const bash = tools.find((t) => t.name === "bash");
     const result = await bash!.execute("tc-2", { command: "echo no-marker" } as any);
     expect(firstText(result)).toContain("no-marker");

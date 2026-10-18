@@ -108,7 +108,7 @@ afterEach(async () => {
 describe("kernel tool dispatch through the registry (slice 1)", () => {
   it("kernel-origin bash resolves while run_python holds the workspace mutation lock", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((tool) => tool.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((tool) => tool.name === "run_python")!;
     const result = await runPython.execute(
       "call-1",
       { code: 'out = await tools.bash(command="echo hi from kernel")\nprint(out)', timeout: 60 },
@@ -123,7 +123,7 @@ describe("kernel tool dispatch through the registry (slice 1)", () => {
 
   it("routes kernel read_file through the same dispatcher", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((tool) => tool.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((tool) => tool.name === "run_python")!;
     const result = await runPython.execute(
       "call-2",
       { code: 'print(await tools.read_file(path="a.txt"))', timeout: 60 },
@@ -136,7 +136,7 @@ describe("kernel tool dispatch through the registry (slice 1)", () => {
     await setup();
     fake.failNextBash = true;
     const { agentTools } = current!;
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((tool) => tool.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((tool) => tool.name === "run_python")!;
     // A failed cell flows through wrapResult's error branch (thrown, not
     // resolved) — same wire shape as a model-level tool failure.
     const error = await runPython
@@ -157,7 +157,7 @@ describe("kernel tool dispatch through the registry (slice 1)", () => {
 
   it("absent-from-allowlist tools are absent from the namespace, not discouraged", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((tool) => tool.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((tool) => tool.name === "run_python")!;
     // edit_file is tier 2: the namespace is built from the dispatcher's list,
     // so there is no attribute to call — AttributeError before any RPC.
     const error = await runPython
@@ -169,7 +169,7 @@ describe("kernel tool dispatch through the registry (slice 1)", () => {
 
   it("passes bash args through untouched for the adapter to apply its own limits", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((tool) => tool.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((tool) => tool.name === "run_python")!;
     const result = await runPython.execute(
       "call-6",
       { code: 'await tools.bash(command="sleepy", timeout=90)', timeout: 60 },
@@ -221,7 +221,7 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
 
   it("routes web_search/web_fetch through the web executor", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((t) => t.name === "run_python")!;
     const result = await runPython.execute(
       "call-w1",
       { code: 's = await tools.web_search(query="porrima")\nf = await tools.web_fetch(url="https://example.test")\nprint(s)\nprint(f)', timeout: 60 },
@@ -235,7 +235,7 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
 
   it("routes memory reads through the memory executor with chat scope", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((t) => t.name === "run_python")!;
     const result = await runPython.execute(
       "call-m1",
       { code: 'print(await tools.search_memory(query="q"))', timeout: 60 },
@@ -247,7 +247,7 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
 
   it("exposes the full tier-1 surface in the driver namespace", async () => {
     const { agentTools } = await setup();
-    const runPython = agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+    const runPython = (await agentTools.getAgentTools(CHAT, effects)).find((t) => t.name === "run_python")!;
     const result = await runPython.execute(
       "call-m2",
       { code: 'import asyncio\nnames = sorted(n for n in dir(tools) if not n.startswith("_") and n != "list")\nprint(",".join(names))', timeout: 60 },
@@ -273,7 +273,7 @@ describe("kernel tool dispatch — tier 1 completion (slice 2)", () => {
 
   it("advertises tools.* in the run_python description only when the flag is on", async () => {
     const { agentTools } = await setup();
-    const defs = agentTools.getAgentToolDefinitions();
+    const defs = await agentTools.getAgentToolDefinitions();
     const desc = defs.find((d) => d.name === "run_python")!.description!;
     expect(desc).toContain("await tools.<name>(**kwargs)");
     expect(desc).toContain("help(tools)");
@@ -303,14 +303,14 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
     );
   }
 
-  function runPythonTool() {
-    return current!.agentTools.getAgentTools(CHAT, effects).find((t) => t.name === "run_python")!;
+  async function runPythonTool() {
+    return (await current!.agentTools.getAgentTools(CHAT, effects)).find((t) => t.name === "run_python")!;
   }
 
   it("file scan lands in the cell as a real dict — census fields ride, `text` does not", async () => {
     const { agentTools } = await setup();
     await writeFixture();
-    const result = await runPythonTool().execute(
+    const result = await (await runPythonTool()).execute(
       "cs-1",
       {
         code: [
@@ -328,7 +328,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
 
   it("snippet mode tests a pattern against a constructed string — no filesystem", async () => {
     await setup();
-    const result = await runPythonTool().execute(
+    const result = await (await runPythonTool()).execute(
       "cs-2",
       {
         code: [
@@ -345,7 +345,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
   it("the rule loop (§3.3): refine across iterations in variables, inspecting bindings", async () => {
     await setup();
     await writeFixture();
-    const result = await runPythonTool().execute(
+    const result = await (await runPythonTool()).execute(
       "cs-3",
       {
         code: [
@@ -364,7 +364,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
 
   it("gating: flag off, code_search is absent from the namespace — allowlist authority", async () => {
     await setup();
-    const on = await runPythonTool().execute(
+    const on = await (await runPythonTool()).execute(
       "cs-4a",
       { code: 'print(hasattr(tools, "code_search"))', timeout: 60 },
       new AbortController().signal,
@@ -374,7 +374,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
     // and the driver rebuilds the namespace per execute — a flip needs no
     // kernel restart.
     delete process.env.PORRIMA_CODE_SEARCH;
-    const off = await runPythonTool().execute(
+    const off = await (await runPythonTool()).execute(
       "cs-4b",
       { code: 'print(hasattr(tools, "code_search"))', timeout: 60 },
       new AbortController().signal,
@@ -385,7 +385,7 @@ describe.runIf(napiAvailable)("code_search kernel projection (Phase 1)", () => {
 
   it("executor errors surface as KernelToolError with the model-readable message", async () => {
     await setup();
-    const result = await runPythonTool().execute(
+    const result = await (await runPythonTool()).execute(
       "cs-5",
       {
         code: [
