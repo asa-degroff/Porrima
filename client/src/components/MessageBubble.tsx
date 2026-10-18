@@ -15,6 +15,14 @@ import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
+import {
+  deleteMessageEditDraft,
+  getMessageEditDraft,
+  pickMessageEditDraft,
+  setMessageEditDraft,
+  stashMessageEditDraft,
+  type MessageEditDraft,
+} from "../lib/message-edit-drafts";
 
 const MarkdownRenderer = lazy(() =>
   import("./ui/MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -59,27 +67,6 @@ const MESSAGE_ROW_MAX_WIDTH = {
   desktop: 0.86,
   className: "max-w-[97%] md:max-w-[86%]",
 } as const;
-
-interface MessageEditDraft {
-  text: string;
-  images: ImageAttachment[];
-  minWidth?: number;
-}
-
-const messageEditDrafts = new Map<string, MessageEditDraft>();
-
-function getMessageEditDraftKey(
-  chatId: string | undefined,
-  message: ChatMessage,
-  messageIndex: number | null | undefined,
-  messageSequence: number | undefined
-): string | null {
-  if (!chatId) return null;
-  const sequence = messageSequence ?? message._rowSequence;
-  if (sequence != null) return `${chatId}:seq:${sequence}`;
-  if (messageIndex != null) return `${chatId}:idx:${messageIndex}:${message.timestamp}:${message.role}`;
-  return `${chatId}:ts:${message.timestamp}:${message.role}`;
-}
 
 function cloneImageAttachments(images: ImageAttachment[] | undefined): ImageAttachment[] {
   return images ? images.map((image) => ({ ...image })) : [];
@@ -179,7 +166,7 @@ interface Props {
   streamingThinkingLastStartRef?: React.RefObject<number>;
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
-  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => void;
+  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => boolean;
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   messageIndex?: number;
   messageSequence?: number;
@@ -297,10 +284,11 @@ export const MessageBubble = memo(function MessageBubble({
 
   const { isPinned: isItemPinned, unpin: unpinItem } = usePinnedItem();
   const isDesktopView = useIsDesktop();
-  const editDraftKey = isUser
-    ? getMessageEditDraftKey(chatId, message, messageIndex, messageSequence)
+  const editDraft = isUser
+    ? pickMessageEditDraft(chatId, message, messageIndex)
     : null;
-  const initialEditDraft = editDraftKey ? messageEditDrafts.get(editDraftKey) : undefined;
+  const editDraftKey = editDraft?.key ?? null;
+  const initialEditDraft = editDraft?.draft;
   const [editing, setEditing] = useState(() => !!initialEditDraft);
   const [editText, setEditText] = useState(() => initialEditDraft?.text ?? "");
   const [editImages, setEditImages] = useState<ImageAttachment[]>(() => initialEditDraft?.images ?? []);
@@ -323,17 +311,17 @@ export const MessageBubble = memo(function MessageBubble({
 
   const updateEditDraft = useCallback((patch: Partial<MessageEditDraft>) => {
     if (!editDraftKey) return;
-    const current = messageEditDrafts.get(editDraftKey) ?? {
+    const current = getMessageEditDraft(editDraftKey) ?? {
       text: editText,
       images: editImages,
       minWidth: editMinWidth,
     };
-    messageEditDrafts.set(editDraftKey, { ...current, ...patch });
+    setMessageEditDraft(editDraftKey, { ...current, ...patch });
   }, [editDraftKey, editImages, editMinWidth, editText]);
 
   useEffect(() => {
     if (!editDraftKey) return;
-    const draft = messageEditDrafts.get(editDraftKey);
+    const draft = getMessageEditDraft(editDraftKey);
     if (!draft) return;
 
     setEditing(true);
@@ -365,36 +353,35 @@ export const MessageBubble = memo(function MessageBubble({
     setEditMinWidth(minWidth);
     setEditText(message.content);
     setEditImages(images);
-    if (editDraftKey) {
-      messageEditDrafts.set(editDraftKey, {
-        text: message.content,
-        images,
-        minWidth,
-      });
-    }
+    stashMessageEditDraft(chatId, message, messageIndex, {
+      text: message.content,
+      images,
+      minWidth,
+    });
     setEditing(true);
   };
 
   const handleSave = () => {
     const trimmed = editText.trim();
     if (messageIndex == null) return;
-    
+
     const textChanged = trimmed !== message.content.trim();
     const imagesChanged = editImages.length !== (message.images?.length || 0);
-    
+
     if (textChanged || imagesChanged) {
-      onEditMessage?.(messageIndex, trimmed, editImages, messageSequence, messageRowId);
+      // A false return means the edit could not start (a turn began, the tab
+      // went offline, or the target row moved). Keep the editor and the draft
+      // so the typed text survives; the user can send again.
+      if (onEditMessage?.(messageIndex, trimmed, editImages, messageSequence, messageRowId) === false) {
+        return;
+      }
     }
-    if (editDraftKey) {
-      messageEditDrafts.delete(editDraftKey);
-    }
+    deleteMessageEditDraft(editDraftKey);
     setEditing(false);
   };
 
   const handleCancel = () => {
-    if (editDraftKey) {
-      messageEditDrafts.delete(editDraftKey);
-    }
+    deleteMessageEditDraft(editDraftKey);
     setEditing(false);
   };
 

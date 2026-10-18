@@ -4362,11 +4362,13 @@ async function handleChatStream(
       ? (assistantMsg._rowSequence ?? chat.messages.length - 1)
       : undefined;
     let userMessageSequence: number | undefined;
+    let userMessageId: string | undefined;
     if (assistantSequence !== undefined) {
       const assistantIdx = chat.messages.indexOf(assistantMsg);
       for (let i = (assistantIdx >= 0 ? assistantIdx : chat.messages.length) - 1; i >= 0; i--) {
         if (chat.messages[i]?.role === "user") {
           userMessageSequence = chat.messages[i]._rowSequence ?? i;
+          userMessageId = chat.messages[i]._rowId;
           break;
         }
       }
@@ -4394,14 +4396,14 @@ async function handleChatStream(
 
     if (waitingForInput) {
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, waitingForInput: true, iterations })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, userMessageId, waitingForInput: true, iterations })}\n\n`
       );
     } else {
       // Clean up pending state — turn completed normally, no need for crash recovery
       await clearPendingState(chat.id);
 
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, iterations })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, userMessageId, iterations })}\n\n`
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant).

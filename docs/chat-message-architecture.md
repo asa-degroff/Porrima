@@ -49,7 +49,7 @@ The API supports recent-window and older-window reads:
 
 The client requests the most recent 200 messages on chat selection, caches that window in IndexedDB, and loads older windows when the user scrolls near the top. The 1000 clamp is centralized in `server/src/utils/message-window.ts` and shared by three consumers: the initial fetch, the paged endpoint, and `GET /api/chat/status/:chatId?includeWindow=1`.
 
-**Edit/retry resolution is by row identity, not array index.** Because sequence numbers are *not* durable identifiers — any later insert shifts them — the client sends `messageSequence` (the row's `_rowSequence`) alongside the computed index, and the server **prefers** it, resolving via `_rowSequence ?? index`. The route then **fails closed** unless the target is a `user` row, tolerating exactly one form of drift: a locally-rendered empty assistant placeholder immediately following a user row.
+**Edit/retry resolution is by row identity, not array index.** Sequence numbers are *not* durable identifiers: any insert or rebase renumbers them. The client sends `messageRowId` (the row's `_rowId`) with the computed `messageSequence` and index. The server **prefers** the row id, resolving via `_rowId ?? _rowSequence ?? index`, and **fails closed** unless the target is a `user` row. It tolerates exactly one form of drift: a locally-rendered empty assistant placeholder immediately following a user row. The SSE `done` payload reports the answered user row as `userMessageId`/`userMessageSequence`, so the client stamps durable identity onto its optimistic row before any reload.
 
 ## Canonical Tool-Loop Rows
 

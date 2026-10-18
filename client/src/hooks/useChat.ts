@@ -9,6 +9,7 @@ import {
   setCachedChat,
 } from "../lib/db";
 import { applyFollowUpStart, isEmptyAssistantPlaceholder } from "../lib/steeringPlaceholders";
+import { stashMessageEditDraft } from "../lib/message-edit-drafts";
 import type { Chat } from "../types";
 
 /** Server-reported position in the global turn queue (single GPU slot) */
@@ -649,7 +650,7 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
           }
         }
       },
-      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment, messageSequence, userMessageSequence }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment, messageSequence, messageRowId, userMessageSequence, userMessageId }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -727,14 +728,16 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
             _toolLoopId: toolLoopId || last._toolLoopId,
             _toolLoopFragment: toolLoopFragment || undefined,
             _rowSequence: messageSequence ?? last._rowSequence,
+            _rowId: messageRowId ?? last._rowId,
           };
         }
-        if (userMessageSequence != null) {
+        if (userMessageSequence != null || userMessageId != null) {
           for (let i = bg.messages.length - 2; i >= 0; i--) {
             if (bg.messages[i]?.role === "user") {
               bg.messages[i] = {
                 ...bg.messages[i],
-                _rowSequence: userMessageSequence,
+                ...(userMessageSequence != null ? { _rowSequence: userMessageSequence } : {}),
+                ...(userMessageId != null ? { _rowId: userMessageId } : {}),
               };
               break;
             }
@@ -2225,8 +2228,8 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
   );
 
   const editMessage = useCallback(
-    (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string) => {
-      if (!chatId || streaming || !navigator.onLine) return;
+    (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number, messageRowId?: string): boolean => {
+      if (!chatId || streaming || !navigator.onLine) return false;
       const targetChatId = chatId;
       const currentOffset = messageOffsetRef.current;
       const rowIdLocalIndex = messageRowId == null
@@ -2240,29 +2243,33 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
         : sequenceLocalIndex >= 0
           ? sequenceLocalIndex
           : index - messageOffsetRef.current;
-      if (localIndex < 0 || localIndex >= messages.length) return;
+      if (localIndex < 0 || localIndex >= messages.length) return false;
       const targetAbsoluteIndex = messageSequence ?? index;
 
       // Use provided images if explicitly passed (including empty array), otherwise preserve originals
       const originalMessage = messages[localIndex];
-      if (!originalMessage) return;
+      if (!originalMessage) return false;
       const originalImages = images !== undefined ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
+
+      // Snapshot for the refusal rollback below. A server refusal (400 target
+      // miss / 409 concurrent write) must not leave the optimistic truncation
+      // on screen, pretending the edit landed.
+      const prevMessages = messages;
+      const prevOffset = messageOffsetRef.current;
+      const prevTotal = messageTotalRef.current;
 
       // Create bgStream entry
       const bg = createBgStream(activeChatRef.current, messageOffsetRef.current, messageTotalRef.current);
       bgStreams.set(targetChatId, bg);
 
       // Truncate to edit point, add new user msg (with preserved images) + placeholder assistant msg
-      setMessages((prev) => {
-        const truncated = prev.slice(0, localIndex);
-        const next = [
-          ...truncated,
-          { role: "user" as const, content: newText, images: originalImages, timestamp: Date.now() },
-          { role: "assistant" as const, content: "", timestamp: Date.now() },
-        ];
-        bg.messages = next;
-        return next;
-      });
+      const optimisticMessages: ChatMessage[] = [
+        ...messages.slice(0, localIndex),
+        { role: "user", content: newText, images: originalImages, timestamp: Date.now() },
+        { role: "assistant", content: "", timestamp: Date.now() },
+      ];
+      bg.messages = optimisticMessages;
+      setMessages(optimisticMessages);
       bg.messageOffset = currentOffset;
       bg.messageTotal = targetAbsoluteIndex + 2;
       setMessageOffset(currentOffset);
@@ -2271,9 +2278,43 @@ export function useChat(chatId: string | null, options?: UseChatOptions) {
       prepareStream();
 
       const callbacks = makeStreamCallbacks(targetChatId);
-      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages, messageSequence, messageRowId);
+      let refusalStatus: number | null = null;
+      const baseOnError = callbacks.onError;
+      callbacks.onError = (err) => {
+        baseOnError(err);
+        if (refusalStatus == null || bg.doneCalled) return;
+        // A newer turn claimed this chat while the refusal was in flight —
+        // leave its state alone.
+        const currentBg = bgStreams.get(targetChatId);
+        if (currentBg && currentBg !== bg) return;
+        // Drop the finished (never-started) stream entry so a later chat
+        // switch reloads the chat from the server instead of restoring the
+        // refused optimistic truncation.
+        bgStreams.delete(targetChatId);
+        if (activeChatIdRef.current === targetChatId) {
+          // Roll back only if the optimistic rows are still the displayed tail;
+          // anything else means another writer already touched this list.
+          setMessages((curr) => (curr === optimisticMessages ? prevMessages : curr));
+          setMessageOffset(prevOffset);
+          setMessageTotal(prevTotal);
+          setStreaming(false);
+        }
+        // Re-seed the draft under the restored row's identity so its bubble
+        // re-opens the editor with the typed text instead of silently
+        // reverting to the old message on the next reconciliation.
+        stashMessageEditDraft(targetChatId, originalMessage, index, {
+          text: newText,
+          images: originalImages ?? [],
+        });
+      };
+      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages, messageSequence, messageRowId, {
+        onHttpError: (status) => {
+          refusalStatus = status;
+        },
+      });
       bg.abortController = controller;
       abortRef.current = controller;
+      return true;
     },
     [chatId, streaming, messages, prepareStream, makeStreamCallbacks]
   );

@@ -1349,7 +1349,7 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
     (index: number, newText: string, images?: import("./types").ImageAttachment[], messageSequence?: number, messageRowId?: string) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
       autoReadPendingTurnRef.current = true;
-      editMessage(index, newText, images, messageSequence, messageRowId);
+      return editMessage(index, newText, images, messageSequence, messageRowId);
     },
     [activeChatId, editMessage]
   );

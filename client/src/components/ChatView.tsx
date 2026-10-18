@@ -408,7 +408,7 @@ interface Props {
   playbackState?: import("../hooks/useTTS").PlaybackState;
   ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
-  onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[], messageSequence?: number, messageRowId?: string) => void;
+  onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[], messageSequence?: number, messageRowId?: string) => boolean;
   onRetryMessage?: (index: number, messageSequence?: number) => void;
   onLoadOlderMessages?: () => Promise<boolean>;
   onAbort: () => void;
@@ -1050,10 +1050,15 @@ export function ChatView({
                     const isMidTurnCompaction = !!msg._isMidTurnCompaction;
                     const isCrossChatPost = !!msg._crossChatPost;
                     const isReminder = !!msg._reminder;
+                    // Prefer the durable row identity: sequences renumber on
+                    // rebases, and a key change remounts the bubble — which
+                    // closes an open edit editor and orphans its draft.
                     const singleMessageKey =
-                      msg._rowSequence != null
-                        ? `seq-${msg._rowSequence}`
-                        : `${i}-${msg.timestamp}-${msg.role}`;
+                      msg._rowId != null
+                        ? `row-${msg._rowId}`
+                        : msg._rowSequence != null
+                          ? `seq-${msg._rowSequence}`
+                          : `${i}-${msg.timestamp}-${msg.role}`;
                     const stableKey = localStartIdx === localEndIdx
                       ? `msg-${singleMessageKey}`
                       : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;

@@ -356,7 +356,7 @@ export interface ArtifactRuntimeErrorReport {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
+  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; messageRowId?: string; userMessageSequence?: number; userMessageId?: string }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   /** Live-only in-flight output for a running tool (bash, run_python).
@@ -526,7 +526,8 @@ async function readSSEBody(
 function streamSSE(
   url: string,
   body: Record<string, unknown>,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  options?: { onHttpError?: (status: number, message: string) => void }
 ): AbortController {
   const controller = new AbortController();
 
@@ -551,7 +552,9 @@ function streamSSE(
         } catch {
           err = { error: errText || res.statusText };
         }
-        callbacks.onError(err.error || "Request failed");
+        const message = err.error || "Request failed";
+        options?.onHttpError?.(res.status, message);
+        callbacks.onError(message);
         return;
       }
       await readSSEBody(res, callbacks, controller);
@@ -731,12 +734,14 @@ export function editMessage(
   callbacks: StreamCallbacks,
   images?: ImageAttachment[],
   messageSequence?: number,
-  messageRowId?: string
+  messageRowId?: string,
+  options?: { onHttpError?: (status: number, message: string) => void }
 ): AbortController {
   return streamSSE(
     `${BASE}/chat/edit`,
     withDeviceId({ chatId, messageIndex, messageSequence, messageRowId, message, images: images?.length ? images : undefined }),
-    callbacks
+    callbacks,
+    options
   );
 }
 
@@ -780,7 +785,9 @@ function processSSEEvent(
         toolLoopId: data.message?._toolLoopId,
         toolLoopFragment: data.message?._toolLoopFragment,
         messageSequence: data.message?._rowSequence,
+        messageRowId: data.message?._rowId,
         userMessageSequence: data.userMessageSequence,
+        userMessageId: data.userMessageId,
       });
       break;
     case "tool_status":
