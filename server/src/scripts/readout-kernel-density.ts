@@ -95,6 +95,7 @@ const bad = rows.filter((r) => r.outcome !== "ok").slice(0, 10);
 // --- model side (app.db) -----------------------------------------------------
 let modelCalls = 0;
 let modelChats = 0;
+let modelSnippets = 0;
 const runPython: Map<string, { title: string; calls: number }> = new Map();
 try {
   const app = new Database(appDataPath("app.db"), { readonly: true });
@@ -105,14 +106,15 @@ try {
   ).all(since) as { chatId: string; title: string; pj: string }[];
   const toolChats = new Set<string>();
   for (const row of hit) {
-    let calls: { name?: string }[] = [];
+    let calls: { name?: string; arguments?: Record<string, unknown> }[] = [];
     try {
       const msg = JSON.parse(row.pj);
       calls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
     } catch { continue; }
-    const t = calls.filter((c) => c.name === tool).length;
-    if (t > 0) {
-      modelCalls += t;
+    const t = calls.filter((c) => c.name === tool);
+    if (t.length > 0) {
+      modelCalls += t.length;
+      modelSnippets += t.filter((c) => typeof c.arguments?.code === "string").length;
       toolChats.add(row.chatId);
     }
     const rp = calls.filter((c) => c.name === "run_python").length;
@@ -149,7 +151,7 @@ const report = {
     structuredShare: oks.length ? oks.filter((r) => r.structured).length / oks.length : 0,
     nonOkSamples: bad.map((r) => ({ ts: r.timestamp, outcome: r.outcome, detail: r.detail })),
   },
-  q2: { modelSide: { calls: modelCalls, chats: modelChats }, runPythonChecklist: [...runPython].sort((a, b) => b[1].calls - a[1].calls).slice(0, 10) },
+  q2: { modelSide: { calls: modelCalls, chats: modelChats, snippets: modelSnippets }, runPythonChecklist: [...runPython].sort((a, b) => b[1].calls - a[1].calls).slice(0, 10) },
   verdictShapes: { a_density: shapeA, b_discoverability: shapeB, c_dark: shapeC },
   rotationWarning: tableRows >= 1000,
 };
@@ -160,18 +162,18 @@ if (asJson) {
 }
 
 const hr = "-".repeat(72);
-console.log(`density readout — ${tool} — window ${days}d (since ${when(since)})`);
+console.log(`density readout — ${tool} — window ${days}d (since ${when(since)} UTC)`);
 console.log(hr);
 console.log("Q1 — chain depth (per chat+cell)");
 console.log(`  kernel dispatches in window: ${rows.length} across ${cellReports.length} cells` +
-  (rows.length ? ` (coverage ${when(rows[0].timestamp)} → ${when(rows[rows.length - 1].timestamp)})` : ""));
+  (rows.length ? ` (coverage ${when(rows[0].timestamp)} → ${when(rows[rows.length - 1].timestamp)} UTC)` : ""));
 console.log(`  depth histogram (dispatches→cells): ${JSON.stringify(report.q1.depthHistogram)}  median=${medianDepth}`);
 console.log(`  cells ≥2 dispatches: ${report.q1.cellsGe2} | signature cells (snippet+refined pat): ${firing.length}` +
   (firing.length ? `\n  firing: ${firing.slice(0, 5).map((c) => c.cell.slice(0, 26)).join(", ")}` : ""));
 if (rows.length === 0) console.log("  (no kernel dispatches — chain stats vacuous)");
 console.log(hr);
 console.log("Q2 — model level (app.db; substitution itself is the transcript pass)");
-console.log(`  model-level ${tool} calls: ${modelCalls} in ${modelChats} chats`);
+console.log(`  model-level ${tool} calls: ${modelCalls} in ${modelChats} chats (snippet-mode: ${modelSnippets})`);
 console.log(`  run_python checklist (top ${Math.min(10, runPython.size)} chats for the qualitative pass):`);
 for (const [id, e] of [...runPython].sort((a, b) => b[1].calls - a[1].calls).slice(0, 10)) {
   console.log(`    ${id.slice(0, 8)}  ${String(e.calls).padStart(3)}×  ${e.title.slice(0, 46)}`);
