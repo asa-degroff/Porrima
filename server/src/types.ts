@@ -112,6 +112,12 @@ export interface ChatMessage {
    * descriptions once the (CPU) extraction model finishes.
    */
   _archiveIds?: string[];
+  /**
+   * Verbatim prose recap lines (user/assistant excerpts, oldest → newest)
+   * carried by this compaction summary. Re-rendered into `content` on every
+   * summary rewrite and carried forward when this summary is itself compacted.
+   */
+  _archiveRecap?: string[];
   /** Marks this message's content as promoted from thinking (not useful for previews) */
   _thinkingPromoted?: boolean;
   /** Groups canonical split assistant rows that belong to one visible assistant turn. */

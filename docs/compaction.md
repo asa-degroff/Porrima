@@ -2,7 +2,7 @@
 
 When a conversation exceeds the model's context window, the system must remove older messages to make room for new ones. This process is called **compaction**. The challenge is preserving enough context for the agent to continue working coherently.
 
-The compaction system uses an **indexed summary** approach — full messages are archived and searchable, while a concise index replaces them in the conversation. This is lossless: nothing is deleted, only moved out of the active context window.
+The compaction system uses an **indexed summary** approach — full messages are archived and searchable, while a concise index replaces them in the conversation. The summary also carries a **verbatim recap** of the removed user and assistant prose, so the conclusions of archived turns stay in the active context window. This is lossless: nothing is deleted, only moved out of the active context window.
 
 **End-of-turn is the primary path; pre-send is the backstop.** Compaction that runs pre-send makes the user wait for it *at the keyboard*, mid-request — a 7-minute pre-send wait drove the rework. Since then every expected compaction fires **after the response completes, while the user is reading**. Pre-send still runs, but in steady state it should rarely fire on agent chats: it exists to catch what end-of-turn structurally cannot see (the next user message itself, and any rows added after the turn ended), plus crash/`ask_user` resumes where no end-of-turn check ran.
 
@@ -69,6 +69,11 @@ IN truncateChatHistory() / truncateBeforeSend():
 
 5. Splice summary    — the `_isCompactionSummary` row is inserted before
    the first kept in-context message
+   ├── Content order: archive index lines, kernel notice, then the
+   │   archived turn recap (verbatim prose, oldest → newest)
+   └── Recap lines are stored on the row as `_archiveRecap`, so deferred
+       enrichment can re-render them and the next compaction can carry
+       them forward
 
 6. Stale-anchor strip
    ├── Every KEPT role:"system" row is marked _outOfContext
@@ -153,7 +158,7 @@ Removed rows are first filtered to substantive content (`isSubstantiveForPreComp
 
 ### Layer 2: Indexed Archive (archiveAndIndex)
 
-Removed messages are grouped into logical blocks and stored in `context_archives` with:
+The summary of the removed messages has two parts: an archival index (below) and a verbatim prose recap (see "Archived turn recap"). Removed messages are grouped into logical blocks and stored in `context_archives` with:
 - **Full original content** (not truncated) — available via `read_archived_context`
 - **LLM-generated index descriptions** — one-line summaries of what each block contains
 - **FTS5 full-text search** — searchable across all chats via `search_conversation`
@@ -169,6 +174,27 @@ Archived blocks:
 - archive:abc12345:003 — Discussed indexed summary vs narrative summary tradeoffs
 ```
 
+#### Archived turn recap
+
+The summary also carries a verbatim recap of the removed prose. The recap keeps the conclusion of each archived turn in the active window without the tool payloads and reasoning that dominate the removed region.
+
+- **Candidates**: user and assistant rows that this pass removes and that have non-empty content. Split heads are excluded — their prose stays in the kept tail, so a recap line would duplicate context. Promoted-thinking rows (`_thinkingPromoted`) are excluded — that content is reasoning surfaced so a stopped response does not render blank, not reply prose. Prior-era `_outOfContext` rows, system rows, compaction summaries, and synthetic rows (mid-turn handoffs, synthesis, automation) carry no prose.
+- **Excerpts**: whitespace is collapsed and each message is middle-truncated to 400 chars (user) or 1000 chars (assistant). The user excerpt keeps the head (the ask); the assistant excerpt keeps the tail (the conclusion). Each message becomes one line, prefixed `user:` or `assistant:`. When the reserve cannot afford the full cap, both caps shrink to the reserve's character budget, so a small reserve still yields recent lines instead of nothing.
+- **Ordering**: lines render oldest → newest. The recap is the last part of the summary content, so the newest line precedes the kept tail. The recap stores no timestamps, so replay stays byte-stable.
+- **Reserve**: the recap gets 15% of the 30% compaction target, capped at 2048 tokens and at half of the post-overhead message budget. The retention scan subtracts the reserve, so the kept tail and the recap together stay inside the target. A window too small to afford the recap gets a smaller one, or none. The reserve is in the retention planner's scaled units: line costs multiply the raw token estimate by the same scale factor the message budget uses, and the excerpt caps divide the reserve back out into chars (~4 chars/token).
+- **Trimming**: when the recap exceeds the reserve, the oldest lines are dropped first. Fresh prose always wins the remaining space.
+- **Carry-forward**: when a later compaction removes a summary row, the new recap starts with that summary's stored `_archiveRecap` lines. If the prior summary survives in the kept tail, its recap is still visible and is not copied again.
+- **Persistence**: recap lines are stored on the summary row as `_archiveRecap` and rendered into `content` in the order header → index lines → kernel notice → recap. Deferred enrichment re-renders the same composition, so it keeps the notice and the recap.
+- **Downstream consumers**: the summary content is consumed beyond the model replay. Post-compaction topic adjustment embeds the whole in-context summary as the topic vector (`memory-context.ts`), so recap prose shifts that embedding toward real conversation topics. Passive recall tail-clamps the summary at 1600 chars when it builds its query (`passive-memory-recall.ts`), so recap lines lead where the archive index used to. The message search row indexes the recap text, so archived prose is searchable both through `context_archives` and through the summary row.
+
+Example recap section:
+
+```
+Archived turn recap (verbatim excerpts, oldest → newest):
+user: The cache still misses after the restart; check the slot bindings.
+assistant: Found it — the slot lease key includes the context window, so the ... The fix is to normalize the key before lookup.
+```
+
 ### Layer 3: System Prompt (buildSplitAugmentedPrompt)
 
 After compaction the prompt is rebuilt, but the frozen set survives:
@@ -180,7 +206,7 @@ After compaction the prompt is rebuilt, but the frozen set survives:
 
 Mid-turn compaction has additional complexity because the agent is in the middle of a tool loop. The HTTP path (up to 5 cycles):
 
-1. **Build progress summary** — captures the assistant's text output and tool calls so far
+1. **Build progress summary** — captures the tail of the assistant's text output (conclusions and next steps) and the tool calls so far
 2. **Archive & flush** — standard compaction sequence (awaited); in-flight mid-turn extraction pulses are settled first so their cursor is final
 3. **Rebuild system prompt** — `softResetMemoryContext()` retains the frozen section byte-exact; the recall delta is returned alongside it (see the delta-delivery note above)
 4. **Fetch chat memories** — `getMemoriesFromChat(chatId, 10)` after flush, so newly extracted memories are included

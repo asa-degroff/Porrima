@@ -105,6 +105,27 @@ const SCALE_FACTOR_MAX = 1.5;
  */
 const OVERHEAD_MARGIN_TOKENS = 4096;
 const ARCHIVE_INDEX_MAX_TOKENS = 768;
+/**
+ * Archived turn recap: verbatim user/assistant prose from the removed window,
+ * carried inside the compaction summary row. The reserve is a slice of the
+ * 30% compaction target, so small windows get a proportionally smaller recap;
+ * it also never exceeds half the post-overhead message budget.
+ */
+const COMPACTION_RECAP_RESERVE_RATIO = 0.15;
+const COMPACTION_RECAP_RESERVE_MAX_TOKENS = 2048;
+/**
+ * Per-message excerpt caps for recap lines (chars). The caps shrink toward
+ * the recap reserve when it cannot afford the full excerpt (see
+ * buildArchivedTurnRecap), so a tight reserve still yields recent lines.
+ */
+const RECAP_USER_CHARS = 400;
+const RECAP_ASSISTANT_CHARS = 1000;
+/**
+ * Chars/token ratio used to convert the recap reserve (a token budget) into
+ * a character budget for the excerpt caps. Matches the prose branch of the
+ * shared char estimator (estimateTextTokens).
+ */
+const RECAP_CHARS_PER_TOKEN = 4;
 
 /**
  * Detect tool-call-like syntax in thinking text.
@@ -1024,6 +1045,13 @@ export async function truncateBeforeSend(
     );
   }
 
+  // The archived turn recap shares the target: reserve its slice up front so
+  // the kept tail plus the recap stay inside the 30%. The reserve yields to
+  // the message budget when the window is tight (it is never more than half
+  // of the post-overhead budget), so a recap never starves retention.
+  const recapReserve = computeRecapReserveTokens(contextWindow, effectiveTarget, overheadTokens);
+  const messageTarget = effectiveTarget - recapReserve;
+
   // Iterate backwards over in-context messages to find budget boundary.
   // Fills up to the 30% target, not the 85% trigger, so the post-compaction
   // payload has room to grow before the next trigger fires.
@@ -1034,7 +1062,7 @@ export async function truncateBeforeSend(
   let runningTotal = overheadTokens;
   let keepFromIC = icIndices.length; // sentinel: nothing fit yet
   for (let ic = icIndices.length - 1; ic >= 0; ic--) {
-    if (runningTotal + scaledEstimates[ic] <= effectiveTarget) {
+    if (runningTotal + scaledEstimates[ic] <= messageTarget) {
       runningTotal += scaledEstimates[ic];
       keepFromIC = ic;
     } else {
@@ -1053,7 +1081,7 @@ export async function truncateBeforeSend(
     const lastOrigIdx = icIndices[icIndices.length - 1];
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
-      Math.max(0, effectiveTarget - overheadTokens),
+      Math.max(0, messageTarget - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
@@ -1072,7 +1100,7 @@ export async function truncateBeforeSend(
         icIndices.length - 2,
         keepFromIC,
         runningTotal,
-        effectiveTarget,
+        messageTarget,
         scaledEstimates,
         scaleFactor,
         splitInfos,
@@ -1082,7 +1110,7 @@ export async function truncateBeforeSend(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
-          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTarget)}`,
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(messageTarget)}`,
         );
       }
     } else {
@@ -1096,7 +1124,7 @@ export async function truncateBeforeSend(
     // being archived whole.
     const boundaryICIdx = keepFromIC - 1;
     const boundaryOrigIdx = icIndices[boundaryICIdx];
-    const remainingBudget = Math.max(0, effectiveTarget - runningTotal);
+    const remainingBudget = Math.max(0, messageTarget - runningTotal);
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
@@ -1117,7 +1145,7 @@ export async function truncateBeforeSend(
         boundaryICIdx - 1,
         keepFromIC,
         runningTotal,
-        effectiveTarget,
+        messageTarget,
         scaledEstimates,
         scaleFactor,
         splitInfos,
@@ -1127,7 +1155,7 @@ export async function truncateBeforeSend(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
-          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTarget)}`,
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(messageTarget)}`,
         );
       }
     }
@@ -1137,7 +1165,7 @@ export async function truncateBeforeSend(
   const splitSummary = splitInfos.length
     ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
     : "";
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context target=${Math.ceil(effectiveTarget)}${effectiveTarget !== target ? ` (raised from ${Math.ceil(target)})` : ""}${splitSummary}`);
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context target=${Math.ceil(effectiveTarget)}${effectiveTarget !== target ? ` (raised from ${Math.ceil(target)})` : ""} recapReserve=${recapReserve}${splitSummary}`);
 
   if (messagesToMarkCount <= 0 && splitInfos.length === 0) {
     // Budget planning says keep everything AND no split occurred — nothing to
@@ -1212,6 +1240,10 @@ export async function truncateBeforeSend(
     onKeepalive,
   });
 
+  // Verbatim recap of the removed window rides the summary row. Candidates
+  // exclude split heads, whose prose stayed in the kept tail.
+  const recapLines = buildArchivedTurnRecap(removedMessages, recapReserve, scaleFactor);
+
   // Mark messages as out-of-context, strip large content
   const ARCHIVED_CONTENT_CAP = 500;
   for (const origIdx of markedIndices) {
@@ -1238,13 +1270,14 @@ export async function truncateBeforeSend(
   const insertionIdx = icIndices[keepFromIC];
   const summaryMessage: ChatMessage = {
     role: "assistant",
-    content: summaryText,
+    content: `${summaryText}${buildRecapSection(recapLines)}`,
     thinking: undefined,
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
     _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
+    _archiveRecap: recapLines.length > 0 ? recapLines : undefined,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
   chat.messages = messages;
@@ -1620,6 +1653,125 @@ function generateFallbackDescription(block: ChatMessage[]): string {
   return "Conversation context";
 }
 
+/**
+ * Token reserve for the archived turn recap: 15% of the 30% compaction
+ * target, capped at 2048 tokens and never more than half the post-overhead
+ * message budget. A window too small to afford the recap gets a smaller one,
+ * or none (reserve 0).
+ */
+export function computeRecapReserveTokens(
+  contextWindow: number,
+  effectiveTarget: number,
+  overheadTokens: number,
+): number {
+  const target = contextWindow * COMPACTION_TARGET_RATIO;
+  const computed = Math.min(
+    COMPACTION_RECAP_RESERVE_MAX_TOKENS,
+    Math.floor(target * COMPACTION_RECAP_RESERVE_RATIO),
+  );
+  const messageBudget = Math.max(0, effectiveTarget - overheadTokens);
+  return Math.min(computed, Math.floor(messageBudget / 2));
+}
+
+/**
+ * Collapse whitespace and excerpt one message for a recap line. The head/tail
+ * split keeps both ends: user asks front-load their intent (head-weighted),
+ * assistant replies end with conclusions (tail-weighted) — the same
+ * "conclusions live at the tail" rule the archive and handoff caps follow.
+ * Caps can get very small (reserve-derived), so when the tail slice would be
+ * token-sized this falls back to a plain head excerpt.
+ */
+function recapExcerpt(text: string, maxChars: number, headRatio: number): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= maxChars) return collapsed;
+  const headLen = Math.floor(maxChars * headRatio);
+  const tailLen = maxChars - headLen - 5; // -5 for " ... "
+  if (tailLen < 8) return collapsed.slice(0, maxChars);
+  return `${collapsed.slice(0, headLen)} ... ${collapsed.slice(collapsed.length - tailLen)}`;
+}
+
+/**
+ * Build the archived turn recap: verbatim prose excerpts from the messages
+ * this pass removed, plus the carried recap of any removed prior summary.
+ *
+ * Invariants (see docs/compaction.md — "Archived turn recap"):
+ * - Candidates are newly removed user/assistant rows with non-empty content.
+ *   Split heads are excluded because their prose stays in the kept tail;
+ *   promoted-thinking rows are a display fallback, not reply prose; prior-era
+ *   out-of-context rows belong to older eras; summaries and synthetic rows
+ *   carry no conversation prose.
+ * - The reserve is in the retention planner's scaled units: line costs
+ *   multiply the raw estimate by the same scale factor, and the excerpt caps
+ *   divide it back out into chars. A tight reserve therefore yields shorter
+ *   excerpts instead of an empty recap.
+ * - Lines render oldest -> newest so the newest line abuts the kept tail.
+ * - Trimming drops from the oldest end, so fresh prose always wins the
+ *   remaining space and carry-forward survives only in the leftover.
+ */
+export function buildArchivedTurnRecap(
+  removedMessages: ChatMessage[],
+  reserveTokens: number,
+  scaleFactor: number,
+): string[] {
+  if (reserveTokens <= 0) return [];
+
+  // Reserve -> character budget for the excerpt caps. The reserve counts
+  // scaled planner tokens; the estimator counts raw ones (~4 chars/token
+  // for prose). Divide by the scale factor to get back to raw, then subtract
+  // a per-line margin covering the role prefix, the " ... " separator, and
+  // ceil drift, so a line built at the cap fits the reserve on its own.
+  const maxExcerptChars = Math.max(
+    0,
+    Math.floor((reserveTokens * RECAP_CHARS_PER_TOKEN) / scaleFactor) - 24,
+  );
+  const userCap = Math.min(RECAP_USER_CHARS, maxExcerptChars);
+  const assistantCap = Math.min(RECAP_ASSISTANT_CHARS, maxExcerptChars);
+
+  // Carry-forward: the newest removed summary's stored recap continues into
+  // this pass. (If the prior summary survived in the kept tail, its recap is
+  // still visible and must not be duplicated — it is not in removedMessages.)
+  let carry: string[] = [];
+  for (let i = removedMessages.length - 1; i >= 0; i--) {
+    const m = removedMessages[i];
+    if (m._isCompactionSummary && m._archiveRecap?.length) {
+      carry = m._archiveRecap;
+      break;
+    }
+  }
+
+  const lines: string[] = [];
+  for (const m of removedMessages) {
+    if (m._outOfContext || m._isSplitHead || m._isCompactionSummary) continue;
+    if (m._thinkingPromoted) continue;
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    if (m._isSystemMessage || m._isMidTurnCompaction) continue;
+    if (m._isAutomationMessage || m._isSynthesisMessage) continue;
+    const text = (m.content ?? "").trim();
+    if (!text) continue;
+    if (m.role === "user") {
+      if (userCap > 0) lines.push(`user: ${recapExcerpt(text, userCap, 0.6)}`);
+    } else if (assistantCap > 0) {
+      lines.push(`assistant: ${recapExcerpt(text, assistantCap, 0.4)}`);
+    }
+  }
+
+  const all = carry.length > 0 ? [...carry, ...lines] : lines;
+  const costs = all.map((line) => Math.ceil(estimateTokens(line) * scaleFactor));
+  let total = costs.reduce((sum, t) => sum + t, 0);
+  let drop = 0;
+  while (drop < all.length && total > reserveTokens) {
+    total -= costs[drop];
+    drop++;
+  }
+  return all.slice(drop);
+}
+
+/** Render the recap section of a compaction summary row (empty when no lines). */
+function buildRecapSection(recapLines?: string[]): string {
+  if (!recapLines || recapLines.length === 0) return "";
+  return `\n\nArchived turn recap (verbatim excerpts, oldest → newest):\n${recapLines.join("\n")}`;
+}
+
 /** Build the indexed-summary text inserted into the chat from an archive set. */
 function buildSummaryText(archives: Pick<ContextArchive, "id" | "indexEntry">[]): string {
   const indexLines = archives.map((a) => `- ${a.id} — ${a.indexEntry}`).join("\n");
@@ -1959,7 +2111,15 @@ export async function enrichArchiveDescriptions(
           // Summary may have been compacted further or removed — acceptable drop.
           return;
         }
-        const updated = { ...chat.messages[summaryIdx], content: buildSummaryText(archives) };
+        // Re-render with the same composition the original splice used:
+        // index lines + kernel notice + the stored recap. Enrichment must not
+        // drop the notice or the recap (the recap is not derivable from the
+        // archives — it also carries prior-pass recap lines).
+        const recapLines = chat.messages[summaryIdx]._archiveRecap;
+        const updated = {
+          ...chat.messages[summaryIdx],
+          content: `${buildSummaryText(archives)}${KERNEL_STATE_COMPACT_NOTICE}${buildRecapSection(recapLines)}`,
+        };
         chat.messages[summaryIdx] = updated;
         await saveChat(chat);
         console.log(`[compaction] Patched summary message for chat ${chatId} at index ${summaryIdx}`);
@@ -2144,8 +2304,13 @@ export async function truncateChatHistory(
     );
   }
 
+  // The archived turn recap shares the target (same rule as truncateBeforeSend):
+  // reserve its slice up front, never more than half the post-overhead budget.
+  const recapReserve = computeRecapReserveTokens(contextWindow, effectiveTargetTokens, overheadTokens);
+  const messageTargetTokens = effectiveTargetTokens - recapReserve;
+
   for (let ic = inContextIndices.length - 1; ic >= 0; ic--) {
-    if (runningTotal + effectiveEstimates[ic] <= effectiveTargetTokens) {
+    if (runningTotal + effectiveEstimates[ic] <= messageTargetTokens) {
       runningTotal += effectiveEstimates[ic];
       keepFromICIdx = ic;
     } else {
@@ -2164,7 +2329,7 @@ export async function truncateChatHistory(
     const lastOrigIdx = inContextIndices[inContextIndices.length - 1];
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
-      Math.max(0, effectiveTargetTokens - overheadTokens),
+      Math.max(0, messageTargetTokens - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
@@ -2182,7 +2347,7 @@ export async function truncateChatHistory(
         inContextIndices.length - 2,
         keepFromICIdx,
         runningTotal,
-        effectiveTargetTokens,
+        messageTargetTokens,
         effectiveEstimates,
         scaleFactor,
         splitInfos,
@@ -2192,7 +2357,7 @@ export async function truncateChatHistory(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
-          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTargetTokens)}`,
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(messageTargetTokens)}`,
         );
       }
     } else {
@@ -2205,7 +2370,7 @@ export async function truncateChatHistory(
     // off its head so its tail rides along with the kept window.
     const boundaryICIdx = keepFromICIdx - 1;
     const boundaryOrigIdx = inContextIndices[boundaryICIdx];
-    const remainingBudget = Math.max(0, effectiveTargetTokens - runningTotal);
+    const remainingBudget = Math.max(0, messageTargetTokens - runningTotal);
     const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
@@ -2226,7 +2391,7 @@ export async function truncateChatHistory(
         boundaryICIdx - 1,
         keepFromICIdx,
         runningTotal,
-        effectiveTargetTokens,
+        messageTargetTokens,
         effectiveEstimates,
         scaleFactor,
         splitInfos,
@@ -2236,7 +2401,7 @@ export async function truncateChatHistory(
       if (backfill.backfilled > 0) {
         console.log(
           `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
-          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(effectiveTargetTokens)}`,
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(messageTargetTokens)}`,
         );
       }
     }
@@ -2255,7 +2420,7 @@ export async function truncateChatHistory(
     ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
     : "";
 
-  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${Math.ceil(effectiveTargetTokens)}${effectiveTargetTokens !== targetTokens ? ` (raised from ${Math.ceil(targetTokens)})` : ""} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitSummary}`);
+  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${Math.ceil(effectiveTargetTokens)}${effectiveTargetTokens !== targetTokens ? ` (raised from ${Math.ceil(targetTokens)})` : ""} recapReserve=${recapReserve} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitSummary}`);
 
   if (messagesToMarkCount <= 0 && splitInfos.length === 0) return noOp;
 
@@ -2322,6 +2487,10 @@ export async function truncateChatHistory(
     { mode: "sync", onKeepalive },
   );
 
+  // Verbatim recap of the removed window rides the summary row. Candidates
+  // exclude split heads, whose prose stayed in the kept tail.
+  const recapLines = buildArchivedTurnRecap(removedMessages, recapReserve, scaleFactor);
+
   // Mark messages as out-of-context (preserve for UI, exclude from LLM)
   // Also strip large content to limit storage growth.
   const ARCHIVED_CONTENT_CAP = 500;
@@ -2353,12 +2522,13 @@ export async function truncateChatHistory(
   const insertionIndex = inContextIndices[keepFromICIdx];
   const summaryMessage: ChatMessage = {
     role: "assistant",
-    content: indexedSummary,
+    content: `${indexedSummary}${buildRecapSection(recapLines)}`,
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount + splitInfos.length,
     _compactedSplitCount: splitInfos.length,
     _archiveIds: archiveIds,
+    _archiveRecap: recapLines.length > 0 ? recapLines : undefined,
   };
   messages.splice(insertionIndex, 0, summaryMessage);
   chat.messages = messages;
