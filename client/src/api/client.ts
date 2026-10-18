@@ -1322,6 +1322,19 @@ export async function deleteProject(id: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete project");
 }
 
+export async function reorderProjects(pinned: string[], unpinned: string[]): Promise<Project[]> {
+  const res = await apiFetch(`${BASE}/projects/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned, unpinned }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to reorder projects");
+  }
+  return res.json();
+}
+
 export async function getProjectAgentsMd(id: string): Promise<{ content: string | null; path: string }> {
   const res = await apiFetch(`${BASE}/projects/${id}/agents-md`);
   if (!res.ok) throw new Error("Failed to fetch AGENTS.md");

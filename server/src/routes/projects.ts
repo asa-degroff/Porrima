@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { homedir } from "os";
-import { createProject, updateProject, deleteProject, listProjects, getProject, listChatIdsByProject } from "../services/chat-storage.js";
+import { createProject, updateProject, deleteProject, listProjects, getProject, reorderProjects, listChatIdsByProject } from "../services/chat-storage.js";
 import { expandTilde } from "../utils/path.js";
 import { getWorkspaceForLocation, getWorkspaceForProject } from "../services/workspace.js";
 import { invalidateAllCaches } from "../services/memory-context.js";
@@ -89,6 +89,34 @@ router.post("/", async (req, res) => {
   };
   await createProject(project);
   res.status(201).json(project);
+});
+
+// Reorder the project rail. Body: { pinned: string[], unpinned: string[] } —
+// the full id list split by group, in display order. Crossing the boundary
+// pins or unpins a project.
+router.post("/reorder", async (req, res) => {
+  const { pinned, unpinned } = (req.body ?? {}) as { pinned?: unknown; unpinned?: unknown };
+  if (!Array.isArray(pinned) || !Array.isArray(unpinned)) {
+    return res.status(400).json({ error: "pinned and unpinned must be arrays of project ids" });
+  }
+  const known = new Set((await listProjects()).map((project) => project.id));
+  const seen = new Set<string>();
+  for (const id of [...pinned, ...unpinned]) {
+    if (typeof id !== "string" || !known.has(id)) {
+      return res.status(400).json({ error: `Unknown project id: ${String(id)}` });
+    }
+    if (seen.has(id)) {
+      return res.status(400).json({ error: `Duplicate project id: ${id}` });
+    }
+    seen.add(id);
+  }
+  for (const id of known) {
+    if (!seen.has(id)) {
+      return res.status(400).json({ error: `Missing project id: ${id}` });
+    }
+  }
+  await reorderProjects(pinned, unpinned);
+  res.json(await listProjects());
 });
 
 // Update project metadata

@@ -170,6 +170,7 @@ export function getDb(): Database.Database {
       sshConnectionId TEXT,
       color TEXT NOT NULL DEFAULT 'emerald',
       pinned INTEGER NOT NULL DEFAULT 0,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
       createdAt TEXT NOT NULL,
       lastModified TEXT NOT NULL
     );
@@ -449,6 +450,23 @@ export function getDb(): Database.Database {
   if (!projectCols.some((c) => c.name === "sshConnectionId")) {
     db.exec("ALTER TABLE projects ADD COLUMN sshConnectionId TEXT");
     console.log("[chat-storage] Added sshConnectionId column to projects");
+  }
+
+  // Auto-add sortOrder column to projects if upgrading from an earlier schema.
+  // Backfill from the legacy implicit order: pinned group first, then unpinned,
+  // each by lastModified descending.
+  const projectOrderCols = db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+  if (!projectOrderCols.some((c) => c.name === "sortOrder")) {
+    db.exec("ALTER TABLE projects ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0");
+    const setOrder = db.prepare("UPDATE projects SET sortOrder = ? WHERE id = ?");
+    const backfill = db.transaction(() => {
+      const pinned = db.prepare("SELECT id FROM projects WHERE pinned = 1 ORDER BY lastModified DESC").all() as { id: string }[];
+      pinned.forEach((row, index) => setOrder.run(index, row.id));
+      const unpinned = db.prepare("SELECT id FROM projects WHERE pinned = 0 ORDER BY lastModified DESC").all() as { id: string }[];
+      unpinned.forEach((row, index) => setOrder.run(index, row.id));
+    });
+    backfill();
+    console.log("[chat-storage] Added sortOrder column to projects, backfilled from implicit order");
   }
 
   // Auto-add delayed extraction tracking columns
@@ -1106,31 +1124,12 @@ export async function createChat(chat: Chat): Promise<void> {
 // Project CRUD
 // ---------------------------------------------------------------------------
 
-export async function listProjects(): Promise<Project[]> {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified
-    FROM projects
-    ORDER BY pinned DESC, lastModified DESC
-  `).all() as Array<{ id: string; name: string; path: string; locationType?: string; sshConnectionId?: string | null; color: string; pinned: number; createdAt: string; lastModified: string }>;
-  
-  return rows.map(r => ({
-    id: r.id,
-    name: r.name,
-    path: r.path,
-    locationType: r.locationType === "ssh" ? "ssh" : "local",
-    sshConnectionId: r.sshConnectionId || undefined,
-    color: r.color,
-    pinned: r.pinned === 1,
-    createdAt: r.createdAt,
-    lastModified: r.lastModified,
-  }));
-}
+// Projects are listed pinned-group first, then unpinned-group, each in
+// explicit user order (sortOrder). lastModified only breaks ties.
+const PROJECT_SELECT = "id, name, path, locationType, sshConnectionId, color, pinned, sortOrder, createdAt, lastModified";
+type ProjectRow = { id: string; name: string; path: string; locationType?: string; sshConnectionId?: string | null; color: string; pinned: number; sortOrder: number; createdAt: string; lastModified: string };
 
-export async function getProject(id: string): Promise<Project | null> {
-  const db = getDb();
-  const row = db.prepare("SELECT id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as { id: string; name: string; path: string; locationType?: string; sshConnectionId?: string | null; color: string; pinned: number; createdAt: string; lastModified: string } | undefined;
-  if (!row) return null;
+function projectRowToProject(row: ProjectRow): Project {
   return {
     id: row.id,
     name: row.name,
@@ -1139,9 +1138,28 @@ export async function getProject(id: string): Promise<Project | null> {
     sshConnectionId: row.sshConnectionId || undefined,
     color: row.color,
     pinned: row.pinned === 1,
+    sortOrder: row.sortOrder,
     createdAt: row.createdAt,
     lastModified: row.lastModified,
   };
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT ${PROJECT_SELECT}
+    FROM projects
+    ORDER BY pinned DESC, sortOrder ASC, lastModified DESC
+  `).all() as ProjectRow[];
+
+  return rows.map(projectRowToProject);
+}
+
+export async function getProject(id: string): Promise<Project | null> {
+  const db = getDb();
+  const row = db.prepare(`SELECT ${PROJECT_SELECT} FROM projects WHERE id = ?`).get(id) as ProjectRow | undefined;
+  if (!row) return null;
+  return projectRowToProject(row);
 }
 
 export async function createProject(project: Project): Promise<void> {
@@ -1153,20 +1171,26 @@ export async function createProject(project: Project): Promise<void> {
     const nextColor = PROJECT_COLORS.find(c => !usedColors.includes(c)) || PROJECT_COLORS[existing.length % PROJECT_COLORS.length];
     project.color = nextColor;
   }
-  db.prepare(`
-    INSERT INTO projects (id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    project.id,
-    project.name,
-    project.path,
-    project.locationType === "ssh" ? "ssh" : "local",
-    project.sshConnectionId || null,
-    project.color,
-    project.pinned ? 1 : 0,
-    project.createdAt,
-    project.lastModified
-  );
+  const insert = db.transaction(() => {
+    // New projects land at the top of their group (the legacy
+    // lastModified-descending order did the same thing implicitly).
+    db.prepare("UPDATE projects SET sortOrder = sortOrder + 1 WHERE pinned = ?").run(project.pinned ? 1 : 0);
+    db.prepare(`
+      INSERT INTO projects (id, name, path, locationType, sshConnectionId, color, pinned, sortOrder, createdAt, lastModified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(
+      project.id,
+      project.name,
+      project.path,
+      project.locationType === "ssh" ? "ssh" : "local",
+      project.sshConnectionId || null,
+      project.color,
+      project.pinned ? 1 : 0,
+      project.createdAt,
+      project.lastModified
+    );
+  });
+  insert();
 }
 
 export async function updateProject(id: string, updates: Partial<Project>): Promise<boolean> {
@@ -1174,24 +1198,49 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
   const project = await getProject(id);
   if (!project) return false;
 
+  const wasPinned = project.pinned;
   Object.assign(project, updates);
   project.lastModified = new Date().toISOString();
 
-  db.prepare(`
-    UPDATE projects
-    SET name = ?, path = ?, locationType = ?, sshConnectionId = ?, color = ?, pinned = ?, lastModified = ?
-    WHERE id = ?
-  `).run(
-    project.name,
-    project.path,
-    project.locationType === "ssh" ? "ssh" : "local",
-    project.sshConnectionId || null,
-    project.color,
-    project.pinned ? 1 : 0,
-    project.lastModified,
-    project.id
-  );
+  const apply = db.transaction(() => {
+    // A pin toggle moves the project to the top of its new group (the legacy
+    // lastModified-descending order did the same thing implicitly).
+    if (updates.pinned !== undefined && updates.pinned !== wasPinned) {
+      db.prepare("UPDATE projects SET sortOrder = sortOrder + 1 WHERE pinned = ? AND id <> ?").run(project.pinned ? 1 : 0, id);
+    }
+    db.prepare(`
+      UPDATE projects
+      SET name = ?, path = ?, locationType = ?, sshConnectionId = ?, color = ?, pinned = ?, sortOrder = ?, lastModified = ?
+      WHERE id = ?
+    `).run(
+      project.name,
+      project.path,
+      project.locationType === "ssh" ? "ssh" : "local",
+      project.sshConnectionId || null,
+      project.color,
+      project.pinned ? 1 : 0,
+      updates.pinned !== undefined && updates.pinned !== wasPinned ? 0 : project.sortOrder,
+      project.lastModified,
+      id
+    );
+  });
+  apply();
 
+  return true;
+}
+
+// Apply an explicit user order to the project rail. The two arrays must cover
+// every project id exactly once; the first array is the pinned group (in
+// order), the second the unpinned group (in order).
+export async function reorderProjects(pinnedIds: string[], unpinnedIds: string[]): Promise<boolean> {
+  const db = getDb();
+  const apply = db.transaction(() => {
+    const setPinned = db.prepare("UPDATE projects SET pinned = 1, sortOrder = ? WHERE id = ?");
+    pinnedIds.forEach((projectId, index) => setPinned.run(index, projectId));
+    const setUnpinned = db.prepare("UPDATE projects SET pinned = 0, sortOrder = ? WHERE id = ?");
+    unpinnedIds.forEach((projectId, index) => setUnpinned.run(index, projectId));
+  });
+  apply();
   return true;
 }
 

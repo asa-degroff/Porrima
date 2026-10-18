@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { ChatListItem as ChatListItemType, Project, ProjectLocationType, SshConnection, SystemPauseStatus } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
@@ -31,6 +32,8 @@ interface PathValidation {
 interface Props {
   chats: ChatListItemType[];
   projects: Project[];
+  projectsLoaded: boolean;
+  onReorderProjects: (pinned: string[], unpinned: string[]) => Promise<unknown>;
   activeChatId: string | null;
   activeView: 'chats' | 'notebooks';
   onSelectChat: (id: string) => void;
@@ -93,6 +96,58 @@ const PROJECT_COLOR_CLASSES: Record<string, { icon: string; bg: string; border: 
 
 function projectInitial(name: string) {
   return Array.from(name.trim())[0] || "•";
+}
+
+// --- Project rail drag and drop ------------------------------------------------
+// The rail is a flat display of the pinned group followed by the unpinned
+// group. Dragging (mouse: press + move; touch: long-press) moves a project to
+// the highlighted gap; dropping it across the separator pins or unpins it.
+// ArrowUp/ArrowDown move the focused project one slot.
+const RAIL_DRAG_START_PX = 8;
+const RAIL_DRAG_LONG_PRESS_MS = 400;
+const RAIL_DRAG_SCROLL_EDGE_PX = 24;
+const RAIL_DRAG_SCROLL_SPEED_PX = 12;
+
+interface RailDragState {
+  id: string;
+  gapIndex: number; // insertion slot in the rail, 0..n (before slot gapIndex)
+}
+
+/**
+ * Compute the pinned/unpinned id arrays after inserting `draggedId` at
+ * `fullGap` (an insertion slot in the full rail, 0..n). The pinned group is
+ * always the leading run of the rail; a drop exactly at the separator
+ * boundary keeps the project's current pin state.
+ */
+function computeRailOrder(
+  rail: Project[],
+  draggedId: string,
+  fullGap: number,
+): { pinned: string[]; unpinned: string[] } {
+  const fromIndex = rail.findIndex((project) => project.id === draggedId);
+  if (fromIndex < 0) {
+    return {
+      pinned: rail.filter((project) => project.pinned).map((project) => project.id),
+      unpinned: rail.filter((project) => !project.pinned).map((project) => project.id),
+    };
+  }
+  const others = rail.filter((project) => project.id !== draggedId);
+  const fullClamped = Math.max(0, Math.min(fullGap, rail.length));
+  const gapIndex = fullClamped > fromIndex ? fullClamped - 1 : fullClamped;
+  const clamped = Math.max(0, Math.min(gapIndex, others.length));
+  const final: Project[] = [
+    ...others.slice(0, clamped),
+    rail[fromIndex],
+    ...others.slice(clamped),
+  ];
+  const pinnedOthers = others.filter((project) => project.pinned).length;
+  const draggedPinned =
+    clamped < pinnedOthers || (clamped === pinnedOthers && rail[fromIndex].pinned);
+  const pinnedCount = pinnedOthers + (draggedPinned ? 1 : 0);
+  return {
+    pinned: final.slice(0, pinnedCount).map((project) => project.id),
+    unpinned: final.slice(pinnedCount).map((project) => project.id),
+  };
 }
 
 const DEFAULT_PROJECT_WORKSPACE_HEIGHT = "clamp(7rem, 28vh, 14rem)";
@@ -842,6 +897,8 @@ function SelectedProjectPanel({
 export function Sidebar({
   chats,
   projects,
+  projectsLoaded,
+  onReorderProjects,
   activeChatId,
   activeView,
   onSelectChat,
@@ -931,6 +988,24 @@ export function Sidebar({
   );
   const [isProjectWorkspaceResizing, setIsProjectWorkspaceResizing] = useState(false);
   const [agentShowAll, setAgentShowAll] = useState(false);
+
+  // --- Project rail drag & drop state ---
+  const [railDrag, setRailDrag] = useState<RailDragState | null>(null);
+  const railDragRef = useRef<RailDragState | null>(null);
+  railDragRef.current = railDrag;
+  const railCandidateRef = useRef<{
+    id: string;
+    fromIndex: number;
+    startX: number;
+    startY: number;
+    pointerType: string;
+    longPressTimer: ReturnType<typeof setTimeout> | null;
+  } | null>(null);
+  const railGhostRef = useRef<HTMLDivElement | null>(null);
+  const railPaneRef = useRef<HTMLDivElement | null>(null);
+  const railPointerPosRef = useRef({ x: 0, y: 0 });
+  const railDragJustEndedRef = useRef(false);
+  const railScrollLock = useCallback((event: TouchEvent) => event.preventDefault(), []);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
 
   // Track blocking interactions (delete confirmations, context menus) so the
@@ -1071,17 +1146,23 @@ export function Sidebar({
     setSelectedProjectId(activeChatProjectId);
   }, [activeChatId, activeChatProjectId, setSelectedProjectId]);
 
-  // Keep persisted selection valid as projects are loaded or deleted.
+  // Keep the persisted selection valid as projects load or get deleted. Runs
+  // only after the list has actually loaded: while the fetch is in flight the
+  // list is empty and the persisted selection must survive (it is what
+  // restores the workspace after a server restart). A null selection resolves
+  // to the top project and is persisted, so the effective selection is always
+  // explicit.
   useEffect(() => {
+    if (!projectsLoaded) return;
     if (projects.length === 0) {
       if (selectedProjectId !== null) setSelectedProjectId(null);
       return;
     }
-    if (!projects.some((project) => project.id === selectedProjectId)) {
+    if (selectedProjectId === null || !projects.some((project) => project.id === selectedProjectId)) {
       const activeProjectStillExists = projects.some((project) => project.id === activeChatProjectId);
       setSelectedProjectId(activeProjectStillExists ? activeChatProjectId : projects[0].id);
     }
-  }, [activeChatProjectId, projects, selectedProjectId, setSelectedProjectId]);
+  }, [projectsLoaded, activeChatProjectId, projects, selectedProjectId, setSelectedProjectId]);
 
   // A newly created project becomes the visible workspace without requiring a
   // second click after the creation modal closes.
@@ -1095,6 +1176,315 @@ export function Sidebar({
       setSelectedProjectId(addedProjects[0].id);
     }
   }, [projects, setSelectedProjectId]);
+
+  // --- Project rail drag & drop handlers ---
+  // Mouse: press and move past a small threshold to start the drag. Touch:
+  // long-press starts the drag so a plain swipe can still scroll the rail.
+  // Gap indices use full-rail semantics (an insertion slot 0..n); the dragged
+  // button stays mounted (dimmed) at its origin so pointer capture survives.
+  function computeRailGapIndex(clientY: number): number {
+    const pane = railPaneRef.current;
+    if (!pane) return 0;
+    const buttons = Array.from(pane.querySelectorAll<HTMLElement>("[data-rail-project]"));
+    for (let i = 0; i < buttons.length; i++) {
+      const rect = buttons[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return buttons.length;
+  }
+
+  function beginRailDrag(clientX: number, clientY: number) {
+    const candidate = railCandidateRef.current;
+    if (!candidate) return;
+    if (candidate.longPressTimer) {
+      clearTimeout(candidate.longPressTimer);
+      candidate.longPressTimer = null;
+    }
+    const next: RailDragState = { id: candidate.id, gapIndex: candidate.fromIndex };
+    railDragRef.current = next;
+    setRailDrag(next);
+    railPointerPosRef.current = { x: clientX, y: clientY };
+    if (candidate.pointerType === "touch") {
+      // Stop native scrolling while the drag is active.
+      document.addEventListener("touchmove", railScrollLock, { passive: false });
+    }
+    // Keep the mobile drawer from reacting to the drag gesture.
+    window.dispatchEvent(new CustomEvent("sidebar-block-close:show"));
+  }
+
+  function endRailDrag(pointerType: string) {
+    if (pointerType === "touch") {
+      document.removeEventListener("touchmove", railScrollLock);
+    }
+    window.dispatchEvent(new CustomEvent("sidebar-block-close:hide"));
+    railDragJustEndedRef.current = true;
+    // Suppress the synthetic click that follows the drag release.
+    window.setTimeout(() => {
+      railDragJustEndedRef.current = false;
+    }, 300);
+  }
+
+  function commitRailReorder(dragId: string, fullGap: number) {
+    const { pinned, unpinned } = computeRailOrder(projectRailProjects, dragId, fullGap);
+    const currentPinned = projectRailProjects
+      .filter((project) => project.pinned)
+      .map((project) => project.id);
+    const currentUnpinned = projectRailProjects
+      .filter((project) => !project.pinned)
+      .map((project) => project.id);
+    if (pinned.join("|") === currentPinned.join("|") && unpinned.join("|") === currentUnpinned.join("|")) {
+      return; // no-op drop
+    }
+    onReorderProjects(pinned, unpinned).catch((error) => {
+      console.error("Failed to reorder projects:", error);
+    });
+  }
+
+  function handleRailPointerDown(e: React.PointerEvent<HTMLButtonElement>, id: string, index: number) {
+    if (railDragRef.current || railCandidateRef.current) return; // one drag at a time
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Pointer already released; treat as a tap.
+    }
+    railCandidateRef.current = {
+      id,
+      fromIndex: index,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerType: e.pointerType,
+      longPressTimer:
+        e.pointerType === "touch"
+          ? setTimeout(() => {
+              const candidate = railCandidateRef.current;
+              if (candidate && candidate.id === id && !railDragRef.current) {
+                beginRailDrag(candidate.startX, candidate.startY);
+              }
+            }, RAIL_DRAG_LONG_PRESS_MS)
+          : null,
+    };
+  }
+
+  function handleRailPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
+    const candidate = railCandidateRef.current;
+    if (candidate && !railDragRef.current) {
+      const dist = Math.hypot(e.clientX - candidate.startX, e.clientY - candidate.startY);
+      if (candidate.pointerType === "touch") {
+        // Movement before the long-press fires means this is a swipe, not a drag.
+        if (dist > RAIL_DRAG_START_PX) {
+          if (candidate.longPressTimer) clearTimeout(candidate.longPressTimer);
+          railCandidateRef.current = null;
+        }
+        return;
+      }
+      if (dist > RAIL_DRAG_START_PX) {
+        beginRailDrag(e.clientX, e.clientY);
+      }
+      return;
+    }
+    const drag = railDragRef.current;
+    if (!drag) return;
+    railPointerPosRef.current = { x: e.clientX, y: e.clientY };
+    if (railGhostRef.current) {
+      railGhostRef.current.style.transform = `translate(${e.clientX}px, ${e.clientY}px) translate(-50%, -50%)`;
+    }
+    const gapIndex = computeRailGapIndex(e.clientY);
+    if (gapIndex !== drag.gapIndex) {
+      const next: RailDragState = { id: drag.id, gapIndex };
+      railDragRef.current = next;
+      setRailDrag(next);
+    }
+  }
+
+  function handleRailPointerUp(e: React.PointerEvent<HTMLButtonElement>) {
+    const candidate = railCandidateRef.current;
+    railCandidateRef.current = null;
+    if (candidate?.longPressTimer) clearTimeout(candidate.longPressTimer);
+    const drag = railDragRef.current;
+    if (!drag) return; // plain tap/click: onClick handles selection
+    const gapIndex = computeRailGapIndex(e.clientY);
+    railDragRef.current = null;
+    setRailDrag(null);
+    endRailDrag(candidate?.pointerType ?? "touch");
+    commitRailReorder(drag.id, gapIndex);
+  }
+
+  function handleRailPointerCancel() {
+    const candidate = railCandidateRef.current;
+    railCandidateRef.current = null;
+    if (candidate?.longPressTimer) clearTimeout(candidate.longPressTimer);
+    const drag = railDragRef.current;
+    if (!drag) return;
+    railDragRef.current = null;
+    setRailDrag(null);
+    endRailDrag(candidate?.pointerType ?? "touch");
+  }
+
+  function handleRailKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, id: string, index: number) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (railDragRef.current) return;
+    // Full-rail insertion slot for moving one slot up/down.
+    const target = e.key === "ArrowUp" ? index - 1 : index + 2;
+    commitRailReorder(id, target);
+  }
+
+  // Auto-scroll the rail while a drag lingers near its edges.
+  useEffect(() => {
+    if (!railDrag) return;
+    const pane = railPaneRef.current;
+    if (!pane) return;
+    let raf = 0;
+    const tick = () => {
+      const bounds = pane.getBoundingClientRect();
+      const y = railPointerPosRef.current.y;
+      let delta = 0;
+      if (y < bounds.top + RAIL_DRAG_SCROLL_EDGE_PX) {
+        delta =
+          -(((bounds.top + RAIL_DRAG_SCROLL_EDGE_PX - y) / RAIL_DRAG_SCROLL_EDGE_PX) *
+            RAIL_DRAG_SCROLL_SPEED_PX);
+      } else if (y > bounds.bottom - RAIL_DRAG_SCROLL_EDGE_PX) {
+        delta =
+          ((y - (bounds.bottom - RAIL_DRAG_SCROLL_EDGE_PX)) / RAIL_DRAG_SCROLL_EDGE_PX) *
+          RAIL_DRAG_SCROLL_SPEED_PX;
+      }
+      if (delta !== 0 && pane.scrollHeight > pane.clientHeight) {
+        pane.scrollTop += delta;
+        const gapIndex = computeRailGapIndex(y);
+        const current = railDragRef.current;
+        if (current && gapIndex !== current.gapIndex) {
+          const next: RailDragState = { id: current.id, gapIndex };
+          railDragRef.current = next;
+          setRailDrag(next);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [railDrag]);
+
+  // Position the ghost at the pointer when a drag begins.
+  useEffect(() => {
+    if (railDrag && railGhostRef.current) {
+      const { x, y } = railPointerPosRef.current;
+      railGhostRef.current.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+    }
+  }, [railDrag]);
+
+  // Rail layout. Idle: the pinned group, a separator, then the unpinned group.
+  // Dragging: every original button (the source dimmed) plus the drop gap
+  // before slot railDrag.gapIndex, with the separator tracking the virtual
+  // final order so the pin boundary is always visible.
+  function renderRailButton(project: Project, index: number) {
+    const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
+    const selected = project.id === displayedProject.id;
+    const containsActiveChat = project.id === activeChatProjectId;
+    const isDragSource = railDrag?.id === project.id;
+    return (
+      <button
+        type="button"
+        data-rail-project={project.id}
+        onClick={() => {
+          if (railDragJustEndedRef.current) return; // don't select on drag release
+          setSelectedProjectId(project.id);
+        }}
+        onPointerDown={(e) => handleRailPointerDown(e, project.id, index)}
+        onPointerMove={handleRailPointerMove}
+        onPointerUp={handleRailPointerUp}
+        onPointerCancel={handleRailPointerCancel}
+        onKeyDown={(e) => handleRailKeyDown(e, project.id, index)}
+        aria-label={`Select ${project.name}. Use arrow keys to reorder.`}
+        aria-pressed={selected}
+        title={project.name}
+        className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable select-none ${
+          selected
+            ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
+            : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
+        } ${isDragSource ? "opacity-35" : ""}`}
+      >
+        {projectInitial(project.name)}
+        {containsActiveChat && (
+          <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
+        )}
+      </button>
+    );
+  }
+
+  function renderRail() {
+    const rail = projectRailProjects;
+    if (!railDrag) {
+      return rail.map((project, index) => (
+        <Fragment key={project.id}>
+          {pinnedProjectCount > 0 && index === pinnedProjectCount && (
+            <span aria-hidden="true" className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]" />
+          )}
+          {renderRailButton(project, index)}
+        </Fragment>
+      ));
+    }
+    const indexById = new Map(rail.map((project, index) => [project.id, index]));
+    const fromIndex = indexById.get(railDrag.id) ?? 0;
+    const othersGap = railDrag.gapIndex > fromIndex ? railDrag.gapIndex - 1 : railDrag.gapIndex;
+    const pinnedOthers = rail.filter(
+      (project) => project.pinned && project.id !== railDrag.id
+    ).length;
+    const draggedProject = rail.find((project) => project.id === railDrag.id);
+    const draggedPinned =
+      othersGap < pinnedOthers || (othersGap === pinnedOthers && draggedProject?.pinned === true);
+    const pinnedCount = pinnedOthers + (draggedPinned ? 1 : 0);
+    // Render slot of the first unpinned button in the virtual final order —
+    // the separator goes immediately before it.
+    let separatorSlot: number | null = null;
+    if (pinnedCount > 0 && pinnedCount < rail.length) {
+      const v = pinnedCount;
+      let originalIndex: number;
+      if (v === othersGap) {
+        originalIndex = fromIndex; // the dragged project is the first unpinned
+      } else if (v > othersGap) {
+        const o = v - 1;
+        originalIndex = o < fromIndex ? o : o + 1;
+      } else {
+        originalIndex = v < fromIndex ? v : v + 1;
+      }
+      separatorSlot = originalIndex >= railDrag.gapIndex ? originalIndex + 1 : originalIndex;
+    }
+    const n = rail.length;
+    const slots: Array<{ key: string; project: Project | null }> = [];
+    let railIndex = 0;
+    for (let slot = 0; slot <= n; slot++) {
+      if (slot === railDrag.gapIndex) {
+        slots.push({ key: "__rail-gap__", project: null });
+      } else {
+        slots.push({ key: rail[railIndex].id, project: rail[railIndex] });
+        railIndex++;
+      }
+    }
+    return slots.map((slot, position) => (
+      <Fragment key={slot.key}>
+        {separatorSlot === position && (
+          <span aria-hidden="true" className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]" />
+        )}
+        {slot.project ? (
+          renderRailButton(slot.project, indexById.get(slot.project.id) ?? position)
+        ) : (
+          <span
+            aria-hidden="true"
+            className="block h-8 w-8 shrink-0 rounded-lg border border-dashed border-white/20 bg-white/[0.04]"
+          />
+        )}
+      </Fragment>
+    ));
+  }
+
+  const railDragProject = railDrag
+    ? projectRailProjects.find((project) => project.id === railDrag.id) || null
+    : null;
+  const railDragColors = railDragProject
+    ? PROJECT_COLOR_CLASSES[railDragProject.color] || PROJECT_COLOR_CLASSES.emerald
+    : null;
 
   useEffect(() => {
     if (isProjectWorkspaceResizing) return;
@@ -1549,41 +1939,26 @@ export function Sidebar({
                     style={{ height: projectWorkspaceHeightDraft ?? DEFAULT_PROJECT_WORKSPACE_HEIGHT }}
                   >
                     <div
+                      ref={railPaneRef}
                       className="project-rail-scroll-pane w-11 shrink-0 overflow-y-auto overflow-x-hidden border-r border-white/[0.06] px-1 py-1.5"
                       aria-label="Projects"
                     >
                       <div className="flex flex-col items-center gap-1">
-                        {projectRailProjects.map((project, index) => {
-                          const colors = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.emerald;
-                          const selected = project.id === displayedProject.id;
-                          const containsActiveChat = project.id === activeChatProjectId;
-                          return (
-                            <Fragment key={project.id}>
-                              {pinnedProjectCount > 0 && index === pinnedProjectCount && (
-                                <span aria-hidden="true" className="my-0.5 h-px w-5 shrink-0 bg-white/[0.09]" />
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setSelectedProjectId(project.id)}
-                                aria-label={`Select ${project.name}`}
-                                aria-pressed={selected}
-                                title={project.name}
-                                className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all pressable ${
-                                  selected
-                                    ? `${colors.bg} ${colors.border} ${colors.text} shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]`
-                                    : `border-transparent bg-white/[0.025] ${colors.icon} hover:border-white/10 hover:bg-white/[0.06]`
-                                }`}
-                              >
-                                {projectInitial(project.name)}
-                                {containsActiveChat && (
-                                  <span className="absolute bottom-0.5 h-0.5 w-3 rounded-full bg-white/55" aria-label="Contains active chat" />
-                                )}
-                              </button>
-                            </Fragment>
-                          );
-                        })}
+                        {renderRail()}
                       </div>
                     </div>
+                    {railDragProject && railDragColors &&
+                      createPortal(
+                        <div
+                          ref={railGhostRef}
+                          aria-hidden="true"
+                          className={`pointer-events-none fixed left-0 top-0 z-[100] flex h-8 w-8 items-center justify-center rounded-lg border text-xs font-semibold opacity-90 shadow-xl select-none ${railDragColors.bg} ${railDragColors.border} ${railDragColors.text}`}
+                          style={{ transform: "translate(-50%, -50%)" }}
+                        >
+                          {projectInitial(railDragProject.name)}
+                        </div>,
+                        document.body
+                      )}
                     <div className="min-w-0 flex-1">
                       <SelectedProjectPanel
                         key={displayedProject.id}

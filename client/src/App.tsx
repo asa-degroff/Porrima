@@ -180,7 +180,7 @@ interface AuthenticatedAppProps {
 function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeChange }: AuthenticatedAppProps) {
   const { models, refresh: refreshModels } = useModels();
   const { chats, createChat, removeChat, updateChatTitle, adjustChatQueueCount, refresh, refreshImmediate } = useChats();
-  const { projects, createProject, removeProject } = useProjects();
+  const { projects, createProject, removeProject, reorderProjects, loaded: projectsLoaded } = useProjects();
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
@@ -1584,6 +1584,8 @@ function AuthenticatedApp({ onLogout, highEfficiencyMode, onHighEfficiencyModeCh
       <Sidebar
         chats={chats}
         projects={projects}
+        projectsLoaded={projectsLoaded}
+        onReorderProjects={reorderProjects}
         activeChatId={activeView === 'chats' ? activeChatId : null}
         activeView={activeView}
         onSelectChat={(id) => { selectChat(id); setActiveView('chats'); }}

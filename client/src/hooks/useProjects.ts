@@ -4,6 +4,7 @@ import {
   createProject as apiCreateProject,
   updateProject as apiUpdateProject,
   deleteProject as apiDeleteProject,
+  reorderProjects as apiReorderProjects,
   OfflineError,
   type Project,
   type ProjectLocationType,
@@ -12,11 +13,16 @@ import {
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  // True once a list fetch has actually succeeded. Consumers must not treat
+  // an empty list as authoritative while loaded is false (e.g. clobbering a
+  // persisted selection before the first fetch resolves).
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const list = await fetchProjects();
       setProjects(list);
+      setLoaded(true);
     } catch (e) {
       if (!(e instanceof OfflineError)) {
         console.error("Failed to fetch projects:", e);
@@ -25,6 +31,15 @@ export function useProjects() {
     }
     setLoading(false);
   }, []);
+
+  const reorderProjects = useCallback(
+    async (pinned: string[], unpinned: string[]) => {
+      const list = await apiReorderProjects(pinned, unpinned);
+      setProjects(list);
+      setLoaded(true);
+    },
+    []
+  );
 
   useEffect(() => {
     refresh();
@@ -61,5 +76,5 @@ export function useProjects() {
     [refresh]
   );
 
-  return { projects, loading, createProject, updateProject, removeProject, refresh };
+  return { projects, loading, loaded, createProject, updateProject, removeProject, reorderProjects, refresh };
 }

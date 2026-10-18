@@ -446,6 +446,7 @@ export interface Project {
   sshConnectionId?: string;
   color: string;
   pinned: boolean;
+  sortOrder?: number; // explicit position within its pinned/unpinned group (0-based)
   createdAt: string;
   lastModified: string;
 }
