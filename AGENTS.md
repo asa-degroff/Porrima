@@ -26,7 +26,7 @@
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
-Two chat types: **agent** (memory-augmented) and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. LLM system uses OpenAI-compatible (llama.cpp) backend for all inference.
+Two chat types: **agent** (memory-augmented) and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. LLM system uses OpenAI-compatible (llama.cpp) backend for all inference. See [llama.cpp API Surface](docs/llama-cpp-api-surface.md) for the exact endpoints and fields Porrima depends on.
 
 ## Tool System
 
@@ -276,6 +276,7 @@ Architecture and subsystems:
 - [Key Patterns](docs/key-patterns.md) — Cross-cutting invariants and important notes
 - [Data Storage](docs/data-storage.md) — Directory layout and all SQLite schemas
 - [Integrations](docs/integrations.md) — Notebooks, TTS, skills, push, PWA, SSH
+- [llama.cpp API Surface](docs/llama-cpp-api-surface.md) — Every llama.cpp HTTP endpoint Porrima calls, the fields consumed, and an upgrade checklist
 - [Zeitgeist](docs/zeitgeist.md) — Background knowledge consolidation
 - [Automation Scope](server/src/docs/automation-scope.md) — Automation scoping rules (in-tree, not in `docs/`)
 
