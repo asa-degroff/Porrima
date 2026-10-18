@@ -4468,23 +4468,32 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
             </div>
           </div>
 
-          {/* High Efficiency */}
+          {/* Surface style: Default (solid surfaces) / Frosted (blurred glass) */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="min-w-0 pr-3">
-                <label className="block text-sm font-medium text-white/60">High Efficiency</label>
-                <p className="text-white/30 text-xs mt-0.5">
-                  {deviceHighEfficiencyMode
-                    ? "Blur is disabled on this device."
-                    : "Blurred surfaces are enabled on this device."}
-                </p>
-              </div>
-              <ToggleSwitch
-                checked={deviceHighEfficiencyMode}
-                onChange={() => setDeviceHighEfficiencyMode(!deviceHighEfficiencyMode)}
-                accentColor="blue"
-              />
+            <label className="block text-sm font-medium text-white/60">Surface Style</label>
+            <div className="flex gap-2">
+              {[
+                { value: true, label: "Default" },
+                { value: false, label: "Frosted" },
+              ].map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  aria-pressed={deviceHighEfficiencyMode === opt.value}
+                  onClick={() => setDeviceHighEfficiencyMode(opt.value)}
+                  className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 pressable ${
+                    deviceHighEfficiencyMode === opt.value
+                      ? "border-white/30 bg-white/5"
+                      : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
+            <p className="text-white/30 text-xs">
+              Default uses solid surfaces without blur. Frosted uses the classic blurred glass look.
+            </p>
           </div>
 
           {/* Corner Radius */}

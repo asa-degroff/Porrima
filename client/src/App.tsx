@@ -147,9 +147,11 @@ function readCachedCornerRadius(): CornerRadius {
 
 function readCachedHighEfficiencyMode(): boolean {
   try {
-    return readStoredValue(HIGH_EFFICIENCY_MODE_KEY) === "true";
+    // The solid "Default" look is the default. Only an explicit "false"
+    // (a prior "Frosted" choice) keeps the blurred glass look.
+    return readStoredValue(HIGH_EFFICIENCY_MODE_KEY) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 

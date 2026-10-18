@@ -79,7 +79,7 @@ Custom mode takes a background and accent color directly, subject to a luminance
 - **Chromatic aberration** and **mouse warp** are offered only when the active effect is `ripple-grid` or `ripple-dots`
 - **Flat background** and **opaque bubbles** disable the glass treatment selectively
 - **Corner radius**: tiny / small / default, with a squircle superellipse
-- **High efficiency mode** is a *device-local* kill switch (not a server setting): cached in `porrima-high-efficiency-mode` and applied as `<html data-high-efficiency>` to drop backdrop blurs
+- **Surface style** is a *device-local* setting (not a server setting): two modes — **Default** (solid surfaces, no blur; the default) and **Frosted** (blurred glass surfaces). Cached in `porrima-high-efficiency-mode` and applied as `<html data-high-efficiency>` while Default is active
 - **Surface depth**: Flat (default) / Beveled, with a locally scoped preview. `surfaceDepth` is saved with settings and cached as `porrima-surface-depth` for startup. `data-depth` controls explicit `.depth-raised` / `.depth-inset` opt-ins in `styles/glass.css`: send buttons, model picker trigger/panel, active sidebar chat cards, and the composer. The masked `::after` lights the existing 1px border without changing fills, state colors, or shadows. Hosts must be positioned, reserve `::after`, and keep scrolling on a child. Unsupported masking and forced colors retain ordinary borders. No new blur or animation is added
 
 ### Settings Control Density
