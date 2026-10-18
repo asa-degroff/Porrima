@@ -3478,7 +3478,10 @@ async function handleChatStream(
       const progressParts: string[] = [];
       progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your messages so far — continue from where you left off.]");
       if (partialAssistant.content) {
-        progressParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
+        // Keep the tail: conclusions and next steps live at the end of a
+        // response, and the head is usually preamble. Parity with the
+        // headless handoff's tail-5000 slice (chat-turn-runner.ts).
+        progressParts.push(`Your progress so far:\n${partialAssistant.content.slice(-5000)}`);
       }
       if (partialAssistant.toolCalls?.length) {
         const toolSummary = partialAssistant.toolCalls.map((tc) => {
