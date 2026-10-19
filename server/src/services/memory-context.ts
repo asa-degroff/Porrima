@@ -20,6 +20,7 @@ import { formatAgentClock, formatAgentDate } from "./time-format.js";
 import { log } from "./logger.js";
 import { getRetrievalBudget } from "./retrieval-settings.js";
 import { KERNEL_STATE_COMPACT_NOTICE } from "./compaction-notice.js";
+import { scrubOperationalNoise } from "./query-scrub.js";
 import {
   clearLlamaCacheResidencyTarget,
   NEW_AGENT_CHAT_BASELINE_CACHE_ID,
@@ -615,7 +616,9 @@ export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars =
   let used = 0;
 
   for (const message of [...messages].reverse()) {
-    const text = sandwichClamp(message.content, perMessage).replace(/\s+/g, " ");
+    // Scrub before the sandwich: scrub output is whitespace-collapsed,
+    // so sandwich boundaries land on space boundaries.
+    const text = sandwichClamp(scrubOperationalNoise(message.content), perMessage).replace(/\s+/g, " ");
     if (!text) continue;
     const separator = parts.length > 0 ? 2 : 0;
     if (used + separator + text.length > maxChars && parts.length > 0) break;

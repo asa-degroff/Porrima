@@ -268,6 +268,25 @@ describe("memory retrieval project scoping", () => {
     expect(query.length).toBeLessThanOrEqual(400);
   });
 
+  it("scrubs operational noise from rerank-query user messages", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content:
+          "Can you look at server/src/services/memory-context.ts and tell me why read_file keeps failing on the slots endpoint?",
+        timestamp: 1000,
+      },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toContain("memory context");
+    expect(query).toContain("slots endpoint");
+    expect(query).not.toContain("server/src");
+    expect(query).not.toContain("services");
+    expect(query).not.toContain("read_file");
+  });
+
   it("dampens cross-project scores without filtering them out", () => {
     const candidates = [
       { memory: { projectId: "other" }, score: 0.9 },
