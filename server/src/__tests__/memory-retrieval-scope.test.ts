@@ -99,8 +99,7 @@ describe("memory retrieval project scoping", () => {
 
     const query = buildMemoryRerankQuery(messages, 900);
 
-    expect(query.startsWith("Conversation topic so far:")).toBe(true);
-    expect(query).toContain("KV snapshot parking design");
+    expect(query.startsWith("KV snapshot parking design")).toBe(true);
     expect(query).not.toContain("two builders feed one client");
     expect(query.endsWith("yeah, go with that"));
     expect(query.length).toBeLessThanOrEqual(900);
@@ -129,7 +128,6 @@ describe("memory retrieval project scoping", () => {
 
     const query = buildMemoryRerankQuery(messages, 900);
 
-    expect(query).not.toContain("Conversation topic so far:");
     expect(query).not.toContain("Compacted summary index");
   });
 
@@ -199,7 +197,7 @@ describe("memory retrieval project scoping", () => {
     const query = buildMemoryRerankQuery(messages, 400);
 
     expect(query.length).toBeLessThanOrEqual(400);
-    expect(query.startsWith("Conversation topic so far:")).toBe(true);
+    expect(query.startsWith("topic word")).toBe(true);
     expect(query.endsWith("ok"));
   });
 
@@ -216,7 +214,6 @@ describe("memory retrieval project scoping", () => {
 
     const query = buildMemoryRerankQuery(messages, 900);
 
-    expect(query.startsWith("Conversation topic so far:")).toBe(true);
     expect(query).toContain("old style summary body");
   });
 

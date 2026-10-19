@@ -539,7 +539,6 @@ const MEMORY_RERANK_QUERY_CHARS = 900;
 const MEMORY_RERANK_MESSAGE_CHARS = 450;
 const RERANK_THIN_QUERY_CHARS = 200;
 const RERANK_TOPIC_ANCHOR_CHARS = 500;
-const RERANK_TOPIC_ANCHOR_LABEL = "Conversation topic so far:";
 
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
@@ -612,15 +611,17 @@ export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars =
   // is the regime with no topic words for the cross-encoder to attend to.
   // A substantial query already specifies the topic, and the summary
   // describes the PREVIOUS phase: prepending it could fight a topic that
-  // just pivoted at the compaction boundary.
+  // just pivoted at the compaction boundary. The anchor is bare text - no
+  // label or descriptive prefix, which would compete with the query
+  // content and skew the cross-encoder.
   if (query && query.length <= RERANK_THIN_QUERY_CHARS) {
-    const anchorBudget = maxChars - query.length - RERANK_TOPIC_ANCHOR_LABEL.length - 3;
+    const anchorBudget = maxChars - query.length - 2;
     if (anchorBudget >= 100) {
       const anchor = topicAnchorForQuery(
         recentMessages,
         Math.min(RERANK_TOPIC_ANCHOR_CHARS, anchorBudget),
       );
-      if (anchor) query = `${RERANK_TOPIC_ANCHOR_LABEL}\n${anchor}\n\n${query}`;
+      if (anchor) query = `${anchor}\n\n${query}`;
     }
   }
 
