@@ -641,24 +641,22 @@ anyway:
 - `invalidateAllCaches` (workspace move) → drop row.
 
 Explicitly NOT landing points: `invalidateStablePrefixCache` /
-`invalidateAllStablePrefixCaches` (synthesis, block edits, budget changes).
-Those clear the Map globally; a project chat whose non-project sections
-rebuild byte-identical still keeps its prefix — wiping the snapshot there
-would land an AGENTS.md edit on the chat's next turn for a reason unrelated
-to compaction.
+`invalidateAllStablePrefixCaches` (Map-only clears; no production path calls
+them). Those clear the Map without a compaction; a project chat whose
+non-project sections rebuild byte-identical still keeps its prefix — wiping
+the snapshot there would land an AGENTS.md edit on the chat's next turn for
+a reason unrelated to compaction.
 
 ### 11.5 Scope notes
 
-- Only the PROJECT SECTION defers. AGENTS.md edits arrive with no event at
-  all, which is why they get the deferral treatment. Block edits likewise
+- Only the PROJECT SECTION defers its snapshot. AGENTS.md edits arrive with no
+  event at all, which is why they get the deferral treatment. Block edits likewise
   defer: agent-tool and UI writes are not invalidated at write time;
   they land at each chat's next compaction (the soft reset re-reads the
-  blocks) and at synthesis. The per-automation backstop clear and
-  synthesis's global invalidation remain as healers for headless writes and
-  global rewrites.
-- If a global invalidation coincides with a divergence, the turn pays its
-  (already owed) miss with the snapshot's stale bytes embedded — zero extra
-  cost, content lands at the next compaction.
+  blocks). No path clears cached heads globally: a global clear rewrites
+  every chat's head on its next build and stales the prefix digest of every
+  parked KV snapshot (`kv-snapshot-parking.md` §5.4), so each cold return
+  pays a full re-prefill before its re-park heals it.
 - The agent's own AGENTS.md edits defer like any others; the per-turn notice
   says "read AGENTS.md / check git status", so a working agent sees the newer
   file immediately.

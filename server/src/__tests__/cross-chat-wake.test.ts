@@ -113,7 +113,6 @@ async function loadModules(homeDir: string) {
         return { systemPrompt: "wake system prompt", ...deltaConfig };
       }),
       commitMemoryDelta,
-      invalidateAllStablePrefixCaches: vi.fn(),
       resetMemoryContext,
       buildTimeAnchor: vi.fn(() => "\n\n[time: test]"),
     };

@@ -155,9 +155,9 @@ The fix mirrors the frozen-section persistence: the last-SERVED project section 
 - **Different source (workspace move)** → apply fresh immediately and re-baseline the snapshot
 - **Workspace read failure** → serve the snapshot without claiming a change
 
-Landing points where the prompt is reprocessed anyway: `softResetMemoryContext` (every compaction path drops the snapshot + cached prefix entry), `resetMemoryContext` (chat deletion, cache-warm prep), and `invalidateAllCaches` (workspace move). Global Map-only invalidations (synthesis, block edits, budget changes) deliberately KEEP the snapshot: chats whose non-project sections rebuild byte-identical keep their KV prefix, and the deferred notice continues until that chat's own next compaction. `buildStablePrefix(..., { preview: true })` (the context viewer's display fallback) consults both stores for honest rendering but writes neither.
+Landing points where the prompt is reprocessed anyway: `softResetMemoryContext` (every compaction path drops the snapshot + cached prefix entry), `resetMemoryContext` (chat deletion, cache-warm prep), and `invalidateAllCaches` (workspace move). Map-only invalidations deliberately KEEP the snapshot: chats whose non-project sections rebuild byte-identical keep their KV prefix, and the deferred notice continues until that chat's own next compaction. `buildStablePrefix(..., { preview: true })` (the context viewer's display fallback) consults both stores for honest rendering but writes neither.
 
-Scope note: only the project section defers. Persona/zeitgeist/block changes flow through deliberate global invalidations where the system consciously propagates new content to every chat; AGENTS.md edits arrive with no Porrima event at all. See `docs/design/memory-context-persistence.md` §11.
+Scope note: only the project section defers against silent disk drift — AGENTS.md edits arrive with no Porrima event at all. Persona/zeitgeist/block changes land at each chat's next compaction (the soft reset re-reads them); no production path clears cached heads globally, because a global head rewrite stales every parked KV snapshot's prefix digest. See `docs/design/memory-context-persistence.md` §11.
 
 ## Passive Mid-Turn Memory Recall
 

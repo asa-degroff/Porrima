@@ -1032,7 +1032,7 @@ export async function runSystemSynthesis(options?: {
     // survives between cycles. Memory retrieval is skipped — synthesis doesn't
     // need a conversational search query, and passive recall during the run
     // will supply relevant memories based on the agent's output.
-    const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
+    const { buildSplitAugmentedPrompt } = await import("./memory-context.js");
     const splitPrompt = await buildSplitAugmentedPrompt(
       chat.messages,
       SYSTEM_CHAT_ID,
@@ -1264,12 +1264,12 @@ export async function runSystemSynthesis(options?: {
       return makeErrorResult(phaseError);
     }
 
-    // --- Invalidate stable prefix caches so next chats pick up block changes ---
-    try {
-      invalidateAllStablePrefixCaches();
-    } catch (e: any) {
-      console.warn("[system-chat] Failed to invalidate stable prefix caches:", e.message);
-    }
+    // --- No stable-prefix invalidation here ---
+    // Synthesis block/persona rewrites land at each chat's own next compaction
+    // (softResetMemoryContext re-reads the bytes; memory-context-persistence
+    // §10.4). A global clear rewrites every chat's cached head on its next
+    // build without re-parking its KV snapshot, so each cold return then
+    // reports prefix digest drift and pays a full re-prefill.
 
     // --- Gate future scheduler ticks ---
     await setLastSynthesis(new Date().toISOString());
@@ -1520,14 +1520,8 @@ export async function runWakeCycle(options?: {
       (title) => emitter.emitTitleUpdate(title),
     );
 
-    // Invalidate caches and gate future ticks
-    try {
-      const { invalidateAllStablePrefixCaches } = await import("./memory-context.js");
-      invalidateAllStablePrefixCaches();
-    } catch (e: any) {
-      console.warn("[system-chat] Failed to invalidate stable prefix caches:", e.message);
-    }
-
+    // No stable-prefix invalidation here: same landing model as synthesis
+    // above — head content changes land at each chat's own next compaction.
     await setLastWakeCycleAt(new Date().toISOString());
 
     emitter.end();

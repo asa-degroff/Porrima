@@ -215,7 +215,7 @@ async function runPromptAutomation(
   const { estimateContextTokens, truncateBeforeSend, COMPACTION_TRIGGER_RATIO } = await import("./compaction.js");
   const { runEndOfTurnCompaction } = await import("./turn-compaction.js");
   const { preCompactionFlushHook } = await import("./memory-extraction.js");
-  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, commitMemoryDelta } = await import("./memory-context.js");
+  const { buildSplitAugmentedPrompt, commitMemoryDelta } = await import("./memory-context.js");
   const { resolveCurrentMessageIndex } = await import("./current-message.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -447,17 +447,11 @@ async function runPromptAutomation(
       });
     }
 
-    // Backstop, not the load-bearing invalidation: block writes from this
-    // turn (or any other headless write to prefix content) already defer to
+    // No stable-prefix invalidation here: block writes from this turn defer to
     // the per-chat compaction landing (softResetMemoryContext re-reads the
-    // blocks) and to synthesis. This clear is a byte-identical no-op when
-    // nothing prefix-relevant changed, and it heals any headless write that
-    // has no other landing point before the next synthesis.
-    try {
-      invalidateAllStablePrefixCaches();
-    } catch (e: any) {
-      console.warn("[automation] Failed to invalidate stable prefix caches:", e.message);
-    }
+    // blocks; memory-context-persistence §10.4). A global clear rewrites every
+    // chat's cached head without re-parking its KV snapshot — the automation
+    // schedule would silently bust the disk tier on every run.
 
     emitter.end();
 

@@ -582,10 +582,11 @@ router.post("/blocks", async (req, res) => {
   });
   // Block writes DEFER their stable-prefix cost: no invalidation here. The
   // new bytes land at each chat's next compaction (softResetMemoryContext
-  // re-reads the blocks) and at synthesis; until then the editing chat
+  // re-reads the blocks); until then the editing chat
   // carries the content in its transcript and read_memory_block always
   // serves fresh bytes. An immediate global invalidation would turn every
-  // chat's next turn into a mid-conversation head re-prefill for one edit.
+  // chat's next turn into a mid-conversation head re-prefill for one edit,
+  // and would make every parked KV snapshot's prefix digest drift.
   res.status(201).json(block);
 });
 

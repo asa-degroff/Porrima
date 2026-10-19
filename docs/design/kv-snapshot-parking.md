@@ -242,8 +242,10 @@ never points at the bad file.
 
 ### 5.3a Post-warm save
 
-Block edits defer to compaction (`memory-context-persistence.md` §10.4), so the
-post-synthesis warm pass is the single remaining global head-refresh point.
+Block edits land at each chat's own compaction (`memory-context-persistence.md`
+§10.4); no path refreshes cached heads globally. The post-synthesis warm pass
+remains the point where synthesis reaches the disk tier: its Case-1 re-roll
+rebuilds the frozen-memories section, which is part of the head digest (§5.2).
 Without an explicit park it discards the fresh head it just built, for three
 compounding reasons: the warm pins no slot (the prefill lands on an arbitrary
 slot by model routing), it crosses no provider choke point (no `llm_requests`
