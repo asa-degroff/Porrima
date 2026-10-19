@@ -284,6 +284,7 @@ interface RetrievalPresetValues {
   rerankerTimeoutMs: number;
   memoryContextSearchQueryChars: number;
   memoryContextRerankQueryChars: number;
+  memoryContextRerankDocumentChars: number;
   memoryContextSearchLimit: number;
   memoryContextCandidatePool: number;
   memoryContextRerankDocumentLimit: number;
@@ -303,17 +304,18 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
   fast: {
     rerankerTimeoutMs: 25_000,
     memoryContextSearchQueryChars: 4000,
-    memoryContextRerankQueryChars: 700,
+    memoryContextRerankQueryChars: 1500,
+    memoryContextRerankDocumentChars: 1200,
     memoryContextSearchLimit: 24,
     memoryContextCandidatePool: 18,
-    memoryContextRerankDocumentLimit: 12,
-    memoryContextRerankTopN: 10,
+    memoryContextRerankDocumentLimit: 16,
+    memoryContextRerankTopN: 12,
     passiveRecallQueryChars: 4000,
-    passiveRecallRerankQueryChars: 1200,
+    passiveRecallRerankQueryChars: 1500,
     passiveRecallSearchLimit: 28,
     passiveRecallCandidatePool: 18,
     passiveRecallDiverseCandidateLimit: 12,
-    passiveRecallRerankDocumentLimit: 8,
+    passiveRecallRerankDocumentLimit: 10,
     passiveRecallRerankDocumentChars: 1200,
     passiveRecallRerankTopN: 3,
     passiveRecallMemoriesPerInjection: 1,
@@ -321,17 +323,18 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
   balanced: {
     rerankerTimeoutMs: 25_000,
     memoryContextSearchQueryChars: 6000,
-    memoryContextRerankQueryChars: 900,
+    memoryContextRerankQueryChars: 2000,
+    memoryContextRerankDocumentChars: 1600,
     memoryContextSearchLimit: 30,
     memoryContextCandidatePool: 24,
-    memoryContextRerankDocumentLimit: 16,
-    memoryContextRerankTopN: 15,
+    memoryContextRerankDocumentLimit: 24,
+    memoryContextRerankTopN: 18,
     passiveRecallQueryChars: 6000,
     passiveRecallRerankQueryChars: 2000,
     passiveRecallSearchLimit: 40,
     passiveRecallCandidatePool: 24,
     passiveRecallDiverseCandidateLimit: 16,
-    passiveRecallRerankDocumentLimit: 12,
+    passiveRecallRerankDocumentLimit: 14,
     passiveRecallRerankDocumentChars: 1600,
     passiveRecallRerankTopN: 4,
     passiveRecallMemoriesPerInjection: 2,
@@ -339,13 +342,14 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
   thorough: {
     rerankerTimeoutMs: 25_000,
     memoryContextSearchQueryChars: 8000,
-    memoryContextRerankQueryChars: 1200,
+    memoryContextRerankQueryChars: 2500,
+    memoryContextRerankDocumentChars: 2000,
     memoryContextSearchLimit: 48,
     memoryContextCandidatePool: 36,
-    memoryContextRerankDocumentLimit: 24,
-    memoryContextRerankTopN: 20,
+    memoryContextRerankDocumentLimit: 32,
+    memoryContextRerankTopN: 24,
     passiveRecallQueryChars: 8000,
-    passiveRecallRerankQueryChars: 2400,
+    passiveRecallRerankQueryChars: 2500,
     passiveRecallSearchLimit: 64,
     passiveRecallCandidatePool: 36,
     passiveRecallDiverseCandidateLimit: 24,
@@ -929,17 +933,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [retrievalAdvancedOpen, setRetrievalAdvancedOpen] = useState(settings.retrievalDepthProfile === "custom");
   const [rerankerTimeoutMs, setRerankerTimeoutMs] = useState(settings.rerankerTimeoutMs ?? 25_000);
   const [memoryContextSearchQueryChars, setMemoryContextSearchQueryChars] = useState(settings.memoryContextSearchQueryChars ?? 6000);
-  const [memoryContextRerankQueryChars, setMemoryContextRerankQueryChars] = useState(settings.memoryContextRerankQueryChars ?? 900);
+  const [memoryContextRerankQueryChars, setMemoryContextRerankQueryChars] = useState(settings.memoryContextRerankQueryChars ?? 2000);
+  const [memoryContextRerankDocumentChars, setMemoryContextRerankDocumentChars] = useState(settings.memoryContextRerankDocumentChars ?? 1600);
   const [memoryContextSearchLimit, setMemoryContextSearchLimit] = useState(settings.memoryContextSearchLimit ?? 30);
   const [memoryContextCandidatePool, setMemoryContextCandidatePool] = useState(settings.memoryContextCandidatePool ?? 24);
-  const [memoryContextRerankDocumentLimit, setMemoryContextRerankDocumentLimit] = useState(settings.memoryContextRerankDocumentLimit ?? 16);
-  const [memoryContextRerankTopN, setMemoryContextRerankTopN] = useState(settings.memoryContextRerankTopN ?? 15);
+  const [memoryContextRerankDocumentLimit, setMemoryContextRerankDocumentLimit] = useState(settings.memoryContextRerankDocumentLimit ?? 24);
+  const [memoryContextRerankTopN, setMemoryContextRerankTopN] = useState(settings.memoryContextRerankTopN ?? 18);
   const [passiveRecallQueryChars, setPassiveRecallQueryChars] = useState(settings.passiveRecallQueryChars ?? 6000);
-  const [passiveRecallRerankQueryChars, setPassiveRecallRerankQueryChars] = useState(settings.passiveRecallRerankQueryChars ?? 900);
+  const [passiveRecallRerankQueryChars, setPassiveRecallRerankQueryChars] = useState(settings.passiveRecallRerankQueryChars ?? 2000);
   const [passiveRecallSearchLimit, setPassiveRecallSearchLimit] = useState(settings.passiveRecallSearchLimit ?? 40);
   const [passiveRecallCandidatePool, setPassiveRecallCandidatePool] = useState(settings.passiveRecallCandidatePool ?? 24);
   const [passiveRecallDiverseCandidateLimit, setPassiveRecallDiverseCandidateLimit] = useState(settings.passiveRecallDiverseCandidateLimit ?? 16);
-  const [passiveRecallRerankDocumentLimit, setPassiveRecallRerankDocumentLimit] = useState(settings.passiveRecallRerankDocumentLimit ?? 12);
+  const [passiveRecallRerankDocumentLimit, setPassiveRecallRerankDocumentLimit] = useState(settings.passiveRecallRerankDocumentLimit ?? 14);
   const [passiveRecallRerankDocumentChars, setPassiveRecallRerankDocumentChars] = useState(settings.passiveRecallRerankDocumentChars ?? 1600);
   const [passiveRecallRerankTopN, setPassiveRecallRerankTopN] = useState(settings.passiveRecallRerankTopN ?? 4);
   const [passiveRecallMemoriesPerInjection, setPassiveRecallMemoriesPerInjection] = useState(settings.passiveRecallMemoriesPerInjection ?? 2);
@@ -948,6 +953,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     setRerankerTimeoutMs(preset.rerankerTimeoutMs);
     setMemoryContextSearchQueryChars(preset.memoryContextSearchQueryChars);
     setMemoryContextRerankQueryChars(preset.memoryContextRerankQueryChars);
+    setMemoryContextRerankDocumentChars(preset.memoryContextRerankDocumentChars);
     setMemoryContextSearchLimit(preset.memoryContextSearchLimit);
     setMemoryContextCandidatePool(preset.memoryContextCandidatePool);
     setMemoryContextRerankDocumentLimit(preset.memoryContextRerankDocumentLimit);
@@ -972,17 +978,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     applyRetrievalPreset({
       rerankerTimeoutMs: settings.rerankerTimeoutMs ?? 25_000,
       memoryContextSearchQueryChars: settings.memoryContextSearchQueryChars ?? 6000,
-      memoryContextRerankQueryChars: settings.memoryContextRerankQueryChars ?? 900,
+      memoryContextRerankQueryChars: settings.memoryContextRerankQueryChars ?? 2000,
+      memoryContextRerankDocumentChars: settings.memoryContextRerankDocumentChars ?? 1600,
       memoryContextSearchLimit: settings.memoryContextSearchLimit ?? 30,
       memoryContextCandidatePool: settings.memoryContextCandidatePool ?? 24,
-      memoryContextRerankDocumentLimit: settings.memoryContextRerankDocumentLimit ?? 16,
-      memoryContextRerankTopN: settings.memoryContextRerankTopN ?? 15,
+      memoryContextRerankDocumentLimit: settings.memoryContextRerankDocumentLimit ?? 24,
+      memoryContextRerankTopN: settings.memoryContextRerankTopN ?? 18,
       passiveRecallQueryChars: settings.passiveRecallQueryChars ?? 6000,
-      passiveRecallRerankQueryChars: settings.passiveRecallRerankQueryChars ?? 900,
+      passiveRecallRerankQueryChars: settings.passiveRecallRerankQueryChars ?? 2000,
       passiveRecallSearchLimit: settings.passiveRecallSearchLimit ?? 40,
       passiveRecallCandidatePool: settings.passiveRecallCandidatePool ?? 24,
       passiveRecallDiverseCandidateLimit: settings.passiveRecallDiverseCandidateLimit ?? 16,
-      passiveRecallRerankDocumentLimit: settings.passiveRecallRerankDocumentLimit ?? 12,
+      passiveRecallRerankDocumentLimit: settings.passiveRecallRerankDocumentLimit ?? 14,
       passiveRecallRerankDocumentChars: settings.passiveRecallRerankDocumentChars ?? 1600,
       passiveRecallRerankTopN: settings.passiveRecallRerankTopN ?? 4,
       passiveRecallMemoriesPerInjection: settings.passiveRecallMemoriesPerInjection ?? 2,
@@ -2244,6 +2251,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       rerankerTimeoutMs,
       memoryContextSearchQueryChars,
       memoryContextRerankQueryChars,
+      memoryContextRerankDocumentChars,
       memoryContextSearchLimit,
       memoryContextCandidatePool,
       memoryContextRerankDocumentLimit,
@@ -2254,6 +2262,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       passiveRecallCandidatePool,
       passiveRecallDiverseCandidateLimit,
       passiveRecallRerankDocumentLimit,
+      passiveRecallRerankDocumentChars,
       passiveRecallRerankTopN,
       passiveRecallMemoriesPerInjection,
     };
@@ -6202,6 +6211,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                      <RetrievalRange label="Search results" description="Hybrid retrieval results kept before MMR and reranking." value={memoryContextSearchLimit} min={12} max={80} step={2} suffix="docs" onChange={setMemoryContextSearchLimit} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Candidate pool" description="Adjusted-score candidates considered by MMR." value={memoryContextCandidatePool} min={8} max={80} step={2} suffix="docs" onChange={setMemoryContextCandidatePool} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Reranked documents" description="Documents scored by the reranker for turn-start context." value={memoryContextRerankDocumentLimit} min={8} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankDocumentLimit} onCommit={switchToCustom} />
+                      <RetrievalRange label="Document length" description="Maximum memory text sent to the turn-start reranker for scoring." value={memoryContextRerankDocumentChars} min={400} max={4000} step={100} suffix="chars" onChange={setMemoryContextRerankDocumentChars} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Returned rerank results" description="Top reranker scores retained before final filtering." value={memoryContextRerankTopN} min={4} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankTopN} onCommit={switchToCustom} />
 	                    </div>
 	                    <div className="space-y-4">

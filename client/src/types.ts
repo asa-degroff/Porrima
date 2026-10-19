@@ -600,6 +600,7 @@ export interface Settings {
   retrievalDepthProfile?: RetrievalDepthProfile;
   memoryContextSearchQueryChars?: number;
   memoryContextRerankQueryChars?: number;
+  memoryContextRerankDocumentChars?: number;
   memoryContextSearchLimit?: number;
   memoryContextCandidatePool?: number;
   memoryContextRerankDocumentLimit?: number;
