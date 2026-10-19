@@ -3787,7 +3787,9 @@ async function handleChatStream(
             // main loop's turn_end) so the ask_user pause handler and crash
             // checkpoints see this turn's messages — including the assistant
             // message carrying the ask_user tool call that the pause trim
-            // scans for.
+            // scans for. runAgentLoop runs the loop on a detached copy of
+            // this array (continue mode shares nothing with the caller), so
+            // these mirror pushes are the only appends the live context sees.
             context.messages.push(msg);
             if (event.toolResults?.length) {
               for (const tr of event.toolResults) {

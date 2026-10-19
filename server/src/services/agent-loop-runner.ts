@@ -120,9 +120,21 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
     throw new Error("streamFn not provided — all callers must provide a stream function");
   });
 
+  // pi-agent-core's `agentLoopContinue` spreads the context shallowly and
+  // pushes every generated message and tool result into the caller's
+  // `context.messages` array itself. Callers whose `turn_end` handlers mirror
+  // those messages into the same array (the HTTP route's loops) would then
+  // double-append: the wire carries every tool-loop fragment twice, the
+  // canonical-row replay can never rebuild that shape, and the turn's cached
+  // prefix and parked KV snapshot are lost. `agentLoop` copies internally for
+  // mode "start"; copy here too so runAgentLoop never mutates the caller's
+  // messages array in either mode.
+  const loopContext: AgentContext =
+    mode === "start" ? context : { ...context, messages: [...context.messages] };
+
   const stream = mode === "start"
     ? agentLoop(prompts || [], context, config, signal, effectiveStreamFn)
-    : agentLoopContinue(context, config, signal, effectiveStreamFn);
+    : agentLoopContinue(loopContext, config, signal, effectiveStreamFn);
 
   let events = 0;
   try {
