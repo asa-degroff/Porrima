@@ -1,4 +1,5 @@
 import type { CustomTheme, ThemePreset } from "../types";
+import { mixHexOklab } from "./oklch";
 
 export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   background: "#1e1b4b",
@@ -155,23 +156,13 @@ function rgbToCss({ r, g, b }: Rgb): string {
   return `${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}`;
 }
 
-function rgbToHex({ r, g, b }: Rgb): string {
-  return `#${[r, g, b]
-    .map((component) => Math.round(component).toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-function mixRgb(first: Rgb, second: Rgb, secondWeight: number): Rgb {
-  const weight = Math.min(1, Math.max(0, secondWeight));
-  return {
-    r: first.r + (second.r - first.r) * weight,
-    g: first.g + (second.g - first.g) * weight,
-    b: first.b + (second.b - first.b) * weight,
-  };
-}
-
+/**
+ * Mix two hex colors in OKLab space. Mixing in perceptual space keeps the
+ * midpoint of the transition vivid — RGB channel averaging drifts toward
+ * gray on complementary hues.
+ */
 function mixHex(first: string, second: string, secondWeight: number): string {
-  return rgbToHex(mixRgb(hexToRgb(first), hexToRgb(second), secondWeight));
+  return mixHexOklab(first, second, secondWeight);
 }
 
 function channelLuminance(channel: number): number {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CustomTheme, Theme, ThemePreset } from "../types";
 import { getCustomThemeBackgroundError, normalizeThemePresetName } from "../utils/custom-theme";
+import { OklchColorPicker } from "./OklchColorPicker";
 
 export const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string }> = [
   { value: "default", label: "Lapis", preview: "from-purple-900" },
@@ -218,12 +219,13 @@ export function ThemePicker({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <ColorControl
+            <OklchColorPicker
               label="Background"
               value={customTheme.background}
               onChange={(background) => onCustomThemeChange({ ...customTheme, background })}
+              darkOnly
             />
-            <ColorControl
+            <OklchColorPicker
               label="Accent"
               value={customTheme.accent}
               onChange={(accent) => onCustomThemeChange({ ...customTheme, accent })}
@@ -299,24 +301,6 @@ export function ThemePicker({
         </div>
       )}
     </>
-  );
-}
-
-function ColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="flex items-center gap-3 rounded-md border border-white/10 bg-black/10 px-2.5 py-1.5 cursor-pointer">
-      <input
-        type="color"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label={`${label} color`}
-        className="h-8 w-8 shrink-0 rounded border border-white/20 bg-transparent cursor-pointer"
-      />
-      <span className="min-w-0">
-        <span className="block text-xs text-white/60">{label}</span>
-        <span className="block text-[11px] text-white/35 font-mono uppercase">{value}</span>
-      </span>
-    </label>
   );
 }
 
