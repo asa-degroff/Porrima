@@ -99,9 +99,13 @@ over the scroll pill). Coordinates live in messages-wrapper space; the wrapper c
 - **Drag from the frame image** (not a handle strip): pointer capture with a 4px travel
   threshold separating drag from click-to-enlarge; the click that follows a drag is
   suppressed.
-- **Width-only resize** via a bottom-right corner grip — height stays locked to the 16:10
-  frame aspect (free 2D would make `object-cover` crop unpredictably). A reset button
-  restores the default docked position. Keyboard: arrows nudge (shift = 3× step), `+`/`-`
+- **Width-only resize** from any corner — four invisible corner zones (the resize
+  cursor is the affordance, no visible grip). Right corners drag the right edge
+  (x pinned); left corners drag the left edge (the right edge pinned). Height stays
+  locked to the 16:10 frame aspect (free 2D would make `object-cover` crop
+  unpredictably). The top-corner zones sit under the reset/minimize buttons, which
+  ride `z-20` above the `z-10` zones so they stay clickable. A reset button restores
+  the default docked position. Keyboard: arrows nudge (shift = 3× step), `+`/`-`
   resize, while the frame is focused.
 - Limits: 120–520px width, 8px margin from wrapper edges. Defaults: 210px desktop / 132px
   mobile — the historical fixed top-right placement, computed from wrapper width (the `sm`
@@ -113,8 +117,10 @@ over the scroll pill). Coordinates live in messages-wrapper space; the wrapper c
   prefs, same class as theme-local toggles).
 - **z-order**: the scroll-to-bottom pill bumps to `z-30` so it stays clickable when the
   card parks in its corner; the lightbox remains `z-50`, above both.
-- Testing: drag/resize/chip-drag wiring is verified in the field — jsdom has no pointer
-  capture; the clamping math (the part with real edge cases) is fully unit-tested instead.
+- Testing: the corner-resize wiring has jsdom pointer tests (direct pointer sequences
+  drive the handlers on the corner zones; pointer *capture* itself remains untested —
+  jsdom lacks it). The clamping math (the part with real edge cases) is fully
+  unit-tested.
 
 **Contents**: latest screenshot with `object-cover object-top` thumbnails (crops tall
 full-page shots to the top instead of letterboxing — reads better at card size), one-line

@@ -13,9 +13,11 @@
  *
  * Phase 1.5 (docs/design/browser-observability.md §9): the card is movable
  * — drag the frame (a 4px threshold separates drag from click-to-enlarge) —
- * and width-resizable via the bottom-right corner grip (height stays locked
- * to the 16:10 frame aspect). Geometry clamps to the messages wrapper and
- * persists in localStorage; arrows nudge and +/- resize from the keyboard.
+ * and width-resizable from any corner (invisible corner zones; the resize
+ * cursor is the affordance). Right corners drag the right edge, left
+ * corners drag the left edge; height stays locked to the 16:10 frame
+ * aspect. Geometry clamps to the messages wrapper and persists in
+ * localStorage; arrows nudge and +/- resize from the keyboard.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -54,13 +56,6 @@ const resetIcon = (
   </svg>
 );
 
-const gripIcon = (
-  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-    <line x1="8" y1="16" x2="16" y2="8" />
-    <line x1="12" y1="18" x2="18" y2="12" />
-  </svg>
-);
-
 interface DragState {
   pointerId: number;
   startX: number;
@@ -70,10 +65,51 @@ interface DragState {
   moved: boolean;
 }
 
-interface GripState {
+interface CornerState {
   pointerId: number;
   startX: number;
+  originX: number;
   originW: number;
+  /** Which edge the pointer drives: right corners move the right edge
+   *  (x pinned); left corners move the left edge (the right edge pinned). */
+  side: "left" | "right";
+}
+
+/** Invisible corner resize zone — the cursor is the affordance. */
+function CornerZone({
+  corner,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  const position = {
+    "top-left": "top-0 left-0",
+    "top-right": "top-0 right-0",
+    "bottom-left": "bottom-0 left-0",
+    "bottom-right": "bottom-0 right-0",
+  }[corner];
+  // The diagonal the corner travels along: top-left/bottom-right run NW-SE,
+  // top-right/bottom-left run NE-SW.
+  const cursor =
+    corner === "top-left" || corner === "bottom-right"
+      ? "cursor-nwse-resize"
+      : "cursor-nesw-resize";
+  return (
+    <div
+      data-resize-corner={corner}
+      className={`absolute ${position} w-5 h-5 z-10 touch-none ${cursor}`}
+      title="Drag to resize"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    />
+  );
 }
 
 export function BrowserViewer({
@@ -94,7 +130,7 @@ export function BrowserViewer({
   const { geom, setGeometry, persistGeometry, resetGeometry } = useBrowserViewerGeometry(wrapperRef);
 
   const dragState = useRef<DragState | null>(null);
-  const gripState = useRef<GripState | null>(null);
+  const cornerState = useRef<CornerState | null>(null);
   /** Set when a pointer gesture was a drag — swallows the trailing click. */
   const suppressClickRef = useRef(false);
   const [interacting, setInteracting] = useState(false);
@@ -209,30 +245,47 @@ export function BrowserViewer({
     setGeometry({ x: x + dx, y: y + dy, w: w + dw });
   };
 
-  // --- Resize: bottom-right corner grip, width only ----------------------
+  // --- Resize: any corner, width only -------------------------------------
+  // The height is aspect-locked, so a corner drag changes width along one
+  // edge: right corners drive the right edge (x pinned), left corners drive
+  // the left edge (the right edge pinned). The vertical pointer component is
+  // ignored, which is why top and bottom corners share behavior.
 
-  const onGripPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
-    gripState.current = { pointerId: e.pointerId, startX: e.clientX, originW: w };
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      /* jsdom — see above */
-    }
-    setInteracting(true);
-    e.stopPropagation();
+  const onCornerPointerDown =
+    (side: "left" | "right") => (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
+      cornerState.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        originX: x,
+        originW: w,
+        side,
+      };
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* jsdom — see above */
+      }
+      setInteracting(true);
+      e.stopPropagation();
+    };
+
+  const onCornerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const c = cornerState.current;
+    if (!c || e.pointerId !== c.pointerId) return;
+    const dx = e.clientX - c.startX;
+    setGeometry(
+      c.side === "right"
+        ? { x: c.originX, y, w: c.originW + dx }
+        : { x: c.originX + dx, y, w: c.originW - dx },
+      { persist: false },
+    );
   };
 
-  const onGripPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const g = gripState.current;
-    if (!g || e.pointerId !== g.pointerId) return;
-    setGeometry({ x, y, w: g.originW + (e.clientX - g.startX) }, { persist: false });
-  };
-
-  const onGripPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const g = gripState.current;
-    if (!g || e.pointerId !== g.pointerId) return;
-    gripState.current = null;
+  const onCornerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const c = cornerState.current;
+    if (!c || e.pointerId !== c.pointerId) return;
+    cornerState.current = null;
     setInteracting(false);
     persistGeometry();
   };
@@ -338,7 +391,7 @@ export function BrowserViewer({
         )}
         <button
           onClick={resetGeometry}
-          className="absolute top-1.5 right-[42px] flex items-center justify-center w-6 h-6 rounded-full bg-black/50 border border-white/15 text-white/60 hover:text-white hover:bg-black/70 transition-colors"
+          className="absolute top-1.5 right-[42px] z-20 flex items-center justify-center w-6 h-6 rounded-full bg-black/50 border border-white/15 text-white/60 hover:text-white hover:bg-black/70 transition-colors"
           title="Reset position and size"
           aria-label="Reset browser view position and size"
         >
@@ -346,7 +399,7 @@ export function BrowserViewer({
         </button>
         <button
           onClick={() => setCollapsed(true)}
-          className="absolute top-1.5 right-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-black/50 border border-white/15 text-white/60 hover:text-white hover:bg-black/70 transition-colors"
+          className="absolute top-1.5 right-1.5 z-20 flex items-center justify-center w-6 h-6 rounded-full bg-black/50 border border-white/15 text-white/60 hover:text-white hover:bg-black/70 transition-colors"
           title="Minimize browser view"
           aria-label="Minimize browser view"
         >
@@ -366,16 +419,30 @@ export function BrowserViewer({
             </span>
           )}
         </div>
-        <div
-          onPointerDown={onGripPointerDown}
-          onPointerMove={onGripPointerMove}
-          onPointerUp={onGripPointerUp}
-          onPointerCancel={onGripPointerUp}
-          className="absolute bottom-0 right-0 w-5 h-5 z-10 flex items-end justify-end p-0.5 cursor-nwse-resize touch-none text-white/50 hover:text-white"
-          title="Drag to resize"
-        >
-          {gripIcon}
-        </div>
+        <CornerZone
+          corner="top-left"
+          onPointerDown={onCornerPointerDown("left")}
+          onPointerMove={onCornerPointerMove}
+          onPointerUp={onCornerPointerUp}
+        />
+        <CornerZone
+          corner="top-right"
+          onPointerDown={onCornerPointerDown("right")}
+          onPointerMove={onCornerPointerMove}
+          onPointerUp={onCornerPointerUp}
+        />
+        <CornerZone
+          corner="bottom-left"
+          onPointerDown={onCornerPointerDown("left")}
+          onPointerMove={onCornerPointerMove}
+          onPointerUp={onCornerPointerUp}
+        />
+        <CornerZone
+          corner="bottom-right"
+          onPointerDown={onCornerPointerDown("right")}
+          onPointerMove={onCornerPointerMove}
+          onPointerUp={onCornerPointerUp}
+        />
       </div>
       {lightboxOpen && frame &&
         createPortal(

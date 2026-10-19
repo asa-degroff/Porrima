@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RefObject } from "react";
 import type { ImageAttachment } from "../types";
@@ -226,5 +226,55 @@ describe("BrowserViewer", () => {
     expect(cardStyle(wrapper).width).toBe("520px");
     await user.keyboard("-");
     expect(cardStyle(wrapper).width).toBe("504px");
+  });
+
+  // jsdom has no pointer capture, but the handlers live on the corner zones
+  // themselves, so direct pointer events exercise the same wiring the field
+  // exercises (pointerId 1 isolates the gesture; see CornerState).
+  function dragCorner(corner: number, fromX: number, toX: number) {
+    // Corner zones in DOM order: top-left, top-right, bottom-left, bottom-right.
+    // isPrimary: jsdom defaults it to false, but a real gesture's first pointer
+    // is primary — the component guards on that.
+    const init = (clientX: number) => ({
+      clientX,
+      clientY: 300,
+      pointerId: 1,
+      isPrimary: true,
+    });
+    const cornerEl = screen.getAllByTitle("Drag to resize")[corner];
+    fireEvent.pointerDown(cornerEl, init(fromX));
+    fireEvent.pointerMove(cornerEl, init(toX));
+    fireEvent.pointerUp(cornerEl, init(toX));
+  }
+
+  it("resizes from the right corners — the right edge follows the pointer", () => {
+    const { wrapper } = renderViewer(makeFrame("/api/tool-result-images/p/image.png"), {
+      storedGeom: JSON.stringify({ x: 100, y: 200, w: 260 }),
+    });
+    dragCorner(3, 360, 390); // bottom-right corner, drag 30px right
+    const style = cardStyle(wrapper);
+    expect(style.left).toBe("100px"); // x pinned
+    expect(style.width).toBe("290px");
+    expect(JSON.parse(localStorage.getItem(GEOM_KEY)!)).toEqual({ x: 100, y: 200, w: 290 });
+  });
+
+  it("resizes from the left corners — the left edge follows, the right edge stays", () => {
+    const { wrapper } = renderViewer(makeFrame("/api/tool-result-images/q/image.png"), {
+      storedGeom: JSON.stringify({ x: 100, y: 200, w: 260 }),
+    });
+    dragCorner(2, 100, 60); // bottom-left corner, drag 40px left
+    const style = cardStyle(wrapper);
+    expect(style.left).toBe("60px");
+    expect(style.width).toBe("300px"); // right edge still 100 + 260 = 360
+  });
+
+  it("clamps a left-corner drag against the wrapper's left margin", () => {
+    const { wrapper } = renderViewer(makeFrame("/api/tool-result-images/r/image.png"), {
+      storedGeom: JSON.stringify({ x: 100, y: 200, w: 260 }),
+    });
+    dragCorner(2, 100, -100); // 200px past the left margin
+    const style = cardStyle(wrapper);
+    expect(style.left).toBe("8px"); // margin floor
+    expect(style.width).toBe("460px"); // still below the 520px max
   });
 });

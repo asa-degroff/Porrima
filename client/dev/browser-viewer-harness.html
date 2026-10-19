@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser viewer harness</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #0b0c10; color: #eee; font-family: system-ui, sans-serif; }
+      .hint { max-width: 800px; margin: 16px auto 0; padding: 0 16px; font-size: 13px; opacity: 0.7; }
+    </style>
+  </head>
+  <body>
+    <div class="hint">
+      Harness: the PiP card floats in the messages wrapper below. Drag the frame to move it,
+      drag any corner to resize (right corners move the right edge, left corners move the left
+      edge), click to enlarge, and test that the top-right minimize button still works.
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/dev/browser-viewer-harness.tsx"></script>
+  </body>
+</html>
