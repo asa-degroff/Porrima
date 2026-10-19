@@ -217,6 +217,57 @@ describe("memory retrieval project scoping", () => {
     expect(query).toContain("old style summary body");
   });
 
+  it("sandwich-clamps long rerank-query messages, keeping head and tail", () => {
+    const head = "opening framing of the pasted log";
+    const tail = "the error line the user is asking about";
+    const messages: ChatMessage[] = [
+      { role: "user", content: head + " " + "m".repeat(2000) + " " + tail, timestamp: 1000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query.startsWith(head)).toBe(true);
+    expect(query.endsWith(tail));
+    expect(query).toContain("…");
+    expect(query).not.toContain("[truncated]");
+  });
+
+  it("keeps three long messages within the total rerank budget", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "a".repeat(1500), timestamp: 1000 },
+      { role: "user", content: "b".repeat(1500), timestamp: 2000 },
+      { role: "user", content: "c".repeat(1500), timestamp: 3000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 1500);
+
+    expect(query.length).toBeLessThanOrEqual(1500);
+    expect(query.startsWith("b".repeat(249))).toBe(true);
+    expect(query.endsWith("c".repeat(249)));
+    expect(query).not.toContain("[truncated]");
+  });
+
+  it("passes medium messages through unclamped when the budget allows", () => {
+    const text = "d".repeat(700);
+    const messages: ChatMessage[] = [{ role: "user", content: text, timestamp: 1000 }];
+
+    const query = buildMemoryRerankQuery(messages, 2500);
+
+    expect(query).toBe(text);
+  });
+
+  it("keeps the custom-minimum profile inside its total budget", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "e".repeat(1500), timestamp: 1000 },
+      { role: "user", content: "f".repeat(1500), timestamp: 2000 },
+      { role: "user", content: "g".repeat(1500), timestamp: 3000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 400);
+
+    expect(query.length).toBeLessThanOrEqual(400);
+  });
+
   it("dampens cross-project scores without filtering them out", () => {
     const candidates = [
       { memory: { projectId: "other" }, score: 0.9 },

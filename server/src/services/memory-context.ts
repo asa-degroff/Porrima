@@ -536,9 +536,9 @@ export interface RetrievalResult {
 
 const SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD = 0.8;
 const MEMORY_RERANK_QUERY_CHARS = 900;
-const MEMORY_RERANK_MESSAGE_CHARS = 450;
 const RERANK_THIN_QUERY_CHARS = 200;
 const RERANK_TOPIC_ANCHOR_CHARS = 500;
+const RERANK_MIN_MESSAGE_CHARS = 150;
 
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
@@ -550,6 +550,22 @@ function clampText(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
   return `${trimmed.slice(0, maxChars).trimEnd()}\n[truncated]`;
+}
+
+/**
+ * Head+tail sandwich clamp for rerank-query messages.
+ *
+ * The rerank query is a topic-distillation channel: the head of a long
+ * message carries the framing, the tail the newest content, and the middle
+ * is bulk that the broad search query already protects. The seam is an
+ * ellipsis, not a prose marker - a prose marker is attendable signal.
+ */
+function sandwichClamp(text: string, maxChars: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const head = Math.floor(maxChars / 2);
+  const tail = maxChars - head;
+  return trimmed.slice(0, head).trimEnd() + "…" + trimmed.slice(trimmed.length - tail).trimStart();
 }
 
 function isSyntheticUserContext(message: ChatMessage): boolean {
@@ -592,11 +608,14 @@ function topicAnchorForQuery(recentMessages: ChatMessage[], budget: number): str
 
 export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars = MEMORY_RERANK_QUERY_CHARS): string {
   const messages = recentRealUserMessages(recentMessages, 3);
+  // Per-message share derived from the total: the rerankQueryChars
+  // setting is a live control, and the 3 message slots split it equally.
+  const perMessage = Math.max(RERANK_MIN_MESSAGE_CHARS, Math.floor((maxChars - 4) / 3));
   const parts: string[] = [];
   let used = 0;
 
   for (const message of [...messages].reverse()) {
-    const text = clampText(message.content, MEMORY_RERANK_MESSAGE_CHARS).replace(/\s+/g, " ");
+    const text = sandwichClamp(message.content, perMessage).replace(/\s+/g, " ");
     if (!text) continue;
     const separator = parts.length > 0 ? 2 : 0;
     if (used + separator + text.length > maxChars && parts.length > 0) break;
