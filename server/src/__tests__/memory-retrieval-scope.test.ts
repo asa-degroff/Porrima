@@ -7,6 +7,7 @@ import {
   sortByAdjustedScore,
 } from "../services/memory-retrieval-scope.js";
 import { buildMemoryRerankQuery, filterMemoriesAlreadyInCurrentContext } from "../services/memory-context.js";
+import { KERNEL_STATE_COMPACT_NOTICE } from "../services/compaction-notice.js";
 import type { ChatMessage, Memory } from "../types.js";
 
 function memory(overrides: Partial<Memory>): Memory {
@@ -78,6 +79,145 @@ describe("memory retrieval project scoping", () => {
 
     expect(query).toContain("latest");
     expect(query.length).toBeLessThanOrEqual(500);
+  });
+
+  it("anchors thin rerank queries with the latest in-context compaction summary index", () => {
+    const summary: ChatMessage = {
+      role: "assistant",
+      content:
+        "KV snapshot parking design.\nReranker query construction review." +
+        KERNEL_STATE_COMPACT_NOTICE +
+        "User: can you review how the queries are constructed?\nVela: two builders feed one client.",
+      timestamp: 2000,
+      _isCompactionSummary: true,
+    };
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Start of the thread.", timestamp: 1000 },
+      summary,
+      { role: "user", content: "yeah, go with that", timestamp: 3000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query.startsWith("Conversation topic so far:")).toBe(true);
+    expect(query).toContain("KV snapshot parking design");
+    expect(query).not.toContain("two builders feed one client");
+    expect(query.endsWith("yeah, go with that"));
+    expect(query.length).toBeLessThanOrEqual(900);
+  });
+
+  it("leaves substantial rerank queries untouched even when a summary exists", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content:
+          "Why does the post-warm park skip the slot-identity guard when the workload counters double count on warm LCP prefills in the live regime?",
+        timestamp: 1000,
+      },
+      {
+        role: "assistant",
+        content: "Compacted summary index." + KERNEL_STATE_COMPACT_NOTICE + "recap text",
+        timestamp: 2000,
+        _isCompactionSummary: true,
+      },
+      {
+        role: "user",
+        content: "And what does the value-inverted plan allocation do to the expensive just-changed heads under the hardware-derived capacity budget?",
+        timestamp: 3000,
+      },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).not.toContain("Conversation topic so far:");
+    expect(query).not.toContain("Compacted summary index");
+  });
+
+  it("does not anchor thin queries when no compaction summary is in context", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "quick question here", timestamp: 1000 },
+      { role: "assistant", content: "answer", timestamp: 2000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toBe("quick question here");
+  });
+
+  it("ignores out-of-context summaries when anchoring", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Old topic index." + KERNEL_STATE_COMPACT_NOTICE + "old recap",
+        timestamp: 1000,
+        _isCompactionSummary: true,
+        _outOfContext: true,
+      },
+      { role: "user", content: "ok, do it", timestamp: 2000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toBe("ok, do it");
+  });
+
+  it("anchors with the latest of multiple in-context summaries", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Old phase topics." + KERNEL_STATE_COMPACT_NOTICE + "old recap",
+        timestamp: 1000,
+        _isCompactionSummary: true,
+      },
+      {
+        role: "assistant",
+        content: "New phase topics." + KERNEL_STATE_COMPACT_NOTICE + "new recap",
+        timestamp: 2000,
+        _isCompactionSummary: true,
+      },
+      { role: "user", content: "go ahead", timestamp: 3000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toContain("New phase topics");
+    expect(query).not.toContain("Old phase topics");
+  });
+
+  it("clamps the anchor to the remaining query budget", () => {
+    const longIndex = "topic word ".repeat(200).trim();
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: longIndex + KERNEL_STATE_COMPACT_NOTICE + "recap",
+        timestamp: 1000,
+        _isCompactionSummary: true,
+      },
+      { role: "user", content: "ok", timestamp: 2000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 400);
+
+    expect(query.length).toBeLessThanOrEqual(400);
+    expect(query.startsWith("Conversation topic so far:")).toBe(true);
+    expect(query.endsWith("ok"));
+  });
+
+  it("anchors from the full summary when the composition marker is absent", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "old style summary body " + "z".repeat(100),
+        timestamp: 1000,
+        _isCompactionSummary: true,
+      },
+      { role: "user", content: "sure", timestamp: 2000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query.startsWith("Conversation topic so far:")).toBe(true);
+    expect(query).toContain("old style summary body");
   });
 
   it("dampens cross-project scores without filtering them out", () => {

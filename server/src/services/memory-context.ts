@@ -19,6 +19,7 @@ import { getWorkspaceForProject } from "./workspace.js";
 import { formatAgentClock, formatAgentDate } from "./time-format.js";
 import { log } from "./logger.js";
 import { getRetrievalBudget } from "./retrieval-settings.js";
+import { KERNEL_STATE_COMPACT_NOTICE } from "./compaction-notice.js";
 import {
   clearLlamaCacheResidencyTarget,
   NEW_AGENT_CHAT_BASELINE_CACHE_ID,
@@ -536,6 +537,9 @@ export interface RetrievalResult {
 const SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD = 0.8;
 const MEMORY_RERANK_QUERY_CHARS = 900;
 const MEMORY_RERANK_MESSAGE_CHARS = 450;
+const RERANK_THIN_QUERY_CHARS = 200;
+const RERANK_TOPIC_ANCHOR_CHARS = 500;
+const RERANK_TOPIC_ANCHOR_LABEL = "Conversation topic so far:";
 
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
@@ -566,6 +570,27 @@ function recentRealUserMessages(recentMessages: ChatMessage[], limit: number): C
     .slice(-limit);
 }
 
+/**
+ * Topic anchor for thin rerank queries.
+ *
+ * A short user follow-up carries no topic words, so the cross-encoder
+ * scores memories against almost nothing. The latest in-context compaction
+ * summary describes what the conversation is about now: its index section
+ * is distilled topic lines, the densest query-shaped signal. Head-clamped
+ * to budget; falls back to the full summary if the composition marker is
+ * absent (defensive - current summaries always carry it).
+ */
+function topicAnchorForQuery(recentMessages: ChatMessage[], budget: number): string {
+  const summaries = recentMessages.filter((m) => m._isCompactionSummary && !m._outOfContext);
+  const latest = summaries[summaries.length - 1]?.content?.trim();
+  if (!latest || budget <= 0) return "";
+  const [index] = latest.split(KERNEL_STATE_COMPACT_NOTICE);
+  const source = (index ?? latest).trim();
+  if (!source) return "";
+  const text = source.length > budget ? source.slice(0, budget).trimEnd() : source;
+  return text.replace(/\s+/g, " ");
+}
+
 export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars = MEMORY_RERANK_QUERY_CHARS): string {
   const messages = recentRealUserMessages(recentMessages, 3);
   const parts: string[] = [];
@@ -580,9 +605,26 @@ export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars =
     used += separator + text.length;
   }
 
-  const query = parts.join("\n\n").trim();
-  if (query.length <= maxChars) return query;
-  return query.slice(query.length - maxChars).trimStart();
+  let query = parts.join("\n\n").trim();
+  if (query.length > maxChars) query = query.slice(query.length - maxChars).trimStart();
+
+  // Topic anchor: applied only when the assembled user query is thin - that
+  // is the regime with no topic words for the cross-encoder to attend to.
+  // A substantial query already specifies the topic, and the summary
+  // describes the PREVIOUS phase: prepending it could fight a topic that
+  // just pivoted at the compaction boundary.
+  if (query && query.length <= RERANK_THIN_QUERY_CHARS) {
+    const anchorBudget = maxChars - query.length - RERANK_TOPIC_ANCHOR_LABEL.length - 3;
+    if (anchorBudget >= 100) {
+      const anchor = topicAnchorForQuery(
+        recentMessages,
+        Math.min(RERANK_TOPIC_ANCHOR_CHARS, anchorBudget),
+      );
+      if (anchor) query = `${RERANK_TOPIC_ANCHOR_LABEL}\n${anchor}\n\n${query}`;
+    }
+  }
+
+  return query;
 }
 
 function isSourceMessage(message: ChatMessage): boolean {

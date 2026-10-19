@@ -9,8 +9,8 @@ import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, wi
  * persistMidTurnHandoff), so both compaction dialects share one source of
  * truth and replay stays byte-stable (no wall-clock, no route drift).
  */
-export const KERNEL_STATE_COMPACT_NOTICE =
-  "\n\nKernel note: if this thread used run_python, the kernel namespace survives compaction — variables, imports, and background jobs (checkable via python_jobs) are still live.";
+import { KERNEL_STATE_COMPACT_NOTICE } from "./compaction-notice.js";
+export { KERNEL_STATE_COMPACT_NOTICE };
 import { regenerateTitle } from "./title-generation.js";
 import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";
