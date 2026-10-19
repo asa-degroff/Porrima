@@ -7,13 +7,14 @@
     <style>
       :root { color-scheme: dark; }
       body { margin: 0; background: #0b0c10; color: #eee; font-family: system-ui, sans-serif; }
+      /* Mirrors the settings modal: max-w-3xl container, pickers stacked. */
       .wrap {
-        max-width: 760px;
+        max-width: 768px;
         margin: 0 auto;
         padding: 24px;
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
+        grid-template-columns: 1fr;
+        gap: 12px;
       }
       .swatch { grid-column: 1 / -1; padding: 14px; border-radius: 10px; font-size: 13px; }
       .swatch .mono { font-family: ui-monospace, monospace; opacity: 0.75; }

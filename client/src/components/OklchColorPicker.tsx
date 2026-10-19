@@ -16,7 +16,9 @@ import { CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE, normalizeHexColor } from "../uti
 // The plane maps x to chroma (0 at the left, PLANE_CHROMA_MAX at the right)
 // and y to lightness (0 at the bottom, 1 at the top). It renders at a fixed
 // internal resolution and scales with its container; pointer mapping uses the
-// bounding rect, so the CSS scaling is transparent.
+// bounding rect, so the CSS scaling is transparent. Resolution trades against
+// the per-hue-change re-render cost (the hue slider re-renders it on every
+// drag step), so it stays modest — the surface is a smooth gradient.
 const PLANE_WIDTH = 480;
 const PLANE_HEIGHT = 300;
 const PLANE_CHROMA_MAX = 0.35;
@@ -32,9 +34,11 @@ const OUT_OF_GAMUT_GHOST = 0.22;
 const DARK_BG_MAX_L = lightnessForLuminance(CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE);
 
 // Slider styling shared with the settings UI's color sliders (Activity
-// Spinner block): gradient track, white round thumb.
+// Spinner block): gradient track, white round thumb. min-w-0 lets the native
+// range input (which has an intrinsic minimum width) shrink inside flex rows
+// instead of overflowing its container.
 const SLIDER_CLASSES =
-  "flex-1 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/80 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white/80 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-track]:transparent";
+  "flex-1 min-w-0 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/80 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white/80 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-track]:transparent";
 
 const HUE_TRACK = `linear-gradient(to right, ${Array.from({ length: 13 }, (_, i) => `oklch(0.7 0.25 ${i * 30})`).join(", ")})`;
 
