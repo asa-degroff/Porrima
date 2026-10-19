@@ -6,7 +6,14 @@ import {
   normalizeCrossProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "../services/memory-retrieval-scope.js";
-import { buildMemoryRerankQuery, filterMemoriesAlreadyInCurrentContext } from "../services/memory-context.js";
+import {
+  buildMemoryRerankQuery,
+  buildRerankDocuments,
+  filterMemoriesAlreadyInCurrentContext,
+  type RetrievalResult,
+} from "../services/memory-context.js";
+import { resolveRetrievalBudget } from "../services/retrieval-settings.js";
+import type { Settings } from "../types.js";
 import { KERNEL_STATE_COMPACT_NOTICE } from "../services/compaction-notice.js";
 import type { ChatMessage, Memory } from "../types.js";
 
@@ -285,6 +292,45 @@ describe("memory retrieval project scoping", () => {
     expect(query).not.toContain("server/src");
     expect(query).not.toContain("services");
     expect(query).not.toContain("read_file");
+  });
+
+  it("clamps main-path rerank documents to the document budget, keeping the subject", () => {
+    const candidates: RetrievalResult[] = [
+      { memory: memory({ id: "m1", subject: "A subject line", text: "t".repeat(3000) }), score: 0.9 },
+    ];
+
+    const docs = buildRerankDocuments(candidates, 1200);
+
+    expect(docs[0].length).toBeLessThanOrEqual(1200);
+    expect(docs[0].startsWith("A subject line\n")).toBe(true);
+    expect(docs[0]).not.toContain("[truncated]");
+  });
+
+  it("passes short rerank documents through unchanged", () => {
+    const candidates: RetrievalResult[] = [
+      { memory: memory({ id: "m2", subject: "Short", text: "short body" }), score: 0.5 },
+    ];
+
+    const docs = buildRerankDocuments(candidates, 1200);
+
+    expect(docs[0]).toBe("Short\nshort body");
+  });
+
+  it("resolves the main-path document budget per profile and clamps custom", () => {
+    const balanced = resolveRetrievalBudget({ retrievalDepthProfile: "balanced" } as unknown as Settings);
+    expect(balanced.memoryContext.rerankDocumentChars).toBe(1600);
+
+    const customHigh = resolveRetrievalBudget({
+      retrievalDepthProfile: "custom",
+      memoryContextRerankDocumentChars: 99999,
+    } as unknown as Settings);
+    expect(customHigh.memoryContext.rerankDocumentChars).toBe(4000);
+
+    const customLow = resolveRetrievalBudget({
+      retrievalDepthProfile: "custom",
+      memoryContextRerankDocumentChars: 100,
+    } as unknown as Settings);
+    expect(customLow.memoryContext.rerankDocumentChars).toBe(400);
   });
 
   it("dampens cross-project scores without filtering them out", () => {

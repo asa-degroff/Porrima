@@ -67,7 +67,7 @@ Every tunable below is driven by `resolveRetrievalBudget(settings)`, which resol
 | `balanced` (default) | 6000 | 30 | 24 | 18 | 6000 | 4 | 2 |
 | `thorough` | 8000 | 48 | 36 | 24 | 8000 | 6 | 3 |
 
-Each profile also sets `rerankQueryChars`, `rerankDocumentLimit`, `rerankDocumentChars`, and `diverseCandidateLimit`. The numbers quoted in the rest of this document are the `balanced` defaults.
+Each profile also sets `rerankQueryChars` (both paths), `rerankDocumentLimit`, `rerankDocumentChars` (both paths), and `diverseCandidateLimit`. The numbers quoted in the rest of this document are the `balanced` defaults.
 
 `custom` values are clamped field-by-field:
 
@@ -101,7 +101,7 @@ The coupling is surprising and worth knowing before editing Settings: `candidate
    - **Passive-memory**: instruction tuned for mid-turn context discovery during long agent runs
    - Graceful fallback to RRF-only scoring if reranker is unavailable (main retrieval only — passive recall bails entirely if reranker is down)
 
-   The main-retrieval rerank query is the recent real user messages (up to 3, per-message clamp). When the assembled query is thin (≤ 200 characters), a **topic anchor** prefixes it: the index section of the latest in-context compaction summary, head-clamped to the remainder of the query budget. A thin follow-up carries no topic words for the cross-encoder to attend to, so the anchor supplies the topic. A substantial query already specifies the topic, and the summary describes the previous phase — prepending it could fight a topic that just pivoted at the compaction boundary — so no anchor is added there. The anchor complements stage 4: it makes the cross-encoder topic-aware at scoring time, while culling adjusts scores afterward in embedding space.
+   The main-retrieval rerank query is the recent real user messages (up to 3), each scrubbed of operational noise and head+tail sandwich-clamped to an equal share of the query budget. When the assembled query is thin (≤ 200 characters), a **topic anchor** prefixes it: the index section of the latest in-context compaction summary, head-clamped to the remainder of the query budget. A thin follow-up carries no topic words for the cross-encoder to attend to, so the anchor supplies the topic. A substantial query already specifies the topic, and the summary describes the previous phase — prepending it could fight a topic that just pivoted at the compaction boundary — so no anchor is added there. The anchor complements stage 4: it makes the cross-encoder topic-aware at scoring time, while culling adjusts scores afterward in embedding space. Documents sent to the cross-encoder are the memory index text (subject + body), head-clamped to `memoryContext.rerankDocumentChars` (1 600 at balanced) so per-call token cost is bounded.
 
 3. **MMR diversity selection** (`memory-context.ts`): MMR runs **twice** in main retrieval — λ = 0.65 to trim the candidate pool before it is handed to the cross-encoder, then λ = 0.7 over the reranked survivors. Passive recall uses λ = 0.55 (more diversity-biased) since it accumulates candidates across multiple search rounds.
 

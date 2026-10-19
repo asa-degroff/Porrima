@@ -650,6 +650,19 @@ export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars =
   return query;
 }
 
+/**
+ * Rerank documents for the main path: the same index text that was
+ * embedded, head-clamped to the document budget so per-call token cost
+ * is bounded. No truncation marker - a prose marker in the document
+ * channel is attendable signal.
+ */
+export function buildRerankDocuments(candidates: RetrievalResult[], maxChars: number): string[] {
+  return candidates.map((r) => {
+    const text = buildMemoryIndexText(r.memory.text, r.memory.subject).trim();
+    return text.length <= maxChars ? text : text.slice(0, maxChars).trimEnd();
+  });
+}
+
 function isSourceMessage(message: ChatMessage): boolean {
   return message.role !== "system";
 }
@@ -769,7 +782,7 @@ async function retrieveMemories(
     budget.memoryContext.rerankDocumentLimit,
     0.65,
   );
-  const rerankDocuments = rerankCandidates.map((r) => buildMemoryIndexText(r.memory.text, r.memory.subject));
+  const rerankDocuments = buildRerankDocuments(rerankCandidates, budget.memoryContext.rerankDocumentChars);
   const rerankOutput: RerankOutput = await rerank(
     rerankQuery,
     rerankDocuments,

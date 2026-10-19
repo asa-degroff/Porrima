@@ -12,6 +12,7 @@ export interface RetrievalBudget {
   memoryContext: {
     searchQueryChars: number;
     rerankQueryChars: number;
+    rerankDocumentChars: number;
     searchLimit: number;
     candidatePool: number;
     rerankDocumentLimit: number;
@@ -37,6 +38,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
     memoryContext: {
       searchQueryChars: 4000,
       rerankQueryChars: 1500,
+      rerankDocumentChars: 1200,
       searchLimit: 24,
       candidatePool: 18,
       rerankDocumentLimit: 16,
@@ -60,6 +62,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
     memoryContext: {
       searchQueryChars: 6000,
       rerankQueryChars: 2000,
+      rerankDocumentChars: 1600,
       searchLimit: 30,
       candidatePool: 24,
       rerankDocumentLimit: 24,
@@ -83,6 +86,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
     memoryContext: {
       searchQueryChars: 8000,
       rerankQueryChars: 2500,
+      rerankDocumentChars: 2000,
       searchLimit: 48,
       candidatePool: 36,
       rerankDocumentLimit: 32,
@@ -147,6 +151,7 @@ export function resolveRetrievalBudget(settings: Settings): RetrievalBudget {
     memoryContext: {
       searchQueryChars: clampInt(settings.memoryContextSearchQueryChars, base.memoryContext.searchQueryChars, 2000, 12000),
       rerankQueryChars: clampInt(settings.memoryContextRerankQueryChars, base.memoryContext.rerankQueryChars, 400, 2000),
+      rerankDocumentChars: clampInt(settings.memoryContextRerankDocumentChars, base.memoryContext.rerankDocumentChars, 400, 4000),
       searchLimit: clampInt(settings.memoryContextSearchLimit, base.memoryContext.searchLimit, 12, 80),
       candidatePool: clampInt(settings.memoryContextCandidatePool, base.memoryContext.candidatePool, memoryContextRerankDocumentLimit, 80),
       rerankDocumentLimit: memoryContextRerankDocumentLimit,
