@@ -1634,7 +1634,13 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       // Sync local state from the updated server status
       const s = result.server;
       if (s.id === "inference") {
-        setLlamacppUrl(s.url);
+        // The inference row's url follows the selected backend (the
+        // supervisor probes the Strata URL when Strata is chosen); sync it
+        // into the field the backend actually uses so a row save can never
+        // write the Strata URL into llamacppUrl or vice versa
+        // (docs/design/strata-backend.md §9).
+        if (inferenceBackend === "strata") setStrataUrl(s.url);
+        else setLlamacppUrl(s.url);
         if (s.expectedModel) setDefaultModelId(s.expectedModel);
       }
       if (s.id === "extraction") {
@@ -1659,15 +1665,17 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
     } catch (e: any) {
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to update settings" });
     }
-  }, [refreshLlamaServers, refreshModels]);
+  }, [refreshLlamaServers, refreshModels, inferenceBackend]);
 
   const handleSaveLlamaConnection = useCallback((id: LlamaServerId) => {
-    if (id === "inference") return handleLlamaServerSettings(id, { url: llamacppUrl });
+    // Inference sends the URL of the active backend; the server routes the
+    // write to the matching settings key (PATCH /:id, §9).
+    if (id === "inference") return handleLlamaServerSettings(id, { url: inferenceBackend === "strata" ? strataUrl : llamacppUrl });
     if (id === "extraction") return handleLlamaServerSettings(id, { url: extractionModelUrl });
     if (id === "reranker") return handleLlamaServerSettings(id, { url: rerankerUrl });
     if (id === "embedding") return handleLlamaServerSettings(id, { url: embeddingUrl, provider: embeddingProvider });
     return handleLlamaServerSettings(id, { url: titleGenerationUrl });
-  }, [embeddingProvider, embeddingUrl, extractionModelUrl, handleLlamaServerSettings, llamacppUrl, rerankerUrl, titleGenerationUrl]);
+  }, [embeddingProvider, embeddingUrl, extractionModelUrl, handleLlamaServerSettings, inferenceBackend, llamacppUrl, rerankerUrl, strataUrl, titleGenerationUrl]);
 
   const applyExtractionCtxSizeDraft = useCallback(() => {
     const next = clampIntegerDraft(
@@ -2366,7 +2374,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       } else {
         setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply main chat model" });
       }
-      return null;
+      // Apply failure must not eat the settings save: the user's other
+      // changes (including the backend selection) still persist. The turn
+      // path re-applies the model itself, so the unit state self-corrects.
+      return nextSettings;
     } finally {
       setApplyingSlot(null);
     }
@@ -3640,7 +3651,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                    model override
 		                                  </span>
 		                                )}
-		                                {server.http.routerMode && (
+		                                {server.http.routerMode && !strataInference && (
 		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/15 text-emerald-200" title="Slot multiplexes models via /v1/models — swaps go through /models/load (no restart)">
 		                                    router mode
 		                                  </span>

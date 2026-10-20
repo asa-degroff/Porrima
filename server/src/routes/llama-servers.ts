@@ -726,7 +726,15 @@ router.patch("/:id", async (req, res) => {
         rejectStrataInference(res, "model and binary selection");
         return;
       }
-      if (body.url !== undefined) settings.llamacppUrl = (body.url as string).trim() || undefined;
+      if (body.url !== undefined) {
+        // Row-level URL saves land on the key the active backend actually
+        // reads; writing the Strata URL into llamacppUrl (or vice versa) is
+        // how the llama-native path ends up probing a Strata server
+        // (docs/design/strata-backend.md §9).
+        const v = (body.url as string).trim();
+        if (isStrataBackend(settings)) settings.strataUrl = v || undefined;
+        else settings.llamacppUrl = v || undefined;
+      }
       if (body.modelId !== undefined) settings.defaultModelId = (body.modelId as string).trim() || settings.defaultModelId;
       if (body.enabled !== undefined) settings.llamacppEnabled = Boolean(body.enabled);
       if (body.binaryPath !== undefined) {
