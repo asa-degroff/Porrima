@@ -520,24 +520,25 @@ function normalizeBaseUrl(baseUrl: string): string {
  *  (docs/design/strata-backend.md). Strata serves the OpenAI chat surface
  *  only: no router load, no /apply-template, no /tokenize, no /completion,
  *  no id_slot, no cache_prompt, and its conversation cache is automatic. */
-/** True when a stream chunk carries ONLY prefill progress (Strata's
- *  `return_progress` shape: an empty delta with a prompt_progress field —
- *  llama.cpp emits nothing like this on the stream). Such chunks feed the
- *  prefill monitor and must not be read as "decoding started", or the
- *  dual-phase activity spinner flips to the fast decode state minutes
- *  before the first real token (docs/design/strata-backend.md §5). */
-export function isProgressOnlyChunk(chunk: OpenAIChatChunk): boolean {
-  const choice = chunk.choices?.[0];
-  const delta = choice?.delta;
-  return !chunk.usage &&
-    !choice?.finish_reason &&
-    !delta?.content &&
-    !delta?.reasoning_content &&
-    !(delta?.tool_calls?.length ?? false);
-}
-
 function isStrataModel(model: { provider?: string | null }): boolean {
   return model.provider === "strata";
+}
+
+/** True when a stream chunk carries no generation signal: no usage, no
+ *  finish_reason, and an empty or role-only delta. Two kinds matter:
+ *  Strata's prompt_progress chunks (fed separately, then skipped) and the
+ *  OpenAI role opener {"role":"assistant","content":""}. Strata sends the
+ *  opener at connection time, before prompt processing; llama.cpp sends it
+ *  only once its first token exists. The decoding-started boundary must
+ *  wait for real signal or the dual-phase activity spinner (slow prefill /
+ *  fast decode) jumps to the fast state at stream start on Strata
+ *  (docs/design/strata-backend.md §5). */
+export function isStreamPreludeChunk(chunk: OpenAIChatChunk): boolean {
+  const choice = chunk.choices?.[0];
+  const delta = choice?.delta;
+  if (chunk.usage || choice?.finish_reason) return false;
+  if (delta?.content || delta?.reasoning_content || delta?.tool_calls?.length) return false;
+  return true;
 }
 
 /** Image part for the request body. llama.cpp mtmd receives pre-normalized
@@ -2368,20 +2369,20 @@ export const streamOpenAICompat = (
         // Strata prefill progress (docs/design/strata-backend.md §5): while
         // the prompt is being read, chunks with an empty delta carry
         // prompt_progress because the body opted in with return_progress.
-        // Feed the same emit path the /slots poller uses, then skip the rest
-        // of the loop for progress-only chunks: unlike llama.cpp, Strata
-        // puts these on the wire DURING prompt processing, and the next
-        // statement treats the first parsed chunk as "decoding started" —
-        // without this the dual-phase activity spinner flips to the fast
-        // decode state minutes before the first real token.
+        // Feed the same emit path the /slots poller uses, then keep prelude
+        // chunks (progress frames, the role opener, empty deltas) out of the
+        // boundary below: Strata sends these BEFORE the first token, so the
+        // old first-parsed-chunk rule — sound for llama.cpp, which holds its
+        // stream silent through prefill — put the activity spinner in the
+        // fast decode state for the whole prefill.
         if (chunk.prompt_progress && feedPromptProgress) {
           feedPromptProgress(chunk.prompt_progress);
-          if (isProgressOnlyChunk(chunk)) continue;
         }
+        if (isStreamPreludeChunk(chunk)) continue;
 
         // llama.cpp can return HTTP headers before prompt prefill completes.
-        // The first parsed SSE chunk is the reliable boundary where decoding has
-        // actually started, so keep prefill progress active until then.
+        // The first chunk carrying generation signal is the reliable
+        // boundary where decoding has actually started.
         announceGenerating();
 
         // Extract usage from final chunk

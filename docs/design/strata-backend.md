@@ -151,12 +151,14 @@ source instead of the event shape:
 - `total` from the first `prompt_progress` chunk is the exact prefill
   denominator; store it on the run record. Until it arrives, use the char
   estimate (the current last-resort path).
-- Progress-only chunks never reach the turn's event stream. Unlike llama.cpp,
-  Strata puts these chunks on the wire during prompt processing, so the
-  provider classifies them (`isProgressOnlyChunk`) and keeps the
-  first-chunk "decoding started" boundary for real content. Without that,
-  the chat's dual-phase activity spinner (slow prefill / fast decode) jumps
-  to decode at the first progress chunk.
+- Prelude chunks never reach the generation-started boundary. Strata puts
+  two silent chunk kinds on the stream before the first token: the
+  `prompt_progress` frames and the OpenAI role opener
+  `{"role":"assistant","content":""}` (llama.cpp sends the opener only with
+  its first token, after prefill). The provider feeds progress frames to the
+  monitor and skips silent chunks (`isStreamPreludeChunk`), so the
+  dual-phase activity spinner (slow prefill / fast decode) stays in the
+  prefill state until a chunk carries real signal.
 - Cache state: `cache` on the first progress chunk, else
   `usage.prompt_tokens_details.cached_tokens` / `timings.cache_n` after the
   turn. `determineCacheState` keeps its `"unknown"` fallback.

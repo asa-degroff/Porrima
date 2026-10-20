@@ -17,7 +17,7 @@ import sharp from "sharp";
 import {
   computePrefillProgress,
   estimatePromptTokensForProgress,
-  isProgressOnlyChunk,
+  isStreamPreludeChunk,
   normalizeImageForLlamaCpp,
   promptWorkTokens,
   readProcessedTokens,
@@ -591,42 +591,49 @@ describe("buildOpenAICompatChatBody", () => {
   });
 });
 
-describe("isProgressOnlyChunk", () => {
+describe("isStreamPreludeChunk", () => {
   const base = {
     id: "c", object: "chat.completion.chunk", model: "m", created: 0,
     choices: [{ index: 0, delta: {}, finish_reason: null as string | null }],
   };
 
-  it("classifies a bare prompt_progress chunk as progress-only", () => {
-    expect(isProgressOnlyChunk({
+  it("classifies a bare prompt_progress chunk as prelude", () => {
+    expect(isStreamPreludeChunk({
       ...base,
       prompt_progress: { total: 6195, cache: 0, processed: 4096, time_ms: 7034 },
     } as any)).toBe(true);
   });
 
-  it("lets content chunks fall through to the normal path", () => {
-    expect(isProgressOnlyChunk({
+  it("classifies Strata's role opener as prelude (the spinner bug)", () => {
+    expect(isStreamPreludeChunk({
+      ...base,
+      choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+    } as any)).toBe(true);
+  });
+
+  it("lets content chunks through as the decoding boundary", () => {
+    expect(isStreamPreludeChunk({
       ...base,
       choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
       prompt_progress: { total: 10 },
     } as any)).toBe(false);
   });
 
-  it("lets reasoning and tool-call chunks fall through", () => {
-    expect(isProgressOnlyChunk({
+  it("lets reasoning and tool-call chunks through", () => {
+    expect(isStreamPreludeChunk({
       ...base,
       choices: [{ index: 0, delta: { reasoning_content: "thinking" }, finish_reason: null }],
       prompt_progress: { total: 10 },
     } as any)).toBe(false);
-    expect(isProgressOnlyChunk({
+    expect(isStreamPreludeChunk({
       ...base,
       choices: [{ index: 0, delta: { tool_calls: [{ index: 0 }] }, finish_reason: null }],
       prompt_progress: { total: 10 },
     } as any)).toBe(false);
   });
 
-  it("lets the final usage/finish chunk fall through", () => {
-    expect(isProgressOnlyChunk({
+  it("lets the final usage/finish chunk through", () => {
+    expect(isStreamPreludeChunk({
       ...base,
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
