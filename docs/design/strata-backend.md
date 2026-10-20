@@ -344,6 +344,16 @@ that both backends fill.
   (`fit_max_tokens`), not 400 as llama.cpp strict mode. Porrima budgets
   below the reported context either way; note it if a host sets
   `fit_max_tokens: false`.
+- Strata's model occasionally ends its reply inside the thinking block: it
+  emits the end-of-turn token with reasoning text and no answer
+  (finish `stop`). Porrima's existing mitigation promotes the thinking to
+  visible content (`_thinkingPromoted`), which reads as a cut-off reply.
+  The real recovery is server-side: `"reasoning_close_retry": true` closes
+  the thinking once and continues to the answer. Hosts launched through a
+  Strata profile must set it in the launch config the control runtime
+  reads (the profile's `source_config`) — the install-level
+  `strata-<model>.json` is not consulted on that path. `slot_save_path`
+  follows the same rule.
 - One request at a time unless the host runs `--batch`, and then parking is
   unavailable (§7).
 
