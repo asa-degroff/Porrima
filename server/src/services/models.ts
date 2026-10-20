@@ -4,6 +4,7 @@ import { getSettings } from "./chat-storage.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { getContextWindowFloor, applyContextWindowFloor } from "./context-high-water.js";
+import { getInferenceBackend, resolveInferenceBaseUrl, strataAuthHeaders } from "./inference-backend.js";
 
 const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
@@ -46,6 +47,7 @@ interface LlamaCppPropsResponse {
 // Cache for model discovery results (TTL-based)
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let llamacppCache: { models: InferenceModel[]; timestamp: number } | null = null;
+let strataCache: { models: InferenceModel[]; timestamp: number } | null = null;
 
 export async function discoverLlamaCppModels(settings?: Settings): Promise<InferenceModel[]> {
   if (llamacppCache && Date.now() - llamacppCache.timestamp < MODEL_CACHE_TTL_MS) {
@@ -205,16 +207,108 @@ function formatLlamaCppModelName(id: string): string {
 }
 
 /**
+ * Discover models from a Strata server (docs/design/strata-backend.md §8).
+ * Strata is single-model: /v1/models lists the loaded model (plus aliases),
+ * and an unloaded engine lists nothing. There are no status.args and no
+ * Ollama-style capability list, so context comes from meta.n_ctx (per model)
+ * or /props default_generation_settings.n_ctx, and vision from
+ * /props modalities.vision or architecture.input_modalities.
+ */
+interface StrataModelsResponse {
+  data: Array<{
+    id: string;
+    status?: { value?: string };
+    meta?: { n_ctx?: number };
+    architecture?: {
+      input_modalities?: string[];
+      output_modalities?: string[];
+    };
+  }>;
+}
+
+interface StrataPropsResponse {
+  default_generation_settings?: { n_ctx?: number };
+  modalities?: { vision?: boolean };
+  model_alias?: string;
+}
+
+export async function discoverStrataModels(settings?: Settings): Promise<InferenceModel[]> {
+  if (strataCache && Date.now() - strataCache.timestamp < MODEL_CACHE_TTL_MS) {
+    return strataCache.models;
+  }
+
+  const s = settings ?? await getSettings();
+  // llamacppEnabled is the shared local-inference gate (see inference-backend.ts).
+  if (!s.llamacppEnabled) return [];
+  const baseUrl = resolveInferenceBaseUrl(s);
+  const headers = strataAuthHeaders(s);
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const [modelsRes, propsRes] = await Promise.all([
+      fetch(`${baseUrl}/v1/models`, { signal: controller.signal, headers }),
+      fetch(`${baseUrl}/props`, { signal: controller.signal, headers }).catch(() => null),
+    ]);
+    clearTimeout(timeoutId);
+
+    if (!modelsRes.ok) throw new Error(`Strata not reachable: ${modelsRes.status}`);
+    const modelsData = (await modelsRes.json()) as StrataModelsResponse;
+
+    let propsData: StrataPropsResponse | undefined;
+    if (propsRes?.ok) {
+      try {
+        propsData = (await propsRes.json()) as StrataPropsResponse;
+      } catch { /* ignore parse errors */ }
+    }
+
+    const propsContextWindow = propsData?.default_generation_settings?.n_ctx;
+
+    const models: InferenceModel[] = modelsData.data
+      .filter((m) => m.id && !m.id.includes("/"))
+      // Drop non-chat entries (the image-generation model advertises
+      // output_modalities without "text"). Chat turns need text output.
+      .filter((m) => !m.architecture?.output_modalities ||
+        m.architecture.output_modalities.includes("text"))
+      .map((m) => ({
+        id: m.id,
+        name: formatLlamaCppModelName(m.id),
+        parameterSize: "",
+        family: "",
+        contextWindow: m.meta?.n_ctx ?? propsContextWindow ?? 32768,
+        supportsImages: propsData?.modalities?.vision === true ||
+          (m.architecture?.input_modalities?.includes("image") ?? false),
+        provider: "strata" as const,
+      }));
+
+    strataCache = { models, timestamp: Date.now() };
+    return models;
+  } catch (error) {
+    console.error("[models] discoverStrataModels failed:", error);
+    if (strataCache) {
+      console.warn("[models] returning stale Strata cache");
+      return strataCache.models;
+    }
+    return [];
+  }
+}
+
+/**
  * Discover models from all enabled providers.
  * Returns a unified list tagged with their provider.
  */
 export async function discoverAllModels(): Promise<InferenceModel[]> {
-  return discoverLlamaCppModels();
+  const settings = await getSettings();
+  if (getInferenceBackend(settings) === "strata") {
+    return discoverStrataModels(settings);
+  }
+  return discoverLlamaCppModels(settings);
 }
 
 /** Invalidate model caches (e.g., after settings change). */
 export function invalidateModelCache() {
   llamacppCache = null;
+  strataCache = null;
 }
 
 export interface ExtractionRoute {
@@ -290,19 +384,21 @@ export function getEffectiveContextWindow(
 
 /**
  * Create a pi-ai Model from a discovered inference model.
- * All models now route through the openai-compat (llama.cpp) provider.
+ * All models route through the openai-compat provider path, tagged with
+ * their backend (llamacpp or strata) so the provider can apply backend-
+ * specific request policy and pi-ai dispatch resolves the right entry.
  */
 export async function createPiModelFromProvider(
   model: InferenceModel
 ): Promise<Model<string>> {
   const settings = await getSettings();
-  const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+  const baseUrl = resolveInferenceBaseUrl(settings);
   const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
   return {
     id: model.id,
     name: model.name,
     api: "openai-compat",
-    provider: "llamacpp",
+    provider: model.provider,
     baseUrl,
     reasoning: true, // thinking arrives via delta.reasoning_content; non-reasoning models simply emit none
     input,

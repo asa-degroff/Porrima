@@ -14,6 +14,7 @@
 
 import { randomUUID } from "crypto";
 import { getChat, getProject, getSettings } from "./chat-storage.js";
+import { getInferenceBackend } from "./inference-backend.js";
 import { chatMessagesToHydratedPiMessages } from "./agent.js";
 import type { ReplayModelIdentity } from "./agent.js";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
@@ -574,6 +575,14 @@ export async function warmChatCache(
     reason: options.reason ?? "user-requested",
     warmedAt: Date.now(),
   };
+  // Cache warm is a llama.cpp-native feature (/apply-template + /completion
+  // n_predict:0). Strata caches automatically and the seeding replacement
+  // lands separately (docs/design/strata-backend.md §6); until then this
+  // whole path is inert on that backend.
+  if (getInferenceBackend(await getSettings()) === "strata") {
+    result.error = "cache warm is not supported on the Strata backend";
+    return result;
+  }
   let lease: LlamaSlotLease | null = null;
 
   try {
@@ -702,6 +711,11 @@ export async function warmNewAgentChatBaselineCache(
 
   try {
     const settings = await getSettings();
+    // Same backend gate as warmChatCache (docs/design/strata-backend.md §6).
+    if (getInferenceBackend(settings) === "strata") {
+      result.error = "cache warm is not supported on the Strata backend";
+      return result;
+    }
     const allModels = await discoverAllModels();
     const requestedModelId = settings.defaultModelId || allModels[0]?.id;
     if (!requestedModelId) {

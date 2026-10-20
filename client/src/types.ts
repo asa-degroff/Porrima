@@ -483,7 +483,7 @@ export interface UserDocument {
   path?: string;
 }
 
-export type InferenceProvider = "llamacpp";
+export type InferenceProvider = "llamacpp" | "strata";
 
 export interface InferenceModel {
   id: string;
@@ -572,6 +572,12 @@ export interface Settings {
   // "auto" lets llama.cpp select physical slots and restore prompt cache;
   // "enforced" sends app-managed id_slot leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // Strata inference backend (docs/design/strata-backend.md §9). Selects the
+  // inference-slot server: llama.cpp (default) or Strata.
+  inferenceBackend?: "llamacpp" | "strata";
+  strataUrl?: string;
+  strataApiKey?: string;
+  strataSlotSavePath?: string;
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Disk tier for
   // idle slot KV; restore fires on cold returns. Default off.
   kvSnapshotEnabled?: boolean;

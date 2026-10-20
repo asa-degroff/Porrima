@@ -487,7 +487,7 @@ export async function streamChat(
       role: "assistant",
       content: [{ type: "text", text: fullText }],
       api: "openai-compat",
-      provider: "llamacpp",
+      provider: typeof piModel.provider === "string" ? piModel.provider : "llamacpp",
       model: modelId,
       usage: {
         input: 0,

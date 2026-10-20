@@ -99,12 +99,11 @@ import { partialToolText, toolCallDeltaFrame, toolCallStartFrame, toolPartialFra
 import { getBrowserSessionSnapshot } from "../services/browser-session.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
-import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
+import { resolveInferenceBaseUrl } from "../services/inference-backend.js";
 import { recordContextEstimateObservation } from "../services/token-estimate-observability.js";
 import { onLlmRequestEvent } from "../services/request-log.js";
 import { stampAssistantCompletionActivity, stampUserTurnActivity } from "../services/user-activity.js";
 
-const DEFAULT_LLAMACPP_URL = getDefaultLlamaServerUrl("inference");
 const ARTIFACTS_DIR = appDataPath("artifacts");
 const VISUALS_DIR = appDataPath("visuals");
 const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
@@ -4993,7 +4992,7 @@ router.post("/", async (req, res) => {
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
             await toolsForEstimate(chat, effectiveContextWindow),
-            { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
+            { baseUrl: resolveInferenceBaseUrl(settings), modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed (resume)"),
             turnRequestSignal(res),
           );
@@ -5249,7 +5248,7 @@ router.post("/", async (req, res) => {
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
             await toolsForEstimate(chat, effectiveContextWindow),
-            { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
+            { baseUrl: resolveInferenceBaseUrl(settings), modelId: chat.modelId },
             preCompactionFlushHook(chat, "pre-send flush failed"),
             turnRequestSignal(res),
           );
@@ -6018,7 +6017,7 @@ router.post("/edit", async (req, res) => {
           () => res.write(`event: compacting\ndata: {}\n\n`),
           emitKeepalive,
           undefined,
-          { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
+          { baseUrl: resolveInferenceBaseUrl(settings), modelId: chat.modelId },
           preCompactionFlushHook(chat, "pre-send flush failed (edit)"),
           turnRequestSignal(res),
         );

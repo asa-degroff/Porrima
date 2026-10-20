@@ -2,10 +2,13 @@ import { Router } from "express";
 import { discoverAllModels, invalidateModelCache } from "../services/models.js";
 import { getSettings } from "../services/chat-storage.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
+import { resolveInferenceBaseUrl, strataAuthHeaders } from "../services/inference-backend.js";
 
 const router = Router();
 
-const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
+// The inference-slot base URL follows the configured backend (llama.cpp or
+// Strata — docs/design/strata-backend.md). Health and discovery pings resolve
+// it through settings instead of the llama default.
 
 router.get("/", async (req, res) => {
   try {
@@ -15,7 +18,7 @@ router.get("/", async (req, res) => {
     res.json(filtered);
   } catch (e: any) {
     console.error("[models] discovery failed:", e.message);
-    res.status(503).json({ error: "Cannot connect to inference server. Is llama.cpp running?", details: e.message });
+    res.status(503).json({ error: "Cannot connect to inference server. Is it running?", details: e.message });
   }
 });
 
@@ -39,13 +42,14 @@ router.get("/health/:modelId", async (req, res) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const settings = await getSettings();
-    const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+    const baseUrl = resolveInferenceBaseUrl(settings);
     const response = await fetch(`${baseUrl}/health`, {
       signal: controller.signal,
+      headers: strataAuthHeaders(settings),
     });
     clearTimeout(timeoutId);
     if (!response.ok) {
-      return res.status(503).json({ model: modelId, status: "unavailable", error: `llama.cpp returned ${response.status}` });
+      return res.status(503).json({ model: modelId, status: "unavailable", error: `inference server returned ${response.status}` });
     }
     res.json({ model: modelId, status: "ok" });
   } catch (e: any) {
@@ -87,13 +91,17 @@ router.get("/discover", async (req, res) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    // llama.cpp discovery
+    // Inference-server discovery (llama.cpp or Strata per the backend
+    // setting); urlOverride targets auxiliary servers.
     const settings = await getSettings();
-    const baseUrl = urlOverride || settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
-    const response = await fetch(`${baseUrl}/v1/models`, { signal: controller.signal });
+    const baseUrl = urlOverride || resolveInferenceBaseUrl(settings);
+    const response = await fetch(`${baseUrl}/v1/models`, {
+      signal: controller.signal,
+      headers: urlOverride ? undefined : strataAuthHeaders(settings),
+    });
     clearTimeout(timeoutId);
     if (!response.ok) {
-      return res.json({ models: [], error: `llama.cpp returned ${response.status}` });
+      return res.json({ models: [], error: `inference server returned ${response.status}` });
     }
     const data = (await response.json()) as { data: Array<{ id: string }> };
     const models = data.data
@@ -110,7 +118,7 @@ router.get("/discover", async (req, res) => {
 // Parallel HTTP pings; returns reachability (not systemd state).
 router.get("/health-all", async (_req, res) => {
   const settings = await getSettings();
-  const inferenceUrl = settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL;
+  const inferenceUrl = resolveInferenceBaseUrl(settings);
   const extractionUrl = settings.extractionModelUrl?.trim() || getDefaultLlamaServerUrl("extraction");
   const rerankerUrl = settings.rerankerUrl?.trim() || getDefaultLlamaServerUrl("reranker");
   const titleGenerationUrl = settings.titleGenerationUrl?.trim() || getDefaultLlamaServerUrl("title-generation");
@@ -142,15 +150,18 @@ router.get("/llamacpp/health", async (req, res) => {
     // Allow optional URL override via query parameter (for extraction model testing)
     const urlOverride = req.query.url as string | undefined;
     const settings = await getSettings();
-    const baseUrl = urlOverride || settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+    const baseUrl = urlOverride || resolveInferenceBaseUrl(settings);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+    const response = await fetch(`${baseUrl}/health`, {
+      signal: controller.signal,
+      headers: urlOverride ? undefined : strataAuthHeaders(settings),
+    });
     clearTimeout(timeoutId);
     if (response.ok) {
       res.json({ status: "ok" });
     } else {
-      res.status(503).json({ status: "unavailable", error: `llama.cpp returned ${response.status}` });
+      res.status(503).json({ status: "unavailable", error: `inference server returned ${response.status}` });
     }
   } catch (e: any) {
     res.status(503).json({ status: "unavailable", error: e.message });

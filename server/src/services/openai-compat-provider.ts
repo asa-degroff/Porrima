@@ -266,6 +266,16 @@ interface OpenAIChatChunk {
     /** llama.cpp (b10164+): prompt tokens served from the KV cache. */
     cache_n?: number;
   };
+  /** Strata (and llama.cpp with `return_progress`): prefill progress on a
+   *  chunk with an empty delta. llama.cpp's four fields: `total` prompt
+   *  tokens, `cache` reused prefix, `processed` counting from token 0, and
+   *  `time_ms` since prompt reading started. */
+  prompt_progress?: {
+    total?: number;
+    cache?: number;
+    processed?: number;
+    time_ms?: number;
+  };
 }
 
 export interface LlamaCacheMetadata {
@@ -427,10 +437,11 @@ export async function buildOpenAICompatChatBody(
   }
 
   const llamaSlotLease = getLlamaSlotLease(options);
-  const useLlamaSlotLease = !!llamaSlotLease &&
+  const strata = isStrataModel(model);
+  const useLlamaSlotLease = !strata && !!llamaSlotLease &&
     normalizeBaseUrl(llamaSlotLease.baseUrl) === normalizeBaseUrl(model.baseUrl) &&
     llamaSlotLease.modelId === model.id;
-  if (llamaSlotLease && !useLlamaSlotLease) {
+  if (!strata && llamaSlotLease && !useLlamaSlotLease) {
     console.warn(
       `[openai-compat] ignoring mismatched llama slot lease for model=${model.id}: ` +
       `lease model=${llamaSlotLease.modelId} slot=${llamaSlotLease.slotId}`,
@@ -443,10 +454,22 @@ export async function buildOpenAICompatChatBody(
   // llama.cpp exposes prompt KV reuse through its `cache_prompt` request
   // parameter. The OpenAI-compatible endpoint accepts server-specific
   // generation parameters, so set it explicitly instead of relying on
-  // defaults that vary across llama.cpp builds.
+  // defaults that vary across llama.cpp builds. Strata caches automatically
+  // (checkpointed prefix reuse is always on) and has no such field — the
+  // metadata flag stays true so residency accounting reports the cache as
+  // active, while the wire body carries no llama-specific key.
   const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
-  if (cachePrompt) {
+  if (cachePrompt && !strata) {
     body.cache_prompt = true;
+  }
+
+  // Strata feeds the prefill indicator through the stream: chunks with an
+  // empty delta carry prompt_progress {total, cache, processed, time_ms}
+  // (docs/design/strata-backend.md §5). Off unless the client asks, as in
+  // llama.cpp; we always ask so the monitor has a source without /slots
+  // processed-token fields (which Strata does not expose).
+  if (strata) {
+    body.return_progress = true;
   }
 
   if (model.reasoning) {
@@ -491,6 +514,31 @@ function buildCacheMetadata(
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
+}
+
+/** True when the model dispatches to the Strata backend
+ *  (docs/design/strata-backend.md). Strata serves the OpenAI chat surface
+ *  only: no router load, no /apply-template, no /tokenize, no /completion,
+ *  no id_slot, no cache_prompt, and its conversation cache is automatic. */
+function isStrataModel(model: { provider?: string | null }): boolean {
+  return model.provider === "strata";
+}
+
+/** Image part for the request body. llama.cpp mtmd receives pre-normalized
+ *  images (MIME whitelist plus pixel budget with 28px grid snapping);
+ *  Strata runs its own image reader and takes the stored bytes as-is
+ *  (docs/design/strata-backend.md §4). */
+async function buildImagePart(
+  model: { provider?: string | null },
+  data: string,
+  rawMime: string,
+  pixelBudget: number,
+): Promise<any> {
+  if (isStrataModel(model)) {
+    return { type: "image_url", image_url: { url: `data:${rawMime};base64,${data}` } };
+  }
+  const { data: outData, mimeType } = await normalizeImageForLlamaCpp(data, rawMime, pixelBudget);
+  return { type: "image_url", image_url: { url: `data:${mimeType};base64,${outData}` } };
 }
 
 function getLlamaSlotLease(options?: SimpleStreamOptions): LlamaSlotLease | null {
@@ -1003,6 +1051,16 @@ function shouldAutoShowPrefillIndicator(
   return processedTokens >= LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS;
 }
 
+/** Prefill monitor handle. `stop` detaches the poller (call sites keep it as
+ *  the turn's cleanup hook). `feedPromptProgress` is the Strata source:
+ *  prompt_progress chunks on the response stream replace the /slots poll —
+ *  Strata exposes no processed-token fields there
+ *  (docs/design/strata-backend.md §5). */
+interface PrefillMonitorHandle {
+  stop: () => void;
+  feedPromptProgress: (p: NonNullable<OpenAIChatChunk["prompt_progress"]>) => void;
+}
+
 function startLlamaPrefillMonitor(input: {
   baseUrl: string;
   modelId: string;
@@ -1020,9 +1078,13 @@ function startLlamaPrefillMonitor(input: {
    *  locks it instead. Server-reported cached tokens for the request are
    *  authoritative and correct the lock once observed (see poll). */
   initialCacheState?: ModelProgressEvent["cacheState"];
-}): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, exactPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState } = input;
-  if (!onProgress) return () => {};
+  /** Stream-fed mode (Strata): no /slots polling. Progress arrives through
+   *  feedPromptProgress from prompt_progress chunks on the response stream
+   *  (docs/design/strata-backend.md §5). */
+  streamFeed?: boolean;
+}): PrefillMonitorHandle {
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, exactPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState, streamFeed } = input;
+  if (!onProgress) return { stop: () => {}, feedPromptProgress: () => {} };
 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1030,6 +1092,11 @@ function startLlamaPrefillMonitor(input: {
   let lastProcessedTokens: number | undefined;
   let firstProcessedTokens: number | undefined;
   let firstProgressAt: number | undefined;
+  // First prompt_progress total seen in stream-fed mode. Acts as the exact
+  // denominator from that point on: Strata reports the full prompt size with
+  // every progress chunk, so it is authoritative and stable — the same role
+  // /apply-template + /tokenize play for llama.cpp, which Strata lacks.
+  let streamTotalTokens: number | undefined;
   // Locked cache state: seeded from the pre-request signal, falling back to
   // the first snapshot's progress ratio. Once llama.cpp reports the request's
   // cached token count, that authoritative value re-locks it (see poll).
@@ -1059,6 +1126,111 @@ function startLlamaPrefillMonitor(input: {
     }, LLAMACPP_PREFILL_ACTIVE_POLL_INTERVAL_MS);
   };
 
+  /** Turn a slot snapshot (polled) or a synthesized stream chunk into a
+   *  progress event. Shared by the poller and the Strata stream feed so both
+   *  sources lock cache state and compute the denominator identically. */
+  const applySnapshot = (snapshot: SlotProgressSnapshot) => {
+    const now = Date.now();
+    // Raw token counts from llama.cpp slot status. These may include
+    // previously cached context tokens (n_tokens/n_past fallback) or
+    // may track the same growing value during prefill
+    // (n_prompt_tokens ≈ n_prompt_tokens_processed). Using them
+    // directly as numerator/denominator produces a static 100% ratio.
+    const rawProcessedTokens = snapshot.processedTokens;
+    const rawPromptTokens = snapshot.promptTokens;
+    const progressed = rawProcessedTokens !== undefined &&
+      (lastProcessedTokens === undefined || rawProcessedTokens > lastProcessedTokens);
+
+    if (!progressed && lastProcessedTokens !== undefined) return;
+
+    if (rawProcessedTokens !== undefined) {
+      lastProcessedTokens = rawProcessedTokens;
+      if (firstProcessedTokens === undefined) {
+        firstProcessedTokens = rawProcessedTokens;
+        firstProgressAt = now;
+      }
+    }
+    // Lock cache state. When llama.cpp reports this request's cached
+    // token count, that is authoritative — it reflects actual prefix
+    // reuse for THIS request and corrects the pre-request
+    // determination (slot probe / digest check) whenever the slot was
+    // overwritten server-side. The value is fixed for the request's
+    // lifetime, so re-locking from it is stable. Without it, lock
+    // once on the first snapshot's raw ratio.
+    if (
+      snapshot.cachedPromptTokens !== undefined &&
+      snapshot.fullPromptTokens !== undefined &&
+      snapshot.fullPromptTokens > 0
+    ) {
+      lockedCacheState = cacheStateFromProgress(
+        undefined,
+        undefined,
+        snapshot.fullPromptTokens,
+        snapshot.cachedPromptTokens,
+      );
+    } else if (lockedCacheState === "unknown") {
+      lockedCacheState = cacheStateFromProgress(
+        rawProcessedTokens,
+        rawPromptTokens,
+        snapshot.fullPromptTokens,
+        snapshot.cachedPromptTokens,
+      );
+    }
+
+    // Denominator preference (see computePrefillProgress): the exact
+    // pre-request token count when available, otherwise the stream-fed
+    // prompt_progress total (Strata: authoritative and stable for the
+    // request), otherwise the slot's own prompt total when it is
+    // trustworthy (strictly ahead of the processed count — llama.cpp grows
+    // n_prompt_tokens in batch-sized chunks during prefill, so the slot
+    // value is a moving frontier, not the final total), otherwise the
+    // stable char estimate. Cached tokens come off so the denominator is
+    // the uncached work, matching the processed count; without that the
+    // bar caps below 100% on warm caches. The delta baseline is only
+    // applied for the cumulative n_tokens/n_past fallback (which
+    // includes previously cached context) or when there is no exact
+    // total to anchor against; per-request processed fields already
+    // start at the request's own work, and subtracting the first poll
+    // would undercount by whatever was processed before polling
+    // began. The denominator is floored at the processed count so an
+    // underestimated total can never push progress past 100%.
+    const exactTotal = exactPromptTokens ?? streamTotalTokens;
+    const useDeltaBaseline = exactTotal === undefined || snapshot.processedCumulativeFallback === true;
+    const { processedTokens: effectiveProcessedTokens, promptTokens: effectivePromptTokens, progress } =
+      computePrefillProgress({
+        rawProcessedTokens,
+        slotPromptTokens: snapshot.slotReportedPromptTokens,
+        cachedPromptTokens: snapshot.cachedPromptTokens,
+        estimatedPromptTokens,
+        exactPromptTokens: exactTotal,
+        firstProcessedTokens,
+        useDeltaBaseline,
+      });
+    emit({
+      phase: "prefill",
+      modelId,
+      baseUrl: normalizeBaseUrl(baseUrl),
+      slotId: snapshot.slotId,
+      processedTokens: effectiveProcessedTokens,
+      promptTokens: effectivePromptTokens,
+      progress,
+      elapsedMs: now - startedAt,
+      estimatedRemainingMs: effectiveProcessedTokens !== undefined && firstProgressAt !== undefined
+        ? estimateRemainingMs({
+            processedTokens: effectiveProcessedTokens,
+            promptTokens: effectivePromptTokens,
+            // Baseline is already subtracted from effectiveProcessedTokens,
+            // so firstProcessedTokens for ETA calculation is 0.
+            firstProcessedTokens: 0,
+            firstProgressAt,
+            now,
+          })
+        : undefined,
+      cacheState: lockedCacheState,
+      confidence: snapshot.confidence,
+    });
+  };
+
   const poll = async () => {
     if (stopped || signal?.aborted) return;
     try {
@@ -1068,105 +1240,7 @@ function startLlamaPrefillMonitor(input: {
       if (res.ok) {
         const payload = await res.json().catch(() => null);
         const snapshot = extractSlotProgress(payload, slotId, estimatedPromptTokens);
-        if (snapshot) {
-          const now = Date.now();
-          // Raw token counts from llama.cpp slot status. These may include
-          // previously cached context tokens (n_tokens/n_past fallback) or
-          // may track the same growing value during prefill
-          // (n_prompt_tokens ≈ n_prompt_tokens_processed). Using them
-          // directly as numerator/denominator produces a static 100% ratio.
-          const rawProcessedTokens = snapshot.processedTokens;
-          const rawPromptTokens = snapshot.promptTokens;
-          const progressed = rawProcessedTokens !== undefined &&
-            (lastProcessedTokens === undefined || rawProcessedTokens > lastProcessedTokens);
-
-          if (progressed || lastProcessedTokens === undefined) {
-            if (rawProcessedTokens !== undefined) {
-              lastProcessedTokens = rawProcessedTokens;
-              if (firstProcessedTokens === undefined) {
-                firstProcessedTokens = rawProcessedTokens;
-                firstProgressAt = now;
-              }
-            }
-            // Lock cache state. When llama.cpp reports this request's cached
-            // token count, that is authoritative — it reflects actual prefix
-            // reuse for THIS request and corrects the pre-request
-            // determination (slot probe / digest check) whenever the slot was
-            // overwritten server-side. The value is fixed for the request's
-            // lifetime, so re-locking from it is stable. Without it, lock
-            // once on the first snapshot's raw ratio.
-            if (
-              snapshot.cachedPromptTokens !== undefined &&
-              snapshot.fullPromptTokens !== undefined &&
-              snapshot.fullPromptTokens > 0
-            ) {
-              lockedCacheState = cacheStateFromProgress(
-                undefined,
-                undefined,
-                snapshot.fullPromptTokens,
-                snapshot.cachedPromptTokens,
-              );
-            } else if (lockedCacheState === "unknown") {
-              lockedCacheState = cacheStateFromProgress(
-                rawProcessedTokens,
-                rawPromptTokens,
-                snapshot.fullPromptTokens,
-                snapshot.cachedPromptTokens,
-              );
-            }
-
-            // Denominator preference (see computePrefillProgress): the exact
-            // pre-request token count when available, otherwise the slot's
-            // own prompt total when it is trustworthy (strictly ahead of the
-            // processed count — llama.cpp grows n_prompt_tokens in
-            // batch-sized chunks during prefill, so the slot value is a
-            // moving frontier, not the final total), otherwise the stable
-            // char estimate. Cached tokens come off so the denominator is the
-            // uncached work, matching the processed count; without that the
-            // bar caps below 100% on warm caches. The delta baseline is only
-            // applied for the cumulative n_tokens/n_past fallback (which
-            // includes previously cached context) or when there is no exact
-            // total to anchor against; per-request processed fields already
-            // start at the request's own work, and subtracting the first poll
-            // would undercount by whatever was processed before polling
-            // began. The denominator is floored at the processed count so an
-            // underestimated total can never push progress past 100%.
-            const useDeltaBaseline = exactPromptTokens === undefined || snapshot.processedCumulativeFallback === true;
-            const { processedTokens: effectiveProcessedTokens, promptTokens: effectivePromptTokens, progress } =
-              computePrefillProgress({
-                rawProcessedTokens,
-                slotPromptTokens: snapshot.slotReportedPromptTokens,
-                cachedPromptTokens: snapshot.cachedPromptTokens,
-                estimatedPromptTokens,
-                exactPromptTokens,
-                firstProcessedTokens,
-                useDeltaBaseline,
-              });
-            emit({
-              phase: "prefill",
-              modelId,
-              baseUrl: normalizeBaseUrl(baseUrl),
-              slotId: snapshot.slotId,
-              processedTokens: effectiveProcessedTokens,
-              promptTokens: effectivePromptTokens,
-              progress,
-              elapsedMs: now - startedAt,
-              estimatedRemainingMs: effectiveProcessedTokens !== undefined && firstProgressAt !== undefined
-                ? estimateRemainingMs({
-                    processedTokens: effectiveProcessedTokens,
-                    promptTokens: effectivePromptTokens,
-                    // Baseline is already subtracted from effectiveProcessedTokens,
-                    // so firstProcessedTokens for ETA calculation is 0.
-                    firstProcessedTokens: 0,
-                    firstProgressAt,
-                    now,
-                  })
-                : undefined,
-              cacheState: lockedCacheState,
-              confidence: snapshot.confidence,
-            });
-          }
-        }
+        if (snapshot) applySnapshot(snapshot);
       }
     } catch {
       // Slot probes can time out while llama.cpp is inside a large prompt batch.
@@ -1174,6 +1248,31 @@ function startLlamaPrefillMonitor(input: {
     } finally {
       schedule();
     }
+  };
+
+  /** Strata's prompt_progress chunk → snapshot. Same field rule as
+   *  llama.cpp's four fields: `processed` counts from token 0, this
+   *  request's work is `processed - cache`, and anchoring the exact `total`
+   *  makes the compute path apply the same subtraction. */
+  const feedPromptProgress: PrefillMonitorHandle["feedPromptProgress"] = (p) => {
+    if (stopped || signal?.aborted) return;
+    if (typeof p.processed !== "number" || !Number.isFinite(p.processed)) return;
+    const cache = typeof p.cache === "number" && Number.isFinite(p.cache) && p.cache > 0 ? p.cache : 0;
+    if (streamTotalTokens === undefined && typeof p.total === "number" && p.total > 0) {
+      streamTotalTokens = p.total;
+    }
+    const total = typeof p.total === "number" && p.total > 0 ? p.total : streamTotalTokens;
+    applySnapshot({
+      slotId,
+      processedTokens: Math.max(0, p.processed - cache),
+      processedCumulativeFallback: false,
+      promptTokens: promptWorkTokens(total, cache),
+      fullPromptTokens: total,
+      slotReportedPromptTokens: total,
+      cachedPromptTokens: cache,
+      // The stream is this request's own progress channel — no slot guessing.
+      confidence: "matched-slot",
+    });
   };
 
   emit({
@@ -1186,11 +1285,14 @@ function startLlamaPrefillMonitor(input: {
     cacheState: lockedCacheState,
     confidence: slotId !== undefined ? "matched-slot" : "unknown",
   });
-  void poll();
+  if (!streamFeed) void poll();
 
-  return () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+    feedPromptProgress,
   };
 }
 
@@ -1248,15 +1350,7 @@ async function convertMessages(model: Model<Api>, context: TranscriptContext): P
           } else if (item.type === "image") {
             if (model.input.includes("image")) {
               const rawMime = (item as any).mimeType || "image/jpeg";
-              const { data, mimeType } = await normalizeImageForLlamaCpp(
-                (item as any).data,
-                rawMime,
-                imagePixelBudget
-              );
-              parts.push({
-                type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${data}` },
-              });
+              parts.push(await buildImagePart(model, (item as any).data, rawMime, imagePixelBudget));
             }
           }
         }
@@ -1326,15 +1420,7 @@ async function convertMessages(model: Model<Api>, context: TranscriptContext): P
           for (const block of tr.content) {
             if (block.type === "image") {
               const rawMime = (block as any).mimeType || "image/jpeg";
-              const { data, mimeType } = await normalizeImageForLlamaCpp(
-                (block as any).data,
-                rawMime,
-                imagePixelBudget
-              );
-              imageParts.push({
-                type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${data}` },
-              });
+              imageParts.push(await buildImagePart(model, (block as any).data, rawMime, imagePixelBudget));
             }
           }
         }
@@ -1863,7 +1949,14 @@ export const streamOpenAICompat = (
   const stream = createAssistantMessageEventStream();
 
   (async () => {
+    // Backend identity for this dispatch: Strata models skip the llama.cpp
+    // native plumbing (router preflight, apply-template/tokenize exact
+    // counts, id_slot) and drive the prefill indicator from the stream
+    // instead. See docs/design/strata-backend.md §4.
+    const strata = isStrataModel(model);
+    const apiLabel = strata ? "Strata" : "llama.cpp";
     let stopPrefillMonitor: (() => void) | null = null;
+    let feedPromptProgress: ((p: NonNullable<OpenAIChatChunk["prompt_progress"]>) => void) | null = null;
     // Set once the wire body is dispatched and the request-log recorder has
     // taken its snapshot; read by both the success and error finalization.
     let recordedRequest: { chatId: string; requestId: string; startedAt: number } | null = null;
@@ -1889,13 +1982,18 @@ export const streamOpenAICompat = (
       // Pre-load the model in router mode. This ensures the target model is
       // loaded and ready before we send the chat request. In single-model mode
       // this endpoint doesn't exist, so we catch and ignore errors.
-      await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
+      // Strata has no router management at all: one loaded model, loaded on
+      // request by the server itself after an idle unload. The preflight and
+      // its unload/reload dance would issue three dead round-trips per turn.
+      if (!strata) {
+        await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
+      }
 
       const llamaSlotLease = getLlamaSlotLease(options);
-      const useLlamaSlotLease = !!llamaSlotLease &&
+      const useLlamaSlotLease = !strata && !!llamaSlotLease &&
         normalizeBaseUrl(llamaSlotLease.baseUrl) === normalizeBaseUrl(model.baseUrl) &&
         llamaSlotLease.modelId === model.id;
-      if (llamaSlotLease && !useLlamaSlotLease) {
+      if (!strata && llamaSlotLease && !useLlamaSlotLease) {
         console.warn(
           `[openai-compat] ignoring mismatched llama slot lease for model=${model.id}: ` +
           `lease model=${llamaSlotLease.modelId} slot=${llamaSlotLease.slotId}`,
@@ -1978,8 +2076,11 @@ export const streamOpenAICompat = (
       // estimate: vision tokens are injected by mtmd outside the rendered
       // text, so a text-only count would undercount them.
       let renderedPrompt: string | undefined;
-      const wantsExactCount = showIndicator !== false && !cacheMetadata.containsImages;
-      if ((LLAMACPP_PROMPT_DEBUG && promptDebugChatId) || wantsExactCount) {
+      // Strata has no /apply-template or /tokenize (docs/design/
+      // strata-backend.md §5): the indicator denominator comes from the
+      // stream's first prompt_progress total instead.
+      const wantsExactCount = !strata && showIndicator !== false && !cacheMetadata.containsImages;
+      if (!strata && ((LLAMACPP_PROMPT_DEBUG && promptDebugChatId) || wantsExactCount)) {
         try {
           renderedPrompt = await renderPromptForDebug(model.baseUrl, body, options?.signal);
         } catch (err) {
@@ -2032,7 +2133,7 @@ export const streamOpenAICompat = (
         },
       );
 
-      stopPrefillMonitor = startLlamaPrefillMonitor({
+      const prefillMonitor = startLlamaPrefillMonitor({
         baseUrl: model.baseUrl,
         modelId: model.id,
         slotId: cacheMetadata.slotId,
@@ -2043,17 +2144,29 @@ export const streamOpenAICompat = (
         signal: options?.signal,
         showIndicator,
         initialCacheState,
+        // Strata: no /slots polling (no processed-token fields). The stream's
+        // prompt_progress chunks feed the same emit path below.
+        streamFeed: strata,
       });
+      stopPrefillMonitor = prefillMonitor.stop;
+      feedPromptProgress = strata ? prefillMonitor.feedPromptProgress : null;
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
       // llama.cpp's router can briefly refuse connections between rapid iterations.
+      // Optional Strata API key (settings.strataApiKey); llama.cpp stays keyless.
+      const dispatchHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (strata) {
+        const settings = await getSettings().catch(() => undefined);
+        const key = settings?.strataApiKey?.trim();
+        if (key) dispatchHeaders.Authorization = `Bearer ${key}`;
+      }
       let response: Response | undefined;
       let lastFetchError: Error | undefined;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await undiciFetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: dispatchHeaders,
             body: JSON.stringify(body),
             signal: options?.signal,
             dispatcher: llamaStreamAgent,
@@ -2088,11 +2201,11 @@ export const streamOpenAICompat = (
             invalidateLoadedModel();
           }
         }
-        throw new Error(`llama.cpp API error ${response?.status ?? "?"}: ${errorText}`);
+        throw new Error(`${apiLabel} API error ${response?.status ?? "?"}: ${errorText}`);
       }
 
       if (!response.body) {
-        throw new Error("No response body from llama.cpp");
+        throw new Error(`No response body from ${apiLabel}`);
       }
 
       let announcedGenerating = false;
@@ -2239,6 +2352,14 @@ export const streamOpenAICompat = (
         // The first parsed SSE chunk is the reliable boundary where decoding has
         // actually started, so keep prefill progress active until then.
         announceGenerating();
+
+        // Strata prefill progress (docs/design/strata-backend.md §5): chunks
+        // with an empty delta carry prompt_progress when the body opts in
+        // with return_progress. Feed the same emit path the /slots poller
+        // uses; under llama.cpp this field never appears.
+        if (chunk.prompt_progress && feedPromptProgress) {
+          feedPromptProgress(chunk.prompt_progress);
+        }
 
         // Extract usage from final chunk
         if (chunk.usage) {

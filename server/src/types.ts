@@ -427,7 +427,7 @@ export interface ChatMessageWindow {
   hasMoreBefore: boolean;
 }
 
-export type InferenceProvider = "llamacpp";
+export type InferenceProvider = "llamacpp" | "strata";
 
 export interface InferenceModel {
   id: string;
@@ -494,8 +494,18 @@ export interface Settings {
   llamacppUrl?: string;         // default "http://localhost:32100"
   // App-level behavior for llama.cpp physical slot routing. "auto" lets
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
-  // id_slot based on app-managed leases.
+  // id_slot based on app-managed leases. Slot binding is llama.cpp-only:
+  // the Strata backend ignores id_slot and always reports auto binding.
   llamacppSlotBindingMode?: "auto" | "enforced";
+  // Strata inference backend (docs/design/strata-backend.md §9). Selects the
+  // inference-slot server: llama.cpp (default) or Strata. Strata consumes
+  // only the OpenAI-compatible surface plus /props, /slots, and /health.
+  inferenceBackend?: "llamacpp" | "strata";
+  strataUrl?: string;           // default "http://localhost:8080"
+  strataApiKey?: string;        // sent as Authorization: Bearer when configured
+  // Absolute path of the Strata server's slot_save_path directory, used to
+  // unlink expired KV snapshots (Strata has no erase action). Optional.
+  strataSlotSavePath?: string;
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Keys are
   // defined in Phase 1; the save/restore paths consume them in Phases 2-3.
   // Defaults live next to the policy code, not in the wire type.

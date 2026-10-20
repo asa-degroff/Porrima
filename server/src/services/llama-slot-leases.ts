@@ -76,6 +76,11 @@ async function slotBindingEnabled(): Promise<boolean> {
   try {
     const { getSettings } = await import("./chat-storage.js");
     const settings = await getSettings();
+    // Slot binding is llama.cpp-only: Strata ignores id_slot and allocates
+    // its own slots (docs/design/strata-backend.md §7). A null lease here
+    // disables the whole pinning chain — bindingMode reports "auto", KV
+    // parking keeps its lease gate, and no id_slot reaches the wire.
+    if (settings.inferenceBackend === "strata") return false;
     return settings.llamacppSlotBindingMode === "enforced";
   } catch (err) {
     console.warn("[llama-slot] settings lookup failed:", err instanceof Error ? err.message : err);

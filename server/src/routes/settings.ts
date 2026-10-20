@@ -56,6 +56,8 @@ function baselineSensitiveSettingsChanged(before: Settings, after: Settings): bo
   return (
     before.defaultModelId !== after.defaultModelId ||
     before.llamacppUrl !== after.llamacppUrl ||
+    before.inferenceBackend !== after.inferenceBackend ||
+    before.strataUrl !== after.strataUrl ||
     before.preserveThinking !== after.preserveThinking ||
     JSON.stringify(before.modelPreserveThinking ?? {}) !== JSON.stringify(after.modelPreserveThinking ?? {})
   );
@@ -87,7 +89,9 @@ router.put("/", async (req, res) => {
   if (
     before.defaultModelId !== settings.defaultModelId ||
     before.llamacppUrl !== settings.llamacppUrl ||
-    before.llamacppEnabled !== settings.llamacppEnabled
+    before.llamacppEnabled !== settings.llamacppEnabled ||
+    before.inferenceBackend !== settings.inferenceBackend ||
+    before.strataUrl !== settings.strataUrl
   ) {
     invalidateModelCache();
   }
