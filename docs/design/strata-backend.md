@@ -270,7 +270,12 @@ restored across backends or slot models.
 - Capability probe once per server identity: a save with a refused short
   name distinguishes 400 (parking works, name rules enforced) from 501
   (no `slot_save_path`, or `--batch` on): 501 disables parking for the URL
-  and logs the reason.
+  and logs the reason. A 400 carrying the server's `invalid` error
+  category, for a Porrima-generated filename, is a permanent
+  config-level refusal — live finding: `--layer-split` servers answer
+  "session files do not support --layer-split" — and marks the URL
+  unsupported the same way. Unclassified failures stay per-job (the
+  next turn may retry).
 
 ## 8. Model Discovery and Supervisor Surfaces
 

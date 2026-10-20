@@ -1003,8 +1003,14 @@ async function runSaveJob(input: SaveJobInput): Promise<void> {
 
   if (!save.ok) {
     console.warn(`${LOG} chat=${short(chatId)} save failed: ${save.error}`);
-    if (save.status === 501) {
-      markParkingUnsupported(target.baseUrl, `slot action refused (501): ${save.error}`);
+    // 501 = no slot save path configured (or batch slots). 400 with the
+    // invalid category, for a filename we generated ourselves, is a
+    // permanent config-level refusal (e.g. Strata's "session files do not
+    // support --layer-split"). Both mean the server cannot park: stop
+    // attempting for the URL's unsupported window instead of re-failing on
+    // every large turn.
+    if (save.status === 501 || (save.status === 400 && save.errorKind === "invalid")) {
+      markParkingUnsupported(target.baseUrl, `slot action refused (${save.status}): ${save.error}`);
     }
     // A previously-ready snapshot stays usable: its file is untouched and its
     // prefix is still a valid head of the chat's prompt (restore degrades to a
@@ -1154,6 +1160,9 @@ interface SlotCallResult {
   error?: string;
   /** HTTP status of a wire-level failure (501 = feature unsupported here). */
   status?: number;
+  /** Server error category when it provides one (Strata's error.kind:
+   *  invalid | memory | storage | io). */
+  errorKind?: string;
   nTokens?: number;
   nBytes?: number;
   ms?: number;
@@ -1174,7 +1183,12 @@ async function callSlotAction(
     });
     const body: any = await response.json().catch(() => null);
     if (!response.ok || !body || body.error) {
-      return { ok: false, status: response.status, error: body?.error?.message || `HTTP ${response.status}` };
+      return {
+        ok: false,
+        status: response.status,
+        errorKind: typeof body?.error?.kind === "string" ? body.error.kind : undefined,
+        error: body?.error?.message || `HTTP ${response.status}`,
+      };
     }
     const number = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
     // Save and restore report the same triple under different keys (§2.2).

@@ -1123,3 +1123,44 @@ describe("kv-snapshot usage-confirmed breaker", () => {
     h.db.close();
   });
 });
+
+describe("parking capability refusals (docs/design/strata-backend.md §7)", () => {
+  it("marks the URL unsupported when a save is refused at config level (400 invalid) and later turns skip", async () => {
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      fetchImpl: async (url: string) => {
+        if (url.includes("action=save")) {
+          return Response.json(
+            { error: { code: 400, message: "session files do not support --layer-split", type: "invalid_request_error", kind: "invalid" } },
+            { status: 400 },
+          );
+        }
+        return Response.json([]);
+      },
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("stale");
+    // Next turn on the same URL: suppressed at the gate — no save attempt,
+    // no per-turn failed multi-GB capture attempt again.
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    h.db.close();
+  });
+
+  it("an unclassified save failure does not mark the URL unsupported", async () => {
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      fetchImpl: async (url: string) => {
+        if (url.includes("action=save")) {
+          return Response.json({ error: { message: "transient write error" } }, { status: 400 });
+        }
+        return Response.json([]);
+      },
+    });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    await h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    expect(saveCalls(h.fetchMock)).toHaveLength(2);
+    h.db.close();
+  });
+});
