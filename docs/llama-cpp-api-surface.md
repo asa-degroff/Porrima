@@ -366,6 +366,8 @@ against a running server.
   invariants.
 - [design/kv-snapshot-parking.md](design/kv-snapshot-parking.md) — slot KV disk
   tier design.
+- [design/strata-backend.md](design/strata-backend.md) — the inference-slot
+  backend that consumes none of this surface.
 - [design/request-viewer.md](design/request-viewer.md) — `/apply-template` and
   `/tokenize` use in the viewer.
 - [memory-system.md](memory-system.md) — embeddings and rerank in retrieval.
