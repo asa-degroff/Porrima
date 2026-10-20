@@ -16,7 +16,7 @@ import { isAutomationActive } from "./automation-lock.js";
 import { acquireTurn, heartbeatTurnLease, isTurnGateBusy, releaseTurn, type TurnLease } from "./turn-gate.js";
 import { listActiveQueueChats } from "./message-queue.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
-import { getDefaultLlamaServerUrl } from "./llama-ports.js";
+import { resolveInferenceBaseUrl, strataAuthHeaders } from "./inference-backend.js";
 import {
   NEW_AGENT_CHAT_BASELINE_CACHE_ID,
   NEW_AGENT_CHAT_BASELINE_CACHE_LABEL,
@@ -248,16 +248,19 @@ function configuredInferenceParallel(settings: any): number {
 async function discoverPostSynthesisWarmCapacity(): Promise<WarmCapacity> {
   const { getSettings } = await import("./chat-storage.js");
   const settings = await getSettings();
-  const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+  const baseUrl = resolveInferenceBaseUrl(settings);
   const fallback = configuredInferenceParallel(settings);
 
   try {
     const res = await fetch(`${normalizeBaseUrl(baseUrl)}/props`, {
       signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS),
+      headers: strataAuthHeaders(settings),
     });
     if (res.ok) {
       const payload = await res.json().catch(() => null);
-      const maxInstances = readPositiveInt(payload?.max_instances);
+      // max_instances is the legacy fork key; total_slots is what Strata (and
+      // current llama-server builds) report.
+      const maxInstances = readPositiveInt(payload?.max_instances) ?? readPositiveInt(payload?.total_slots);
       if (maxInstances) {
         return { maxSlots: maxInstances, source: "props", baseUrl };
       }
@@ -274,9 +277,13 @@ function isTargetModel(entry: RouterModelEntry, modelId: string): boolean {
   return entry.id === modelId || normalizeRouterModelId(entry.id) === modelId;
 }
 
-async function probeRouterModelState(baseUrl: string, modelId: string): Promise<RouterModelProbe> {
+async function probeRouterModelState(
+  baseUrl: string,
+  modelId: string,
+  headers?: Record<string, string>,
+): Promise<RouterModelProbe> {
   const url = `${normalizeBaseUrl(baseUrl)}/v1/models`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS), headers });
   if (!res.ok) throw new Error(`/v1/models returned ${res.status}`);
 
   const payload = await res.json().catch(() => null);
@@ -319,8 +326,8 @@ function loadedModelSlotsUrl(entry: RouterModelEntry): string | null {
   return `http://${hostname}:${port}/slots`;
 }
 
-async function probeSlotsUrl(url: string): Promise<boolean> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
+async function probeSlotsUrl(url: string, headers?: Record<string, string>): Promise<boolean> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS), headers });
   if (!res.ok) return false;
 
   const payload = await res.json().catch(() => null);
@@ -379,9 +386,13 @@ export async function isCacheWarmOrLlamaRuntimeBusy(modelId?: string): Promise<b
     const effectiveModelId = modelId || settings.defaultModelId;
     if (!effectiveModelId) return false;
 
-    const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+    const baseUrl = resolveInferenceBaseUrl(settings);
+    // Strata guards /slots and /v1/models metadata with its API key when one
+    // is configured; a probe that 401s would land in the catch below and pin
+    // the runtime as busy forever.
+    const auth = strataAuthHeaders(settings);
     const normalizedModelId = normalizeRouterModelId(effectiveModelId);
-    const modelProbe = await probeRouterModelState(baseUrl, normalizedModelId);
+    const modelProbe = await probeRouterModelState(baseUrl, normalizedModelId, auth);
 
     if (modelProbe.state === "unloaded") return false;
     if (modelProbe.state === "transitioning") return true;
@@ -391,13 +402,13 @@ export async function isCacheWarmOrLlamaRuntimeBusy(modelId?: string): Promise<b
       if (childSlotsUrl) return probeSlotsUrl(childSlotsUrl);
 
       const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(normalizedModelId)}`;
-      return probeSlotsUrl(url);
+      return probeSlotsUrl(url, auth);
     }
 
     // Single-model llama.cpp servers do not expose router model status. Probe
     // their model-less slots endpoint, which is side-effect-free on routers too
     // (current router builds return 400 instead of loading a model).
-    return probeSlotsUrl(`${normalizeBaseUrl(baseUrl)}/slots`);
+    return probeSlotsUrl(`${normalizeBaseUrl(baseUrl)}/slots`, auth);
   } catch {
     return true;
   }

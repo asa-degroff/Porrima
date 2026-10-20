@@ -14,7 +14,7 @@
 
 import { randomUUID } from "crypto";
 import { getChat, getProject, getSettings } from "./chat-storage.js";
-import { getInferenceBackend } from "./inference-backend.js";
+import { getInferenceBackend, resolveInferenceBaseUrl, strataAuthHeaders } from "./inference-backend.js";
 import { chatMessagesToHydratedPiMessages } from "./agent.js";
 import type { ReplayModelIdentity } from "./agent.js";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
@@ -144,9 +144,11 @@ async function findModelInfo(modelId: string): Promise<{ model: InferenceModel; 
 
   if (!model) return null;
 
-  // Derive the baseUrl from the model's provider
+  // Derive the baseUrl from the configured inference backend (llama.cpp or
+  // Strata — docs/design/strata-backend.md). The model's provider tag comes
+  // from discovery against that same server.
   const settings = await getSettings();
-  return { model, baseUrl: settings.llamacppUrl || getDefaultLlamaServerUrl("inference") };
+  return { model, baseUrl: resolveInferenceBaseUrl(settings) };
 }
 
 /**
@@ -434,6 +436,9 @@ interface WarmOpenAICompatBodyInput {
   slotId?: number;
   forceNextUserPrefix?: boolean;
   signal?: AbortSignal;
+  /** Strata seeding path replaces the native apply-template + n_predict:0
+   *  chain (docs/design/strata-backend.md §6). */
+  strata?: boolean;
 }
 
 interface WarmOpenAICompatBodyResult {
@@ -454,6 +459,9 @@ interface WarmOpenAICompatBodyResult {
 }
 
 async function warmOpenAICompatBody(input: WarmOpenAICompatBodyInput): Promise<WarmOpenAICompatBodyResult> {
+  if (input.strata) {
+    return seedWarmStrata(input);
+  }
   const promptPayloadDigest = digestPromptPayload(input.body);
   const requestCharCount = estimateRequestChars(input.body);
 
@@ -555,6 +563,103 @@ async function warmOpenAICompatBody(input: WarmOpenAICompatBodyInput): Promise<W
   }
 }
 
+/**
+ * Strata seeding warm (docs/design/strata-backend.md §6). Strata exposes no
+ * /apply-template, /tokenize, or prefill-only /completion, and it does not
+ * need them: the server checkpoints every assistant-turn boundary, every
+ * 16K prompt tokens, and permanently at the system-prompt root. A chat
+ * completion of the exact live body, capped at one generated token, reads
+ * the whole prefix and leaves the deepest checkpoint at that boundary; the
+ * next real turn resumes from it. The byte-identity contract with the live
+ * body still decides the hit — seed bodies come from the same builder.
+ */
+async function seedWarmStrata(input: WarmOpenAICompatBodyInput): Promise<WarmOpenAICompatBodyResult> {
+  const promptPayloadDigest = digestPromptPayload(input.body);
+  const requestCharCount = estimateRequestChars(input.body);
+
+  const residencyContext: CacheResidencyContext = {
+    chatId: input.targetId,
+    targetKind: input.targetKind,
+    targetLabel: input.targetLabel,
+    baseUrl: input.baseUrl,
+    modelId: input.modelId,
+    contextWindow: input.contextWindow,
+    bindingMode: input.slotId != null ? "enforced" : "auto",
+    slotId: input.slotId,
+  };
+  markLlamaCacheResidencyStarted(residencyContext);
+
+  try {
+    const seedBody = { ...input.body, stream: false, max_tokens: 1 };
+    delete seedBody.stream_options;
+    delete seedBody.return_progress;
+    console.log(
+      `[cache-warm] seeding strata warm for ${input.logLabel}: ` +
+      `messages=${Array.isArray(input.body.messages) ? input.body.messages.length : 0}, ` +
+      `tools=${input.body.tools?.length ?? 0} payload=${promptPayloadDigest}`,
+    );
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const settings = await getSettings().catch(() => null);
+    const auth = settings ? strataAuthHeaders(settings) : undefined;
+    if (auth) Object.assign(headers, auth);
+
+    const res = await undiciFetch(`${normalizeBaseUrl(input.baseUrl)}/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(seedBody),
+      signal: input.signal || AbortSignal.timeout(LLAMACPP_WARM_TIMEOUT_MS),
+      dispatcher: llamaWarmAgent,
+    }) as unknown as Response;
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`/v1/chat/completions seed failed (${res.status}): ${text.slice(0, 300)}`);
+    }
+
+    const json = (await res.json()) as {
+      usage?: { prompt_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+      timings?: { prompt_n?: number; prompt_ms?: number; cache_n?: number };
+    };
+    const totalTokens = json.usage?.prompt_tokens ?? 0;
+    // Strata reports prefix reuse through the OpenAI-standard usage detail;
+    // timings.cache_n is the llama.cpp-named fallback, matching the
+    // provider's dual-source rule.
+    const cached = json.usage?.prompt_tokens_details?.cached_tokens ?? json.timings?.cache_n ?? 0;
+    const evaluated = json.timings?.prompt_n ?? Math.max(0, totalTokens - cached);
+    const promptMs = json.timings?.prompt_ms ?? 0;
+    const hitRatio = totalTokens > 0 ? cached / totalTokens : 0;
+
+    recordLlamaCacheResidencyRun({
+      ...residencyContext,
+      timings: { prompt_n: totalTokens, prompt_ms: promptMs },
+      cache: {
+        cachePrompt: true,
+        cacheMode: "cache_prompt",
+        requestDigest: promptPayloadDigest,
+        requestMessageCount: Array.isArray(input.body.messages) ? input.body.messages.length : 0,
+        requestCharCount,
+        containsImages: false,
+        reportedPromptTokens: totalTokens,
+        promptEvalTokens: evaluated,
+        inferredCachedTokens: cached,
+        inferredCacheHitRatio: hitRatio,
+      },
+    });
+
+    return {
+      promptMs,
+      tokensCached: cached,
+      tokensEvaluated: evaluated,
+      totalPromptTokens: totalTokens,
+      warmPromptTokens: totalTokens,
+      cacheHitRatio: hitRatio,
+    };
+  } catch (err) {
+    markLlamaCacheResidencyFinished(input.targetId, input.targetKind);
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main warm function
 // ---------------------------------------------------------------------------
@@ -575,14 +680,6 @@ export async function warmChatCache(
     reason: options.reason ?? "user-requested",
     warmedAt: Date.now(),
   };
-  // Cache warm is a llama.cpp-native feature (/apply-template + /completion
-  // n_predict:0). Strata caches automatically and the seeding replacement
-  // lands separately (docs/design/strata-backend.md §6); until then this
-  // whole path is inert on that backend.
-  if (getInferenceBackend(await getSettings()) === "strata") {
-    result.error = "cache warm is not supported on the Strata backend";
-    return result;
-  }
   let lease: LlamaSlotLease | null = null;
 
   try {
@@ -609,16 +706,23 @@ export async function warmChatCache(
     }
 
     const { model, baseUrl } = modelInfo;
+    // Backend gate (docs/design/strata-backend.md §6): Strata seeds through
+    // chat completions; the native apply-template + n_predict:0 chain needs
+    // endpoints that server does not have.
+    const strata = model.provider === "strata";
     const normalizedModelId = normalizeRouterModelId(chat.modelId);
     const effectiveContextWindow = getEffectiveContextWindow(chat, model);
 
-    // 3. Ensure model is loaded on the router
-    const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
-      contextWindow: effectiveContextWindow,
-    });
-    if (loadResult === "error") {
-      result.error = `Failed to load model: ${normalizedModelId}`;
-      return result;
+    // 3. Ensure model is loaded on the router. Strata has no router: one
+    //    loaded model, loaded on request by the server itself.
+    if (!strata) {
+      const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
+        contextWindow: effectiveContextWindow,
+      });
+      if (loadResult === "error") {
+        result.error = `Failed to load model: ${normalizedModelId}`;
+        return result;
+      }
     }
 
     // 3b. Pin the warm prefill to a physical slot (10-17 post-warm park):
@@ -659,6 +763,7 @@ export async function warmChatCache(
       body,
       slotId: lease?.slotId,
       signal: options.signal,
+      strata,
     });
 
     // Capture the fresh head on disk now (fire-and-forget, mirrors the
@@ -711,11 +816,9 @@ export async function warmNewAgentChatBaselineCache(
 
   try {
     const settings = await getSettings();
-    // Same backend gate as warmChatCache (docs/design/strata-backend.md §6).
-    if (getInferenceBackend(settings) === "strata") {
-      result.error = "cache warm is not supported on the Strata backend";
-      return result;
-    }
+    // Backend gate (docs/design/strata-backend.md §6): the seed path needs
+    // no native endpoints, so baseline warm works on Strata too.
+    const strata = getInferenceBackend(settings) === "strata";
     const allModels = await discoverAllModels();
     const requestedModelId = settings.defaultModelId || allModels[0]?.id;
     if (!requestedModelId) {
@@ -733,15 +836,17 @@ export async function warmNewAgentChatBaselineCache(
     }
 
     result.modelId = normalizedModelId;
-    const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+    const baseUrl = resolveInferenceBaseUrl(settings);
     const effectiveContextWindow = getEffectiveContextWindow({ modelId: normalizedModelId }, model);
 
-    const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
-      contextWindow: effectiveContextWindow,
-    });
-    if (loadResult === "error") {
-      result.error = `Failed to load model: ${normalizedModelId}`;
-      return result;
+    if (!strata) {
+      const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
+        contextWindow: effectiveContextWindow,
+      });
+      if (loadResult === "error") {
+        result.error = `Failed to load model: ${normalizedModelId}`;
+        return result;
+      }
     }
 
     const { stablePrefix } = await buildStablePrefix(
@@ -772,6 +877,7 @@ export async function warmNewAgentChatBaselineCache(
       body,
       forceNextUserPrefix: true,
       signal: options.signal,
+      strata,
     });
 
     return {
