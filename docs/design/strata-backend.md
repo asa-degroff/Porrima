@@ -42,9 +42,9 @@ Base URL default: `http://127.0.0.1:8080`. Porrima consumes:
 | Endpoint | Strata behavior Porrima relies on |
 | --- | --- |
 | `GET /health` | 200 JSON with `loaded`, `max_context`, `model`. Porrima reads HTTP status, plus `loaded` for restart/idle-unload detection. |
-| `GET /v1/models` | `data[].id`, `data[].status.value` (`loaded`/`unloaded`), `data[].meta.n_ctx`, `architecture.input_modalities`. No `status.args`, no `max_model_len`, no Ollama-style `models[]`. |
-| `GET /props` | `default_generation_settings.n_ctx`, `model_alias`, `modalities.vision`, `total_slots`, `is_sleeping`, `chat_template_caps`, `model_path`, `build_info`. No top-level `n_ctx`, no `max_instances`. `?model=<id>` must match the loaded name or an alias, else 404. |
-| `GET /slots` | Array of `{id, n_ctx, is_processing, n_prompt_tokens}`; one entry unless `--batch`. `n_prompt_tokens` is the running request's prompt size and is kept after the request. No processed-token fields. Returns `[]` when the engine is down. |
+| `GET /v1/models` | `data[].id`, `data[].meta.n_ctx`, `architecture.input_modalities` / `output_modalities`. `data[].status.value` (`loaded`/`unloaded`) appears only when idle-unload is configured; single-model serving omits `status`. No `status.args`, no `max_model_len`. An Ollama-style `models[]` list with `capabilities` is also present on live builds. |
+| `GET /props` | `default_generation_settings.n_ctx`, `model_alias`, `modalities.vision`, `total_slots`, `is_sleeping`, `chat_template_caps`, `model_path`, `build_info`. No top-level `n_ctx`, no `max_instances`. `?model=<id>` must match the loaded name or an alias, else 404. `build_info` carries a llama.cpp-style tag (`b11669-...`). |
+| `GET /slots` | Array of `{id, n_ctx, is_processing, n_prompt_tokens}`; one entry unless `--batch`. `n_prompt_tokens` is the running request's prompt size and is kept after the request. Live builds also carry `n_prompt_tokens_processed` / `n_prompt_tokens_cache`, but idle values can read 0 while the engine reports cached tokens — do not trust the cache alias. Returns `[]` when the engine is down. |
 | `POST /slots/0?action=save\|restore` | Body key `filename`; result keys `n_saved`/`n_written`/`n_restored`/`n_read`/`timings`. Slot 0 only. No `erase` action. Needs Strata's `slot_save_path` launch config (`501` without it, and with `--batch`). Files are Strata's own format, bound to a model+config fingerprint. |
 | `POST /v1/chat/completions` | Full stream and non-stream; `tools` with `tool_calls` and correct `finish_reason`; image parts; `reasoning_content` deltas; `chat_template_kwargs.enable_thinking` honored; `reasoning_effort` honored. |
 
@@ -65,12 +65,21 @@ unknown body fields): `cache_prompt`, `stream_options`, `id_slot`,
 `chat_template_kwargs.preserve_thinking`. Porrima omits `id_slot` and
 `cache_prompt` for this backend instead of relying on ignore behavior.
 
-Endpoints that do not exist on Strata: `/completion`, `/apply-template`,
-`/tokenize`, `/detokenize`, `/infill`, `/predict`, `/models/load`,
-`/models/unload`, `/v1/embeddings`, `/v1/rerank`. Strata's equivalents, when
-needed: `/load` + `/unload` (process-level, not per model),
+Endpoints that do not exist on Strata: `/models/load`, `/models/unload`,
+`/infill`, `/predict`, `/v1/embeddings`, `/v1/rerank`. Strata's equivalents,
+when needed: `/load` + `/unload` (process-level, not per model),
 `/status` + `/v1/status` (busy stage), `/metrics` (engine telemetry),
 `/v1/messages/count_tokens` (Anthropic-shaped, unused by Porrima).
+
+Native-mirror note (live-verified against engine 0.1.45.3, build
+b11669): `/completion`, `/apply-template`, `/tokenize`, and `/detokenize`
+**do** answer on current Strata builds under llama.cpp's field names
+(`prompt`, `tokens`, `content`, `tokens_evaluated`, `timings.cache_n`), even
+though Strata's own API table does not document them. Two divergences keep
+them out of Porrima's supported path: `n_predict: 0` still predicts one
+token, and the mirrors are undocumented surface — free to change. The
+seeding warm (§6) and the stream-fed prefill (§5) stay the contract. Hosts
+may use the mirrors for external tooling.
 
 ## 3. Backend Resolution and Dispatch
 
