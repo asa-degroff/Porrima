@@ -251,7 +251,14 @@ restored across backends or slot models.
   the turn ends, so this is safe. Restore stays at the pre-dispatch hook
   and keeps the never-throw rule: any non-2xx is a strike on the breaker.
 - Disk headroom: the `statfs` check stays; it only means something when
-  `strataSlotSavePath` points at the same filesystem (documented).
+  `strataSlotSavePath` points at the same filesystem (documented). The
+  host must launch Strata with `slot_save_path` pointing at the Porrima
+  KV cache directory; without it every save answers 501 and parking
+  reports itself unsupported (the observed failure mode).
+- Backend flip: the registry is wiped and tracked files unlinked
+  (`routes/settings.ts` on `inferenceBackend` change). Cross-backend rows
+  can never restore — opaque format, pool-key mismatch — and holding them
+  steals the disk headroom the new backend budgets against.
 - Capability probe once per server identity: a save with a refused short
   name distinguishes 400 (parking works, name rules enforced) from 501
   (no `slot_save_path`, or `--batch` on): 501 disables parking for the URL

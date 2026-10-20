@@ -1525,6 +1525,36 @@ async function unlinkFile(path: string): Promise<void> {
   }
 }
 
+/**
+ * Wipe the disk tier: rows, tracked files, and the slot-ownership witness.
+ * Called when the inference backend flips (routes/settings.ts): slot files
+ * are opaque per server format and every restore path already skips on
+ * pool-key mismatch, so cross-backend rows are dead weight — worse, they
+ * hold the disk headroom that parking budgets against (docs/design/
+ * strata-backend.md §7). Total by contract; returns what was cleared.
+ */
+export async function clearAllKvSnapshots(reason: string): Promise<{ rows: number; bytes: number }> {
+  try {
+    const rows = getDb()
+      .prepare("SELECT chat_id, filename, bytes, config_digest FROM kv_snapshots")
+      .all() as Array<{ chat_id: string; filename: string; bytes: number; config_digest: string }>;
+    let bytes = 0;
+    for (const row of rows) {
+      if (row.filename) {
+        await unlinkFile(snapshotPath(row.filename, rowSaveDir(row.config_digest)));
+        bytes += row.bytes;
+      }
+    }
+    getDb().prepare("DELETE FROM kv_snapshots").run();
+    slotOwner.clear();
+    console.log(`${LOG} cleared ${rows.length} snapshot(s) (${formatGiB(bytes)}) reason=${reason}`);
+    return { rows: rows.length, bytes };
+  } catch (error: any) {
+    console.warn(`${LOG} clear-all failed:`, error?.message || error);
+    return { rows: 0, bytes: 0 };
+  }
+}
+
 function short(id: string): string {
   return id.slice(0, 8);
 }

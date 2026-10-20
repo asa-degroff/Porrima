@@ -102,6 +102,13 @@ router.put("/", async (req, res) => {
   // (docs/design/strata-backend.md §8).
   if (before.inferenceBackend !== settings.inferenceBackend) {
     clearAllLlamaCacheResidency();
+    // Slot files are never portable across backends (opaque server format,
+    // pool-key mismatch on every restore). Wipe the registry and the tracked
+    // files so the disk headroom returns to the new backend's parking
+    // (docs/design/strata-backend.md §7).
+    void import("../services/kv-snapshot.js")
+      .then((m) => m.clearAllKvSnapshots("inference backend switched"))
+      .catch(() => {});
   }
   res.json(settings);
 });
