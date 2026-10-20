@@ -620,7 +620,7 @@ function CollapsibleDocSection({
         <span>{open ? "▼" : "▶"}</span>
         <span>{title} ({count})</span>
       </button>
-      {open && <div className="space-y-1 max-h-64 overflow-y-auto">{children}</div>}
+      {open && <div className="space-y-1">{children}</div>}
     </div>
   );
 }
@@ -686,7 +686,7 @@ function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: 
           {run.query && (
             <div>
               <div className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Formatted query sent to model</div>
-              <pre className="bg-black/30 rounded p-2 text-[11px] text-white/70 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto leading-relaxed">
+              <pre className="bg-black/30 rounded p-2 text-[11px] text-white/70 font-mono whitespace-pre-wrap break-words leading-relaxed">
                 {run.query}
               </pre>
             </div>
