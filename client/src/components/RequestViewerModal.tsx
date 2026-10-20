@@ -263,34 +263,38 @@ function WireMessageList({
   const earlierCount = Math.max(0, messages.length - MESSAGE_TAIL);
   const earlier = messages.slice(0, earlierCount);
   const tail = earlierCount > 0 ? messages.slice(earlierCount) : messages;
+  // The prefix toggle is a plain row at message level. When open, the earlier
+  // rows render as siblings of the tail — not nested one level in — so every
+  // message row shares the same indentation.
   return (
     <div className="space-y-1">
       {earlierCount > 0 ? (
-        <TreeNode
+        <details
           open={showEarlier}
-          onOpenChange={onShowEarlierChange}
-          label={
-            showEarlier ? (
-              <span className="opacity-60">
-                showing all messages
-                <span className="opacity-60"> · {roleSummary(messages)}</span>
-              </span>
-            ) : (
-              <span className="opacity-60">
-                {earlierCount} earlier message{earlierCount === 1 ? "" : "s"}
-                <span className="opacity-60"> · {roleSummary(earlier)}</span>
-              </span>
-            )
-          }
-          bodyClassName="px-3 pb-3 pt-0.5"
+          onToggle={(e) => onShowEarlierChange(e.currentTarget.open)}
+          className="rounded-lg bg-black/20 border border-white/5"
         >
-          <div className="space-y-1 ml-1 border-l border-white/5 pl-2">
-            {earlier.map((m, i) => (
-              <WireMessageBlock key={i} message={m} index={i} />
-            ))}
-          </div>
-        </TreeNode>
+          <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 text-xs select-none">
+            <Chevron variant="tree" open={showEarlier} className="opacity-40" />
+            <span className="min-w-0 truncate">
+              {showEarlier ? (
+                <span className="opacity-60">
+                  showing all messages
+                  <span className="opacity-60"> · {roleSummary(messages)}</span>
+                </span>
+              ) : (
+                <span className="opacity-60">
+                  {earlierCount} earlier message{earlierCount === 1 ? "" : "s"}
+                  <span className="opacity-60"> · {roleSummary(earlier)}</span>
+                </span>
+              )}
+            </span>
+          </summary>
+        </details>
       ) : null}
+      {showEarlier
+        ? earlier.map((m, i) => <WireMessageBlock key={i} message={m} index={i} />)
+        : null}
       {tail.map((m, i) => (
         <WireMessageBlock key={earlierCount + i} message={m} index={earlierCount + i} />
       ))}
