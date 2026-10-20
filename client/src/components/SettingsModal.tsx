@@ -498,8 +498,20 @@ function llamaDisplayStatus(server: LlamaServerStatus): { label: string; tone: s
   return { label: "Checking", tone: llamaHealthTone(server.http.status) };
 }
 
-function formatSystemdTimestamp(value: string): string {
-  if (!value || value === "n/a") return "n/a";
+/** Strata-served inference row: systemd plays no part — status is the HTTP
+ *  probe of the external server only (docs/design/strata-backend.md §8). */
+function strataHttpDisplayStatus(server: LlamaServerStatus): { label: string; tone: string } {
+  if (server.http.status === "ok") {
+    if (server.http.modelLoaded === false) {
+      return { label: "Idle (unloaded)", tone: "bg-amber-500/15 text-amber-300 border-amber-400/25" };
+    }
+    return { label: "Ready", tone: llamaHealthTone(server.http.status) };
+  }
+  if (server.http.status === "unavailable") return { label: "Unreachable", tone: llamaHealthTone(server.http.status) };
+  return { label: "Checking", tone: llamaHealthTone(server.http.status) };
+}
+
+function formatSystemdTimestamp(value: string): string {  if (!value || value === "n/a") return "n/a";
   return value.replace(/\s+UTC$/, "");
 }
 
@@ -1966,12 +1978,31 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   }, []);
 
   useEffect(() => {
+    // Strata is not backed by the local GGUF pool: its model comes from the
+    // server via /api/models. Clear the disk list so the default-model picker
+    // falls back to the discovered Strata model.
+    if (inferenceBackend === "strata") {
+      setChatDiskModels([]);
+      setChatDiskModelsLoading(false);
+      return;
+    }
     let cancelled = false;
     loadDiskModels("inference",
       (m) => { if (!cancelled) setChatDiskModels(m); },
       (b) => { if (!cancelled) setChatDiskModelsLoading(b); });
     return () => { cancelled = true; };
-  }, [loadDiskModels, scanPathsVersion]);
+  }, [inferenceBackend, loadDiskModels, scanPathsVersion]);
+
+  // Adopt Strata's model as the default whenever the backend is Strata and
+  // the selection points elsewhere (Strata serves exactly one model; the
+  // llama default is stale right after the switch and until the user picks).
+  useEffect(() => {
+    if (inferenceBackend !== "strata") return;
+    const strataModels = models.filter((m) => m.provider === "strata");
+    if (strataModels.length === 0) return;
+    if (defaultModelId && strataModels.some((m) => m.id === defaultModelId)) return;
+    setDefaultModelId(strataModels[0].id);
+  }, [inferenceBackend, models, defaultModelId]);
 
   // Embedding model discovery from llama.cpp server.
   // For provider=llamacpp, source from local llama-models dir so swaps go
@@ -2289,6 +2320,12 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const prepareSettingsForSave = async (): Promise<Settings | null> => {
     if (customThemeValidationError) return null;
     const nextSettings = handleSave();
+    // Strata has no per-slot model apply: the inference model is whatever
+    // the Strata server serves — single model, chosen on the Strata side
+    // (docs/design/strata-backend.md §8). The adopt effect below syncs the
+    // default to Strata's listing; a stale llama default still degrades to
+    // the first discovered model at turn time.
+    if (inferenceBackend === "strata") return nextSettings;
     const currentInferenceServer = llamaServers.find((server) => server.id === "inference");
     const shouldApplyDefaultModel = Boolean(
       defaultModelId &&
@@ -3186,8 +3223,8 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                     <span className="text-[10px] text-white/30 shrink-0">{(m as any).parameterSize}</span>
                   )}
                   <ProviderIcon
-                    provider="llamacpp"
-                    className="text-[#ff8236] shrink-0"
+                    provider={inferenceBackend}
+                    className={inferenceBackend === "strata" ? "text-sky-300 shrink-0" : "text-[#ff8236] shrink-0"}
                   />
                 </button>
               ))}
@@ -3575,8 +3612,9 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                {llamaServers.map((server) => {
 			                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
 				                  const missingUnit = server.systemd.loadState === "not-found";
+				                  const strataInference = server.id === "inference" && inferenceBackend === "strata";
 				                  const isSelected = selectedLlamaServerId === server.id;
-				                  const displayStatus = llamaDisplayStatus(server);
+				                  const displayStatus = strataInference ? strataHttpDisplayStatus(server) : llamaDisplayStatus(server);
 				                  const currentModel = server.http.loadedModelId || server.expectedModel || server.http.modelIds[0] || "No model reported";
 				                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
 			                  const activeLogs = llamaServerLogs?.id === server.id ? llamaServerLogs : null;
@@ -3589,7 +3627,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                        {/* Card header */}
 			                        <div className="p-3">
 			                          <div className="flex items-center gap-3">
-			                            <button type="button" onClick={() => openLlamaServerDetail(server.id, "overview")} className="min-w-0 flex-1 text-left">
+			                            <button type="button" onClick={() => openLlamaServerDetail(server.id, strataInference ? "configuration" : "overview")} className="min-w-0 flex-1 text-left">
 			                              <div className="flex items-center gap-2 flex-wrap">
 			                                <span className="text-sm text-white/80 font-medium">{server.label}</span>
 			                                {!server.appEnabled && (
@@ -3607,12 +3645,18 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                                    router mode
 		                                  </span>
 			                                )}
+			                                {strataInference && (
+			                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/15 text-sky-200" title="Served by an external Strata server — model, launch, and updates happen there">
+			                                    external (Strata)
+			                                  </span>
+			                                )}
 			                              </div>
 			                              <p className="mt-1 truncate text-xs text-white/35" title={currentModel}>{currentModel}</p>
 			                            </button>
 			                            <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium ${displayStatus.tone}`} title={server.http.error}>
 			                              {displayStatus.label}
 			                            </span>
+			                            {!strataInference && (
 			                            <button
 			                              type="button"
 			                              onClick={() => handleLlamaServerAction(server.id, server.systemd.activeState === "active" ? "restart" : "start")}
@@ -3621,17 +3665,21 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 			                            >
 			                              {busy ? "Working…" : server.systemd.activeState === "active" ? "Restart" : "Start"}
 			                            </button>
+			                            )}
 			                          </div>
 		                      </div>
 
 		                      {isSelected && (
 		                        <div className="flex gap-1 overflow-x-auto border-t border-white/5 bg-black/10 px-3 pt-2" role="tablist" aria-label={`${server.label} details`}>
-		                          {([
+		                          {(strataInference
+		                            ? ([["configuration", "Configuration"]] as const)
+		                            : ([
 		                            ["overview", "Overview"],
 		                            ["configuration", "Configuration"],
 		                            ["advanced", "Advanced"],
 		                            ["logs", "Logs"],
-		                          ] as const).map(([tab, label]) => (
+		                          ] as const)
+		                          ).map(([tab, label]) => (
 		                            <button key={tab} type="button" role="tab" aria-selected={llamaServerDetailTab === tab}
 		                              onClick={() => openLlamaServerDetail(server.id, tab)}
 		                              className={`whitespace-nowrap border-b-2 px-2 py-1.5 text-[11px] font-medium transition-colors ${llamaServerDetailTab === tab ? "border-purple-400 text-purple-200" : "border-transparent text-white/40 hover:text-white/65"}`}>

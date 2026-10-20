@@ -1,12 +1,12 @@
 # Strata Inference Backend
 
 **Status:** implemented — backend seam, turn path, stream-fed prefill,
-seeding warm, single-slot parking, settings surfaces, and the smoke script
-(§3–§11) are live. The API contract is verified against a running Strata
-host (engine 0.1.45.3); end-to-end Porrima turns await a backend switch.
-Remaining polish: a per-row "external (Strata)" badge on the llama-servers
-list, and the follow-ups named in §5/§7 (unified progress source on
-llama.cpp; first-class llama.cpp single-slot parking).
+seeding warm, single-slot parking, settings surfaces, the external-server
+row on the llama-servers panel, and the smoke script (§3–§11) are live. The
+API contract is verified against a running Strata host (engine 0.1.45.3);
+end-to-end Porrima turns await a backend switch. Follow-ups named in
+§5/§7: unified progress source on llama.cpp, first-class llama.cpp
+single-slot parking.
 
 This document adds a second backend for the inference slot
 (`LlamaServerId = "inference"`). Strata is an external OpenAI-compatible
@@ -273,13 +273,24 @@ restored across backends or slot models.
   `normalizeRouterModelId` suffix strip is llama-only.
 
 `routes/models.ts` health: `GET {strataUrl}/health`; `health-all` pings the
-Strata URL in place of the llama inference default. `llama-supervisor` and
-`routes/llama-servers.ts`: the inference row renders as
-`external (Strata)` when the backend is strata, with unit actions hidden;
-drop-in rendering and launch templates are untouched for the other slots.
-`routes/settings.ts` invalidation rules extend to `strataUrl` and
-`inferenceBackend` (model cache clear, baseline warm record clear,
-residency reset).
+Strata URL in place of the llama inference default.
+`llama-supervisor.getConfiguredUrl` returns the Strata URL for the
+inference slot while that backend is selected, so the row probe, loaded
+model list, and health read the live Strata server.
+`routes/llama-servers.ts` enforces the same rule server-side: apply-model,
+router conversion, unit start/stop/restart, drop-in config writes, and unit
+enablement return 409 for inference while Strata is selected, and
+`available-models?slot=inference` lists exactly what the Strata server
+reports instead of the disk scan. `llama-path` binary-swap restarts exclude
+`llama-server.service` while the backend is Strata. The client renders the
+inference row as `external (Strata)` with an HTTP-only status chip and a
+Configuration tab only (Overview, Advanced, and Logs are not offered). The
+disk-model scan for inference is skipped while Strata is selected, the
+default-model list comes from the server, and the settings panel adopts the
+Strata model as the default; turn resolution already falls back to the
+first discovered model. `routes/settings.ts` invalidation rules extend to
+`strataUrl` and `inferenceBackend` (model cache clear, baseline warm record
+clear, residency reset). Other slots keep their llama unit management.
 
 ## 9. Settings
 

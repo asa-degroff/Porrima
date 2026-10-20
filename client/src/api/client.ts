@@ -1774,6 +1774,9 @@ export interface LlamaServerStatus {
     error?: string;
     routerMode: boolean;
     loadedModelId?: string;
+    /** Engine load state from /health on servers that report it (Strata
+     *  idle-unload); undefined elsewhere. */
+    modelLoaded?: boolean;
   };
   override: {
     active: boolean;

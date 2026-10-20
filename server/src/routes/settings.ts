@@ -15,6 +15,7 @@ import {
 import { getDefaultLlamaScanDir, getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
 import { getSlotAssignments } from "../services/llama-slot-leases.js";
 import {
+  clearAllLlamaCacheResidency,
   clearLlamaCacheResidencyTarget,
   listLlamaCacheResidency,
   NEW_AGENT_CHAT_BASELINE_CACHE_ID,
@@ -94,6 +95,13 @@ router.put("/", async (req, res) => {
     before.strataUrl !== settings.strataUrl
   ) {
     invalidateModelCache();
+  }
+  // A backend flip changes what "warm" means entirely: the residency ledger
+  // keys on baseUrl and the previous server's state has no bearing on the new
+  // one. Clear it so indicators and cold-gates start honest
+  // (docs/design/strata-backend.md §8).
+  if (before.inferenceBackend !== settings.inferenceBackend) {
+    clearAllLlamaCacheResidency();
   }
   res.json(settings);
 });

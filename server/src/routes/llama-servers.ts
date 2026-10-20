@@ -18,7 +18,8 @@ import { findLocalModel, listLocalModels, scanDirectory, resolveModelsDirs, type
 import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
-import { invalidateModelCache } from "../services/models.js";
+import { invalidateModelCache, discoverAllModels } from "../services/models.js";
+import { isStrataBackend } from "../services/inference-backend.js";
 import {
   getDefaultServiceConfig,
   getServiceCapabilities,
@@ -228,6 +229,27 @@ router.get("/available-models", async (req, res) => {
     }
 
     const settings = await getSettings();
+
+    // A Strata-served inference slot has no local GGUF pool: the model is
+    // configured on the Strata side, and Porrima lists exactly what its
+    // server reports (docs/design/strata-backend.md §8).
+    if (slot === "inference" && isStrataBackend(settings)) {
+      const serverModels = await discoverAllModels().catch(() => []);
+      res.json({
+        models: serverModels
+          .filter((m) => m.provider === "strata")
+          .map((m) => ({
+            id: m.id,
+            name: m.name,
+            sizeBytes: 0,
+            kind: "chat" as LlamaModelKind,
+            hasMmproj: Boolean(m.supportsImages),
+            source: "server" as const,
+          })),
+      });
+      return;
+    }
+
     const all = await listLocalModels(settings.llamaModelsDirs);
     const filtered = kindFilter ? all.filter((m) => m.kind === kindFilter) : all;
     const models = new Map<string, {
@@ -458,10 +480,33 @@ router.post("/:id/config/preview", async (req, res) => {
   }
 });
 
+/** The inference slot on the Strata backend is an external process: unit
+ *  actions, model swaps, overrides, and drop-in config belong to Strata
+ *  (docs/design/strata-backend.md §1). Everything llama-unit-shaped returns
+ *  409 while that backend is selected. */
+async function inferenceOwnedByStrata(id: string): Promise<boolean> {
+  if (id !== "inference") return false;
+  try {
+    return isStrataBackend(await getSettings());
+  } catch {
+    return false;
+  }
+}
+
+function rejectStrataInference(res: any, action: string): void {
+  res.status(409).json({
+    error: `The inference slot is served by Strata — ${action} there (strata launch or the Strata app), not from Porrima.`,
+  });
+}
+
 router.put("/:id/config", async (req, res) => {
   const id = req.params.id;
   if (!getDefinition(id)) {
     res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  if (await inferenceOwnedByStrata(id)) {
+    rejectStrataInference(res, "launch and drop-in configuration");
     return;
   }
   try {
@@ -487,6 +532,10 @@ router.delete("/:id/config", async (req, res) => {
   const id = req.params.id;
   if (!getDefinition(id)) {
     res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  if (await inferenceOwnedByStrata(id)) {
+    rejectStrataInference(res, "launch and drop-in configuration");
     return;
   }
   try {
@@ -520,6 +569,10 @@ router.put("/:id/enabled", async (req, res) => {
     res.status(400).json({ error: `Unknown server: ${id}` });
     return;
   }
+  if (await inferenceOwnedByStrata(id)) {
+    rejectStrataInference(res, "systemd enablement");
+    return;
+  }
   try {
     const enabled = Boolean(req.body?.enabled);
     const result = await setLlamaUnitEnabled(id, enabled);
@@ -545,6 +598,10 @@ router.post("/:id/apply-model", async (req, res) => {
   const id = req.params.id;
   if (!supportsRuntimeModelApply(id)) {
     res.status(400).json({ error: `Server does not support runtime model apply: ${id}` });
+    return;
+  }
+  if (await inferenceOwnedByStrata(id)) {
+    rejectStrataInference(res, "model switching");
     return;
   }
   const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
@@ -590,6 +647,10 @@ router.post("/:id/convert-to-router", async (req, res) => {
     res.status(400).json({ error: `Slot does not support router mode: ${id}` });
     return;
   }
+  if (await inferenceOwnedByStrata(id)) {
+    rejectStrataInference(res, "router conversion");
+    return;
+  }
   try {
     const settings = await getSettings();
     const execStart = renderRouterExecStart(id, settings);
@@ -630,6 +691,10 @@ router.post("/:id/:action", async (req, res) => {
     res.status(400).json({ error: "action must be start, stop, or restart" });
     return;
   }
+  if (await inferenceOwnedByStrata(req.params.id)) {
+    rejectStrataInference(res, "unit control");
+    return;
+  }
 
   try {
     const settings = await getSettings();
@@ -657,6 +722,10 @@ router.patch("/:id", async (req, res) => {
 
     // Map request fields to settings keys per server role
     if (def.id === "inference") {
+      if ((body.modelId !== undefined || body.binaryPath !== undefined) && isStrataBackend(settings)) {
+        rejectStrataInference(res, "model and binary selection");
+        return;
+      }
       if (body.url !== undefined) settings.llamacppUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) settings.defaultModelId = (body.modelId as string).trim() || settings.defaultModelId;
       if (body.enabled !== undefined) settings.llamacppEnabled = Boolean(body.enabled);

@@ -3,7 +3,7 @@ import { promisify } from "util";
 import type { Settings } from "../types.js";
 import { extractOverrideBinaryPath, extractOverrideModelPath, readOverride, type OverrideInfo } from "./llama-overrides.js";
 import { getDefaultLlamaBin, resolveBin } from "./llama-launch-templates.js";
-import { getDefaultLlamaServerUrl } from "./llama-ports.js";
+import { getDefaultLlamaServerUrl, STRATA_DEFAULT_URL } from "./llama-ports.js";
 
 const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
@@ -56,6 +56,9 @@ export interface LlamaServerStatus {
     error?: string;
     routerMode: boolean;
     loadedModelId?: string;
+    /** Single-model servers that report engine state on /health (Strata:
+     *  idle-unload/reload). Absent when the server does not expose it. */
+    modelLoaded?: boolean;
   };
   override: {
     active: boolean;
@@ -130,7 +133,14 @@ function getDefinition(id: string): LlamaServerDefinition | null {
 }
 
 function getConfiguredUrl(def: LlamaServerDefinition, settings: Settings): string {
-  if (def.id === "inference") return settings.llamacppUrl?.trim() || def.defaultUrl;
+  if (def.id === "inference") {
+    // The inference slot may be served by an external Strata server; probe
+    // and model listing follow that selection (docs/design/strata-backend.md §8).
+    if (settings.inferenceBackend === "strata") {
+      return settings.strataUrl?.trim() || STRATA_DEFAULT_URL;
+    }
+    return settings.llamacppUrl?.trim() || def.defaultUrl;
+  }
   if (def.id === "extraction") return settings.extractionModelUrl?.trim() || def.defaultUrl;
   if (def.id === "reranker") return settings.rerankerUrl?.trim() || def.defaultUrl;
   if (def.id === "embedding") {
@@ -258,18 +268,23 @@ async function getHttpStatus(baseUrl: string): Promise<LlamaServerStatus["http"]
   const url = normalizeBaseUrl(baseUrl);
   if (!url) return { status: "unknown", modelIds: [], routerMode: false, error: "No URL configured" };
 
+  // /health body is read for its `loaded` flag (Strata idle-unload); servers
+  // that answer {} simply leave modelLoaded undefined.
+  let modelLoaded: boolean | undefined;
   try {
     const health = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2500) });
     if (!health.ok) {
       return { status: "unavailable", modelIds: [], routerMode: false, error: `/health returned HTTP ${health.status}` };
     }
+    const healthBody = await health.json().catch(() => null);
+    if (typeof healthBody?.loaded === "boolean") modelLoaded = healthBody.loaded;
   } catch (e: any) {
     return { status: "unavailable", modelIds: [], routerMode: false, error: e?.message || "Health check failed" };
   }
 
   try {
     const modelsRes = await fetch(`${url}/v1/models`, { signal: AbortSignal.timeout(2500) });
-    if (!modelsRes.ok) return { status: "ok", modelIds: [], routerMode: false };
+    if (!modelsRes.ok) return { status: "ok", modelIds: [], routerMode: false, modelLoaded };
     type RouterModelEntry = { id?: string; status?: { value?: string } };
     const data = await modelsRes.json().catch(() => null) as { data?: RouterModelEntry[] } | null;
     const entries = Array.isArray(data?.data) ? data!.data : [];
@@ -281,9 +296,32 @@ async function getHttpStatus(baseUrl: string): Promise<LlamaServerStatus["http"]
     // look identical to a single-model launch.
     const routerMode = entries.some((m) => m.status && typeof m.status === "object");
     const loaded = entries.find((m) => m.status?.value === "loaded");
-    return { status: "ok", modelIds, routerMode, loadedModelId: loaded?.id };
+    return { status: "ok", modelIds, routerMode, loadedModelId: loaded?.id, modelLoaded };
   } catch {
-    return { status: "ok", modelIds: [], routerMode: false };
+    return { status: "ok", modelIds: [], routerMode: false, modelLoaded };
+  }
+}
+
+/**
+ * Strata idle-unload detection (docs/design/strata-backend.md §5). The llama
+ * units are tracked by PID; an external single-model server reports engine
+ * state on /health instead. A loaded→unloaded edge means the engine process
+ * exited and every KV/warm witness died with it; the reload edge refreshes
+ * the model listing (an unloaded Strata lists nothing). Inference slot only,
+ * and a no-op for servers that never report `loaded`.
+ */
+const lastReportedLoaded = new Map<string, boolean>();
+function observeReportedLoadEdge(url: string, modelLoaded: boolean | undefined): void {
+  if (typeof modelLoaded !== "boolean") return;
+  const previous = lastReportedLoaded.get(url);
+  lastReportedLoaded.set(url, modelLoaded);
+  if (previous === true && modelLoaded === false) {
+    void import("./llama-cache-residency.js")
+      .then((m) => m.clearAllLlamaCacheResidency())
+      .catch(() => {});
+  }
+  if (previous === false && modelLoaded === true) {
+    void import("./models.js").then((m) => m.invalidateModelCache()).catch(() => {});
   }
 }
 
@@ -355,6 +393,7 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         resolveSystemdUnit(def),
         getHttpStatus(url),
       ]);
+      if (def.id === "inference") observeReportedLoadEdge(url, http.modelLoaded);
       // Detect llama.cpp server restarts — when the PID changes, the KV cache
       // is wiped and any in-memory residency/model metadata becomes stale.
       await handleDetectedServerRestart(def, url, unit.systemd.mainPid, http.status);
@@ -387,6 +426,7 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     resolveSystemdUnit(def),
     getHttpStatus(url),
   ]);
+  if (def.id === "inference") observeReportedLoadEdge(url, http.modelLoaded);
   await handleDetectedServerRestart(def, url, unit.systemd.mainPid, http.status);
   const overrideInfo = await readOverride(unit.unitName);
   const override = formatOverrideInfo(overrideInfo);

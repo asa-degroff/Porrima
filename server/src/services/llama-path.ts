@@ -160,6 +160,16 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
     throw new Error(`Invalid path: ${validation.error}`);
   }
 
+  // Never restart llama-server while the inference slot belongs to Strata:
+  // a binary swap must not spin up the llama unit and take GPU memory the
+  // Strata engine holds (docs/design/strata-backend.md §8).
+  const { getSettings } = await import("./chat-storage.js");
+  const { isStrataBackend } = await import("./inference-backend.js");
+  const strataOwnsInference = await getSettings().then(isStrataBackend).catch(() => false);
+  const serviceNames = strataOwnsInference
+    ? SERVICE_NAMES.filter((name) => name !== "llama-server.service")
+    : SERVICE_NAMES;
+
   // Read the current target for rollback
   let previousPath = "";
   try {
@@ -181,7 +191,7 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
   }
 
   try {
-    await execFileAsync(SYSTEMCTL, ["--user", "restart", ...SERVICE_NAMES], {
+    await execFileAsync(SYSTEMCTL, ["--user", "restart", ...serviceNames], {
       timeout: 15000,
     });
   } catch (e: any) {
@@ -190,7 +200,7 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
       await unlink(LLAMA_CURRENT_LINK).catch(() => {});
       await symlink(previousPath, LLAMA_CURRENT_LINK);
       try {
-        await execFileAsync(SYSTEMCTL, ["--user", "restart", ...SERVICE_NAMES], { timeout: 15000 });
+        await execFileAsync(SYSTEMCTL, ["--user", "restart", ...serviceNames], { timeout: 15000 });
       } catch {}
     }
     throw new Error(`Failed to restart services: ${e.message}`);
@@ -198,7 +208,7 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
 
   // Wait for services and check health
   const serviceResults: Record<string, "active" | "failed" | "unknown"> = {};
-  const healthChecks = SERVICE_NAMES.map(async (name) => {
+  const healthChecks = serviceNames.map(async (name) => {
     const status = await waitForService(name);
     serviceResults[name] = status;
     return { name, status };
@@ -206,7 +216,7 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
   await Promise.all(healthChecks);
 
   // If any service failed, roll back
-  const anyFailed = SERVICE_NAMES.some((name) => serviceResults[name] === "failed");
+  const anyFailed = serviceNames.some((name) => serviceResults[name] === "failed");
   let rolledBack = false;
 
   if (anyFailed && previousPath) {
@@ -215,10 +225,10 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
     await symlink(previousPath, LLAMA_CURRENT_LINK);
     try {
       await execFileAsync(SYSTEMCTL, ["--user", "daemon-reload"], { timeout: 5000 });
-      await execFileAsync(SYSTEMCTL, ["--user", "restart", ...SERVICE_NAMES], { timeout: 15000 });
+      await execFileAsync(SYSTEMCTL, ["--user", "restart", ...serviceNames], { timeout: 15000 });
     } catch {}
     // Re-check after rollback (best effort, don't block on it)
-    for (const name of SERVICE_NAMES) {
+    for (const name of serviceNames) {
       serviceResults[name] = await waitForService(name, 5000);
     }
   }
