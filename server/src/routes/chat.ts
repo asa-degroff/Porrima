@@ -99,7 +99,7 @@ import { partialToolText, toolCallDeltaFrame, toolCallStartFrame, toolPartialFra
 import { getBrowserSessionSnapshot } from "../services/browser-session.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
-import { resolveInferenceBaseUrl } from "../services/inference-backend.js";
+import { resolveInferenceBaseUrl, isLocalInferenceProvider } from "../services/inference-backend.js";
 import { recordContextEstimateObservation } from "../services/token-estimate-observability.js";
 import { onLlmRequestEvent } from "../services/request-log.js";
 import { stampAssistantCompletionActivity, stampUserTurnActivity } from "../services/user-activity.js";
@@ -2087,9 +2087,11 @@ async function handleChatStream(
     // longer hides its own runs from the stats display until completion.
     // This also covers ask_user/error paths, whose runs were previously
     // dropped because the post-turn flush never ran for them.
-    if (inferenceModel?.provider === "llamacpp") {
+    // Both local backends emit llama-shaped timings; the row carries the
+    // actual provider so stats readers can attribute per backend.
+    if (inferenceModel && isLocalInferenceProvider(inferenceModel.provider)) {
       try {
-        const stats = recordModelStats(inferenceModel.id, "llamacpp", timings, cache ?? undefined);
+        const stats = recordModelStats(inferenceModel.id, inferenceModel.provider, timings, cache ?? undefined);
         const cacheText = stats.inferredCachedTokens !== undefined
           ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
           : "";
@@ -2158,7 +2160,7 @@ async function handleChatStream(
       // the full detected context window (e.g. 128k) and may overflow VRAM.
       piModel.contextWindow = getEffectiveContextWindow(chat, inferenceModel);
       activeAssistantIdentity = replayIdentityFromPiModel(piModel);
-      if (inferenceModel.provider === "llamacpp" && piModel.baseUrl) {
+      if (isLocalInferenceProvider(inferenceModel.provider) && piModel.baseUrl) {
         llamaSlotLease = await acquireLlamaSlotLease({
           baseUrl: piModel.baseUrl,
           chatId: chat.id,

@@ -10,6 +10,13 @@ import { getDefaultLlamaServerUrl, STRATA_DEFAULT_URL } from "./llama-ports.js";
 
 export type InferenceBackend = "llamacpp" | "strata";
 
+/** True for providers that run the local turn pipeline (timings accounting,
+ *  residency ledger, seeding-compatible warm). Distinct from the llama-only
+ *  native-endpoint gates (exact /tokenize counts stay llamacpp-only). */
+export function isLocalInferenceProvider(provider: unknown): provider is InferenceBackend {
+  return provider === "llamacpp" || provider === "strata";
+}
+
 export function getInferenceBackend(
   settings: Pick<Settings, "inferenceBackend">,
 ): InferenceBackend {
