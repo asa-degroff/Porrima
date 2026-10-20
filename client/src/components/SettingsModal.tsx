@@ -35,7 +35,7 @@ import { ThemePicker } from "./ThemePicker";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
-import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
+import { getDefaultLlamaServerUrl, STRATA_DEFAULT_URL } from "../utils/llamaPorts";
 import { DEFAULT_CUSTOM_THEME, getCustomThemeBackgroundError, normalizeCustomTheme, normalizeThemePresetName, saveThemePreset, saveThemePresetAsNew } from "../utils/custom-theme";
 
 /**
@@ -647,6 +647,11 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [llamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "enforced");
+  // Strata inference backend (docs/design/strata-backend.md §9)
+  const [inferenceBackend, setInferenceBackend] = useState<"llamacpp" | "strata">(settings.inferenceBackend ?? "llamacpp");
+  const [strataUrl, setStrataUrl] = useState(settings.strataUrl || STRATA_DEFAULT_URL);
+  const [strataApiKey, setStrataApiKey] = useState(settings.strataApiKey || "");
+  const [strataSlotSavePath, setStrataSlotSavePath] = useState(settings.strataSlotSavePath || "");
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Only the
   // three keys with UI are sent; the rest persist server-side via the
   // settings merge (fields a client omits are preserved).
@@ -1131,6 +1136,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const embeddingBinaryDd = useDropdown();
   const titleGenBinaryDd = useDropdown();
   const slotBindingModeDd = useDropdown();
+  const inferenceBackendDd = useDropdown();
   // Per-server dropdown state for systemd service mode (inside .map())
   const [serviceModeOpen, setServiceModeOpen] = useState<Record<string, boolean>>({});
   const serviceModeRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
@@ -2186,6 +2192,10 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSlotBindingMode,
+      inferenceBackend,
+      strataUrl: strataUrl.trim() || undefined,
+      strataApiKey: strataApiKey.trim() || undefined,
+      strataSlotSavePath: strataSlotSavePath.trim() || undefined,
       kvSnapshotEnabled,
       kvSnapshotMinTokens: parseInt(kvSnapshotMinTokens, 10) > 0 ? parseInt(kvSnapshotMinTokens, 10) : undefined,
       kvSnapshotMaxBytesPerPool: parseInt(kvSnapshotMaxGib, 10) > 0 ? parseInt(kvSnapshotMaxGib, 10) * 1073741824 : undefined,
@@ -3643,16 +3653,59 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 		                          {server.id === "inference" && (
 	                            <div className="space-y-2">
 	                              <div className="space-y-2">
+	                                  <div className="flex items-center gap-2">
+	                                    <label className="block text-xs text-white/50 w-16">Backend</label>
+	                                    <Dropdown
+	                                      state={inferenceBackendDd}
+	                                      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-md px-2.5 py-1 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer whitespace-nowrap"
+	                                      trigger={<span>{inferenceBackend === "strata" ? "Strata" : "llama.cpp"}</span>}
+	                                    >
+	                                      {(["llamacpp", "strata"] as const).map((backend) => (
+	                                        <button key={backend} onClick={() => {
+	                                          inferenceBackendDd.close();
+	                                          setInferenceBackend(backend);
+	                                        }} className={`w-full text-left px-2.5 py-1.5 text-xs transition-all ${backend === inferenceBackend ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                          {backend === "strata" ? "Strata" : "llama.cpp"}
+	                                        </button>
+	                                      ))}
+	                                    </Dropdown>
+	                                    <span className="text-xs text-white/30">Strata serves this role externally over the OpenAI surface; llama.cpp keeps the managed unit.</span>
+	                                  </div>
 	                                  <div className="flex gap-2">
 	                                    <label className="block text-xs text-white/50 w-12">URL</label>
 	                                    <input
 		                                      type="text"
-		                                      value={llamacppUrl}
-		                                      onChange={(e) => setLlamacppUrl(e.target.value)}
+		                                      value={inferenceBackend === "strata" ? strataUrl : llamacppUrl}
+		                                      onChange={(e) => (inferenceBackend === "strata" ? setStrataUrl : setLlamacppUrl)(e.target.value)}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                      placeholder={DEFAULT_INFERENCE_URL}
+	                                      placeholder={inferenceBackend === "strata" ? STRATA_DEFAULT_URL : DEFAULT_INFERENCE_URL}
 	                                    />
 	                                  </div>
+	                                  {inferenceBackend === "strata" && (
+	                                    <>
+	                                      <div className="flex gap-2">
+	                                        <label className="block text-xs text-white/50 w-16">API key</label>
+	                                        <input
+                                          type="password"
+                                          value={strataApiKey}
+                                          onChange={(e) => setStrataApiKey(e.target.value)}
+	                                        className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                                          placeholder="only when the Strata server sets api_key"
+                                        />
+	                                      </div>
+	                                      <div className="flex gap-2">
+	                                        <label className="block text-xs text-white/50 w-16">Save dir</label>
+	                                        <input
+                                          type="text"
+                                          value={strataSlotSavePath}
+                                          onChange={(e) => setStrataSlotSavePath(e.target.value)}
+	                                        className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                                          placeholder="Strata slot_save_path — leave empty when it matches the KV cache dir"
+                                        />
+	                                      </div>
+	                                    </>
+	                                  )}
+	                                  {inferenceBackend === "llamacpp" && (
 	                                  <div className="flex items-center gap-2">
 	                                    <label className="block text-xs text-white/50 w-16">Slots</label>
 	                                    <Dropdown
@@ -3671,18 +3724,22 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
 	                                    </Dropdown>
 	                                    <span className="text-xs text-white/30">Enforced pins each chat to a slot (required for KV parking); Auto lets llama.cpp pick slots by prompt similarity.</span>
 	                                  </div>
+	                                  )}
 	                                  <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-2">
 	                                    <div className="flex items-center justify-between gap-3">
 	                                      <div className="min-w-0">
 	                                        <p className="text-xs font-medium text-white/70">KV snapshot parking</p>
 	                                        <p className="text-[11px] text-white/35">Saves KV caches to NVMe at end of turn if they don't fit in RAM.</p>
-	                                        {llamacppSlotBindingMode !== "enforced" && (
+	                                        {inferenceBackend === "llamacpp" && llamacppSlotBindingMode !== "enforced" && (
 	                                          <p className="text-[11px] text-amber-300/80">Requires Slots = Enforced — switch the Slots setting above to enable parking.</p>
 	                                        )}
+	                                        {inferenceBackend === "strata" && (
+	                                          <p className="text-[11px] text-white/35">Strata mode parks the server's slot-0 session file. Leave Save dir empty when Strata writes to the Porrima KV cache dir.</p>
+	                                        )}
 	                                      </div>
-	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" disabled={llamacppSlotBindingMode !== "enforced"} />
+	                                      <ToggleSwitch checked={kvSnapshotEnabled} onChange={() => setKvSnapshotEnabled(!kvSnapshotEnabled)} accentColor="purple" ariaLabel="KV snapshot parking" disabled={inferenceBackend === "llamacpp" && llamacppSlotBindingMode !== "enforced"} />
 	                                    </div>
-	                                    {kvSnapshotEnabled && llamacppSlotBindingMode === "enforced" && (
+	                                    {kvSnapshotEnabled && (inferenceBackend === "strata" || llamacppSlotBindingMode === "enforced") && (
 	                                      <div className="grid grid-cols-3 gap-2">
 	                                        <label className="block">
 	                                          <span className="block text-[10px] text-white/40 mb-1">Park above (tokens)</span>

@@ -1,8 +1,12 @@
 # Strata Inference Backend
 
-**Status:** in progress — the backend seam, turn path, stream-fed prefill
-(§3–§6) are live. Parking (§7) lands next; the llama.cpp single-slot and
-unified-progress-source follow-ups are named there.
+**Status:** implemented — backend seam, turn path, stream-fed prefill,
+seeding warm, single-slot parking, settings surfaces, and the smoke script
+(§3–§11) are live. The API contract is verified against a running Strata
+host (engine 0.1.45.3); end-to-end Porrima turns await a backend switch.
+Remaining polish: a per-row "external (Strata)" badge on the llama-servers
+list, and the follow-ups named in §5/§7 (unified progress source on
+llama.cpp; first-class llama.cpp single-slot parking).
 
 This document adds a second backend for the inference slot
 (`LlamaServerId = "inference"`). Strata is an external OpenAI-compatible

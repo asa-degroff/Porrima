@@ -4,6 +4,7 @@
 // - llama.cpp: icon from ggml-org/llama.cpp/media/llama1-icon-transparent.svg
 //   (MIT-licensed). Original brand color is #ff8236; we expose it via
 //   `currentColor` so it can be tinted contextually.
+// - strata: three stacked layers drawn in-theme (no brand asset vendored).
 
 interface Props {
   provider: string | undefined | null;
@@ -16,11 +17,33 @@ export function ProviderIcon({ provider, className = "", size = 14, title }: Pro
   if (provider === "llamacpp") {
     return <LlamaCppIcon className={className} size={size} title={title ?? "llama.cpp"} />;
   }
+  if (provider === "strata") {
+    return <StrataIcon className={className} size={size} title={title ?? "Strata"} />;
+  }
   // For backward compatibility, treat "ollama" or no provider as llama.cpp
   if (!provider || provider === "llamacpp") {
     return <LlamaCppIcon className={className} size={size} title={title ?? "llama.cpp"} />;
   }
   return null;
+}
+
+function StrataIcon({ className, size, title }: { className: string; size: number; title: string }) {
+  // Three stacked layers: strata.
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      role="img"
+      aria-label={title}
+    >
+      <rect x="3" y="5" width="18" height="3.4" rx="1.7" />
+      <rect x="5" y="10.3" width="14" height="3.4" rx="1.7" opacity="0.75" />
+      <rect x="7" y="15.6" width="10" height="3.4" rx="1.7" opacity="0.55" />
+    </svg>
+  );
 }
 
 function LlamaCppIcon({ className, size, title }: { className: string; size: number; title: string }) {
