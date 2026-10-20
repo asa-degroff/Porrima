@@ -874,6 +874,169 @@ describe("kv-snapshot restore gate (Phase 3)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Shared-slot semantics (doc §7 D9): the single-slot launch multiplexes every
+// chat onto one slot. Two rules follow: the tier-1 count probe only witnesses
+// for the slot's last writer, and restores serialize on the slot's chain.
+// ---------------------------------------------------------------------------
+
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+
+describe("kv-snapshot shared-slot restore (§7 D9)", () => {
+  it("restores when a different chat last held the slot, despite a warm token count", async () => {
+    const otherChat = "22222222-2222-2222-2222-222222222222";
+    // Slot reports 130k prompt tokens: the OLD count-only gate would skip the
+    // restore. The count belongs to the OTHER chat (it recorded ownership via
+    // a park entry below the token floor) — the gate must treat the slot as
+    // cold and restore without consulting the meaningless count.
+    const h = await loadHarness({
+      seedSnapshots: [parkedSeed],
+      slots: [{ id: lease.slotId, is_processing: false, n_prompt_tokens: 130_000 }],
+    });
+    await h.kv.parkAfterWarm({
+      chatId: otherChat,
+      lease: { ...lease, chatId: otherChat },
+      promptTokens: 0, // below-min: the park skips, the ownership witness lands
+      prefixDigest: "x",
+    });
+
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(1);
+    // The probe is bypassed entirely: GET /slots was never asked.
+    expect(h.fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/slots"))).toHaveLength(0);
+
+    // A successful restore re-records ownership. The next turn sees its own
+    // state in the slot, so the warm count probe's verdict applies again and
+    // the restore is skipped (tier 1 / restored state serves).
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t2", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(1);
+    h.db.close();
+  });
+
+  it("keeps the count-probe verdict for the slot's own last writer", async () => {
+    const h = await loadHarness({
+      seedSnapshots: [parkedSeed],
+      slots: [{ id: lease.slotId, is_processing: false, n_prompt_tokens: 130_000 }],
+    });
+    // This chat is the slot's last writer: the warm count is evidence about
+    // its own prefix and the restore defers (today's behavior, unchanged).
+    await h.kv.parkAfterWarm({ chatId: lease.chatId, lease, promptTokens: 0, prefixDigest: "x" });
+    await h.kv.observeLlamaRequestBody({ chatId: lease.chatId, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+    expect(h.fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/slots"))).toHaveLength(1);
+    h.db.close();
+  });
+
+  it("chains a restore behind an in-flight save on the same slot", async () => {
+    const returner = "33333333-3333-3333-3333-333333333333";
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      seedSnapshots: [{ ...parkedSeed, chatId: returner }],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          markSaveStarted();
+          await saveGate;
+          return Response.json({ n_saved: 150_050, n_written: 1_000, timings: { save_ms: 10 } });
+        }
+        if (url.includes("action=restore")) {
+          return Response.json({ n_restored: 134_050, n_read: 1_000, timings: { restore_ms: 10 } });
+        }
+        return Response.json([{ id: lease.slotId, n_prompt_tokens: 0 }]);
+      },
+    });
+
+    // Chat A finishes its turn; its park save is in flight (blocked).
+    const park = h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    await saveStarted;
+
+    // Chat B returns: its restore must queue BEHIND the in-flight save — that
+    // save still captures A's valid pre-restore state; a restore issued over
+    // it would land first and poison A's snapshot.
+    const observe = h.kv.observeLlamaRequestBody({ chatId: returner, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    await flushMicrotasks();
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0);
+
+    releaseSave();
+    await park;
+    await observe;
+    expect(restoreCalls(h.fetchMock)).toHaveLength(1);
+    const urls = h.fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls.findIndex((u) => u.includes("action=save"))).toBeLessThan(
+      urls.findIndex((u) => u.includes("action=restore")),
+    );
+    h.db.close();
+  });
+
+  it("cancels other chats' queued saves before a foreground restore", async () => {
+    const chatB = "44444444-4444-4444-4444-444444444444";
+    const chatD = "55555555-5555-5555-5555-555555555555";
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const h = await loadHarness({
+      seedPromptTokens: 150_000,
+      seedSnapshots: [{ ...parkedSeed, chatId: chatD }],
+      fetchImpl: async (url) => {
+        if (url.includes("action=save")) {
+          markSaveStarted();
+          await saveGate;
+          return Response.json({ n_saved: 150_050, n_written: 1_000, timings: { save_ms: 10 } });
+        }
+        if (url.includes("action=restore")) {
+          return Response.json({ n_restored: 134_050, n_read: 1_000, timings: { restore_ms: 10 } });
+        }
+        return Response.json([{ id: lease.slotId, n_prompt_tokens: 0 }]);
+      },
+    });
+    // Give chat B a wire-truth DONE turn so it is park-eligible.
+    h.db
+      .prepare(
+        "INSERT INTO llm_requests (id, chat_id, timestamp, model_id, provider, status, prompt_tokens) VALUES (?,?,?,?,?,?,?)",
+      )
+      .run("req-b", chatB, BASE_TIME, lease.modelId, "llamacpp", "done", 150_000);
+
+    const parkA = h.kv.maybeParkChatAfterTurn({ chatId: lease.chatId, lease });
+    await saveStarted;
+    // B's park queues behind A's in-flight save (unstarted descriptor).
+    const parkB = h.kv.maybeParkChatAfterTurn({ chatId: chatB, lease: { ...lease, chatId: chatB } });
+    await flushMicrotasks();
+
+    // D's restore cancels B's queued capture — the slot's content is about to
+    // be replaced with D's state, and B parking THAT would register D's KV
+    // under B's row. Flush observe's pre-scan awaits first so the cancel is
+    // deterministically applied before the save backlog drains.
+    const observe = h.kv.observeLlamaRequestBody({ chatId: chatD, lease, body: wireBody, turnId: "t1", iteration: 1 });
+    await flushMicrotasks();
+    expect(restoreCalls(h.fetchMock)).toHaveLength(0); // still chained behind A
+
+    releaseSave();
+    await Promise.all([parkA, parkB, observe]);
+
+    // Only A's save ran; B dropped itself before touching the slot API or the
+    // registry; D's restore executed.
+    expect(saveCalls(h.fetchMock)).toHaveLength(1);
+    expect(restoreCalls(h.fetchMock)).toHaveLength(1);
+    expect(h.kv.getKvSnapshot(chatB)).toBeNull();
+    expect(h.kv.getKvSnapshot(lease.chatId)?.state).toBe("ready");
+    h.db.close();
+  });
+});
+
 describe("kv-snapshot summary surface (Phase 4)", () => {
   it("aggregates pool totals, policy, and free disk for the status panel", async () => {
     const h = await loadHarness({

@@ -104,7 +104,10 @@ deliberately, not by accident:
     `max_instances` key on `/props` is an old-fork convention that current builds
     never exposed; trust `/props` as a legacy fallback only, never as the primary
     count (assuming one slot when the real pool is larger serializes every chat onto
-    slot 0 and feeds LRU-steal churn).
+    slot 0 and feeds LRU-steal churn). A capacity of one is nonetheless the
+    preferred launch (§7 D9): the app deliberately multiplexes chats onto one
+    slot, and the restore gate reads the slot's recorded owner instead of the
+    count alone (§5.4 step 2).
 
 ## 3. Goals
 
@@ -222,7 +225,7 @@ parking. Policy (all must hold):
 | Eligibility | final iteration's `usage.prompt_tokens ≥ kvSnapshotMinTokens` — below this, re-prefill is cheaper than save+restore; the break-even is low (the §1 reference run: 134k tokens re-prefilled in ~355 s vs a ~7 s save+restore round-trip) |
 | Freshness | last save for this chat is older than `kvSnapshotSaveDebounceMs`, **or** context grew by more than `kvSnapshotMinGrowthTokens` since it — rapid-fire tool turns stay in tier 1; the last turn before an idle gap is what gets parked |
 | Spine freshness | the slot witness — the latest DONE chat request (D7's row, also the eligibility input) — must post-date the last §5.5 invalidation (`spineRewrittenAt`). End-of-turn compaction invalidates *before* the lease release enqueues the park, and the slot still holds the pre-rewrite wire shape: parking after the invalidate re-registers the snapshot the drop just deleted — and compaction is invisible to the head digest (§5.2), so a park enqueued after the drop carries the deleted observation's `prefix_digest ''`, which passes the restore gate vacuously; the freshness gate is the only thing that catches it. A rewrite landing mid-save is caught again at completion, before the `ready` mark. A rewrite that never gets a follow-up wire turn leaves the chat unparked, which is exactly right: the next turn re-prefills and then parks the fresh state |
-| Queue | per-`poolKey:slot` serialized job queue; a queued save is dropped (not deferred forever) if the same chat's turn restarts first |
+| Queue | Per-`poolKey:slot` serialized job queue covering saves **and** restores; a queued save is dropped (not deferred forever) if the same chat's turn restarts first, or if another chat's restore reaches the slot first (§5.4 step 3) |
 | Budget | §5.5 byte headroom check with the estimate learned from this chat's previous `bytes/n_tokens` ratio — read from the row **before** the `saving` upsert (the upsert rewrites `n_tokens` in place; reading after computes `prior.bytes / lastUsage`, an under-estimate whenever the context grew) |
 
 Save = one `POST action=save`; on response, record `n_saved`, `n_written`,
@@ -336,17 +339,32 @@ through this one site, so HTTP and headless share the gate:
    the live server (build tag from the running binary — `llama-build-probe`,
    60 s TTL; unknown-on-either-side passes vacuously — the file's own version
    checks are the backstop), `prefix_digest` matches (§5.2).
-2. **The pinned slot is cold.** `GET /slots` for the lease's slot: if
+2. **The pinned slot is cold.** The slot's `n_prompt_tokens` (`GET /slots` for
+   the lease's slot) is a residency witness only for the slot's **last writer**.
+   The app records that writer per `(poolKey, slotId)`: every lease-held turn
+   completion and every successful warm prefill records the chat into the slot,
+   and a successful restore re-records it (§7 D9). If a known *other* chat last
+   held the slot, the count measures that chat's fill — treat the slot as cold
+   and restore without consulting it. Otherwise the count decides: if
    `n_prompt_tokens ≥ 50%` of the row's `n_tokens`, tier 1 still holds most of
    the parked prefix and will serve the turn — tier 2 must not pay the restore.
-   The residency record is *not* this gate's input: the app-side record keeps
+   An unknown owner (app restart, unpinned activity) keeps the count probe's
+   verdict: degradation to prior behavior, never a guess. The residency record
+   is *not* this gate's input: the app-side record keeps
    `warm` for 12 h while llama.cpp evicts idle slot KV in minutes, so a mid-gap
    return would read "warm" and skip exactly the restore it needs — the slot's
-   own count is the only pre-send signal that is ground truth, and residency
+   own state is the only pre-send signal that is ground truth, and residency
    remains the UI surface. Probe failure is a
    skip, never a guess — the turn proceeds with normal prefill, no state change.
-3. `POST action=restore`, budgeted by `kvSnapshotOpTimeoutMs`. Success → bump
-   `restore_count`, stamp `last_used_at`, register a usage-validation marker.
+3. `POST action=restore`, serialized on the slot's job queue (§5.3) and
+   budgeted by `kvSnapshotOpTimeoutMs`. Before it queues, the restore cancels
+   other chats' queued-but-unstarted saves on that slot: the restore replaces
+   the slot's content, and a save that ran afterwards would capture the
+   restored state under another chat's row. In-flight saves keep their capture
+   — the slot still holds the saving chat's state until the restore lands, and
+   the queue orders the restore behind them. Success → bump `restore_count`,
+   stamp `last_used_at`, record the chat as the slot's owner, register a
+   usage-validation marker.
 4. Continue with the normal request; the existing `body.id_slot` pin routes it to the
    restored slot.
 5. **Validation:** iteration-1 usage of the turn (`onLlmRequestEvent` end events —
@@ -389,6 +407,10 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 - Server **restart**: files remain valid (restore-across-restart is the upside of a
   disk tier, D5); server **binary/launch-config change** invalidates rows lazily at
   the §5.4 step-1 check, files unlinked by the sweeper.
+- **Slot-ownership map** (§5.4 step 2, `(poolKey, slotId) → chatId`) is in-memory
+  like `pendingTokens`: a restart leaves every owner unknown and the gate degrades
+  to the count probe until the next recorded writer per slot. Files stay restorable
+  across the restart (D5) — the map only decides whether a restore is attempted.
 
 ### 5.6 Observability
 
@@ -445,7 +467,7 @@ Restore is **not** retried within a turn, and a turn never sees more than one re
 
 ## 7. Explicit deltas
 
-Decisions D1–D8; settings keys are enumerated in §8.
+Decisions D1–D9; settings keys are enumerated in §8.
 
 Every behavioral decision, named — reviewable without reading the code:
 
@@ -459,6 +481,7 @@ Every behavioral decision, named — reviewable without reading the code:
 | **D6** | Budget scope | Per-`poolKey` caps | A global cap lets one server's big chats starve another's; pools are the natural KV namespace |
 | **D7** | Eligibility metric | `usage.prompt_tokens` of the last iteration (wire-truth) | Estimators (chars/4, refined) re-open the estimator-asymmetry class of bugs turn-engine just closed; the usage number is the same quantity the cache actually matched |
 | **D8** | Feature default | **Off** until Phase 3 validation ships | It writes tens-of-GB files; opt-in per host with visible stats first is the honest rollout |
+| **D9** | Shared-slot semantics | Single-slot launch (`--parallel 1`) is the preferred topology; the tier-1 gate keys on the slot's recorded last writer, and restores serialize on the slot's job queue | The turn gate already serializes every turn, so slot multiplicity buys no throughput the app uses, while `--parallel N` shrinks every pinned chat's usable context to the slot's share. On a shared slot a count-only "warm" probe measures whoever filled the slot last — it silently skips the restore that saves minutes; an unchained restore lands over queued captures, registering one chat's KV under another's row. Ownership plus queue ordering replaces both with a re-restore of at most seconds |
 
 ## 8. Settings surface
 
@@ -497,6 +520,7 @@ hours). Unexposed keys persist through the settings merge.
 | Post-warm save error/timeout | row rolls back to the prior `ready` snapshot (or `stale` if none); the fresh head lives in tier 1 until evicted | next end-of-turn park, or the next synthesis warm pass, re-parks |
 | Warm prefill aborted/failed/preempted | no save is issued — no partial slot state captured | tier-1-only; next warm pass or turn re-parks |
 | Warm deferred past a user turn (benign) | one extra park (different digest) in the corner case | digest gate keeps the row canonical; end-of-turn debounce covers the common case |
+| Queued save of another chat races a foreground restore on the shared slot | the save is cancelled before it runs; its row keeps the prior snapshot | restore cancels queued saves on the slot and chains behind the in-flight one (§5.4 step 3); next eligible end-of-turn re-parks |
 
 In every row: no data corruption is possible (llama.cpp validates token identity on
 reuse; §2.9), and the turn's output correctness is independent of this subsystem.
@@ -540,7 +564,11 @@ eligible end-of-turn, skip when the slot is warm, restore pre-send gated by the 
 probe (cold / warm / probe-failed), wire-failure strikes, min-build skip, slot-identity
 guard, estimate ordering, D2 lease balance for headless turns
 (`chat-turn-runner-lease.test.ts`: acquire args, streamFn threading, and the
-clean/error/non-llamacpp/acquire-failure balance).
+clean/error/non-llamacpp/acquire-failure balance). Shared-slot semantics (§7 D9):
+a known other chat's ownership bypasses the warm-count probe and restores; the slot's
+own last writer keeps the probe verdict; a restore chains behind an in-flight save on
+the same slot; a restore cancels other chats' queued-but-unstarted saves before
+replacing the slot's content.
 
 Slot-capacity discovery (`llama-slot-leases.test.ts`): `GET /slots` entry-count ground
 truth, `/props` legacy fallback, inactive-peer LRU eviction, and the no-steal-while-active

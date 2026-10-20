@@ -29,7 +29,12 @@ import { resolveLlamaBuildTag } from "./llama-build-probe.js";
  * - Tier-1 warmth is read from the SERVER, not app memory: the pre-send gate
  *   probes the pinned slot's `n_prompt_tokens` (GET /slots) instead of trusting
  *   the residency record, whose warm memory outlives llama.cpp's idle-slot
- *   eviction by orders of magnitude (10-11 review fix).
+ *   eviction by orders of magnitude (10-11 review fix). The count is only a
+ *   residency witness for the slot's LAST WRITER: the app records who last
+ *   left state in each (poolKey, slot), and a restore targeting a slot whose
+ *   last writer is another chat treats the slot as cold — its count measures
+ *   the other chat's fill, not this prefix's residency (single-slot launch
+ *   makes every slot shared; doc §7 D9).
  * - A park captures what the slot holds, and the slot holds the state the last
  *   DONE chat request left there (D7). When a spine rewrite (compaction)
  *   invalidates the snapshot after that request, the slot still holds exactly
@@ -335,21 +340,62 @@ export async function observeLlamaRequestBody(input: {
     // Tier-1 gate (§5.4 step 2): ask the server what the pinned slot
     // actually holds. The app-side residency record is memory with a 12h
     // horizon while llama.cpp evicts idle slot KV in minutes, so it is not
-    // a reliable "warm" witness — the slot is. If the slot still holds most
-    // of the parked prefix, tier 1 will serve the turn; tier 2 must not
-    // pay the restore. Probe failure is a skip (never a guess): the turn
-    // proceeds with normal prefill, no state change.
-    const tier1Tokens = await slotPromptTokens(input.lease);
-    if (tier1Tokens === null) {
-      console.warn(`${LOG} chat=${short(input.chatId)} restore skipped: slot probe failed`);
-      return;
-    }
-    const warmThreshold = Math.ceil(row.nTokens * 0.5);
-    if (tier1Tokens >= warmThreshold) {
-      return;
+    // a reliable "warm" witness — the slot is. The slot's token count is
+    // only that witness for its LAST WRITER, though: on a shared slot (the
+    // single-slot launch, §7 D9) the count measures whoever filled the slot
+    // since our park, not whether our parked prefix is resident. When a
+    // known different chat last held the slot, treat it as cold and restore.
+    // Unknown owner (restart, unpinned activity) keeps the count probe's
+    // verdict — degradation to prior behavior, never a guess. Probe failure
+    // remains a skip (never a guess): the turn proceeds with normal prefill,
+    // no state change.
+    const chainKey = slotChainKey(input.lease);
+    const owner = slotOwner.get(chainKey);
+    if (owner && owner !== input.chatId) {
+      console.log(
+        `${LOG} chat=${short(input.chatId)} restore: slot=${input.lease.slotId} last held by chat=${short(owner)} — cold for this chat`,
+      );
+    } else {
+      const tier1Tokens = await slotPromptTokens(input.lease);
+      if (tier1Tokens === null) {
+        console.warn(`${LOG} chat=${short(input.chatId)} restore skipped: slot probe failed`);
+        return;
+      }
+      const warmThreshold = Math.ceil(row.nTokens * 0.5);
+      if (tier1Tokens >= warmThreshold) {
+        console.log(
+          `${LOG} chat=${short(input.chatId)} restore skipped: slot=${input.lease.slotId} still holds ${tier1Tokens}/${row.nTokens} tokens`,
+        );
+        return;
+      }
     }
 
-    const restore = await callSlotAction(input.lease, "restore", row.filename, policy.opTimeoutMs);
+    // Restore is foreground slot work: it belongs on the slot's serialized
+    // chain BEHIND any in-flight save (which captures valid pre-restore
+    // state) and AHEAD of other chats' queued saves — those would capture
+    // the state this restore lands in the slot and register it under their
+    // own row. Cancel them first: bumping the token makes each unstarted
+    // job drop itself in runSaveJob's entry check, so the restore's chain
+    // wait is one in-flight save, not a save backlog.
+    for (const job of queuedSaves.get(chainKey) ?? []) {
+      if (job.chatId === input.chatId || job.started) continue;
+      if (pendingTokens.get(job.chatId) === job.token) {
+        pendingTokens.set(job.chatId, job.token + 1);
+      }
+    }
+
+    const previous = slotQueues.get(chainKey) ?? Promise.resolve();
+    const restoreJob = previous.then(() =>
+      callSlotAction(input.lease, "restore", row.filename, policy.opTimeoutMs),
+    );
+    slotQueues.set(
+      chainKey,
+      restoreJob.then(
+        () => {},
+        () => {},
+      ),
+    );
+    const restore = await restoreJob;
     if (!restore.ok) {
       // A wire-level failure (build/config-incompatible file, torn write,
       // server error) is evidence the park is not hitting — count it as a
@@ -367,6 +413,9 @@ export async function observeLlamaRequestBody(input: {
     getDb()
       .prepare("UPDATE kv_snapshots SET last_used_at = ?, restore_count = restore_count + 1 WHERE chat_id = ?")
       .run(Date.now(), input.chatId);
+    // The restored state is now this chat's: the slot's residency witness
+    // belongs to it again.
+    slotOwner.set(chainKey, input.chatId);
     pendingRestoreValidation.set(
       `${input.chatId}:${input.turnId ?? ""}`,
       { chatId: input.chatId, turnId: input.turnId, restoredTokens: restore.nTokens ?? row.nTokens },
@@ -459,8 +508,63 @@ const pendingTokens = new Map<string, number>();
  *  slot-identity guard already bounds the worst case for a lost entry. */
 const spineRewrittenAt = new Map<string, number>();
 /** Per-slot serialized chains: llama.cpp processes one slot task at a time and
- *  our own queue keeps the registry's view of each slot coherent. */
+ *  our own queue keeps the registry's view of each slot coherent. SAVES and
+ *  RESTORES both run on these chains — with a shared slot (single-slot launch)
+ *  an unchained restore can overwrite the state a queued save is about to
+ *  capture, registering someone else's KV under the wrong row. */
 const slotQueues = new Map<string, Promise<void>>();
+/** Queued-save descriptors per slot chain, so a foreground restore can cancel
+ *  other chats' QUEUED (not yet started) captures before it replaces the
+ *  slot's state. In-flight saves keep their capture: the slot is still the
+ *  saving chat's until the restore runs, and the chain orders it first. */
+interface QueuedSaveJob {
+  chatId: string;
+  token: number;
+  started: boolean;
+}
+const queuedSaves = new Map<string, QueuedSaveJob[]>();
+/** Last app-known holder of each (poolKey, slotId): whose turn or warm last
+ *  left state in the slot. Recorded by both park entry points and by a
+ *  successful restore; a different known owner makes the tier-1 count probe
+ *  meaningless (§5.4 D9). In-memory like `spineRewrittenAt`: a restart leaves
+ *  the owner unknown and the gate falls back to the count probe's verdict —
+ *  degradation to prior behavior, never a guess. */
+const slotOwner = new Map<string, string>();
+
+function slotChainKey(lease: LlamaSlotLease): string {
+  return `${lease.poolKey}#${lease.slotId}`;
+}
+
+/**
+ * Enqueue a save job on the slot's serialized chain with a cancelable
+ * descriptor. The descriptor is removed when the job settles; a foreground
+ * restore bumps the job's token (via `pendingTokens`) so an unstarted job
+ * drops itself in `runSaveJob`'s entry check.
+ */
+function enqueueSaveJob(
+  chainKey: string,
+  chatId: string,
+  token: number,
+  run: () => Promise<void>,
+): Promise<void> {
+  const entry: QueuedSaveJob = { chatId, token, started: false };
+  const list = queuedSaves.get(chainKey) ?? [];
+  list.push(entry);
+  queuedSaves.set(chainKey, list);
+  const previous = slotQueues.get(chainKey) ?? Promise.resolve();
+  const job = previous
+    .then(() => {
+      entry.started = true;
+      return run();
+    })
+    .finally(() => {
+      const idx = list.indexOf(entry);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) queuedSaves.delete(chainKey);
+    });
+  slotQueues.set(chainKey, job.catch(() => {}));
+  return job;
+}
 
 /**
  * Fire-and-forget end-of-turn entry. Called from the lease-release `finally` of
@@ -473,6 +577,11 @@ export async function maybeParkChatAfterTurn(input: {
   try {
     const { chatId, lease } = input;
     if (!lease) return; // D2 pinning requirement: slot must be known (eligibility gate 2)
+
+    // Slot-ownership witness: this turn (whatever the park gates decide
+    // below) left its state in the pinned slot. Recorded before the enabled
+    // check so the map stays truthful across a feature toggle.
+    slotOwner.set(slotChainKey(lease), chatId);
 
     const settings = await readSettings();
     const policy = resolveKvSnapshotSettings(settings);
@@ -515,9 +624,8 @@ export async function maybeParkChatAfterTurn(input: {
     pendingTokens.set(chatId, token);
     const streamAtEnqueue = liveStreams.get(chatId);
 
-    const chainKey = `${lease.poolKey}#${lease.slotId}`;
-    const previous = slotQueues.get(chainKey) ?? Promise.resolve();
-    const job = previous.then(() =>
+    const chainKey = slotChainKey(lease);
+    const job = enqueueSaveJob(chainKey, chatId, token, () =>
       runSaveJob({
         chatId,
         lease,
@@ -528,10 +636,6 @@ export async function maybeParkChatAfterTurn(input: {
         existing,
         reason: "end-of-turn",
       }),
-    );
-    slotQueues.set(
-      chainKey,
-      job.catch(() => {}),
     );
     await job;
   } catch (error: any) {
@@ -573,6 +677,10 @@ export async function parkAfterWarm(input: {
       return;
     }
 
+    // Slot-ownership witness: a successful warm prefill leaves the warm's
+    // head in the pinned slot, whether or not the park below writes.
+    slotOwner.set(slotChainKey(lease), chatId);
+
     const settings = await readSettings();
     const policy = resolveKvSnapshotSettings(settings);
     if (!policy.enabled) {
@@ -607,9 +715,8 @@ export async function parkAfterWarm(input: {
     pendingTokens.set(chatId, token);
     const streamAtEnqueue = liveStreams.get(chatId);
 
-    const chainKey = `${lease.poolKey}#${lease.slotId}`;
-    const previous = slotQueues.get(chainKey) ?? Promise.resolve();
-    const job = previous.then(() =>
+    const chainKey = slotChainKey(lease);
+    const job = enqueueSaveJob(chainKey, chatId, token, () =>
       runSaveJob({
         chatId,
         lease,
@@ -622,7 +729,6 @@ export async function parkAfterWarm(input: {
         reason: "post-warm",
       }),
     );
-    slotQueues.set(chainKey, job.catch(() => {}));
     await job;
   } catch (error: any) {
     // Save policy failures are background noise by contract.
