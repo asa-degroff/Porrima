@@ -1,9 +1,13 @@
 # Strata Inference Backend
 
-**Status:** planned. Adds a second backend for the inference slot
+**Status:** in progress — the backend seam, turn path, stream-fed prefill
+(§3–§6) are live. Parking (§7) lands next; the llama.cpp single-slot and
+unified-progress-source follow-ups are named there.
+
+This document adds a second backend for the inference slot
 (`LlamaServerId = "inference"`). Strata is an external OpenAI-compatible
 server built on a custom engine plus ggml parts. It is not `llama-server`.
-This document records the API contract Porrima consumes, the dispatch seam,
+It records the API contract Porrima consumes, the dispatch seam,
 and the per-subsystem behavior changes.
 
 ## 1. Problem
@@ -137,6 +141,10 @@ source instead of the event shape:
 - Cache state: `cache` on the first progress chunk, else
   `usage.prompt_tokens_details.cached_tokens` / `timings.cache_n` after the
   turn. `determineCacheState` keeps its `"unknown"` fallback.
+- `return_progress` is llama.cpp's own mechanism — recent builds answer it
+  with the same four fields. The stream feed is therefore backend-neutral:
+  moving llama.cpp to the same source (poll as fallback for older builds)
+  is a follow-up, not a Strata special.
 
 Token accounting needs no change. Strata's `timings` and `cached_tokens`
 satisfy `captureLlamaRun`, `recordModelStats`, `resolveCanonicalCachedTokens`
@@ -183,46 +191,58 @@ Strata warm design:
 Failure behavior: seed errors resolve the queue job as `warmed: false` with
 the error, as today. No hard-throw chains are reachable on the Strata path.
 
-## 7. Leases and Parking on Slot 0
+## 7. Leases and Parking: one target model, per-backend transport
 
 **Slot leases.** `acquire()` returns null when the inference backend is
 Strata: `id_slot` is ignored by the server, and `--batch` self-allocates.
 `llamacppSlotBindingMode` stays llama-only. Capacity discovery is unused on
 the Strata path.
 
-**Parking.** kv-snapshot keeps its lifecycle (debounce, growth gate, byte
-budget, TTL, breaker) with these adaptations:
+**Parking targets.** The parking policy layer (eligibility gates, debounce,
+growth gate, byte budget, TTL, breaker) is backend-agnostic. It operates on
+a parking target: one physical slot on one server. Two ways to name one:
 
-- Eligibility no longer requires a lease. Under Strata the target is fixed
-  `baseUrl + slot 0`. One parked conversation at a time; saving a second
-  chat's session replaces the first file only if the name matches, and
-  Porrima's per-chat names keep the files but Strata's live session holds
-  only the newest — restore of an older file is still valid.
-- Capability probe once per server identity: `POST /slots/0?action=save`
-  with an invalid short name expecting 400/501. `501` means no
-  `slot_save_path` or `--batch` is on; disable parking for the URL and log
-  the reason.
-- `erase` does not exist. Prune deletes the file directly from the
-  directory configured in `strataSlotSavePath` (same-host assumption,
-  §1). When that key is unset, prune skips unlinking and relies on
-  same-name overwrite; files then linger until Strata's directory is
-  cleaned by hand.
-- Build identity: replace the `/proc/<pid>/exe` + `--version` probe with
-  `/props` `build_info` + `model_path` + `is_sleeping` transitions. Strata
-  also fingerprints files against the model and config itself; a `400`
-  invalid-file response marks the snapshot row `stale` (existing path).
+- **Leased slot** — llama.cpp with enforced binding. The lease identifies
+  `(baseUrl, slotId)`. This is today's behavior and stays byte-identical.
+- **Fixed slot 0** — any single-slot server. No lease is required or
+  meaningful. Strata is always single-slot. llama.cpp launched with one
+  slot has the same shape: single-slot operation is the intended
+  resource-efficient configuration on llama.cpp too, and disk parking is
+  built around it. The fixed-slot transport below serves both.
+
+Keeping the target abstraction small means the llama.cpp single-slot
+follow-up is a capability choice, not a second parking implementation.
+
+**Transport capabilities.** One adapter per backend supplies the endpoint
+semantics:
+
+| Capability | llama.cpp | Strata |
+| --- | --- | --- |
+| save / restore | `POST /slots/<id>?action=save\|restore`, any leased slot | slot 0 only; same body key `filename` and result fields |
+| erase | `action=erase` | none. Unlink from `strataSlotSavePath` when the directory is configured; otherwise rely on same-name overwrite and leave files for host cleanup |
+| cold probe | `GET /slots` → `n_prompt_tokens` of the target slot | `GET /slots` single entry; the value is kept after the request ends, which matches the held session. A fresh engine returns `[]` or zero |
+| server identity | `llama-build-probe` (`/proc` exe + `--version`) | `/props` `build_info` + `model_path`. Strata additionally fingerprints every file against model and config; a `400` invalid-file response marks the row `stale` through the existing path |
+| parallel-slot conflict | n/a | `501` when `--batch` is on: the capability probe reports the feature unsupported and parking stays off |
+
+Snapshot rows record the backend kind and target scope, so a file is never
+restored across backends or slot models.
+
+**Lifecycle adaptations** (on top of
+[design/kv-snapshot-parking.md](kv-snapshot-parking.md)):
+
+- Eligibility replaces the lease requirement with "a target can be named":
+  lease present (llama enforced), or single-slot fixed target (Strata;
+  llama single-slot later). The rest of the gates are unchanged.
 - Save timing: Strata queues save/restore behind the running request. The
   existing post-turn park point (lease-release finally) already runs after
   the turn ends, so this is safe. Restore stays at the pre-dispatch hook
-  (`observeLlamaRequestBody` equivalent), and it honors the same
-  never-throw rule: any non-2xx is a strike on the existing breaker.
-- Restore gate: the cold-slot gate reads `n_prompt_tokens` from
-  `GET /slots`. Strata keeps the last request's prompt size after it ends,
-  which reflects its held session; a fresh engine after idle-unload returns
-  `[]` or zero, so the gate logic needs no change.
-- Disk headroom: keep the `statfs` check; the session directory must be on
-  the same filesystem for the check to mean anything (documented
-  constraint).
+  and keeps the never-throw rule: any non-2xx is a strike on the breaker.
+- Disk headroom: the `statfs` check stays; it only means something when
+  `strataSlotSavePath` points at the same filesystem (documented).
+- Capability probe once per server identity: a save with a refused short
+  name distinguishes 400 (parking works, name rules enforced) from 501
+  (no `slot_save_path`, or `--batch` on): 501 disables parking for the URL
+  and logs the reason.
 
 ## 8. Model Discovery and Supervisor Surfaces
 
