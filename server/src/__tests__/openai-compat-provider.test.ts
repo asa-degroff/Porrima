@@ -17,6 +17,7 @@ import sharp from "sharp";
 import {
   computePrefillProgress,
   estimatePromptTokensForProgress,
+  isProgressOnlyChunk,
   normalizeImageForLlamaCpp,
   promptWorkTokens,
   readProcessedTokens,
@@ -539,6 +540,98 @@ describe("buildOpenAICompatChatBody", () => {
 
     const toolMsg = body.messages.find((m: any) => m.role === "tool");
     expect(toolMsg.content).toBe("wrote  ok");
+  });
+
+  it("Strata bodies carry no llama-native fields and opt into return_progress", async () => {
+    const { buildOpenAICompatChatBody, buildTranscriptContext } = await loadProviderWithTempHome();
+    const model = {
+      id: "qwen-strata",
+      api: "openai-compat",
+      provider: "strata",
+      baseUrl: "http://127.0.0.1:8080",
+      input: ["text"],
+      reasoning: true,
+    };
+    const context = buildTranscriptContext("sys", [
+      { role: "user", content: "hello", timestamp: Date.now() },
+    ] as any);
+    const lease = {
+      chatId: "chat-1", poolKey: "k", modelId: "qwen-strata",
+      baseUrl: "http://127.0.0.1:8080", slotId: 2, leaseId: "l1",
+    };
+    const { body } = await buildOpenAICompatChatBody(model as any, context, { llamaSlotLease: lease } as any);
+    expect(body.cache_prompt).toBeUndefined();
+    expect(body.id_slot).toBeUndefined();
+    expect(body.return_progress).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+
+  it("llama.cpp bodies keep cache_prompt and id_slot and send no return_progress", async () => {
+    const { buildOpenAICompatChatBody, buildTranscriptContext } = await loadProviderWithTempHome();
+    const model = {
+      id: "qwen-llama",
+      api: "openai-compat",
+      provider: "llamacpp",
+      baseUrl: "http://127.0.0.1:32100",
+      input: ["text"],
+      reasoning: true,
+    };
+    const context = buildTranscriptContext("sys", [
+      { role: "user", content: "hello", timestamp: Date.now() },
+    ] as any);
+    const lease = {
+      chatId: "chat-1", poolKey: "k", modelId: "qwen-llama",
+      baseUrl: "http://127.0.0.1:32100", slotId: 2, leaseId: "l1",
+    };
+    const { body } = await buildOpenAICompatChatBody(model as any, context, { llamaSlotLease: lease } as any);
+    expect(body.cache_prompt).toBe(true);
+    expect(body.id_slot).toBe(2);
+    expect(body.return_progress).toBeUndefined();
+  });
+});
+
+describe("isProgressOnlyChunk", () => {
+  const base = {
+    id: "c", object: "chat.completion.chunk", model: "m", created: 0,
+    choices: [{ index: 0, delta: {}, finish_reason: null as string | null }],
+  };
+
+  it("classifies a bare prompt_progress chunk as progress-only", () => {
+    expect(isProgressOnlyChunk({
+      ...base,
+      prompt_progress: { total: 6195, cache: 0, processed: 4096, time_ms: 7034 },
+    } as any)).toBe(true);
+  });
+
+  it("lets content chunks fall through to the normal path", () => {
+    expect(isProgressOnlyChunk({
+      ...base,
+      choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
+      prompt_progress: { total: 10 },
+    } as any)).toBe(false);
+  });
+
+  it("lets reasoning and tool-call chunks fall through", () => {
+    expect(isProgressOnlyChunk({
+      ...base,
+      choices: [{ index: 0, delta: { reasoning_content: "thinking" }, finish_reason: null }],
+      prompt_progress: { total: 10 },
+    } as any)).toBe(false);
+    expect(isProgressOnlyChunk({
+      ...base,
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0 }] }, finish_reason: null }],
+      prompt_progress: { total: 10 },
+    } as any)).toBe(false);
+  });
+
+  it("lets the final usage/finish chunk fall through", () => {
+    expect(isProgressOnlyChunk({
+      ...base,
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      prompt_progress: { total: 10 },
+    } as any)).toBe(false);
   });
 });
 

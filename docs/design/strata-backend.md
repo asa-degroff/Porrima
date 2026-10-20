@@ -151,6 +151,12 @@ source instead of the event shape:
 - `total` from the first `prompt_progress` chunk is the exact prefill
   denominator; store it on the run record. Until it arrives, use the char
   estimate (the current last-resort path).
+- Progress-only chunks never reach the turn's event stream. Unlike llama.cpp,
+  Strata puts these chunks on the wire during prompt processing, so the
+  provider classifies them (`isProgressOnlyChunk`) and keeps the
+  first-chunk "decoding started" boundary for real content. Without that,
+  the chat's dual-phase activity spinner (slow prefill / fast decode) jumps
+  to decode at the first progress chunk.
 - Cache state: `cache` on the first progress chunk, else
   `usage.prompt_tokens_details.cached_tokens` / `timings.cache_n` after the
   turn. `determineCacheState` keeps its `"unknown"` fallback.

@@ -520,6 +520,22 @@ function normalizeBaseUrl(baseUrl: string): string {
  *  (docs/design/strata-backend.md). Strata serves the OpenAI chat surface
  *  only: no router load, no /apply-template, no /tokenize, no /completion,
  *  no id_slot, no cache_prompt, and its conversation cache is automatic. */
+/** True when a stream chunk carries ONLY prefill progress (Strata's
+ *  `return_progress` shape: an empty delta with a prompt_progress field —
+ *  llama.cpp emits nothing like this on the stream). Such chunks feed the
+ *  prefill monitor and must not be read as "decoding started", or the
+ *  dual-phase activity spinner flips to the fast decode state minutes
+ *  before the first real token (docs/design/strata-backend.md §5). */
+export function isProgressOnlyChunk(chunk: OpenAIChatChunk): boolean {
+  const choice = chunk.choices?.[0];
+  const delta = choice?.delta;
+  return !chunk.usage &&
+    !choice?.finish_reason &&
+    !delta?.content &&
+    !delta?.reasoning_content &&
+    !(delta?.tool_calls?.length ?? false);
+}
+
 function isStrataModel(model: { provider?: string | null }): boolean {
   return model.provider === "strata";
 }
@@ -2349,18 +2365,24 @@ export const streamOpenAICompat = (
       let llamaTimings: OpenAIChatChunk["timings"] | undefined;
 
       for await (const chunk of parseSSE(response.body, options?.signal)) {
+        // Strata prefill progress (docs/design/strata-backend.md §5): while
+        // the prompt is being read, chunks with an empty delta carry
+        // prompt_progress because the body opted in with return_progress.
+        // Feed the same emit path the /slots poller uses, then skip the rest
+        // of the loop for progress-only chunks: unlike llama.cpp, Strata
+        // puts these on the wire DURING prompt processing, and the next
+        // statement treats the first parsed chunk as "decoding started" —
+        // without this the dual-phase activity spinner flips to the fast
+        // decode state minutes before the first real token.
+        if (chunk.prompt_progress && feedPromptProgress) {
+          feedPromptProgress(chunk.prompt_progress);
+          if (isProgressOnlyChunk(chunk)) continue;
+        }
+
         // llama.cpp can return HTTP headers before prompt prefill completes.
         // The first parsed SSE chunk is the reliable boundary where decoding has
         // actually started, so keep prefill progress active until then.
         announceGenerating();
-
-        // Strata prefill progress (docs/design/strata-backend.md §5): chunks
-        // with an empty delta carry prompt_progress when the body opts in
-        // with return_progress. Feed the same emit path the /slots poller
-        // uses; under llama.cpp this field never appears.
-        if (chunk.prompt_progress && feedPromptProgress) {
-          feedPromptProgress(chunk.prompt_progress);
-        }
 
         // Extract usage from final chunk
         if (chunk.usage) {
