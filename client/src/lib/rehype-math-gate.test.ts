@@ -53,7 +53,7 @@ describe("rehypeMathGate", () => {
         },
       ],
     };
-    rehypeMathGate(source)(tree);
+    rehypeMathGate(source)()(tree);
     expect(tree.children![0].children![1]).toEqual({ type: "text", value: "$\\bar$" });
   });
 
@@ -63,7 +63,7 @@ describe("rehypeMathGate", () => {
       type: "root",
       children: [{ type: "element", tagName: "p", children: [inlineMath("x^2", 2, 8)] }],
     };
-    rehypeMathGate(source)(tree);
+    rehypeMathGate(source)()(tree);
     expect(tree.children![0].children![0].type).toBe("element");
   });
 
@@ -73,14 +73,14 @@ describe("rehypeMathGate", () => {
       type: "root",
       children: [{ type: "element", tagName: "p", children: [inlineMath("VAR=", 4, 10)] }],
     };
-    rehypeMathGate(source)(tree);
+    rehypeMathGate(source)()(tree);
     expect(tree.children![0].children![0]).toEqual({ type: "text", value: "$VAR=$" });
   });
 
   it("replaces a failing display span with its fence span", () => {
     const source = "$$\n\\frac{1}\n$$";
     const tree: H = { type: "root", children: [displayMath("\\frac{1}", 0, 14)] };
-    rehypeMathGate(source)(tree);
+    rehypeMathGate(source)()(tree);
     expect(tree.children![0]).toEqual({ type: "text", value: "$$\n\\frac{1}\n$$" });
   });
 });

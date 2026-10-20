@@ -47,9 +47,14 @@ function mathValue(children: HNode[]): string {
  * `source` must be the exact string that was parsed (the output of
  * escapeNonMathDollars); the original span is recovered from the node's
  * position offsets (for display math, from its `pre` wrapper).
+ *
+ * Returns a unified **attacher** (a zero-argument function yielding the
+ * transformer), which is what `use()` expects for a plugin. Handing the raw
+ * transformer to `use()` instead makes unified call it during freeze with no
+ * tree, crashing on `undefined.children`.
  */
 export function rehypeMathGate(source: string) {
-  return (tree: HNode): void => {
+  return () => (tree: HNode): void => {
     walk(tree);
   };
 

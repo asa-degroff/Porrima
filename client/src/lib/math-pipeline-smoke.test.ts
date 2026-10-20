@@ -18,7 +18,7 @@ function pipeline(source: string): H {
   const prepared = escapeNonMathDollars(source);
   const runner = unified().use(remarkParse).use(remarkMath).use(remarkRehype);
   const tree = runner.runSync(runner.parse(prepared)) as unknown as H;
-  rehypeMathGate(prepared)(tree);
+  rehypeMathGate(prepared)()(tree);
   return tree;
 }
 
@@ -49,6 +49,24 @@ function mathElements(tree: H, cls: string): H[] {
 }
 
 describe("math pipeline (pre-pass + gate) end to end", () => {
+  it("registers through unified.use() without crashing (attacher protocol)", () => {
+    // Regression: rehypeMathGate must return an attacher, not a bare
+    // transformer. A transformer handed to use() is invoked during freeze
+    // with no tree and throws on undefined.children.
+    const prepared = escapeNonMathDollars("prose $5 and $10, math $x^2$");
+    const runner = unified()
+      .use(remarkParse)
+      .use(remarkMath)
+      .use(remarkRehype)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .use(rehypeMathGate(prepared) as any);
+    const tree = runner.runSync(runner.parse(prepared)) as unknown as H;
+    const m = mathElements(tree, "math-inline");
+    expect(m.length).toBe(1);
+    expect(textOf(m[0])).toBe("x^2");
+    expect(textOf(tree)).toContain("$5 and $10");
+  });
+
   it("renders prose dollars literally", () => {
     for (const input of [
       "set $VAR=$PATH now",
