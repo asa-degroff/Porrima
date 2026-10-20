@@ -2051,14 +2051,15 @@ export const streamOpenAICompat = (
       }
       // KV snapshot parking (docs/design/kv-snapshot-parking.md §5.4): observe
       // the wire head of this request for the digest gate, and on iteration 1
-      // of a lease-pinned turn, restore the parked snapshot before dispatch
-      // when tier-1 residency is cold. The call is total by contract — parking
-      // can delay the pre-send by at most one budgeted restore, never disturb
-      // the request or the byte-identical KV prefix.
-      if (typeof explicitDebugChatId === "string" && useLlamaSlotLease && llamaSlotLease) {
+      // of a pinned turn, restore the parked snapshot before dispatch when the
+      // slot is cold. Pinned means a lease on llama.cpp, or the fixed slot-0
+      // target on Strata (docs/design/strata-backend.md §7). The call is total
+      // by contract — parking can delay the pre-send by at most one budgeted
+      // restore, never disturb the request or the byte-identical KV prefix.
+      if (typeof explicitDebugChatId === "string" && (useLlamaSlotLease || strata)) {
         await observeLlamaRequestBody({
           chatId: explicitDebugChatId,
-          lease: llamaSlotLease,
+          lease: useLlamaSlotLease ? llamaSlotLease : null,
           body,
           turnId: requestMeta?.turnId,
           iteration: requestMeta?.iteration ?? 0,
