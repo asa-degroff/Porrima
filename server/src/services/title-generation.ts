@@ -26,8 +26,32 @@ function postProcess(raw: string | null | undefined): string | null {
   if (!title) return null;
   // Reject prompt artifacts — the small model can echo role prefixes from the prompt.
   if (/^(User|Assistant)\s*:?\s*$/i.test(title)) return null;
+  // Reject missing-input complaints. When the conversation fed to the model is
+  // blank (e.g. a tool-loop window with no visible text), the small model does
+  // the sensible thing and says so. That is never a real title — discard it so
+  // the existing chat title survives instead of being overwritten.
+  if (/^(no|empty|missing)\b.{0,24}\b(conversa|input|content|context|prompt|message|provided)\b/i.test(title)) return null;
   if (title.length > 60) title = title.slice(0, 57) + "...";
   return title;
+}
+
+/**
+ * The user-facing text of a message, for summarization. Tool-loop assistant
+ * rows persist `content: ""` — their visible prose lives in `text` segments,
+ * and pure tool-call iterations have no prose at all (only `thinking`). Fall
+ * back through those so a title prompt never gets an empty line. Mirrors the
+ * segment→content precedence used by `visibleAssistantContent` in agent.ts.
+ */
+function visibleTextForMessage(message: ChatMessage): string {
+  const content = (message.content ?? "").trim();
+  if (content) return content;
+  const fromSegments = (message.segments ?? [])
+    .filter((s) => s.type === "text" && s.content)
+    .map((s) => s.content)
+    .join("")
+    .trim();
+  if (fromSegments) return fromSegments;
+  return (message.thinking ?? "").trim();
 }
 
 async function callServer(
@@ -80,8 +104,14 @@ export async function generateTitle(
   const config = await getServerConfig();
   if (!config) return null;
 
-  const truncatedUser = userMessage.slice(0, 300);
-  const truncatedResponse = assistantResponse.slice(0, 500);
+  const truncatedUser = userMessage.trim().slice(0, 300);
+  const truncatedResponse = assistantResponse.trim().slice(0, 500);
+
+  // Don't ask the model to title a conversation that has nothing in it — it
+  // will only complain about missing input. A blank first-exchange assistant
+  // response (e.g. a pure tool-loop turn) still has the user message, so this
+  // only trips when both sides are empty.
+  if (!truncatedUser && !truncatedResponse) return null;
 
   const systemContent =
     "Generate a short title (2-5 words) summarizing this conversation. " +
@@ -141,12 +171,26 @@ export async function regenerateTitle(
   const config = await getServerConfig();
   if (!config) return null;
 
-  const recentMessages = messages.slice(-10);
+  // Walk the tail collecting messages that carry visible text (up to 10).
+  // A fixed last-10 slice is unsafe: during a long tool run the recent rows
+  // are `_toolLoopFragment` assistant turns with empty `content`, so a naive
+  // slice hands the title model a blank prompt and it replies "No conversation
+  // provided". Skipping blanks and expanding backward past them keeps the real
+  // recent topic — including the last user message — in the window.
   const parts: string[] = [];
-  for (const m of recentMessages) {
+  for (let i = messages.length - 1; i >= 0 && parts.length < 10; i--) {
+    const m = messages[i];
+    if (m._outOfContext) continue;
+    // System rows are memory/context deltas, not conversation content.
+    if (m.role === "system") continue;
+    const text = visibleTextForMessage(m);
+    if (!text) continue;
     const role = m.role === "user" ? "User" : "Assistant";
-    parts.push(`${role}: ${m.content.slice(0, 200)}`);
+    parts.unshift(`${role}: ${text.slice(0, 200)}`);
   }
+
+  // Nothing visible to summarize — do not call the model with a blank prompt.
+  if (parts.length === 0) return null;
   const context = parts.join("\n\n");
 
   const systemContent =
