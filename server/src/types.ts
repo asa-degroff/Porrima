@@ -124,6 +124,14 @@ export interface ChatMessage {
   _toolLoopId?: string;
   /** True when this row is one tool-use iteration, not the final assistant answer. */
   _toolLoopFragment?: boolean;
+  /**
+   * The user's answer to an ask_user question. Kept in chat history so the UI
+   * shows the reply, but NOT replayed: the answer reaches the model as the tool
+   * result of its pending ask_user call (see the resume path in routes/chat.ts).
+   * Replaying both would answer the same call twice and change transcript bytes
+   * at every rebuild.
+   */
+  _askUserAnswer?: boolean;
   /** pi-ai provider identity used when this assistant row was generated. */
   _provider?: string;
   _api?: string;

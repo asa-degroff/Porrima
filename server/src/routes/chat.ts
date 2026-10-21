@@ -12,7 +12,7 @@ import { createTimeMarkerState } from "../services/time-marker.js";
 import { splitNextUserContext } from "../services/pending-user-context.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { digestPiMessages, digestWireShape, getPrefixSnapshot, recordReplaySnapshot } from "../services/kv-prefix-diagnostics.js";
-import { trimMessagesToAskUser } from "../services/pi-message-utils.js";
+import { findAskUserToolCallId, lastAskUserCallIdFromCalls, trimMessagesToAskUser } from "../services/pi-message-utils.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { enqueueImmediateExtraction, preCompactionFlushHook, markChatActive, markChatInactive, touchChatActivity, estimateMidTurnSignalTokens, triggerMidTurnExtractionPulse, type MidTurnPulseResult } from "../services/memory-extraction.js";
@@ -2797,11 +2797,24 @@ async function handleChatStream(
               state.thinkingPromoted = false;
             }
           } else if (stopReason === "stop" && !hasTextContent && state.thinkingText.trim().length > 0) {
-            // No stranded tool call — safe to promote thinking to content
-            state.fullText = state.thinkingText;
-            state.thinkingText = "";
-            state.thinkingPromoted = true;
-            console.log(`[chat] promoted thinking to content (${state.fullText.length}ch) - model output thinking only`);
+            // A tool-loop iteration keeps its reasoning in the thinking field.
+            // That row is replayed as assistant(tool_calls) carrying
+            // reasoning_content; folding the reasoning into visible text rewrites
+            // the bytes every later rebuild sends for it, which is exactly how a
+            // turn boundary loses its cached prefix. Promotion exists for
+            // thinking-only turns, where the user would otherwise see nothing.
+            if (state.allToolCalls.length > 0) {
+              console.log(
+                `[chat] skipped thinking promotion (${state.thinkingText.length}ch) — iteration carries ` +
+                `${state.allToolCalls.length} tool call(s); thinking stays reasoning_content`,
+              );
+            } else {
+              // No stranded tool call — safe to promote thinking to content
+              state.fullText = state.thinkingText;
+              state.thinkingText = "";
+              state.thinkingPromoted = true;
+              console.log(`[chat] promoted thinking to content (${state.fullText.length}ch) - model output thinking only`);
+            }
           }
 
           console.log(
@@ -4926,26 +4939,87 @@ router.post("/", async (req, res) => {
       contextMessages.push(...rebuiltContext);
     }
 
-    // Inject the user's answer as a ToolResultMessage for the pending ask_user call
-    // One anchor instance shared by the wire prompt and the persisted row.
+    // Pair the answer with the call it answers. One anchor instance shared by
+    // the wire prompt and the persisted row.
     const resumeTimeAnchor = buildTimeAnchor(chat.messages, chat.id);
-    const toolResultMsg: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: pendingState.askToolCallId,
-      toolName: "ask_user",
-      content: [{ type: "text", text: `${message}${resumeTimeAnchor}` }],
-      isError: false,
-      timestamp: Date.now(),
-    };
-    contextMessages.push(toolResultMsg);
+    const answerText = `${message}${resumeTimeAnchor}`;
+    const askToolCallId =
+      pendingState.askToolCallId ||
+      lastAskUserCallIdFromCalls(pendingState.toolCalls) ||
+      findAskUserToolCallId(contextMessages);
 
-    // Show the answer in the UI as a user message
+    let toolResultMsg: ToolResultMessage | null = null;
+    let fallbackAnswerMsg: { role: "user"; content: string; timestamp: number } | null = null;
+    let askedRow: ChatMessage | null = null;
+
+    if (!askToolCallId) {
+      // Nothing to pair against. Emit the answer the way any other user message
+      // arrives rather than a tool result for a call that is not in the
+      // transcript, and leave the persisted row replayable.
+      console.warn(
+        `[chat] ask_user resume: no ask_user tool call to pair the answer with — injecting as a user message`,
+      );
+      fallbackAnswerMsg = { role: "user" as const, content: answerText, timestamp: Date.now() };
+      contextMessages.push(fallbackAnswerMsg);
+    } else {
+      toolResultMsg = {
+        role: "toolResult",
+        toolCallId: askToolCallId,
+        toolName: "ask_user",
+        content: [{ type: "text", text: answerText }],
+        isError: false,
+        timestamp: Date.now(),
+      };
+      contextMessages.push(toolResultMsg);
+
+      // Persist the pair exactly as the live turn put it on the wire: the
+      // assistant message that asked, with the answer as its tool result.
+      // Without this row, a rebuilt transcript drops both the call and its
+      // result and the boundary re-prefills from wherever they used to sit.
+      // upsertAssistantRow replaces an already-committed fragment on an exact
+      // call-id match, so a call that was checkpointed mid-loop is merged,
+      // not duplicated.
+      const identity = replayIdentityForModel(chat.modelId);
+      const askedCalls: ChatToolCall[] = pendingState.toolCalls?.length
+        ? (pendingState.toolCalls as ChatToolCall[])
+        : [{
+            id: askToolCallId,
+            name: "ask_user",
+            arguments: { question: pendingState.askQuestion ?? "", options: pendingState.askOptions },
+          }];
+      const answerResult: ChatToolResult = {
+        toolCallId: askToolCallId,
+        toolName: "ask_user",
+        content: answerText,
+        isError: false,
+      };
+      askedRow = upsertAssistantRow(chat.messages, {
+        role: "assistant",
+        content: pendingState.fullText ?? "",
+        thinking: pendingState.thinkingText || undefined,
+        timestamp: Date.now(),
+        toolCalls: askedCalls,
+        toolResults: orderToolResultsByToolCalls(askedCalls, [
+          ...(pendingState.toolResults ?? []),
+          answerResult,
+        ]),
+        _toolLoopFragment: true,
+        _api: identity.api,
+        _provider: identity.provider,
+        _model: identity.model,
+      });
+    }
+
+    // Show the answer in the UI as a user message. When the answer is already
+    // paired to its call this row is display-only: hydration skips it so the
+    // model receives the answer once, as the tool result.
     const resumeAnswerRow: ChatMessage = {
       role: "user",
       content: message,
       images: persistedImages?.length ? persistedImages : undefined,
       timestamp: Date.now(),
       timeAnchor: resumeTimeAnchor,
+      _askUserAnswer: askToolCallId ? true : undefined,
     };
     chat.messages.push(resumeAnswerRow);
     await saveChat(chat);
@@ -5060,7 +5134,22 @@ router.post("/", async (req, res) => {
     // it. Mirrors the send/edit hidden-row + merged-message pattern.
     if (resumeMemoriesDelta) {
       const deltaContext = `[System context — updated memories]\n${resumeMemoriesDelta}`;
-      toolResultMsg.content = [{ type: "text", text: `${message}${resumeTimeAnchor}\n\n${deltaContext}` }];
+      const mergedAnswer = `${answerText}\n\n${deltaContext}`;
+      if (toolResultMsg) {
+        toolResultMsg.content = [{ type: "text", text: mergedAnswer }];
+      } else if (fallbackAnswerMsg) {
+        fallbackAnswerMsg.content = mergedAnswer;
+      }
+
+      // The delta rode inside the paired tool result on the wire. Fold it into
+      // the persisted copy of that result too, so a rebuilt transcript emits the
+      // same bytes instead of the same text at a different position.
+      if (askedRow?.toolResults) {
+        askedRow.toolResults = askedRow.toolResults.map((tr) =>
+          tr.toolCallId === askToolCallId ? { ...tr, content: mergedAnswer } : tr,
+        );
+      }
+
       const insertAt = Math.max(0, resolveCurrentMessageIndex(chat.messages, resumeAnswerRow));
       chat.messages.splice(insertAt, 0, {
         role: "system",
@@ -5068,8 +5157,10 @@ router.post("/", async (req, res) => {
         timestamp: Date.now(),
         // Structural "next user context" marker: wire builds exclude this row
         // and merge its content into the following user message; replay merges
-        // the persisted row identically.
-        _mergeIntoNextUserMessage: true,
+        // the persisted row identically. When the answer is paired to its call
+        // the merge already happened above, so the row is record-only — replay
+        // must not see the delta a second time.
+        ...(askedRow ? { _outOfContext: true } : { _mergeIntoNextUserMessage: true }),
       });
       await saveChat(chat);
       // Delivery receipt — the delta is on the wire and the replay row is saved.

@@ -212,6 +212,15 @@ export function chatMessagesToPiMessages(
     // Skip out-of-context messages (preserved for UI, not for LLM)
     if (m._outOfContext) continue;
 
+    // The ask_user answer is a UI copy — the model already received it as the
+    // tool result paired to its call. Flush any pending system context at this
+    // position first, so a memory delta injected before the answer stays at
+    // the same place in the transcript instead of sliding to a later turn.
+    if (m._askUserAnswer) {
+      flushPendingSystemContext(m.timestamp);
+      continue;
+    }
+
     if (m.role === "system") {
       // Persisted memory-delta messages live in chat history with role "system"
       // so the UI can hide them. Model replay merges them into the following

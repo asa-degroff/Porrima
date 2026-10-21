@@ -1427,6 +1427,14 @@ async function convertMessages(model: Model<Api>, context: TranscriptContext): P
           .join("\n");
         const hasImages = tr.content.some((c: any) => c.type === "image");
 
+        // A tool result with no call id would be paired to its tool NAME, which
+        // no assistant message actually called — the provider then sees a result
+        // for a call that never happened. Loud on purpose: this is the seam where
+        // wire-vs-replay drift starts.
+        if (!tr.toolCallId) {
+          console.warn(`[openai-compat] tool result without a toolCallId (tool=${tr.toolName}) — pairing is broken`);
+        }
+
         params.push({
           role: "tool",
           tool_call_id: tr.toolCallId || tr.toolName,

@@ -231,6 +231,40 @@ export function sanitizeProviderText(text: string): string {
  * out-of-context history that the compaction removed (which once produced a
  * 225k-token resume prompt and a KV-cache-missing prefill).
  */
+/**
+ * Find the tool-call id of the most recent ask_user call in a context.
+ *
+ * The pause saves `askToolCallId` alongside the pending state, but the saves
+ * that run before the ask_user callback is wired (crash recovery, mid-turn
+ * compaction) store an empty string. When the id is missing the provider has
+ * nothing to pair the answer against, so look it up in the transcript that is
+ * already in hand — the assistant message carrying the call is the authority.
+ */
+export function findAskUserToolCallId(messages: Message[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as any;
+    if (message?.role !== "assistant") continue;
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const block = blocks[j];
+      if (block?.type === "toolCall" && block.name === "ask_user" && typeof block.id === "string" && block.id) {
+        return block.id;
+      }
+    }
+  }
+  return null;
+}
+
+/** Same lookup for the persisted accumulator form (pending_states.toolCalls). */
+export function lastAskUserCallIdFromCalls(calls: Array<{ id?: string; name?: string }> | undefined): string | null {
+  if (!calls?.length) return null;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const call = calls[i];
+    if (call?.name === "ask_user" && typeof call.id === "string" && call.id) return call.id;
+  }
+  return null;
+}
+
 export function trimMessagesToAskUser(messages: Message[]): { trimmed: Message[]; found: boolean } {
   const trimmed = [...messages];
   let found = false;
