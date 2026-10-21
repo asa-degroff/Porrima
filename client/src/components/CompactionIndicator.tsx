@@ -249,7 +249,7 @@ export const MidTurnCompactionIndicator = memo(function MidTurnCompactionIndicat
             className="px-4 pb-3 pt-0 border-t"
             style={{ borderColor: "rgba(147, 197, 253, 0.15)" }}
           >
-            <div className="mt-3 max-h-64 overflow-y-auto text-xs text-white/50 leading-relaxed whitespace-pre-wrap">
+            <div className="mt-3 max-h-64 overflow-y-auto overflow-x-hidden text-xs text-white/50 leading-relaxed whitespace-pre-wrap break-words">
               {midTurn.content}
             </div>
           </div>

@@ -159,9 +159,14 @@ export function ThinkingBlock({
           <div
             ref={contentRef}
             onScroll={handleScroll}
-            className="px-3 pb-3 max-h-64 overflow-y-auto"
+            className="px-3 pb-3 max-h-64 overflow-y-auto overflow-x-hidden"
           >
-            <pre className="text-xs text-white/50 whitespace-pre-wrap font-[inherit] leading-relaxed">
+            {/* `overflow-y-auto` alone makes this box horizontally scrollable too
+                (CSS computes overflow-x to auto when the other axis is non-visible),
+                so any thinking line Chrome cannot break — a long path, a row id, a
+                digest — paints a scrollbar on narrow screens. `break-words` removes
+                the overflow instead of just hiding the affordance. */}
+            <pre className="text-xs text-white/50 whitespace-pre-wrap break-words font-[inherit] leading-relaxed">
               {thinking}
             </pre>
           </div>

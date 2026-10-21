@@ -1110,7 +1110,7 @@ function ScrollableToolContainer({
   return (
     <div className="my-2 relative depth-raised rounded-lg border border-white/10 bg-white/[0.02]">
       {header}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto rounded-b-lg max-h-[300px] custom-scrollbar">
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto overflow-x-hidden rounded-b-lg max-h-[300px] custom-scrollbar">
         {children}
       </div>
       {/* Scroll to bottom button - appears when user scrolls away during streaming */}
@@ -1172,7 +1172,7 @@ function ToolCallsList({
           <span className="text-white/20">•</span>
           <span className="text-[11px]">Scroll to view all</span>
         </div>
-        <div className="max-h-[300px] overflow-y-auto rounded-b-lg custom-scrollbar">
+        <div className="max-h-[300px] overflow-y-auto overflow-x-hidden rounded-b-lg custom-scrollbar">
           {renderToolCalls()}
         </div>
       </div>
