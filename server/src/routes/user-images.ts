@@ -49,7 +49,7 @@ router.get("/:id/thumb", async (req, res) => {
   try {
     await access(thumbPath);
     res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     createReadStream(thumbPath).pipe(res);
   } catch {
     res.status(404).json({ error: "Thumbnail not found" });
@@ -76,7 +76,7 @@ router.get("/:id/image.:ext", async (req, res) => {
     await access(imagePath);
     const contentType = `image/${ext === "jpg" || ext === "jpeg" ? "jpeg" : ext}`;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     createReadStream(imagePath).pipe(res);
   } catch {
     res.status(404).json({ error: "Image not found" });

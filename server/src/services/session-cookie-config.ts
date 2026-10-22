@@ -19,10 +19,16 @@
  *   the local-only and Cloudflare-fronted code paths.
  */
 export function getSessionCookieConfig(): import("express-session").CookieOptions {
+  // The Cloudflare-fronted deployment sets ORIGIN=https://…; only then can the
+  // browser receive a Secure cookie. Local-only http://localhost setup keeps
+  // secure off, which is why this is derived from ORIGIN rather than NODE_ENV.
+  const origin = (process.env.ORIGIN ?? "").trim();
+  const secure = origin.startsWith("https://");
   return {
     httpOnly: true,
-    secure: false,
+    secure,
     sameSite: "lax",
+    path: "/",
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   };
 }

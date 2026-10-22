@@ -48,6 +48,11 @@ function normalizeMemoryDurability(value: unknown): MemoryDurability {
 
 const router = Router();
 
+/** Cap request payloads that go straight into embeddings/FTS. The embedding
+ *  model has its own token window, and an unbounded MATCH query is CPU work. */
+const MAX_MEMORY_TEXT_CHARS = 64_000;
+const MAX_SEARCH_QUERY_CHARS = 2_000;
+
 function stripEmbedding(memory: Memory): MemorySummary {
   const { embedding, ...rest } = memory;
   return rest;
@@ -498,7 +503,10 @@ router.get("/", async (req, res) => {
 // Create memory (auto-embeds)
 router.post("/", async (req, res) => {
   const { text, category, importance, durability, sourceChatId, sourceType, sourceId } = req.body;
-  if (!text) return res.status(400).json({ error: "text is required" });
+  if (typeof text !== "string" || !text.trim()) return res.status(400).json({ error: "text is required" });
+  if (text.length > MAX_MEMORY_TEXT_CHARS) {
+    return res.status(413).json({ error: `text exceeds ${MAX_MEMORY_TEXT_CHARS} characters` });
+  }
 
   let embedding: number[];
   try {
@@ -661,6 +669,9 @@ router.patch("/:id", async (req, res) => {
 
   const existing = await getMemoryById(req.params.id);
   if (!existing) return res.status(404).json({ error: "Memory not found" });
+  if (typeof text === "string" && text.length > MAX_MEMORY_TEXT_CHARS) {
+    return res.status(413).json({ error: `text exceeds ${MAX_MEMORY_TEXT_CHARS} characters` });
+  }
 
   // Text change → create a new memory that supersedes the old one (preserves lineage)
   if (text !== undefined && text !== existing.text) {
@@ -864,7 +875,10 @@ router.get("/contradictions", async (_req, res) => {
 // Conversation search (FTS5 over chat history)
 router.post("/conversations/search", async (req, res) => {
   const { query, chatId, limit } = req.body;
-  if (!query) return res.status(400).json({ error: "query is required" });
+  if (typeof query !== "string" || !query.trim()) return res.status(400).json({ error: "query is required" });
+  if (query.length > MAX_SEARCH_QUERY_CHARS) {
+    return res.status(413).json({ error: `query exceeds ${MAX_SEARCH_QUERY_CHARS} characters` });
+  }
 
   const { searchChatMessages, getChatTitle } = await import("../services/chat-storage.js");
 

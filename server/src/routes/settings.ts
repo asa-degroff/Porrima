@@ -36,6 +36,45 @@ import { sshConnectionFieldError } from "../utils/ssh-target.js";
 
 const router = Router();
 
+/** Provider keys and the Strata bearer token are write-only: responses redact
+ *  them and a save that omits or blanks them leaves the stored value intact. */
+const SECRET_SETTING_FIELDS = [
+  "braveApiKey",
+  "exaApiKey",
+  "tavilyApiKey",
+  "deepseekApiKey",
+  "strataApiKey",
+] as const;
+
+function redactSettingsSecrets(settings: Settings): {
+  settings: Settings;
+  configuredSecrets: string[];
+} {
+  const redacted: Settings = { ...settings };
+  const configuredSecrets: string[] = [];
+  for (const field of SECRET_SETTING_FIELDS) {
+    if (settings[field]) {
+      configuredSecrets.push(field);
+      (redacted as unknown as Record<string, unknown>)[field] = "";
+    }
+  }
+  return { settings: redacted, configuredSecrets };
+}
+
+/** Drop blank secret fields so the merge in saveSettings keeps the stored key.
+ *  `strataApiKey` is sent as `undefined` when the input is empty, which would
+ *  otherwise overwrite the existing value during the spread merge. */
+function preserveStoredSecrets(incoming: unknown): unknown {
+  if (!incoming || typeof incoming !== "object") return incoming;
+  const next = { ...(incoming as Record<string, unknown>) };
+  for (const field of SECRET_SETTING_FIELDS) {
+    if (next[field] === "" || next[field] === undefined || next[field] === null) {
+      delete next[field];
+    }
+  }
+  return next;
+}
+
 const SERVER_OWNED_ACTIVITY_FIELDS = [
   "sleepModeTriggeredAt",
   "systemPauseStartedAt",
@@ -67,15 +106,16 @@ function baselineSensitiveSettingsChanged(before: Settings, after: Settings): bo
 
 router.get("/", async (_req, res) => {
   const settings = await getSettings();
+  const { settings: visible, configuredSecrets } = redactSettingsSecrets(settings);
+  let headerImageId: string | undefined;
   try {
     const headerImageInfo = await getHeaderImageInfo();
-    res.json({
-      ...settings,
-      headerImageId: headerImageInfo.exists ? headerImageInfo.version : undefined,
-    });
+    if (headerImageInfo.exists) headerImageId = headerImageInfo.version;
   } catch {
-    res.json(settings);
+    // Header image metadata is best-effort.
   }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ...visible, headerImageId, configuredSecrets });
 });
 
 router.get("/storage-diagnostics", async (_req, res) => {
@@ -84,7 +124,9 @@ router.get("/storage-diagnostics", async (_req, res) => {
 
 router.put("/", async (req, res) => {
   const before = await getSettings();
-  const settings = await saveSettings(stripServerOwnedActivityFields(req.body ?? {}));
+  const settings = await saveSettings(
+    stripServerOwnedActivityFields(preserveStoredSecrets(req.body ?? {}) as Settings)
+  );
   if (baselineSensitiveSettingsChanged(before, settings)) {
     clearLlamaCacheResidencyTarget(NEW_AGENT_CHAT_BASELINE_CACHE_ID, "new-agent-chat");
   }
@@ -111,7 +153,9 @@ router.put("/", async (req, res) => {
       .then((m) => m.clearAllKvSnapshots("inference backend switched"))
       .catch(() => {});
   }
-  res.json(settings);
+  const { settings: visible, configuredSecrets } = redactSettingsSecrets(settings);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ...visible, configuredSecrets });
 });
 
 router.get("/ssh-connections", async (_req, res) => {
@@ -336,14 +380,31 @@ router.get("/kv-snapshots", async (_req, res) => {
 
 // POST /api/settings/header-image — Upload/replace the header image (multipart/form-data)
 router.post("/header-image", (req, res) => {
-  const bb = Busboy({ headers: req.headers });
+  const bb = Busboy({
+    headers: req.headers,
+    // Header art is a small icon; cap the upload before it reaches sharp.
+    limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  });
   let fileReceived = false;
   let responded = false;
+  let tooLarge = false;
   bb.on("file", (_fieldname: string, file: NodeJS.ReadableStream, fileInfo: { filename: string; mimeType: string }) => {
+    if (fileReceived) {
+      file.resume();
+      return;
+    }
     fileReceived = true;
     const chunks: Buffer[] = [];
+    file.on("limit", () => {
+      tooLarge = true;
+      if (!responded) {
+        responded = true;
+        res.status(413).json({ error: "Header image exceeds 20 MB" });
+      }
+    });
     file.on("data", (chunk: Buffer) => chunks.push(chunk));
     file.on("end", async () => {
+      if (tooLarge) return;
       const buffer = Buffer.concat(chunks);
       try {
         console.log(`[header-image] saving ${buffer.length} bytes, mime=${fileInfo.mimeType}`);
@@ -352,7 +413,11 @@ router.post("/header-image", (req, res) => {
         if (!responded) { responded = true; res.json(savedInfo); }
       } catch (e: any) {
         console.error(`[header-image] save failed:`, e.message);
-        if (!responded) { responded = true; res.status(500).json({ error: e.message }); }
+        if (!responded) {
+          responded = true;
+          const status = /^Unsupported image format/.test(e?.message || "") ? 400 : 500;
+          res.status(status).json({ error: e.message });
+        }
       }
     });
   });
@@ -399,7 +464,7 @@ router.get("/header-image/thumb", async (_req, res) => {
   try {
     await access(thumbPath);
     res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     res.setHeader("Vary", "Accept-Encoding");
     createReadStream(thumbPath).pipe(res);
   } catch {
@@ -419,7 +484,7 @@ router.get("/header-image/image.:ext", async (req, res) => {
     await access(imagePath);
     const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext}`;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     res.setHeader("Vary", "Accept-Encoding");
     createReadStream(imagePath).pipe(res);
   } catch {

@@ -25,7 +25,7 @@ router.get("/:id/image.:ext", async (req, res) => {
       ext === "bin" ? "application/octet-stream" :
       `image/${ext}`;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     createReadStream(imagePath).pipe(res);
   } catch {
     res.status(404).json({ error: "Image not found" });

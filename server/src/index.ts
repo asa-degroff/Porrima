@@ -5,6 +5,8 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { Request, Response, NextFunction } from "express";
 import { responseCompression } from "./middleware/compression.js";
+import { securityHeaders } from "./middleware/security-headers.js";
+import { rateLimit } from "./middleware/rate-limit.js";
 import modelsRouter from "./routes/models.js";
 import chatsRouter from "./routes/chats.js";
 import chatRouter from "./routes/chat.js";
@@ -163,6 +165,9 @@ await initSshMux();
 
 const app = express();
 
+// Baseline response headers first so every route (including errors) carries them.
+app.use(securityHeaders);
+
 // Trust proxy (Cloudflare Tunnel terminates TLS upstream)
 if (isProd) {
   app.set("trust proxy", 1);
@@ -185,18 +190,27 @@ if (isProd) {
   app.use(cors({ origin: true, credentials: true }));
 }
 
-app.use(express.json({ limit: "50mb" }));
-
 // Compress API responses. Must be mounted before every router so it wraps
 // their res.write/res.end, and must keep its content-type filter so the
 // SSE routes stay unbuffered (see middleware/compression.ts).
 app.use(responseCompression());
 
-// Auth routes (unprotected)
-app.use("/api/auth", authRouter);
+// Auth routes (unprotected). Mounted before the global body parser so they get
+// a small body limit and a rate limit: these are the only endpoints an
+// unauthenticated caller can reach.
+app.use(
+  "/api/auth",
+  rateLimit({ name: "auth", windowMs: 5 * 60_000, max: 60 }),
+  express.json({ limit: "64kb" }),
+  authRouter,
+);
 
-// Auth middleware (protects all other /api/* routes)
+// Auth middleware (protects all other /api/* routes). Mounted before the large
+// JSON parser so an unauthenticated caller cannot make the server buffer a
+// 50 MB body only to receive a 401.
 app.use("/api", requireAuth);
+
+app.use(express.json({ limit: "50mb" }));
 
 // Protected API routes
 app.use("/api/models", modelsRouter);

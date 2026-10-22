@@ -110,6 +110,54 @@ describe("first-run setup token", () => {
     }
   });
 
+  it("recovers from a setup-token lock after the cooldown", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "porrima-auth-token-"));
+    try {
+      const storage = await loadAuthStorage(dataDir);
+      const token = await storage.getOrCreateSetupToken();
+      const tokenPath = storage.getSetupTokenFilePath();
+      if (!token) throw new Error("expected a fresh setup token");
+
+      for (let i = 0; i < storage.SETUP_TOKEN_MAX_FAILED_ATTEMPTS; i += 1) {
+        expect(await storage.verifySetupToken(`wrong-${i}`)).toBe(false);
+      }
+      expect(await storage.verifySetupToken(token)).toBe(false);
+
+      // Simulate the cooldown elapsing instead of waiting 15 minutes.
+      const state = readSetupTokenState(tokenPath);
+      state.lockedAt = new Date(Date.now() - storage.SETUP_TOKEN_LOCK_MS - 1_000).toISOString();
+      writeFileSync(tokenPath, `${JSON.stringify(state, null, 2)}\n`);
+
+      expect(await storage.verifySetupToken(token)).toBe(true);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("binds a consumed token to one session and re-arms it on restart", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "porrima-auth-token-"));
+    try {
+      const storage = await loadAuthStorage(dataDir);
+      const token = await storage.getOrCreateSetupToken();
+      if (!token) throw new Error("expected a fresh setup token");
+
+      expect(await storage.verifySetupToken(token, "session-a")).toBe(true);
+      // A different client holding the leaked token is rejected.
+      expect(await storage.verifySetupToken(token, "session-b")).toBe(false);
+      // The legitimate session can retry a failed WebAuthn ceremony, even
+      // without re-entering the token.
+      expect(await storage.verifySetupToken(token, "session-a")).toBe(true);
+      expect(await storage.verifySetupToken(undefined, "session-a")).toBe(true);
+      expect(await storage.verifySetupToken(undefined, "session-b")).toBe(false);
+
+      // A restart loses the in-memory session store, so the token is re-armed.
+      await storage.releaseConsumedSetupToken();
+      expect(await storage.verifySetupToken(token, "session-b")).toBe(true);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects and clears setup tokens once setup is complete", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "porrima-auth-token-"));
     try {

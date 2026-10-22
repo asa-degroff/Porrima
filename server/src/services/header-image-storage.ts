@@ -7,17 +7,15 @@ const HEADER_IMAGE_DIR = appDataPath("header-image");
 const HEADER_SIZE = 96;
 const HEADER_QUALITY = 85;
 
-function mimeTypeToExt(mimeType: string): string {
-  const map: Record<string, string> = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-    "image/gif": "gif",
-    "image/avif": "avif",
-    "image/jxl": "jxl",
-  };
-  return map[mimeType] || "png";
-}
+/** Formats we are willing to persist and serve. SVG is deliberately excluded:
+ *  it is executable when served from the app origin. */
+const FORMAT_TO_EXT: Record<string, string> = {
+  jpeg: "jpg",
+  png: "png",
+  webp: "webp",
+  gif: "gif",
+  avif: "avif",
+};
 
 export interface HeaderImageInfo {
   url: string;
@@ -44,22 +42,19 @@ async function getHeaderImageVersion(): Promise<string> {
  */
 export async function saveHeaderImage(
   imageBuffer: Buffer,
-  mimeType: string
+  _mimeType: string
 ): Promise<HeaderImageInfo> {
   await mkdir(HEADER_IMAGE_DIR, { recursive: true });
 
-  const ext = mimeTypeToExt(mimeType);
-
-  await Promise.all(
-    IMAGE_EXTS.map((existingExt) => rm(join(HEADER_IMAGE_DIR, `image.${existingExt}`), { force: true })),
-  );
-
-  // Save original
-  const originalPath = join(HEADER_IMAGE_DIR, `image.${ext}`);
-  await writeFile(originalPath, imageBuffer);
-
-  // Create a square thumbnail cropped from center
+  // Decode before writing: sharp validates the bytes, and its reported format —
+  // not the client-declared Content-Type — decides the extension we serve.
+  // Rejecting here leaves the previous header image untouched.
   const meta = await sharp(imageBuffer).metadata();
+  const ext = meta.format ? FORMAT_TO_EXT[meta.format] : undefined;
+  if (!ext) {
+    throw new Error(`Unsupported image format: ${meta.format || "unknown"}`);
+  }
+
   const size = Math.min(meta.width ?? 96, meta.height ?? 96);
   const thumbBuffer = await sharp(imageBuffer)
     .extract({
@@ -72,6 +67,13 @@ export async function saveHeaderImage(
     .webp({ quality: HEADER_QUALITY })
     .toBuffer();
 
+  await Promise.all(
+    IMAGE_EXTS.map((existingExt) => rm(join(HEADER_IMAGE_DIR, `image.${existingExt}`), { force: true })),
+  );
+
+  const originalPath = join(HEADER_IMAGE_DIR, `image.${ext}`);
+  await writeFile(originalPath, imageBuffer);
+
   const thumbPath = join(HEADER_IMAGE_DIR, "thumb.webp");
   await writeFile(thumbPath, thumbBuffer);
   const version = await getHeaderImageVersion();
@@ -79,7 +81,7 @@ export async function saveHeaderImage(
   return {
     url: appendVersion(`/api/settings/header-image/image.${ext}`, version),
     thumbUrl: appendVersion(`/api/settings/header-image/thumb`, version),
-    mimeType,
+    mimeType: ext === "jpg" ? "image/jpeg" : `image/${ext}`,
     exists: true,
     version,
   };

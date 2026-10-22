@@ -664,6 +664,14 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
   const [strataUrl, setStrataUrl] = useState(settings.strataUrl || STRATA_DEFAULT_URL);
   const [strataApiKey, setStrataApiKey] = useState(settings.strataApiKey || "");
   const [strataSlotSavePath, setStrataSlotSavePath] = useState(settings.strataSlotSavePath || "");
+
+  // Provider keys are write-only in API responses. A stored key renders as an
+  // empty field whose placeholder says it is configured; blank submits are
+  // dropped server-side, so leaving it alone keeps the secret.
+  const secretPlaceholder = (field: string, fallback: string) =>
+    settings.configuredSecrets?.includes(field)
+      ? "Configured — paste a new key to replace"
+      : fallback;
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §8). Only the
   // three keys with UI are sent; the rest persist server-side via the
   // settings merge (fields a client omits are preserved).
@@ -3749,7 +3757,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                                           value={strataApiKey}
                                           onChange={(e) => setStrataApiKey(e.target.value)}
 	                                        className="flex-1 bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-                                          placeholder="only when the Strata server sets api_key"
+                                          placeholder={secretPlaceholder("strataApiKey", "only when the Strata server sets api_key")}
                                         />
 	                                      </div>
 	                                      <div className="flex gap-2">
@@ -5452,7 +5460,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   value={braveApiKey}
                   onChange={(e) => setBraveApiKey(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                  placeholder="BSA..."
+                  placeholder={secretPlaceholder("braveApiKey", "BSA...")}
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
@@ -5470,7 +5478,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   value={exaApiKey}
                   onChange={(e) => setExaApiKey(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                  placeholder="exa_api_key..."
+                  placeholder={secretPlaceholder("exaApiKey", "exa_api_key...")}
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
@@ -5488,7 +5496,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   value={tavilyApiKey}
                   onChange={(e) => setTavilyApiKey(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                  placeholder="tvly-..."
+                  placeholder={secretPlaceholder("tavilyApiKey", "tvly-...")}
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
@@ -5506,7 +5514,7 @@ export function SettingsModal({ settings, models, refreshModels, highEfficiencyM
                   value={deepseekApiKey}
                   onChange={(e) => setDeepseekApiKey(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                  placeholder="sk-..."
+                  placeholder={secretPlaceholder("deepseekApiKey", "sk-...")}
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">

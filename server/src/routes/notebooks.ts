@@ -12,6 +12,9 @@ import type { ImageAttachment, NotebookEntry } from "../types.js";
 
 const router = Router();
 
+/** One DB read per entry; bound the fan-out from a single request. */
+const MAX_BULK_ENTRIES = 500;
+
 // Search notebook entries (both user and agent)
 router.get("/search", (req, res) => {
   const { q, author, limit } = req.query;
@@ -41,6 +44,9 @@ router.post("/bulk", async (req, res) => {
   const { entries } = req.body;
   if (!Array.isArray(entries)) {
     return res.status(400).json({ error: "entries array required" });
+  }
+  if (entries.length > MAX_BULK_ENTRIES) {
+    return res.status(413).json({ error: `entries exceeds ${MAX_BULK_ENTRIES} items` });
   }
   
   const results: Record<string, NotebookEntry | null> = {};

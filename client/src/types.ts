@@ -539,6 +539,9 @@ export interface Settings {
   exaApiKey: string;
   tavilyApiKey: string;
   deepseekApiKey: string;
+  /** Server-populated list of secret fields that have a stored value. Keys are
+   *  write-only in responses; an empty input means "leave unchanged". */
+  configuredSecrets?: string[];
   defaultWebSearchProvider?: WebSearchProvider;
   theme?: Theme;
   customTheme?: CustomTheme;

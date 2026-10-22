@@ -83,7 +83,7 @@ WantedBy=default.target
 
 For remote access, replace `ORIGIN` and `RP_ID` with the final HTTPS browser origin and hostname before registering passkeys, for example `ORIGIN=https://porrima.example.com` and `RP_ID=porrima.example.com`.
 
-On first run, Porrima prints the raw owner setup token to the `porrima.service` journal and stores only hash/state metadata at `~/.porrima/auth/setup-token.txt`. Read the raw token with `journalctl --user -u porrima.service`; do not paste the `tokenSha256` value from the file into the browser. The setup token expires after 30 minutes, locks after 10 failed attempts, and is removed after the first successful owner passkey registration.
+On first run, Porrima prints the raw owner setup token to the `porrima.service` journal and stores only hash/state metadata at `~/.porrima/auth/setup-token.txt`. Read the raw token with `journalctl --user -u porrima.service`; do not paste the `tokenSha256` value from the file into the browser. The setup token expires after 30 minutes and locks for 15 minutes after 10 failed attempts. It is single-use across clients: the first browser to present it owns it until the process restarts (a failed passkey ceremony can retry in the same browser). It is removed after the first successful owner passkey registration.
 
 ### Binary Symlink (Recommended)
 

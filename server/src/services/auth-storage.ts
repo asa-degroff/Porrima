@@ -10,6 +10,9 @@ const SECRET_FILE = join(AUTH_DIR, "session-secret.txt");
 const SETUP_TOKEN_FILE = join(AUTH_DIR, "setup-token.txt");
 export const SETUP_TOKEN_TTL_MS = 30 * 60 * 1000;
 export const SETUP_TOKEN_MAX_FAILED_ATTEMPTS = 10;
+/** A locked token unlocks again after this cooldown. A permanent lock let an
+ *  unauthenticated caller deny first-run setup until the service restarted. */
+export const SETUP_TOKEN_LOCK_MS = 15 * 60 * 1000;
 const SETUP_TOKEN_STATE_VERSION = 1;
 
 export interface StoredCredential {
@@ -33,6 +36,11 @@ interface SetupTokenState {
   failedAttempts: number;
   maxFailedAttempts: number;
   lockedAt?: string;
+  /** Session that successfully presented the token. Bound so the token is
+   *  single-use across clients while allowing the same browser to retry a
+   *  failed WebAuthn ceremony. */
+  consumedBy?: string;
+  consumedAt?: string;
 }
 
 type SetupTokenFile =
@@ -41,7 +49,12 @@ type SetupTokenFile =
   | { kind: "invalid" };
 
 async function ensureAuthDir() {
-  await mkdir(AUTH_DIR, { recursive: true });
+  await mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+  try {
+    await chmod(AUTH_DIR, 0o700);
+  } catch {
+    // Best effort: some filesystems do not support chmod.
+  }
 }
 
 export async function getSessionSecret(): Promise<string> {
@@ -53,7 +66,12 @@ export async function getSessionSecret(): Promise<string> {
     // file doesn't exist yet
   }
   const secret = randomBytes(64).toString("hex");
-  await writeFile(SECRET_FILE, secret);
+  await writeFile(SECRET_FILE, secret, { mode: 0o600 });
+  try {
+    await chmod(SECRET_FILE, 0o600);
+  } catch {
+    // Best effort.
+  }
   return secret;
 }
 
@@ -102,6 +120,16 @@ function parseSetupTokenState(raw: string): SetupTokenState | null {
     ) {
       return null;
     }
+    if (parsed.consumedBy !== undefined && typeof parsed.consumedBy !== "string") {
+      return null;
+    }
+    if (
+      parsed.consumedAt !== undefined &&
+      (typeof parsed.consumedAt !== "string" ||
+        !Number.isFinite(parseIsoTime(parsed.consumedAt)))
+    ) {
+      return null;
+    }
     return {
       version: SETUP_TOKEN_STATE_VERSION,
       tokenSha256: parsed.tokenSha256.toLowerCase(),
@@ -110,6 +138,8 @@ function parseSetupTokenState(raw: string): SetupTokenState | null {
       failedAttempts,
       maxFailedAttempts,
       lockedAt: parsed.lockedAt,
+      consumedBy: parsed.consumedBy,
+      consumedAt: parsed.consumedAt,
     };
   } catch {
     return null;
@@ -140,9 +170,13 @@ function createSetupTokenState(token: string, now = Date.now()): SetupTokenState
 }
 
 function isSetupTokenStateActive(state: SetupTokenState, now = Date.now()): boolean {
-  if (state.lockedAt) return false;
-  if (state.failedAttempts >= state.maxFailedAttempts) return false;
-  return parseIsoTime(state.expiresAt) > now;
+  if (parseIsoTime(state.expiresAt) <= now) return false;
+  if (state.lockedAt) {
+    const lockedAt = parseIsoTime(state.lockedAt);
+    // Locked tokens recover after the cooldown instead of requiring a restart.
+    return Number.isFinite(lockedAt) && now - lockedAt >= SETUP_TOKEN_LOCK_MS;
+  }
+  return state.failedAttempts < state.maxFailedAttempts;
 }
 
 async function writeSetupTokenState(state: SetupTokenState): Promise<void> {
@@ -192,16 +226,15 @@ export async function ensureSetupTokenForFirstRun(
   options: { rotateExpired?: boolean } = {}
 ): Promise<void> {
   if (!(await isSetupComplete())) {
+    await releaseConsumedSetupToken();
     await getOrCreateSetupToken(options);
   } else {
     await clearSetupToken();
   }
 }
 
-export async function verifySetupToken(token: unknown): Promise<boolean> {
-  if (typeof token !== "string") return false;
-  const normalized = token.trim();
-  if (!normalized) return false;
+export async function verifySetupToken(token: unknown, sessionId?: string): Promise<boolean> {
+  const normalized = typeof token === "string" ? token.trim() : "";
   if (await isSetupComplete()) {
     await clearSetupToken();
     return false;
@@ -211,7 +244,24 @@ export async function verifySetupToken(token: unknown): Promise<boolean> {
   if (current.kind !== "state") return false;
   if (!isSetupTokenStateActive(current.state)) return false;
 
+  // Once a session has presented the token, only that session may continue
+  // (a failed WebAuthn ceremony can retry without re-entering it). A different
+  // client holding a leaked token is rejected without incrementing the lock
+  // counter, so it cannot grief the legitimate session.
+  if (current.state.consumedBy) {
+    return Boolean(sessionId) && current.state.consumedBy === sessionId;
+  }
+
+  if (!normalized) return false;
+
   if (setupTokenBuffersMatch(normalized, current.state.tokenSha256)) {
+    if (sessionId) {
+      await writeSetupTokenState({
+        ...current.state,
+        consumedBy: sessionId,
+        consumedAt: new Date().toISOString(),
+      });
+    }
     return true;
   }
 
@@ -226,6 +276,16 @@ export async function verifySetupToken(token: unknown): Promise<boolean> {
   };
   await writeSetupTokenState(nextState);
   return false;
+}
+
+/** A process restart loses the in-memory session store, so a token consumed by
+ *  a now-gone session is re-armed on boot rather than bricking first-run setup
+ *  until the 30-minute TTL expires. */
+export async function releaseConsumedSetupToken(): Promise<void> {
+  const current = await readSetupTokenFile();
+  if (current.kind !== "state" || !current.state.consumedBy) return;
+  const { consumedBy: _consumedBy, consumedAt: _consumedAt, ...remaining } = current.state;
+  await writeSetupTokenState(remaining);
 }
 
 export async function clearSetupToken(): Promise<void> {
@@ -248,7 +308,12 @@ export async function loadAuthStore(): Promise<AuthStore> {
 
 async function saveAuthStore(store: AuthStore): Promise<void> {
   await ensureAuthDir();
-  await writeFile(CREDENTIALS_FILE, JSON.stringify(store, null, 2));
+  await writeFile(CREDENTIALS_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
+  try {
+    await chmod(CREDENTIALS_FILE, 0o600);
+  } catch {
+    // Best effort.
+  }
 }
 
 export async function isSetupComplete(): Promise<boolean> {

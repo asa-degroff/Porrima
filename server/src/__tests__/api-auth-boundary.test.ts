@@ -6,7 +6,7 @@ describe("API auth boundary", () => {
   it("keeps image-serving routes behind the global /api auth middleware", () => {
     const indexSource = readFileSync(join(process.cwd(), "src", "index.ts"), "utf-8");
 
-    const authRoutesMount = indexSource.indexOf('app.use("/api/auth", authRouter)');
+    const authRoutesMount = indexSource.search(/app\.use\(\s*"\/api\/auth"/);
     const authBoundaryMount = indexSource.indexOf('app.use("/api", requireAuth)');
 
     expect(authRoutesMount).toBeGreaterThanOrEqual(0);
@@ -31,9 +31,17 @@ describe("API auth boundary", () => {
     expect(authBoundaryMount).toBeGreaterThanOrEqual(0);
 
     const beforeAuth = indexSource.slice(0, authBoundaryMount);
-    const apiMountsBeforeAuth = Array.from(beforeAuth.matchAll(/app\.use\("\/api\/([^"]+)"/g))
+    const apiMountsBeforeAuth = Array.from(beforeAuth.matchAll(/app\.use\(\s*"\/api\/([^"]+)"/g))
       .map((match) => match[1]);
 
     expect(apiMountsBeforeAuth).toEqual(["auth"]);
+  });
+
+  it("parses large JSON bodies only after authentication", () => {
+    const indexSource = readFileSync(join(process.cwd(), "src", "index.ts"), "utf-8");
+    const authBoundaryMount = indexSource.indexOf('app.use("/api", requireAuth)');
+    const largeJsonMount = indexSource.indexOf('express.json({ limit: "50mb" })');
+
+    expect(largeJsonMount).toBeGreaterThan(authBoundaryMount);
   });
 });

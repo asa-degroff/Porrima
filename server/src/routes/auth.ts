@@ -21,6 +21,9 @@ const router = Router();
 
 const rpName = "Porrima";
 const setupTokenHeader = "x-porrima-setup-token";
+// WebAuthn challenges are single-use and short-lived. The session is the only
+// place they are stored, so a TTL bounds replay if a session id leaks.
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 type WebAuthnUserVerification = "preferred" | "required";
 
 interface WebAuthnRequestContext {
@@ -176,7 +179,7 @@ export async function authorizeRegistration(req: Request, setupComplete: boolean
     return req.session?.authenticated === true;
   }
 
-  return verifySetupToken(getSetupToken(req));
+  return verifySetupToken(getSetupToken(req), req.sessionID);
 }
 
 function sendRegistrationDenied(res: Response, setupComplete: boolean) {
@@ -191,6 +194,25 @@ function sendWebAuthnConfigError(res: Response, err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`[auth] ${message}`);
   res.status(400).json({ error: message });
+}
+
+/** Rotate the session id on privilege change so a planted cookie cannot become
+ *  an authenticated one (session fixation). */
+function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+/** Consume the one-shot challenge and return whether it is still valid. */
+function takeChallenge(req: Request): { challenge?: string; expired: boolean } {
+  const challenge = req.session?.currentChallenge;
+  const issuedAt = req.session?.currentChallengeIssuedAt;
+  delete req.session!.currentChallenge;
+  delete req.session!.currentChallengeIssuedAt;
+  delete req.session!.currentUserVerification;
+  const expired = typeof issuedAt !== "number" || Date.now() - issuedAt > CHALLENGE_TTL_MS;
+  return { challenge, expired };
 }
 
 // GET /api/auth/status
@@ -242,6 +264,7 @@ router.post("/register/options", async (req, res) => {
   });
 
   req.session!.currentChallenge = options.challenge;
+  req.session!.currentChallengeIssuedAt = Date.now();
   req.session!.currentUserVerification = context.userVerification;
   res.json(options);
 });
@@ -264,9 +287,10 @@ router.post("/register/verify", async (req, res) => {
     return;
   }
 
-  const expectedChallenge = req.session?.currentChallenge;
-  if (!expectedChallenge) {
-    res.status(400).json({ error: "No challenge in session" });
+  const requireUserVerification = shouldRequireUserVerification(req);
+  const { challenge: expectedChallenge, expired } = takeChallenge(req);
+  if (!expectedChallenge || expired) {
+    res.status(400).json({ error: "Challenge expired" });
     return;
   }
 
@@ -276,7 +300,7 @@ router.post("/register/verify", async (req, res) => {
       expectedChallenge,
       expectedOrigin: context.expectedOrigin,
       expectedRPID: context.rpID,
-      requireUserVerification: shouldRequireUserVerification(req),
+      requireUserVerification,
     });
 
     if (!verification.verified || !verification.registrationInfo) {
@@ -294,15 +318,15 @@ router.post("/register/verify", async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
-    // Auto-login after registration
-    req.session!.authenticated = true;
-    delete req.session!.currentChallenge;
-    delete req.session!.currentUserVerification;
+    // Auto-login after registration, on a fresh session id.
     await clearSetupToken();
+    await regenerateSession(req);
+    req.session!.authenticated = true;
 
     res.json({ verified: true });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    console.error("[auth] registration verification failed:", err);
+    res.status(400).json({ error: "Verification failed" });
   }
 });
 
@@ -329,15 +353,17 @@ router.post("/login/options", async (req, res) => {
   });
 
   req.session!.currentChallenge = options.challenge;
+  req.session!.currentChallengeIssuedAt = Date.now();
   req.session!.currentUserVerification = context.userVerification;
   res.json(options);
 });
 
 // POST /api/auth/login/verify
 router.post("/login/verify", async (req, res) => {
-  const expectedChallenge = req.session?.currentChallenge;
-  if (!expectedChallenge) {
-    res.status(400).json({ error: "No challenge in session" });
+  const requireUserVerification = shouldRequireUserVerification(req);
+  const { challenge: expectedChallenge, expired } = takeChallenge(req);
+  if (!expectedChallenge || expired) {
+    res.status(400).json({ error: "Challenge expired" });
     return;
   }
 
@@ -345,7 +371,7 @@ router.post("/login/verify", async (req, res) => {
     const { id } = req.body;
     const stored = await getCredentialById(id);
     if (!stored) {
-      res.status(400).json({ error: "Credential not found" });
+      res.status(400).json({ error: "Authentication failed" });
       return;
     }
 
@@ -355,7 +381,7 @@ router.post("/login/verify", async (req, res) => {
       expectedChallenge,
       expectedOrigin: context.expectedOrigin,
       expectedRPID: context.rpID,
-      requireUserVerification: shouldRequireUserVerification(req),
+      requireUserVerification,
       credential: {
         id: stored.id,
         publicKey: isoBase64URL.toBuffer(stored.publicKey),
@@ -374,19 +400,20 @@ router.post("/login/verify", async (req, res) => {
       verification.authenticationInfo.newCounter
     );
 
+    await regenerateSession(req);
     req.session!.authenticated = true;
-    delete req.session!.currentChallenge;
-    delete req.session!.currentUserVerification;
 
     res.json({ verified: true });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    console.error("[auth] login verification failed:", err);
+    res.status(400).json({ error: "Authentication failed" });
   }
 });
 
 // POST /api/auth/logout
 router.post("/logout", (req, res) => {
   req.session?.destroy(() => {
+    res.clearCookie("connect.sid", { path: "/" });
     res.json({ ok: true });
   });
 });

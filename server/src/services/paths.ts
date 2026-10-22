@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync } from "fs";
+import { existsSync, mkdirSync, renameSync, chmodSync } from "fs";
 import { join, sep } from "path";
 import { homedir } from "os";
 
@@ -35,6 +35,19 @@ function migrateLegacyDataFiles(): void {
 migrateLegacyDataDir();
 migrateLegacyDataFiles();
 
+/** The data dir holds chats, memories, credentials, and provider keys. Keep it
+ *  private to the service user; child files are protected by the 0700 dir even
+ *  when their own modes are looser. */
+function ensureAppDataDir(): void {
+  try {
+    mkdirSync(APP_DATA_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(APP_DATA_DIR, 0o700);
+  } catch (error: any) {
+    console.warn(`[paths] Failed to restrict data dir permissions: ${error?.message || error}`);
+  }
+}
+ensureAppDataDir();
+
 export function appDataPath(...parts: string[]): string {
   return join(APP_DATA_DIR, ...parts);
 }
@@ -57,7 +70,7 @@ export function kvCacheFlagPath(): string {
 /** Idempotent; called before rendering a launch config that references it. */
 export function ensureKvCacheDir(): void {
   try {
-    mkdirSync(KV_CACHE_DIR, { recursive: true });
+    mkdirSync(KV_CACHE_DIR, { recursive: true, mode: 0o700 });
   } catch (error: any) {
     console.warn(`[paths] Failed to create KV cache dir: ${error?.message || error}`);
   }

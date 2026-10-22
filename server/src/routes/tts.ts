@@ -608,7 +608,7 @@ router.get("/audio/:cacheKey.wav", (req, res) => {
     }
 
     res.setHeader("Content-Type", "audio/wav");
-    res.setHeader("Cache-Control", "public, max-age=31536000"); // Cache for 1 year
+    res.setHeader("Cache-Control", "private, max-age=31536000"); // Cache for 1 year
     res.send(audio);
   } catch (error) {
     console.error("[TTS] Error serving audio:", error);
