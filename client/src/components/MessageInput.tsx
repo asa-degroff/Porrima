@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect, memo } from "react";
 import type { ImageAttachment, PendingAsk } from "../types";
 import { getDraft, setDraft, clearDraft } from "../hooks/useChat";
+import { buildSkillChipFragment } from "../lib/skill-chips";
 import { AskUserPanel } from "./AskUserPanel";
 
 interface Props {
@@ -78,32 +79,10 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const dragCounterRef = useRef(0);
 
   /**
-   * Insert skill chips for /skill-name patterns in text.
-   * Only creates chips for recognized skills from the skills list.
-   * Returns HTML string with skill spans and updated textRef.
+   * Skill chips are rebuilt from stored text as DOM nodes, never as an HTML
+   * string — see `lib/skill-chips.ts`. Restoring a draft through `innerHTML`
+   * would execute any markup the user had typed or pasted into the composer.
    */
-  const insertSkillChips = (text: string, container: HTMLElement, skillsList: string[]): { html: string } => {
-    const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
-    let html = text;
-    
-    // Replace each /skill with a chip span only if it's a recognized skill
-    html = text.replace(skillPattern, (match, skillName) => {
-      if (!skillsList.includes(skillName)) {
-        // Not a recognized skill - leave as plain text
-        return match;
-      }
-      
-      const chip = document.createElement('span');
-      chip.className = 'skill-chip';
-      chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(var(--theme-accent-muted));border:1px solid rgba(var(--theme-accent-border));border-radius:12px;font-size:12px;color:rgba(var(--theme-accent-text));font-weight:500;vertical-align:middle;';
-      chip.textContent = `/${skillName}`;
-      chip.setAttribute('data-skill', skillName);
-      chip.setAttribute('contenteditable', 'false');
-      return chip.outerHTML;
-    });
-    
-    return { html };
-  };
 
   const prevChatIdRef = useRef<string | null>(null);
 
@@ -139,10 +118,12 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       setImages(draft.images);
       setHasContent(!!draft.text.trim());
       if (editorRef.current) {
-        // Recreate skill chips from draft text
-        editorRef.current.innerHTML = "";
-        const textWithSkills = insertSkillChips(draft.text, editorRef.current, availableSkills || []);
-        editorRef.current.innerHTML = textWithSkills.html;
+        // Recreate skill chips from the stored text as DOM nodes — text nodes
+        // plus a chip per recognized skill token. Never through innerHTML:
+        // draft text is user-authored and may contain markup.
+        editorRef.current.replaceChildren(
+          buildSkillChipFragment(document, draft.text, availableSkills || [])
+        );
         // Position cursor at end
         const range = document.createRange();
         range.selectNodeContents(editorRef.current);
