@@ -60,6 +60,16 @@ describe("SSH workspace path policy", () => {
     expect(remoteCommand).toContain(".porrima-tool-output/bash-");
     expect(remoteCommand).toContain("tail -c 102400");
     expect(remoteCommand).toContain("Use read_file");
+    // The pointer is a header: the tool-result wrapper head-keeps, so a footer
+    // at the tail would be the part it cuts.
+    const headerIndex = remoteCommand.indexOf("Use read_file");
+    const tailIndex = remoteCommand.indexOf("tail -c");
+    expect(headerIndex).toBeGreaterThanOrEqual(0);
+    expect(headerIndex).toBeLessThan(tailIndex);
+
+    // The tail is sized from the same wrapper budget the result will be kept at.
+    await workspace.bash({ command: "yes" }, undefined, { resultBudgetChars: 30_000 });
+    expect(String(exec.mock.calls[1][0])).toContain("tail -c 21808");
   });
 
   it("checks glob matches as well as the requested base directory", async () => {

@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "fs/promises";
+import { dirname } from "path";
 import { createOutputCapture, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
 import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js";
 
@@ -15,10 +17,10 @@ import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js
  * 1. **Inline parts are sized to the wrapper's budget.** After this renders, the
  *    tool result goes through `wrapResult`, which head-keeps at
  *    `max(8000, contextWindow * 4 * 0.15)` characters and knows nothing about the
- *    shape of what it is cutting. Three inline parts (stdout, stderr, the
- *    last-expression repr) that each took the full 100 KiB would total ~300 KB and
- *    the wrapper would silently amputate the tail. Each part gets a quarter of the
- *    budget instead, so the composition arrives whole.
+ *    shape of what it is cutting. If three inline parts (stdout, stderr, the
+ *    last-expression repr) each took the full 100 KiB, they would total ~300 KB
+ *    and the wrapper would silently amputate the tail. The parts that actually
+ *    exist split the budget instead, so the composition arrives whole.
  * 2. **Pointers come first.** A spilled stream is only recoverable if the result
  *    still says where the copy is. A footer at the tail is exactly what a
  *    head-keeping truncator removes, so the pointers render as a header.
@@ -195,6 +197,47 @@ export function renderCellOutput(
   if (!header) return windows;
   if (!windows) return header;
   return `${header}\n${windows}`;
+}
+
+/**
+ * The capture window is 100 KiB regardless of the render allowance, so a stream
+ * between the allowance and the window can be trimmed at render time without
+ * having crossed the capture's spill threshold. The trimmed bytes existed only
+ * in memory and the pointer could only say "no copy was written".
+ *
+ * Before rendering, write any such full window to a spill file so the pointer can
+ * name it. Streams that already spilled are untouched (their file has the whole
+ * stream), and remote kernels opt out because their `read_file` cannot reach this
+ * store. A failed write leaves the honest no-copy pointer in place.
+ */
+export async function spillTrimmedStreams(input: {
+  chatId: string;
+  cellId: string;
+  stdout: CaptureSnapshot;
+  stderr: CaptureSnapshot;
+  allowance: number;
+}): Promise<{ stdout: CaptureSnapshot; stderr: CaptureSnapshot }> {
+  const shortId = input.cellId.slice(0, 8) || "cell";
+  const spillOne = async (
+    snapshot: CaptureSnapshot,
+    stream: "out" | "err",
+  ): Promise<CaptureSnapshot> => {
+    if (snapshot.spillPath) return snapshot;
+    if (snapshot.text.length <= input.allowance) return snapshot;
+    const path = createSpillPath(input.chatId, "py", `${shortId}-${stream}-trim`);
+    try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      await writeFile(path, snapshot.text, "utf-8");
+      return { ...snapshot, spillPath: path };
+    } catch (error) {
+      console.warn(`[kernel-output] failed to spill trimmed ${stream} output:`, error);
+      return snapshot;
+    }
+  };
+  return {
+    stdout: await spillOne(input.stdout, "out"),
+    stderr: await spillOne(input.stderr, "err"),
+  };
 }
 
 /** Inline parts present: a stream that produced nothing gets no share. */

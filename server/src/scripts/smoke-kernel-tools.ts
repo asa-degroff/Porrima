@@ -88,10 +88,10 @@ async function main(): Promise<void> {
     'import re\n' +
       'r = await tools.bash(command="python3 -c \'print(\\"X\\"*1_300_000)\'")\n' +
       'print("windowed", len(r))\n' +
-      'm = re.search(r"saved to: (\\S+)", r)\n' +
+      'm = re.search(r\'Use read_file\\(path="([^"]+)"\', r)\n' +
       'if not m:\n' +
-      '    print("NO-FOOTER-TAIL:", r[-200:])\n' +
-      '    raise AssertionError("bash spill footer missing")\n' +
+      '    print("NO-POINTER-HEADER:", r[:400])\n' +
+      '    raise AssertionError("bash spill pointer missing")\n' +
       'd = open(m.group(1)).read()\n' +
       'print("bytes", len(d))',
     "bytes 1300001",

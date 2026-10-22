@@ -419,7 +419,7 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
 
 **Inline budget, and why the pointers lead.** `kernel-output.ts` owns two rules
 that only work together. A cell's three inline parts (stdout tail, stderr tail,
-the last-expression `repr`) are each sized to a quarter of the character budget
+the last-expression `repr`) split the character budget
 the tool-result wrapper head-keeps at — `max(8000, contextWindow * 4 * 0.15)`,
 passed in as `resultBudgetChars` — with a 100 KiB ceiling and a 4 KiB floor. Two
 caps that cannot see each other compound: at a 262k window the wrapper keeps
@@ -675,7 +675,7 @@ than reporting that the output is gone.
 - **Remote spill goes inside the remote workspace** (the `.porrima-tool-output/`
   pattern bash already uses there), not the remote host's `~/.porrima/kernel-output/`
   — the model's `read_file` resolves against the remote workspace root, so a
-  server-side-style path would be unreachable from the spill footer.
+  server-side-style path would be unreachable from the result's pointer header.
 - Deferred because per-call SSH already works and the lifecycle is the hard
   part; nothing in P1–P3 depends on it.
 

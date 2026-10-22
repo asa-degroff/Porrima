@@ -9,13 +9,12 @@ import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
 import { isValidSshIdentityFile, isValidSshTarget } from "../utils/ssh-target.js";
-import { createOutputCapture, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
-import { renderCellOutput } from "./kernel-output.js";
+import { createOutputCapture, formatCapLabel, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
+import { cellInlineAllowance, renderCellOutput } from "./kernel-output.js";
 import { spawnSupervised } from "./process-supervisor.js";
 import {
   DEFAULT_SPILL_MAX_BYTES,
   createSpillPath,
-  formatSpillFooter,
 } from "./tool-output-store.js";
 // Type-only plus two pure helpers from the kernel manager — python-kernel.ts
 // never imports this module, so there is no cycle (remote-python-kernel.md §4.1).
@@ -104,6 +103,8 @@ export interface WorkspaceBashOptions {
   chatId?: string;
   /** Incremental bounded view updates for live tool rendering. */
   onUpdate?: (view: CaptureSnapshot) => void;
+  /** The tool-result wrapper's head-keep budget; sizes the settled tail. */
+  resultBudgetChars?: number;
 }
 
 export interface WorkspaceAdapter {
@@ -249,6 +250,12 @@ async function runStreamingBash(
     return { content: "Command aborted", isError: true };
   }
 
+  // The wrapper head-keeps, so the settled window is sized from its budget and
+  // the recovery pointer is rendered first, not as a footer it would cut.
+  const allowance = opts.resultBudgetChars
+    ? cellInlineAllowance({ resultBudgetChars: opts.resultBudgetChars }, 1)
+    : BASH_OUTPUT_WINDOW_BYTES;
+
   const spillPath = opts.chatId
     ? createSpillPath(opts.chatId, "bash", randomUUID().slice(0, 8))
     : undefined;
@@ -266,7 +273,7 @@ async function runStreamingBash(
 
   const capture = createOutputCapture({
     limits: {
-      maxBytes: BASH_OUTPUT_WINDOW_BYTES,
+      maxBytes: allowance,
       maxLines: BASH_OUTPUT_MAX_LINES,
       retain: "tail",
     },
@@ -302,14 +309,14 @@ async function runStreamingBash(
   const captured = await capture.finish();
 
   let content = captured.text;
-  if (captured.spillPath) {
-    content += formatSpillFooter({
-      path: captured.spillPath,
-      totalBytes: captured.truncation.totalBytes,
-      windowBytes: BASH_OUTPUT_WINDOW_BYTES,
-      capped: captured.capped,
-      capBytes: DEFAULT_SPILL_MAX_BYTES,
-    });
+  if (captured.truncation.truncated) {
+    const shown = Math.min(captured.truncation.outputBytes, allowance);
+    const header = !captured.spillPath
+      ? `[output truncated — the full output was not captured; last ${formatCapLabel(shown)} shown below.]`
+      : captured.capped
+        ? `[output truncated — the spill was capped at ${formatCapLabel(DEFAULT_SPILL_MAX_BYTES)}; later output was not captured. Copy: ${captured.spillPath}. Last ${formatCapLabel(shown)} shown below.]`
+        : `[output truncated — full output (${formatCapLabel(captured.truncation.totalBytes)}) at ${captured.spillPath}; last ${formatCapLabel(shown)} shown below. Use read_file(path="${captured.spillPath}", offset=N) for more.]`;
+    content = `${header}\n${content}`;
   }
 
   if (exit.error) {
@@ -1221,27 +1228,34 @@ else:
     return result.isError ? { content: `Error listing remote files: ${result.content}`, isError: true } : result;
   }
 
-  async bash(args: Record<string, any>, signal?: AbortSignal, _opts?: WorkspaceBashOptions): Promise<{ content: string; isError: boolean }> {
+  async bash(args: Record<string, any>, signal?: AbortSignal, opts: WorkspaceBashOptions = {}): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.allowBash) {
       return { content: "Bash is disabled for this SSH connection", isError: true };
     }
     const timeoutMs = (args.timeout || 30) * 1000;
+    const allowance = opts.resultBudgetChars
+      ? cellInlineAllowance({ resultBudgetChars: opts.resultBudgetChars }, 1)
+      : BASH_OUTPUT_WINDOW_BYTES;
+    const tailBytes = Math.min(BASH_OUTPUT_WINDOW_BYTES, allowance);
     const outputPath = `.porrima-tool-output/bash-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.log`;
+    // Pointer first: the tool-result wrapper head-keeps, so a footer at the end
+    // is exactly what it cuts when the context window is small.
+    const header = `[output truncated — full output ($((size/1024))KB) at ${outputPath}; last ${Math.max(1, Math.round(tailBytes / 1024))}KB shown below. Use read_file(path=${outputPath}, offset=N) for more.]`;
     const wrapped = [
       `mkdir -p -- ${shellQuote(dirname(outputPath))}`,
       `/bin/bash -lc ${shellQuote(args.command)} > ${shellQuote(outputPath)} 2>&1`,
       "status=$?",
       `size=$(wc -c < ${shellQuote(outputPath)})`,
       `if [ "$size" -gt ${SSH_BASH_OUTPUT_BYTE_CAP} ]; then`,
-      `  tail -c ${BASH_OUTPUT_WINDOW_BYTES} -- ${shellQuote(outputPath)}`,
-      `  printf '\n\n[Output exceeded ${SSH_BASH_OUTPUT_BYTE_CAP / 1024}KB. Full output was saved in the remote workspace at: ${outputPath}\nUse read_file(path="${outputPath}", offset=N) to read more. The tail is shown above.]\n'`,
+      `  printf '%s\\n' "${header}"`,
+      `  tail -c ${tailBytes} -- ${shellQuote(outputPath)}`,
       "else",
       `  cat -- ${shellQuote(outputPath)}`,
       `  rm -f -- ${shellQuote(outputPath)}`,
       "fi",
       "exit $status",
     ].join("\n");
-    return this.inRoot(wrapped, timeoutMs, undefined, signal, BASH_OUTPUT_WINDOW_BYTES + 16 * 1024);
+    return this.inRoot(wrapped, timeoutMs, undefined, signal, tailBytes + 16 * 1024);
   }
 
   async runPython(args: Record<string, any>, signal?: AbortSignal, opts: WorkspacePythonOptions = {}): Promise<{ content: string; isError: boolean }> {

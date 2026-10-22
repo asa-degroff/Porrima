@@ -14,6 +14,7 @@ import {
   renderCellOutput,
   renderCellWindows,
   renderOutputPointers,
+  spillTrimmedStreams,
 } from "../services/kernel-output.js";
 
 const tempDirs: string[] = [];
@@ -167,6 +168,46 @@ describe("budget coordination with the tool-result wrapper", () => {
     expect(head).toContain(stderr.spillPath!);
     expect(head).toContain("last 49KB inline");
     expect(content).toContain("[stderr]");
+
+    capture.stdout.dispose();
+    capture.stderr.dispose();
+  });
+
+  it("spills a sub-ceiling stream when the render allowance trims it", async () => {
+    process.env.PORRIMA_TOOL_OUTPUT_DIR = makeTempDir();
+    const capture = createCellOutputCapture("chat-trim", "cell-00000006", () => {}, {
+      resultBudgetChars: BUDGET_262K,
+    });
+    capture.stdout.push("s".repeat(80 * 1024));
+    capture.stderr.push("e".repeat(1024));
+    const stdout = await capture.stdout.finish();
+    const stderr = await capture.stderr.finish();
+
+    // Under the capture ceiling, so the capture itself wrote no spill file.
+    expect(stdout.truncation.truncated).toBe(false);
+    expect(stdout.spillPath).toBeUndefined();
+
+    const allowance = cellInlineAllowance({ resultBudgetChars: BUDGET_262K }, 2);
+    expect(allowance).toBe(74_547);
+    const spilled = await spillTrimmedStreams({
+      chatId: "chat-trim",
+      cellId: "cell-00000006",
+      stdout,
+      stderr,
+      allowance,
+    });
+
+    expect(spilled.stdout.spillPath).toBeTruthy();
+    expect(spilled.stderr.spillPath).toBeUndefined();
+    expect(readFileSync(spilled.stdout.spillPath!, "utf8").length).toBe(80 * 1024);
+
+    const content = [
+      renderOutputPointers(spilled.stdout, spilled.stderr, allowance),
+      renderCellWindows(spilled.stdout, spilled.stderr, allowance),
+    ].join("\n");
+    expect(content.startsWith("[output truncated")).toBe(true);
+    expect(content).toContain(spilled.stdout.spillPath!);
+    expect(content.length).toBeLessThanOrEqual(BUDGET_262K);
 
     capture.stdout.dispose();
     capture.stderr.dispose();

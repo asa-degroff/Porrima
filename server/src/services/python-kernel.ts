@@ -22,6 +22,7 @@ import {
   createCellOutputCapture,
   renderCellWindows,
   renderOutputPointers,
+  spillTrimmedStreams,
   type CellOutputBudget,
 } from "./kernel-output.js";
 import {
@@ -777,19 +778,31 @@ async function settlePending(
     pending.stdout.finish(),
     pending.stderr.finish(),
   ]);
-  // Pointers first, windows second: the tool-result wrapper head-keeps, so a
-  // recovery path rendered at the tail is the first thing it removes.
   const allowance = cellInlineAllowance(
     pending.resultBudgetChars ? { resultBudgetChars: pending.resultBudgetChars } : undefined,
     countInlineParts(stdoutSnapshot, stderrSnapshot, pending.resultText),
   );
+  // A sub-ceiling stream can still be trimmed by the render allowance; give it
+  // a spill file so the header can name a real copy instead of "none".
+  let [renderStdout, renderStderr] = [stdoutSnapshot, stderrSnapshot];
+  if (pending.spillAllowed) {
+    ({ stdout: renderStdout, stderr: renderStderr } = await spillTrimmedStreams({
+      chatId: instance.chatId,
+      cellId: pending.id,
+      stdout: stdoutSnapshot,
+      stderr: stderrSnapshot,
+      allowance,
+    }));
+  }
+  // Pointers first, windows second: the tool-result wrapper head-keeps, so a
+  // recovery path rendered at the tail is the first thing it removes.
   const pointers = renderOutputPointers(
-    stdoutSnapshot,
-    stderrSnapshot,
+    renderStdout,
+    renderStderr,
     allowance,
     pending.spillAllowed ? undefined : "the kernel runs on another host",
   );
-  const output = renderCellWindows(stdoutSnapshot, stderrSnapshot, allowance);
+  const output = renderCellWindows(renderStdout, renderStderr, allowance);
   const resultText = capCellResultText(pending.resultText, allowance);
   const parts: string[] = [];
   if (output) parts.push(output);

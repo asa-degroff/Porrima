@@ -90,8 +90,9 @@ describe("workspace bash execution", () => {
       { chatId: "chat-bash" },
     );
     expect(result.isError).toBe(false);
-    expect(result.content).toContain("[Output exceeded 100KB.");
-    const match = result.content.match(/saved to: (.+\.log)/);
+    // Pointer first: the result wrapper head-keeps, so a footer would be cut.
+    expect(result.content.startsWith("[output truncated")).toBe(true);
+    const match = result.content.match(/Use read_file\(path="([^"]+)"/);
     expect(match).toBeTruthy();
     const spillPath = match![1];
     expect(spillPath.startsWith(join(spillRoot, "chat-bash"))).toBe(true);

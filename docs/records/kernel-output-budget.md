@@ -95,11 +95,18 @@ version of the header took a `spillAllowed` flag from the caller and always rend
 instruction line, so a remote cell was told to `read_file` paths below a header that named
 no file. The header now decides from `snapshot.spillPath`: no file, no promise.
 
-## Not fixed (same class, remaining member)
+## Follow-ups after this run
 
-`bash` (`BASH_OUTPUT_WINDOW_BYTES`, 100 KB, `formatSpillFooter` at the tail) is the last
-producer whose recovery pointer sits where a head-keeping truncator cuts. Its window is
-larger than the wrapper budget below ~171k tokens of context, so at smaller windows a
-spilled bash result loses its footer. The remedy is the same two rules — window derived
-from the caller's budget, pointer rendered first — but the workspace adapters do not
-currently receive the context budget. Recorded, not done.
+- **Bash now follows the same two rules.** `runStreamingBash` and the remote
+  SSH wrapper render a pointer header before the tail and derive the settled
+  window from the caller's `resultBudgetChars`. The remote command prints the
+  header before `tail`, so a head-keeping wrapper cannot remove the path.
+  Witnesses: `bash-output-budget.test.ts` (local header, budget-sized window,
+  spill file, no header when the output fits) and `workspace-ssh-paths.test.ts`
+  (header before `tail -c`, budget-sized tail).
+- **Sub-ceiling streams are spilled at render time.** A stream under the
+  100 KiB capture ceiling can still exceed the render allowance (three parts,
+  or a small context budget). `spillTrimmedStreams` now writes that full window
+  to a spill file before rendering, so the pointer names a real copy instead of
+  "no copy was written". Witnesses: the unit case in `kernel-output.test.ts`
+  and the real-driver case `fg-trim` in `python-kernel.test.ts`.

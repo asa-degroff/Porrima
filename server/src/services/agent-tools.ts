@@ -1206,6 +1206,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
         wrapResult(
           await workspace.bash(params as Record<string, any>, signal, {
             chatId,
+            resultBudgetChars: getMaxToolResultChars(contextWindow),
             onUpdate: onUpdate
               ? (view) => onUpdate({ content: [{ type: "text", text: view.text }], details: {} })
               : undefined,

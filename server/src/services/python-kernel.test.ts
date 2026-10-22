@@ -365,6 +365,29 @@ describe("python kernel manager", () => {
       expect(outcome.content).toContain("ValueError: boom");
     });
 
+    it("spills a sub-ceiling stream when the render allowance trims it", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-trim");
+      const outcome = kernel(
+        await run(
+          "fg-trim",
+          [
+            "import sys",
+            'print("A" * 80000)',
+            'print("B" * 2000, file=sys.stderr)',
+            '"R" * 5000',
+          ].join("\n"),
+          { resultBudgetChars: BUDGET },
+        ),
+      );
+      expect(outcome.isError).toBe(false);
+      expect(outcome.content.startsWith("[output truncated")).toBe(true);
+      // 80 KB is under the 100 KiB capture ceiling, so without the render-time
+      // spill the pointer could only say "no copy was written".
+      const path = outcome.content.match(/stdout: .*full output -> (\S+)/)?.[1];
+      expect(path).toBeTruthy();
+      expect(readFileSync(path!, "utf8").length).toBeGreaterThanOrEqual(80_000);
+    });
+
     it("streams a live view far smaller than the settled window", async () => {
       process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-view");
       const views: string[] = [];
