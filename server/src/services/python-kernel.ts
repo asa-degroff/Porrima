@@ -15,6 +15,11 @@ import {
 import { getStoredSystemPauseState } from "./system-pause.js";
 import { assertSafePathSegment } from "../utils/safe-path.js";
 import {
+  capCellResultText,
+  createCellOutputCapture,
+  renderCellOutput,
+} from "./kernel-output.js";
+import {
   isGroupAlive,
   killProcessGroup,
   readProcessStartId,
@@ -246,8 +251,8 @@ interface PendingExecution {
   id: string;
   timeoutSec: number;
   startedAt: number;
-  stdout: string[];
-  stderr: string[];
+  stdout: OutputCapture;
+  stderr: OutputCapture;
   resultText: string | null;
   error: KernelErrorEvent | null;
   timedOut: boolean;
@@ -460,15 +465,6 @@ export const localKernelHost: KernelHost = {
 function sendRequest(instance: KernelInstance, request: Record<string, unknown>): void {
   if (instance.disposed) return;
   instance.proc.write(`${JSON.stringify(request)}\n`);
-}
-
-function outputView(instance: KernelInstance, pending: PendingExecution): string {
-  const stdout = pending.stdout.join("").trimEnd();
-  const stderr = pending.stderr.join("").trimEnd();
-  const parts: string[] = [];
-  if (stdout) parts.push(stdout);
-  if (stderr) parts.push(`[stderr] ${stderr}`);
-  return parts.join("\n");
 }
 
 function schedulePendingUpdate(pending: PendingExecution): void {
@@ -742,11 +738,11 @@ async function runSnapshot(
   }
 }
 
-function settlePending(
+async function settlePending(
   instance: KernelInstance,
   pending: PendingExecution,
   status: "ok" | "error",
-): void {
+): Promise<void> {
   if (pending.settled) return;
   pending.settled = true;
   clearPendingUpdate(pending);
@@ -757,10 +753,17 @@ function settlePending(
   instance.lastUsedAt = Date.now();
   cleanupKernelToolCell(instance, pending.id);
 
-  const output = outputView(instance, pending);
+  // Flush both spill streams before the result is rendered; the windows are
+  // already bounded, so this only waits for local file writes.
+  const [stdoutSnapshot, stderrSnapshot] = await Promise.all([
+    pending.stdout.finish(),
+    pending.stderr.finish(),
+  ]);
+  const output = renderCellOutput(stdoutSnapshot, stderrSnapshot);
+  const resultText = capCellResultText(pending.resultText);
   const parts: string[] = [];
   if (output) parts.push(output);
-  if (pending.resultText !== null) parts.push(pending.resultText);
+  if (resultText !== null) parts.push(resultText);
   let content = parts.join("\n") || "(no output)";
   let isError = false;
 
@@ -788,6 +791,8 @@ function settlePending(
   if (!isError && pending.images.length > 0) {
     outcome.images = pending.images;
   }
+  pending.stdout.dispose();
+  pending.stderr.dispose();
   pending.resolve(outcome);
 }
 
@@ -800,6 +805,8 @@ function failPending(instance: KernelInstance, pending: PendingExecution, messag
   instance.pending.delete(pending.id);
   instance.busy = false;
   cleanupKernelToolCell(instance, pending.id);
+  pending.stdout.dispose();
+  pending.stderr.dispose();
   const tail = instance.stderrTail.trim();
   pending.resolve({
     mode: "kernel",
@@ -819,6 +826,8 @@ function wedgePending(instance: KernelInstance, pending: PendingExecution): void
   instance.wedged = true;
   instance.wedgedAt = Date.now();
   cleanupKernelToolCell(instance, pending.id);
+  pending.stdout.dispose();
+  pending.stderr.dispose();
   console.warn(`[kernel] chat=${shortId(instance.chatId)} wedged: cell did not settle after interrupt`);
   pending.resolve({
     mode: "kernel",
@@ -868,9 +877,9 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
       const pending = typeof event.id === "string" ? instance.pending.get(event.id) : undefined;
       if (!pending) return;
       const text = typeof event.text === "string" ? event.text : "";
+      // Captures are bounded; their throttled onUpdate refreshes the streaming
+      // view, so there is no per-frame join here.
       (event.event === "stdout" ? pending.stdout : pending.stderr).push(text);
-      pending.pendingUpdateText = outputView(instance, pending);
-      schedulePendingUpdate(pending);
       return;
     }
     case "result": {
@@ -909,6 +918,9 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
         pending.settled = true;
         clearTimeout(pending.deadline);
         instance.pending.delete(pending.id);
+        // The ack itself has no cell output; the job owns its own capture.
+        pending.stdout.dispose();
+        pending.stderr.dispose();
         const jobId = typeof event.job_id === "string" ? event.job_id : null;
         if (jobId && event.status === "ok") {
           instance.jobs.set(jobId, createJob(instance, jobId));
@@ -937,7 +949,7 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
         }
         return;
       }
-      settlePending(instance, pending, event.status === "ok" ? "ok" : "error");
+      void settlePending(instance, pending, event.status === "ok" ? "ok" : "error");
       return;
     }
     case "parked_interrupt":
@@ -1414,18 +1426,28 @@ function consumeNotice(instance: KernelInstance, recreated: boolean): string | n
 }
 
 function makePendingBase(
+  chatId: string,
   id: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
   onUpdate: ((text: string) => void) | undefined,
   notice: string | null,
 ): PendingExecution {
-  return {
+  let pending!: PendingExecution;
+  const output = createCellOutputCapture(chatId, id, () => {
+    if (!pending || pending.settled) return;
+    pending.pendingUpdateText = renderCellOutput(
+      pending.stdout.snapshot(),
+      pending.stderr.snapshot(),
+    );
+    schedulePendingUpdate(pending);
+  });
+  pending = {
     id,
     timeoutSec: Math.max(1, Math.round(timeoutMs / 1000)),
     startedAt: Date.now(),
-    stdout: [],
-    stderr: [],
+    stdout: output.stdout,
+    stderr: output.stderr,
     resultText: null,
     error: null,
     timedOut: false,
@@ -1440,6 +1462,7 @@ function makePendingBase(
     notice,
     resolve: () => {},
   };
+  return pending;
 }
 
 export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRunOutcome> {
@@ -1468,7 +1491,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
     const id = randomUUID();
     const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
     return new Promise<KernelRunOutcome>((resolve) => {
-      const pending = makePendingBase(id, timeoutMs, signal, undefined, notice);
+      const pending = makePendingBase(chatId, id, timeoutMs, signal, undefined, notice);
       pending.background = true;
       pending.toolDispatcher = dispatcher;
       pending.resolve = resolve;
@@ -1526,7 +1549,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
   const id = randomUUID();
   const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
   return new Promise<KernelRunOutcome>((resolve) => {
-    const pending = makePendingBase(id, timeoutMs, signal, opts.onUpdate, notice);
+    const pending = makePendingBase(chatId, id, timeoutMs, signal, opts.onUpdate, notice);
     pending.toolDispatcher = dispatcher;
     pending.resolve = (outcome) => {
       if (notice && outcome.mode === "kernel") {
