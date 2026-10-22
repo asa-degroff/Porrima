@@ -43,8 +43,14 @@ interface LlamaTimingsEntry {
 
 interface ModelSummary {
   lastRun: LlamaTimingsEntry | null;
+  /** Token-weighted aggregate prefill rate (Σ tokens / Σ time), not a mean of per-run rates. */
   avgPromptTokensPerSec: number | null;
+  /** Token-weighted aggregate decode rate. */
   avgPredictedTokensPerSec: number | null;
+  /** Aggregate prefill rate over runs with ≥1k new tokens (steady-state). */
+  largePromptTokensPerSec: number | null;
+  promptRunCount: number;
+  largePromptRunCount: number;
   avgPromptMs: number | null;
   avgPredictedMs: number | null;
   avgInferredCacheHitRatio: number | null;
@@ -250,10 +256,10 @@ function Section({
   );
 }
 
-function SpeedBar({ value, maxRef, isDecode, label }: { value: number | null; maxRef: number; isDecode: boolean; label: string }) {
+function SpeedBar({ value, maxRef, isDecode, label, title }: { value: number | null; maxRef: number; isDecode: boolean; label: string; title?: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] text-white/40 w-12 shrink-0">{label}</span>
+    <div className="flex items-center gap-2" title={title}>
+      <span className="text-[10px] text-white/40 w-16 shrink-0">{label}</span>
       <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-300 ${speedColor(value, isDecode)}`}
@@ -359,18 +365,36 @@ function ActiveModelCard({
         {/* Compact stats grid */}
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <div>
-            <div className="text-[10px] text-white/30">avg decode</div>
+            <div
+              className="text-[10px] text-white/30"
+              title="Token-weighted aggregate decode rate: total generated tokens ÷ total decode time over recent runs."
+            >
+              decode wtd
+            </div>
             <div className={`text-sm font-mono ${speedColor(summary.avgPredictedTokensPerSec)}`}>
               {summary.avgPredictedTokensPerSec !== null ? summary.avgPredictedTokensPerSec.toFixed(1) : "—"}
               <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-white/30">avg prefill</div>
+            <div
+              className="text-[10px] text-white/30"
+              title="Token-weighted aggregate prefill rate: total new prompt tokens ÷ total prompt-eval time. Large prefills dominate, so a burst of small turns no longer drags the number down. See detail for the ≥1k-token steady-state rate."
+            >
+              prefill wtd
+            </div>
             <div className={`text-sm font-mono ${speedColor(summary.avgPromptTokensPerSec, false)}`}>
               {summary.avgPromptTokensPerSec !== null ? summary.avgPromptTokensPerSec.toFixed(1) : "—"}
               <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
             </div>
+            {summary.largePromptTokensPerSec != null && (
+              <div
+                className={`text-[9px] font-mono ${speedColor(summary.largePromptTokensPerSec, false)}`}
+                title={`Steady-state rate over ${summary.largePromptRunCount ?? 0} runs with at least 1,024 new prompt tokens (fixed per-request cost amortized).`}
+              >
+                ≥1k: {summary.largePromptTokensPerSec.toFixed(1)} t/s
+              </div>
+            )}
           </div>
         </div>
 
@@ -409,14 +433,41 @@ function ActiveModelCard({
             <>
               <Section title={`Averages (${detail.summary.runCount} runs)`} defaultOpen>
                 <div className="space-y-2">
-                  <SpeedBar value={detail.summary.avgPredictedTokensPerSec} maxRef={80} isDecode label="decode EMA" />
-                  <SpeedBar value={detail.summary.avgPromptTokensPerSec} maxRef={200} isDecode={false} label="prefill EMA" />
+                  <SpeedBar
+                    value={detail.summary.avgPredictedTokensPerSec}
+                    maxRef={80}
+                    isDecode
+                    label="decode wtd"
+                    title="Token-weighted aggregate: total generated tokens ÷ total decode time."
+                  />
+                  <SpeedBar
+                    value={detail.summary.avgPromptTokensPerSec}
+                    maxRef={200}
+                    isDecode={false}
+                    label="prefill wtd"
+                    title={`Token-weighted aggregate: total new prompt tokens ÷ total prompt-eval time over ${detail.summary.promptRunCount} qualifying runs. Small turns contribute only their tokens/time, not one equal vote each.`}
+                  />
+                  {detail.summary.largePromptTokensPerSec != null && (
+                    <SpeedBar
+                      value={detail.summary.largePromptTokensPerSec}
+                      maxRef={200}
+                      isDecode={false}
+                      label="prefill 1k+"
+                      title={`Steady-state prefill rate over ${detail.summary.largePromptRunCount ?? 0} runs with at least 1,024 new prompt tokens. This one excludes most of the fixed per-request cost.`}
+                    />
+                  )}
                   {detail.summary.avgPredictedMs !== null && (
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-white/40 w-12 shrink-0">dec/ms</span>
+                      <span className="text-[10px] text-white/40 w-16 shrink-0">dec/ms</span>
                       <span className="text-[10px] text-white/60">{detail.summary.avgPredictedMs.toFixed(1)}ms avg</span>
                     </div>
                   )}
+                  <div className="text-[10px] text-white/30">
+                    weighted by tokens, not by run count
+                    {detail.summary.largePromptRunCount > 0
+                      ? ` · ${detail.summary.promptRunCount} prefill runs, ${detail.summary.largePromptRunCount} ≥1k`
+                      : ""}
+                  </div>
                 </div>
               </Section>
 

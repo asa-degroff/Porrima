@@ -52,33 +52,35 @@ function recordRun(provider: string, t: LlamaTimings): ModelStatsEntry {
   return stats.recordModelStats(MODEL, provider, t, undefined, ts);
 }
 
-describe("getModelStatsSummary prefill-rate EMA floor", () => {
+describe("getModelStatsSummary prefill-rate aggregation", () => {
   it("stays null when only micro-runs exist", () => {
     const provider = "llamacpp-only-micro";
     recordRun(provider, timings({ prompt_n: 4, prompt_ms: 1, prompt_per_second: 4000 }));
     recordRun(provider, timings({ prompt_n: 8, prompt_ms: 2, prompt_per_second: 4000 }));
     const summary = stats.getModelStatsSummary(MODEL, provider);
     expect(summary.avgPromptTokensPerSec).toBeNull();
-    // Decode/timing averages are unaffected by the prefill filter.
+    expect(summary.promptRunCount).toBe(0);
+    // Decode/timing averages are unaffected by the prefill floor.
     expect(summary.avgPredictedTokensPerSec).not.toBeNull();
     expect(summary.runCount).toBe(2);
   });
 
-  it("ignores interleaved micro-runs when averaging real prefills", () => {
+  it("ignores interleaved micro-runs and weights the real prefills by tokens", () => {
     const provider = "llamacpp-mixed";
     recordRun(provider, timings({ prompt_n: 500, prompt_ms: 5000, prompt_per_second: 100 }));
     recordRun(provider, timings({ prompt_n: 4, prompt_ms: 1, prompt_per_second: 4000 }));
     recordRun(provider, timings({ prompt_n: 300, prompt_ms: 1500, prompt_per_second: 200 }));
     const summary = stats.getModelStatsSummary(MODEL, provider);
-    // EMA over qualifying runs only: seed 100, then α=0.3 update with 200.
-    const expected = Math.round((0.3 * 200 + 0.7 * 100) * 10) / 10;
-    expect(Math.round(summary.avgPromptTokensPerSec! * 10) / 10).toBe(expected);
+    // EMA the totals: (0.7*500 + 0.3*300) / (0.7*5000 + 0.3*1500).
+    const expected = ((0.7 * 500 + 0.3 * 300) / (0.7 * 5000 + 0.3 * 1500)) * 1000;
+    expect(summary.avgPromptTokensPerSec).toBeCloseTo(expected, 5);
+    expect(summary.promptRunCount).toBe(2);
   });
 
-  it("seeds the EMA from the first qualifying run, not the first run", () => {
+  it("seeds the aggregate from the first qualifying run, not the first run", () => {
     const provider = "llamacpp-leading-micro";
     recordRun(provider, timings({ prompt_n: 2, prompt_ms: 0.5, prompt_per_second: 4000 }));
-    recordRun(provider, timings({ prompt_n: 600, prompt_ms: 3000, prompt_per_second: 150 }));
+    recordRun(provider, timings({ prompt_n: 600, prompt_ms: 4000, prompt_per_second: 150 }));
     const summary = stats.getModelStatsSummary(MODEL, provider);
     expect(summary.avgPromptTokensPerSec).toBeCloseTo(150, 5);
   });
@@ -91,5 +93,47 @@ describe("getModelStatsSummary prefill-rate EMA floor", () => {
     );
     const summary = stats.getModelStatsSummary(MODEL, provider);
     expect(summary.avgPromptTokensPerSec).not.toBeNull();
+    expect(summary.promptRunCount).toBe(1);
+  });
+
+  it("does not let many small turns dominate one large prefill", () => {
+    const provider = "llamacpp-weighted-prefill";
+    // 20 small turns: 100 new tokens in 2.5s each -> 40 tok/s.
+    for (let i = 0; i < 20; i++) {
+      recordRun(provider, timings({ prompt_n: 100, prompt_ms: 2500, prompt_per_second: 40 }));
+    }
+    // One real prefill: 10k tokens in 35s -> ~286 tok/s.
+    recordRun(provider, timings({ prompt_n: 10_000, prompt_ms: 35_000, prompt_per_second: 285.7 }));
+
+    const summary = stats.getModelStatsSummary(MODEL, provider);
+    // The old per-run EMA would sit near the small-turn rate (~114 t/s
+    // after α=0.3); the weighted aggregate should be much closer to the
+    // large run's rate.
+    expect(summary.avgPromptTokensPerSec).toBeGreaterThan(200);
+  });
+
+  it("reports the steady-state rate from >=1k-token runs only", () => {
+    const provider = "llamacpp-large-prefill";
+    recordRun(provider, timings({ prompt_n: 500, prompt_ms: 5000, prompt_per_second: 100 }));
+    recordRun(provider, timings({ prompt_n: 2000, prompt_ms: 10_000, prompt_per_second: 200 }));
+    recordRun(provider, timings({ prompt_n: 1000, prompt_ms: 10_000, prompt_per_second: 100 }));
+
+    const summary = stats.getModelStatsSummary(MODEL, provider);
+    expect(summary.promptRunCount).toBe(3);
+    expect(summary.largePromptRunCount).toBe(1);
+    expect(summary.largePromptTokensPerSec).toBeCloseTo(200, 5);
+  });
+
+  it("weights decode by generated tokens, not by run count", () => {
+    const provider = "llamacpp-weighted-decode";
+    // 10 short generations: 10 tokens in 1s each -> 10 tok/s.
+    for (let i = 0; i < 10; i++) {
+      recordRun(provider, timings({ predicted_n: 10, predicted_ms: 1000, predicted_per_second: 10 }));
+    }
+    // One long generation: 4k tokens in 100s -> 40 tok/s.
+    recordRun(provider, timings({ predicted_n: 4000, predicted_ms: 100_000, predicted_per_second: 40 }));
+
+    const summary = stats.getModelStatsSummary(MODEL, provider);
+    expect(summary.avgPredictedTokensPerSec).toBeGreaterThan(35);
   });
 });

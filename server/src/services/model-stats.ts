@@ -13,7 +13,13 @@ const EMA_ALPHA = 0.3;
 // launch overhead, not throughput (a single-token probe can report thousands
 // of t/s and drag the "avg prefill" away from real prefill speeds). Every
 // other average (decode, timings, cache) still sees all runs.
-const MIN_PROMPT_TOKENS_FOR_RATE_EMA = 32;
+const MIN_PROMPT_TOKENS_FOR_RATE = 32;
+
+// "Steady-state" prefill summary: aggregate only runs large enough for the
+// per-request fixed cost (checkpoint/restore, expert fetch, launch) to be
+// amortized. The observed knee is around 1k new tokens; below it the rate is
+// mostly fixed overhead, above it the token cost dominates.
+const LARGE_PREFILL_TOKENS = 1024;
 
 export interface LlamaTimings {
   prompt_n: number;
@@ -56,8 +62,28 @@ export interface ModelStatsEntry {
 
 export interface ModelStatsSummary {
   lastRun: ModelStatsEntry | null;
+  /**
+   * Recency-weighted aggregate prefill rate: Σ prompt tokens / Σ prompt ms.
+   *
+   * Not an EMA of per-run rates. EMA-ing a ratio gives every *run* equal
+   * weight, so a burst of 100-token turns can swamp a 10k-token prefill and
+   * make the engine look slower than it is. EMA-ing the numerator and
+   * denominator instead gives every *token* (and every millisecond) equal
+   * weight, which is what aggregate throughput means.
+   */
   avgPromptTokensPerSec: number | null;
+  /** Recency-weighted aggregate decode rate: Σ predicted tokens / Σ predicted ms. */
   avgPredictedTokensPerSec: number | null;
+  /**
+   * Aggregate prefill rate over runs with at least LARGE_PREFILL_TOKENS new
+   * tokens. Use this to compare steady-state engine speed across models and
+   * backends; avgPromptTokensPerSec still includes the cost of small turns.
+   */
+  largePromptTokensPerSec: number | null;
+  /** Runs that contributed to avgPromptTokensPerSec. */
+  promptRunCount: number;
+  /** Runs that contributed to largePromptTokensPerSec. */
+  largePromptRunCount: number;
   avgPromptMs: number | null;
   avgPredictedMs: number | null;
   avgInferredCacheHitRatio: number | null;
@@ -133,6 +159,39 @@ export function resolveCanonicalCachedTokens(
 }
 
 type Row = Record<string, unknown>;
+
+interface RatioAccumulator {
+  num: number;
+  den: number;
+}
+
+/**
+ * Add one numerator/denominator sample to a recency-weighted aggregate.
+ *
+ * EMA the totals, not the ratio. `ema(rate) = ema(num/den)` gives every run
+ * equal weight; `ema(num)/ema(den)` gives every unit of work equal weight.
+ * The latter is the aggregate throughput and is not dominated by a long tail
+ * of small runs.
+ */
+function accumulateRatio(
+  current: RatioAccumulator | null,
+  num: number,
+  den: number,
+): RatioAccumulator | null {
+  if (!Number.isFinite(num) || !Number.isFinite(den) || num <= 0 || den <= 0) {
+    return current;
+  }
+  if (!current) return { num, den };
+  return {
+    num: EMA_ALPHA * num + (1 - EMA_ALPHA) * current.num,
+    den: EMA_ALPHA * den + (1 - EMA_ALPHA) * current.den,
+  };
+}
+
+/** Aggregate rate per second, or null when no usable samples were seen. */
+function accumulatorRatePerSec(acc: RatioAccumulator | null): number | null {
+  return acc && acc.den > 0 ? (acc.num / acc.den) * 1000 : null;
+}
 
 let db: Database.Database | null = null;
 let runSequence = 0;
@@ -359,7 +418,10 @@ export function getModelRuns(modelId: string, limit = 20, provider?: string): Mo
 }
 
 /**
- * Get a summary for a specific model: last run + EMA averages.
+ * Get a summary for a specific model: last run + recency-weighted aggregates.
+ *
+ * Throughput is aggregate (Σ work / Σ time), not a mean of per-run rates:
+ * the latter gives a 100-token turn the same vote as a 10k-token prefill.
  */
 export function getModelStatsSummary(modelId: string, provider?: string): ModelStatsSummary {
   const database = getDb();
@@ -401,9 +463,10 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
     requestDigest: lastRow.requestDigest != null ? lastRow.requestDigest as string : undefined,
   } as ModelStatsEntry) : null;
 
-  // Compute EMA from all runs (chronological order for proper EMA)
+  // All runs, chronological: ratios are accumulated in timestamp order so the
+  // EMA's recency weighting still works.
   const selectAll = `
-    SELECT promptTokens, promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs,
+    SELECT promptTokens, predictedTokens, promptMs, predictedMs,
       inferredCacheHitRatio, inferredCachedTokens
     FROM model_stats
   `;
@@ -411,38 +474,48 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
     ? database.prepare(`${selectAll} WHERE modelId = ? AND provider = ? ORDER BY timestamp ASC`).all(modelId, provider) as Row[]
     : database.prepare(`${selectAll} WHERE modelId = ? ORDER BY timestamp ASC`).all(modelId) as Row[];
 
-  let avgPromptTokensPerSec: number | null = null;
-  let avgPredictedTokensPerSec: number | null = null;
   let avgPromptMs: number | null = null;
   let avgPredictedMs: number | null = null;
   let avgInferredCacheHitRatio: number | null = null;
   let avgInferredCachedTokens: number | null = null;
+  let promptAccum: RatioAccumulator | null = null;
+  let largePromptAccum: RatioAccumulator | null = null;
+  let decodeAccum: RatioAccumulator | null = null;
+  let promptRunCount = 0;
+  let largePromptRunCount = 0;
 
   for (const row of allRows) {
-    const ptps = row.promptTokensPerSec as number;
-    const dtps = row.predictedTokensPerSec as number;
+    const promptN = row.promptTokens as number;
+    const predictedN = row.predictedTokens as number;
     const pMs = row.promptMs as number;
     const dMs = row.predictedMs as number;
     const cacheHitRatio = row.inferredCacheHitRatio as number | null;
     const cachedTokens = row.inferredCachedTokens as number | null;
 
-    if (avgPredictedTokensPerSec === null) {
-      avgPredictedTokensPerSec = dtps;
+    // Per-run timing keeps its old meaning: the typical run's time, not a
+    // token-weighted total. (The UI reads the aggregate rates, not these.)
+    if (avgPromptMs === null) {
       avgPromptMs = pMs;
       avgPredictedMs = dMs;
     } else {
-      avgPredictedTokensPerSec = EMA_ALPHA * dtps + (1 - EMA_ALPHA) * avgPredictedTokensPerSec;
-      avgPromptMs = EMA_ALPHA * pMs + (1 - EMA_ALPHA) * avgPromptMs!;
+      avgPromptMs = EMA_ALPHA * pMs + (1 - EMA_ALPHA) * avgPromptMs;
       avgPredictedMs = EMA_ALPHA * dMs + (1 - EMA_ALPHA) * avgPredictedMs!;
     }
 
-    // Prefill-rate EMA: exclude micro-runs (see MIN_PROMPT_TOKENS_FOR_RATE_EMA).
-    const promptN = row.promptTokens as number | undefined;
-    if (typeof promptN === "number" && promptN >= MIN_PROMPT_TOKENS_FOR_RATE_EMA) {
-      avgPromptTokensPerSec = avgPromptTokensPerSec === null
-        ? ptps
-        : EMA_ALPHA * ptps + (1 - EMA_ALPHA) * avgPromptTokensPerSec;
+    // Aggregate prefill throughput: exclude micro-runs (see
+    // MIN_PROMPT_TOKENS_FOR_RATE), then weight by the work each run did.
+    if (promptN >= MIN_PROMPT_TOKENS_FOR_RATE && Number.isFinite(pMs) && pMs > 0) {
+      promptAccum = accumulateRatio(promptAccum, promptN, pMs);
+      promptRunCount++;
+      if (promptN >= LARGE_PREFILL_TOKENS) {
+        largePromptAccum = accumulateRatio(largePromptAccum, promptN, pMs);
+        largePromptRunCount++;
+      }
     }
+
+    // Decode has the same mean-of-ratios problem: a 10-token generation
+    // should not count as much as a 5k-token one.
+    decodeAccum = accumulateRatio(decodeAccum, predictedN, dMs);
 
     if (typeof cacheHitRatio === "number") {
       avgInferredCacheHitRatio = avgInferredCacheHitRatio === null
@@ -458,8 +531,11 @@ export function getModelStatsSummary(modelId: string, provider?: string): ModelS
 
   return {
     lastRun,
-    avgPromptTokensPerSec,
-    avgPredictedTokensPerSec,
+    avgPromptTokensPerSec: accumulatorRatePerSec(promptAccum),
+    avgPredictedTokensPerSec: accumulatorRatePerSec(decodeAccum),
+    largePromptTokensPerSec: accumulatorRatePerSec(largePromptAccum),
+    promptRunCount,
+    largePromptRunCount,
     avgPromptMs,
     avgPredictedMs,
     avgInferredCacheHitRatio,
