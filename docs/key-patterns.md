@@ -44,7 +44,7 @@
 - Automation defaults are ensured once during server startup in `index.ts`, not on every scheduler tick or route request.
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.
-- Blob URLs for artifacts are critical for Chrome animation performance — do not use cross-origin iframe src.
+- Artifact iframes are sandboxed to an opaque origin; height and runtime errors cross the boundary via `postMessage`, never `contentDocument`. Do not add `allow-same-origin`.
 - llama.cpp provider uses router mode with `--models-dir`. Model directory structure: subdirectory per model with GGUF + optional mmproj for vision. `sync-llama-models.sh` auto-syncs HuggingFace downloads. HF-cached models (IDs with `/`) filtered from discovery. Context window set on first load only — no mid-conversation reloads.
 - **llama.cpp binary management**: All five services reference `~/bin/llama-current/llama-server` by default. Per-slot binary overrides via `settings.llamaServerBins[slotId]`. Custom binaries get auto-injected `LD_LIBRARY_PATH`. Symlink updates via Settings → Binary Path handle swap + restart + rollback. Service configs (port, ctx size, extra args, mode) managed via `/api/llama-servers/:id/config` with systemd drop-in override writing.
 - Reranker service (`reranker.service`) runs Qwen3-Reranker-0.6B on port 32102, CPU-only, always available. Graceful fallback if unavailable.

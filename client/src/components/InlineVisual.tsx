@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { InlineVisual as InlineVisualType } from "../types";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
-import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
+import { injectArtifactBridge } from "../utils/artifactBridge";
 import type { ArtifactRuntimeErrorReport } from "../api/client";
 
 const MIN_HEIGHT = 80;
@@ -36,63 +36,13 @@ export function InlineVisual({ visual, isPinnedView, chatId, onArtifactRuntimeEr
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const iframeResizeObserverRef = useRef<ResizeObserver | null>(null);
   const reportedErrorKeyRef = useRef<string | null>(null);
-
-  const updateHeight = useCallback(() => {
-    try {
-      const doc = iframeRef.current?.contentDocument;
-      if (doc) {
-        // Temporarily force body to auto-height for accurate content measurement.
-        // Visuals may use body { height: 100vh } / min-height: 100vh which in
-        // an iframe context can report the parent window height rather than the
-        // actual content height.
-        const body = doc.body;
-        const html = doc.documentElement;
-        const prevBodyHeight = body.style.height;
-        const prevBodyMinHeight = body.style.minHeight;
-        const prevHtmlHeight = html.style.height;
-        const prevHtmlMinHeight = html.style.minHeight;
-        body.style.height = 'auto';
-        body.style.minHeight = '0';
-        html.style.height = 'auto';
-        html.style.minHeight = '0';
-        const contentHeight = doc.documentElement.scrollHeight;
-        body.style.height = prevBodyHeight;
-        body.style.minHeight = prevBodyMinHeight;
-        html.style.height = prevHtmlHeight;
-        html.style.minHeight = prevHtmlMinHeight;
-        setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight)));
-      }
-    } catch {
-      // cross-origin fallback
-    }
-  }, []);
 
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
-    updateHeight();
-    
-    // Watch for content size changes with ResizeObserver.
-    // Debounce to avoid rapid re-measurements during animations or
-    // CSS transitions — these can fire every animation frame, causing
-    // layout thrashing and unnecessarily updating parent state.
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    const observer = new ResizeObserver(() => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        updateHeight();
-        resizeTimer = null;
-      }, 150);
-    });
-    const doc = iframeRef.current?.contentDocument;
-    if (doc) {
-      observer.observe(doc.documentElement);
-      observer.observe(doc.body);
-    }
-    // Store observer reference for cleanup
-    iframeResizeObserverRef.current = observer;
-  }, [updateHeight]);
+    // Height and runtime errors arrive over postMessage: the sandbox gives the
+    // visual an opaque origin, so the parent cannot read contentDocument.
+  }, []);
 
   // Inject scrollbar styling and max-height guard into visual HTML to match app aesthetic
   // and prevent visuals from expanding to extreme heights (100vh in an iframe can cause this).
@@ -119,23 +69,26 @@ html, body { background: transparent !important; max-height: 100% !important; }
     setRuntimeError(null);
     reportedErrorKeyRef.current = null;
     setIframeLoaded(false);
-    // Disconnect previous resize observer before loading new content
-    iframeResizeObserverRef.current?.disconnect();
-    iframeResizeObserverRef.current = null;
-    const styledHtml = injectArtifactErrorForwarder(injectScrollbarStyles(visual.html));
+    const styledHtml = injectArtifactBridge(injectScrollbarStyles(visual.html), window.location.origin);
     const blob = new Blob([styledHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     setBlobUrl(url);
     return () => {
       URL.revokeObjectURL(url);
-      iframeResizeObserverRef.current?.disconnect();
-      iframeResizeObserverRef.current = null;
     };
   }, [visual.html]);
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.data?.type === "artifact-height") {
+        const next = Number(e.data.height);
+        if (Number.isFinite(next)) {
+          const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(next)));
+          setHeight((prev) => (prev === clamped ? prev : clamped));
+        }
+        return;
+      }
       if (e.data?.type === "artifact-error") {
         const msg = e.data.message || "Unknown runtime error";
         const diagnosticKind = typeof e.data.diagnosticKind === "string" ? e.data.diagnosticKind : undefined;
@@ -280,6 +233,7 @@ html, body { background: transparent !important; max-height: 100% !important; }
           <iframe
             ref={iframeRef}
             src={blobUrl}
+            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
             className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"} ${isPinnedView ? "flex-1 min-h-0" : ""}`}
             style={isPinnedView ? { colorScheme: "normal", background: "transparent" } : { height: `${height}px`, colorScheme: "normal", background: "transparent" }}
             title={visual.title}

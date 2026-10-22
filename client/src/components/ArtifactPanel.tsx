@@ -3,7 +3,7 @@ import type { Artifact } from "../types";
 import type { ArtifactRuntimeErrorReport } from "../api/client";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
-import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
+import { injectArtifactBridge } from "../utils/artifactBridge";
 
 const MIN_HEIGHT = 100;
 const MAX_HEIGHT = 1200;
@@ -59,34 +59,8 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
     setIsLoadingVersion(false);
-    // Auto-size to content since blob URLs are same-origin.
-    // Temporarily neutralise viewport-relative units so scrollHeight reflects
-    // the actual content size rather than the iframe's current viewport.
-    try {
-      const doc = iframeRef.current?.contentDocument;
-      if (doc) {
-        const body = doc.body;
-        const html = doc.documentElement;
-        const prevBodyHeight = body.style.height;
-        const prevBodyMinHeight = body.style.minHeight;
-        const prevHtmlHeight = html.style.height;
-        const prevHtmlMinHeight = html.style.minHeight;
-        body.style.height = 'auto';
-        body.style.minHeight = '0';
-        html.style.height = 'auto';
-        html.style.minHeight = '0';
-        const contentHeight = doc.documentElement.scrollHeight;
-        body.style.height = prevBodyHeight;
-        body.style.minHeight = prevBodyMinHeight;
-        html.style.height = prevHtmlHeight;
-        html.style.minHeight = prevHtmlMinHeight;
-        const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight));
-        setHeight(clamped);
-        heightRef.current = clamped;
-      }
-    } catch {
-      // cross-origin fallback — keep default
-    }
+    // Height arrives over postMessage: the sandbox gives the document an
+    // opaque origin, so the parent cannot read contentDocument.
   }, []);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -141,10 +115,9 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
         setRuntimeError(null);
         runtimeErrorRef.current = null;
         reportedErrorKeyRef.current = null;
-        // Inject error-forwarding script so JS runtime errors in the iframe
-        // surface as messages the parent can display (iframe onError only
-        // fires on network failures, not JS exceptions).
-        const injected = injectArtifactErrorForwarder(html);
+        // Inject the runtime bridge (error forwarding + height measurement);
+        // a sandboxed document cannot be measured from the parent.
+        const injected = injectArtifactBridge(html, window.location.origin);
         const blob = new Blob([injected], { type: "text/html" });
         url = URL.createObjectURL(blob);
         setBlobUrl(url);
@@ -163,6 +136,17 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.data?.type === "artifact-height") {
+        const next = Number(e.data.height);
+        if (Number.isFinite(next)) {
+          const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(next)));
+          if (clamped !== heightRef.current) {
+            heightRef.current = clamped;
+            setHeight(clamped);
+          }
+        }
+        return;
+      }
       if (e.data?.type === "artifact-error") {
         const msg = e.data.message || "Unknown runtime error";
         const diagnosticKind = typeof e.data.diagnosticKind === "string" ? e.data.diagnosticKind : undefined;
@@ -369,6 +353,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
               <iframe
                 ref={iframeRef}
                 src={blobUrl}
+                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
                 className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"} ${isPinnedView ? "flex-1 min-h-0" : ""}`}
                 style={isPinnedView ? { colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" } : { height: `${height}px`, colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" }}
                 title={`${artifact.title} (v${selectedVersion})`}

@@ -1,6 +1,12 @@
-export function injectArtifactErrorForwarder(html: string): string {
+export function injectArtifactBridge(html: string, parentOrigin: string): string {
+  // A sandboxed iframe has an opaque origin, so it cannot read the parent and
+  // postMessage is the only channel back. Target the app origin explicitly;
+  // "null" is the opaque-parent case (file:// harnesses) where "*" is the only
+  // usable target.
+  const targetOrigin = parentOrigin && parentOrigin !== "null" ? parentOrigin : "*";
   const script = `<script>
 (function(){
+  var PARENT_ORIGIN = ${JSON.stringify(targetOrigin)};
   function excerpt(source, lineNumber, radius){
     if (!source || !lineNumber || lineNumber < 1) return '';
     var lines = String(source).split('\\n');
@@ -11,7 +17,7 @@ export function injectArtifactErrorForwarder(html: string): string {
     }).join('\\n');
   }
   function post(message, details){
-    window.parent.postMessage(Object.assign({ type: 'artifact-error', message: message || 'Unknown runtime error' }, details || {}), '*');
+    window.parent.postMessage(Object.assign({ type: 'artifact-error', message: message || 'Unknown runtime error' }, details || {}), PARENT_ORIGIN);
   }
   window.addEventListener('error', function(e){
     post(e.message, { diagnosticKind: 'js-error', filename: e.filename, lineno: e.lineno, colno: e.colno, stack: e.error && e.error.stack });
@@ -143,6 +149,55 @@ export function injectArtifactErrorForwarder(html: string): string {
       window.GPUDevice.prototype.createComputePipeline = wrappedComputePipeline;
     }
   }
+
+  // Height bridge. The parent can no longer read contentDocument (opaque
+  // origin), so the document measures itself and posts the result. Measuring
+  // with viewport-relative units neutralised keeps 100vh layouts from
+  // reporting the iframe's own viewport as content height.
+  var lastReportedHeight = -1;
+  var heightFrame = 0;
+  function postHeight(){
+    var body = document.body;
+    var root = document.documentElement;
+    if (!body || !root) return;
+    var prevBodyHeight = body.style.height;
+    var prevBodyMinHeight = body.style.minHeight;
+    var prevRootHeight = root.style.height;
+    var prevRootMinHeight = root.style.minHeight;
+    body.style.height = 'auto';
+    body.style.minHeight = '0';
+    root.style.height = 'auto';
+    root.style.minHeight = '0';
+    var height = Math.max(body.scrollHeight || 0, root.scrollHeight || 0);
+    body.style.height = prevBodyHeight;
+    body.style.minHeight = prevBodyMinHeight;
+    root.style.height = prevRootHeight;
+    root.style.minHeight = prevRootMinHeight;
+    if (Math.abs(height - lastReportedHeight) < 1) return;
+    lastReportedHeight = height;
+    window.parent.postMessage({ type: 'artifact-height', height: height }, PARENT_ORIGIN);
+  }
+  function scheduleHeight(){
+    if (heightFrame) return;
+    var raf = window.requestAnimationFrame || function(cb){ return window.setTimeout(cb, 16); };
+    heightFrame = raf(function(){
+      heightFrame = 0;
+      postHeight();
+    });
+  }
+  window.addEventListener('load', scheduleHeight);
+  window.addEventListener('resize', scheduleHeight);
+  document.addEventListener('DOMContentLoaded', scheduleHeight);
+  if (window.ResizeObserver) {
+    try {
+      var heightObserver = new ResizeObserver(scheduleHeight);
+      heightObserver.observe(document.documentElement);
+      if (document.body) heightObserver.observe(document.body);
+    } catch (e) {}
+  }
+  scheduleHeight();
+  window.setTimeout(scheduleHeight, 250);
+  window.setTimeout(scheduleHeight, 1000);
 })();
 <\/script>`;
   if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${script}</head>`);
