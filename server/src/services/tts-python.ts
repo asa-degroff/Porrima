@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TTSBackend } from "../types/tts.js";
 import { appDataPath } from "./paths.js";
+import { killProcessTree } from "./tts-process.js";
 
 type TtsPythonBackend = TTSBackend;
 
@@ -138,12 +139,13 @@ function checkCandidate(candidate: PythonCandidate, requiredImports: string[]): 
   return new Promise((resolve) => {
     const proc = spawn(candidate.path, ["-c", script], {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
     const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
+      killProcessTree(proc, "SIGKILL");
       resolve({ ...candidate, available: false, error: "Python import check timed out" });
     }, 15000);
 

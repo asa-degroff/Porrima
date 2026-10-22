@@ -18,6 +18,7 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 - **Supertonic 3** (`tts-supertonic.ts`): Fast local CPU backend via the official Python SDK, with M1-M5/F1-F5 multilingual voice styles
 - **Streaming TTS** (`tts-streaming.ts`, `tts-buffer.ts`): Generator-based streaming with 3-tier boundary detection (word/clause/sentence) for chunking
 - **Text preprocessing** (`tts-text-preprocessor.ts`): Markdown-to-speech text extraction
+- **Process bounds**: the persistent worker resets after its per-request timeout (30 s Supertonic, 120 s Kokoro); direct/fallback spawns carry the same per-backend deadline, SIGTERM the process group, then SIGKILL after a 2 s grace. A wedged model therefore cannot pin a request or a Python process indefinitely.
 - **Client streaming** (`useStreamingTTS.ts`): MediaSource API with WAV/PCM and MP3 codec support, chunk queueing, pause on tool execution, graceful fallback to non-streaming
 - Voice selection, speed, pitch controls
 - Auto-read toggle for assistant messages

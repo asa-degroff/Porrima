@@ -13,6 +13,7 @@ import { generateTTS, getAudioFile } from "./tts.js";
 import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
 import { withTTSChunkRetry } from "./tts-retry.js";
+import { armTtsDeadline, TTS_FALLBACK_TIMEOUT_MS } from "./tts-process.js";
 
 const QWEN3_WRAPPER = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
 
@@ -137,6 +138,7 @@ async function generateTTSChunk(
     
     const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         // Pass attention mode if set
@@ -145,6 +147,13 @@ async function generateTTSChunk(
         MIOPEN_FIND_MODE: "FAST", // Performance optimization for ROCm
       },
     });
+
+    const deadline = armTtsDeadline(
+      proc,
+      TTS_FALLBACK_TIMEOUT_MS["qwen3-tts"],
+      (message) => reject(new Error(message)),
+      "Qwen3-TTS chunk",
+    );
     
     const chunks: Buffer[] = [];
     let stderrData = "";
@@ -158,6 +167,8 @@ async function generateTTSChunk(
     });
     
     proc.on("close", (code) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (code !== 0) {
         try {
           const lines = stderrData.trim().split("\n");
@@ -179,6 +190,8 @@ async function generateTTSChunk(
     });
     
     proc.on("error", (err) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       reject(err);
     });
   });

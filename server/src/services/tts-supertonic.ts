@@ -6,6 +6,7 @@ import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../ty
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
 import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
 import { getWorker } from "./tts-worker-pool.js";
+import { armTtsDeadline, TTS_FALLBACK_TIMEOUT_MS } from "./tts-process.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-supertonic");
 const MAX_CACHE_SIZE_MB = 500;
@@ -120,7 +121,15 @@ async function runSupertonicTTS(
 
     const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+
+    const deadline = armTtsDeadline(
+      proc,
+      TTS_FALLBACK_TIMEOUT_MS["supertonic-3"],
+      (message) => reject(new Error(message)),
+      "Supertonic TTS",
+    );
 
     let stderrData = "";
     const chunks: Buffer[] = [];
@@ -134,6 +143,8 @@ async function runSupertonicTTS(
     });
 
     proc.on("close", (code) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (code !== 0) {
         try {
           const lines = stderrData.trim().split("\n");
@@ -167,6 +178,8 @@ async function runSupertonicTTS(
     });
 
     proc.on("error", (err) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (err.message.includes("ENOENT")) {
         reject(
           new Error(

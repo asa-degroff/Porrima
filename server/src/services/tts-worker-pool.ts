@@ -26,6 +26,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolveTtsPython } from "./tts-python.js";
 import { join } from "node:path";
 import type { TTSSettings } from "../types/tts.js";
+import { killProcessTree } from "./tts-process.js";
 
 export type TTSWorkerBackend = "supertonic-3" | "kokoro";
 
@@ -146,6 +147,7 @@ class TTSWorker {
 
       const proc = spawn(pythonPath, [this.scriptPath ?? WORKER_SCRIPTS[this.backend]], {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
         env: {
           ...process.env,
           MIOPEN_FIND_MODE: "FAST",
@@ -160,7 +162,7 @@ class TTSWorker {
         clearTimeout(readyTimeout);
         this._readyResolver = null;
         if (this.proc === proc && !proc.killed) {
-          proc.kill();
+          killProcessTree(proc, "SIGTERM");
         }
         if (this.proc === proc) {
           this.proc = null;
@@ -349,7 +351,7 @@ class TTSWorker {
     const proc = this.proc;
     this.proc = null;
     if (proc && !proc.killed) {
-      proc.kill("SIGKILL");
+      killProcessTree(proc, "SIGKILL");
     }
     // Reject everything queued behind the wedge so callers fall back
     // immediately instead of waiting out their own timeouts.
@@ -414,11 +416,11 @@ class TTSWorker {
     this._ready = false;
     if (this._drainTimer) clearTimeout(this._drainTimer);
     if (this.proc) {
-      this.proc.kill("SIGTERM");
+      killProcessTree(this.proc, "SIGTERM");
       // unref: this backstop must never hold the event loop open — on a
       // clean shutdown the worker also self-terminates on stdin EOF.
       setTimeout(() => {
-        if (!this.proc?.killed) this.proc?.kill("SIGKILL");
+        if (this.proc) killProcessTree(this.proc, "SIGKILL");
       }, 5000).unref();
     }
     for (const [id, { reject }] of this.pending) {

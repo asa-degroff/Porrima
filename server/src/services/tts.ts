@@ -9,6 +9,7 @@ import { generateQwen3TTS, getQwen3Voices, checkQwen3Availability } from "./tts-
 import { generateSupertonicTTS, getSupertonicVoices, checkSupertonicAvailability } from "./tts-supertonic.js";
 import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
 import { getWorker } from "./tts-worker-pool.js";
+import { armTtsDeadline, TTS_FALLBACK_TIMEOUT_MS } from "./tts-process.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
@@ -119,7 +120,15 @@ async function runKokoroSubprocess(
 
     const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+
+    const deadline = armTtsDeadline(
+      proc,
+      TTS_FALLBACK_TIMEOUT_MS.kokoro,
+      (message) => reject(new Error(message)),
+      "Kokoro TTS",
+    );
 
     let stderrData = "";
     const chunks: Buffer[] = [];
@@ -135,6 +144,8 @@ async function runKokoroSubprocess(
     const pid = proc.pid;
 
     proc.on("close", (code, signal) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (code !== 0) {
         const exitDetail = signal
           ? `pid=${pid ?? "unknown"} signal=${signal}`
@@ -174,6 +185,8 @@ async function runKokoroSubprocess(
     });
 
     proc.on("error", (err) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       // Check if Python interpreter is missing
       if (err.message.includes("ENOENT")) {
         reject(

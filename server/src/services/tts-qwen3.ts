@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
 import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
+import { armTtsDeadline, TTS_FALLBACK_TIMEOUT_MS } from "./tts-process.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-qwen3");
 const MAX_CACHE_SIZE_MB = 500;
@@ -90,7 +91,15 @@ async function runQwen3TTS(
 
     const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+
+    const deadline = armTtsDeadline(
+      proc,
+      TTS_FALLBACK_TIMEOUT_MS["qwen3-tts"],
+      (message) => reject(new Error(message)),
+      "Qwen3-TTS",
+    );
 
     let stderrData = "";
     const chunks: Buffer[] = [];
@@ -104,6 +113,8 @@ async function runQwen3TTS(
     });
 
     proc.on("close", (code) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (code !== 0) {
         try {
           const lines = stderrData.trim().split("\n");
@@ -138,6 +149,8 @@ async function runQwen3TTS(
     });
 
     proc.on("error", (err) => {
+      deadline.clear();
+      if (deadline.timedOut()) return;
       if (err.message.includes("ENOENT")) {
         reject(
           new Error(
