@@ -15,6 +15,12 @@
  *   3. End-to-end: hitting /api/auth/register/options over plain HTTP must
  *      return a Set-Cookie header so the browser has a session id to send
  *      back on the verify step.
+ *   4. End-to-end, both directions: with `trust proxy` set the way production
+ *      sets it, a request that arrives as HTTPS gets the Secure attribute and
+ *      a plain-HTTP request does not. The config value is `secure: "auto"`, so
+ *      the attribute is decided per request by express-session — which is a
+ *      library behavior, and it used to be asserted only in prose. Prose is not
+ *      a referee; the two directions are measured here.
  */
 
 import express from "express";
@@ -64,11 +70,14 @@ describe("session cookie config", () => {
     const { getSessionCookieConfig } = await import("../services/session-cookie-config.js");
 
     const config = getSessionCookieConfig();
-    // The local-only path needs the browser to accept the cookie over HTTP.
-    // If we ever flip this back to `true`, the registration flow will break
-    // silently (no Set-Cookie) and the only symptom is "No challenge in
-    // session" on /register/verify.
-    expect(config.secure).toBe(false);
+    // `false` was replaced by "auto" so the Cloudflare-fronted path can get a
+    // Secure attribute without breaking this one. The failure mode is the same
+    // in either direction: a Secure cookie on a plain-HTTP origin is dropped by
+    // the browser, the session is never persisted, and /register/verify 400s
+    // with "No challenge in session". What makes "auto" safe is that it resolves
+    // to false when the request is not secure -- asserted end-to-end below, not
+    // assumed here.
+    expect(config.secure).toBe("auto");
   });
 
   it("keeps the other cookie attributes intact", async () => {
@@ -116,6 +125,9 @@ describe("register/options Set-Cookie behavior", () => {
     (globalThis as Record<string, unknown>).__porrima_test_token = token;
 
     const app = express();
+    // index.ts sets this in production, so the test app mirrors it: req.secure
+    // is derived from X-Forwarded-Proto, which is what `secure: "auto"` keys on.
+    app.set("trust proxy", 1);
     app.use(
       session({
         secret: "test-secret",
@@ -163,21 +175,17 @@ describe("register/options Set-Cookie behavior", () => {
     expect(setCookie!.toLowerCase()).toMatch(/samesite=lax/);
   });
 
-  it("does not block requests that arrive as HTTPS via X-Forwarded-Proto", async () => {
+  it("emits a Secure attribute for a request that arrives as HTTPS via X-Forwarded-Proto", async () => {
     // The Cloudflare-fronted path terminates TLS upstream and sets
     // X-Forwarded-Proto: https. With trust proxy: 1 (set in production by
-    // index.ts), req.secure becomes true at request time and express-session
-    // emits a Secure attribute automatically.
+    // index.ts, mirrored on this test app), req.secure is true at request time
+    // and express-session's `secure: "auto"` resolves to true for this session.
     //
-    // This minimal test app does not set trust proxy, so req.secure stays
-    // false here. The point of this test is to pin: the cookie config must
-    // not block the request, and the response must still be 200 with a
-    // Set-Cookie header. The presence of the Secure attribute itself is
-    // determined by req.secure at request time, not by this static config,
-    // so we do not assert on it here -- the index.ts side of things is
-    // already covered by the `app.set("trust proxy", 1)` line in
-    // production, and the value of req.secure with X-Forwarded-Proto: https
-    // is express built-in behavior.
+    // The Secure attribute used to be left unasserted here on the grounds that
+    // it is "express built-in behavior". That is exactly the claim that needs a
+    // measurement: the whole point of "auto" is that the attribute is decided at
+    // request time, so a regression in trust proxy or in the cookie config would
+    // be invisible without it.
     const token = (globalThis as Record<string, unknown>).__porrima_test_token as string;
 
     const res = await fetch(`${baseUrl}/api/auth/register/options`, {
@@ -197,5 +205,6 @@ describe("register/options Set-Cookie behavior", () => {
     expect(res.status).toBe(200);
     const setCookie = res.headers.get("set-cookie");
     expect(setCookie).toBeTruthy();
+    expect(setCookie!.toLowerCase()).toMatch(/;\s*secure/);
   });
 });

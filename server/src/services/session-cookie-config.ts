@@ -1,22 +1,27 @@
 /**
  * Cookie attributes for the express-session middleware.
  *
- * Note on `secure: false`:
- *   Cookie transport security is enforced by the browser based on the URL it
- *   sees; setting `secure: isProd` here breaks the documented local-only setup
- *   path (NODE_ENV=production + http://localhost:<port>) because browsers
- *   silently drop Secure cookies received over plain HTTP, leaving the session
- *   empty for /register/verify and producing a "No challenge in session" 400.
+ * `secure: "auto"` is decided per request by express-session: it resolves to the
+ * security of the connection, which under `trust proxy` (set in production) means
+ * the value of `X-Forwarded-Proto`. That is what makes both supported deployments
+ * work at once — the Cloudflare-fronted origin gets a Secure cookie, and the
+ * documented local-only setup (NODE_ENV=production + http://localhost:<port>)
+ * still receives one it can actually send back.
  *
- *   The Cloudflare-fronted case is still protected: the browser only ever sees
- *   the public HTTPS origin, so the cookie can only travel over HTTPS by
- *   virtue of the URL, not this flag. Non-local HTTP origins are rejected
- *   upstream by `validateWebAuthnEnv` in routes/auth.ts, so a misconfigured
- *   public deploy will fail loudly at startup, not silently downgrade sessions.
+ * The history: this value was `isProd`, which broke the local-only path silently.
+ * Browsers drop Secure cookies received over plain HTTP, so the session was never
+ * persisted and /register/verify 400'd with "No challenge in session". Both
+ * directions are now asserted end-to-end in `session-cookie-config.test.ts`
+ * (plain HTTP gets no Secure attribute, a proxied-HTTPS request does), because
+ * "auto" moves the decision to request time and a regression in `trust proxy`
+ * would otherwise be invisible in the suite.
  *
- *   If we ever want to flip this back, gate the value on req.secure at request
- *   time (express-session's static config cannot do that directly) or split
- *   the local-only and Cloudflare-fronted code paths.
+ * One caveat to know before exposing the same hostname over both HTTP and HTTPS:
+ * once a session cookie is emitted with Secure, it is never sent back over plain
+ * HTTP for that session, and the local-only failure mode returns. Non-local HTTP
+ * origins are rejected upstream by `validateWebAuthnEnv` in routes/auth.ts, so a
+ * misconfigured public deploy fails loudly at startup rather than silently
+ * downgrading sessions.
  */
 export function getSessionCookieConfig(): import("express-session").CookieOptions {
   return {
