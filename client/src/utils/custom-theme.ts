@@ -1,5 +1,5 @@
 import type { CustomTheme, ThemePreset } from "../types";
-import { mixHexOklab } from "./oklch";
+import { contrastRatio, mixHexOklab, relativeLuminanceHex } from "./oklch";
 
 export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   background: "#1e1b4b",
@@ -165,19 +165,19 @@ function mixHex(first: string, second: string, secondWeight: number): string {
   return mixHexOklab(first, second, secondWeight);
 }
 
-function channelLuminance(channel: number): number {
-  const normalized = channel / 255;
-  return normalized <= 0.03928
-    ? normalized / 12.92
-    : ((normalized + 0.055) / 1.055) ** 2.4;
-}
-
+/** WCAG relative luminance of a theme hex. An unparseable hex falls back to
+ *  the default background, as every caller has always done. The luminance and
+ *  ratio math lives in utils/oklch.ts — this is a theme-flavored wrapper, not a
+ *  second implementation. */
 export function getRelativeLuminance(hex: string): number {
-  const { r, g, b } = hexToRgb(hex);
-  return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b);
+  const normalized = normalizeHexColor(hex);
+  return relativeLuminanceHex(normalized ?? DEFAULT_CUSTOM_THEME.background) ?? 0;
 }
 
-export function isCustomThemeBackgroundDark(background: string): boolean {
+/** WCAG contrast ratio between two theme hexes, 1 (identical) to 21. */
+export function getCustomThemeContrast(first: string, second: string): number {
+  return contrastRatio(getRelativeLuminance(first), getRelativeLuminance(second));
+}export function isCustomThemeBackgroundDark(background: string): boolean {
   const normalized = normalizeHexColor(background);
   return normalized !== null && getRelativeLuminance(normalized) <= CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE;
 }
@@ -190,21 +190,71 @@ export function getCustomThemeBackgroundError(background: string): string | null
   return null;
 }
 
-function contrastRatio(first: string, second: string): number {
-  const firstLuminance = getRelativeLuminance(first);
-  const secondLuminance = getRelativeLuminance(second);
-  const lighter = Math.max(firstLuminance, secondLuminance);
-  const darker = Math.min(firstLuminance, secondLuminance);
-  return (lighter + 0.05) / (darker + 0.05);
-}
+/** WCAG 1.4.11 (non-text contrast): the ratio at which accent-colored borders,
+ *  rails and icons read as distinct from the background. */
+export const ACCENT_UI_MIN_CONTRAST = 3;
 
-function readableAccentText(accent: string, background: string): string {
+/** WCAG 1.4.3 (text): the ratio body-size text needs against its background. */
+export const ACCENT_TEXT_MIN_CONTRAST = 4.5;
+
+/** The floor the derivation itself enforces on accent-derived text colors. It
+ *  is the UI threshold, not the text threshold — which is why a custom theme
+ *  can end up with body text below 4.5:1 while every guard still passes. */
+const ACCENT_TEXT_DERIVATION_MIN_CONTRAST = ACCENT_UI_MIN_CONTRAST;
+
+/** The accent color the app actually paints text with: the accent lightened
+ *  toward white in OKLab until it clears the derivation floor above. Exported
+ *  because the contrast readout has to measure what is rendered, not just what
+ *  was picked. */
+export function readableAccentText(accent: string, background: string): string {
   const candidates = [
     mixHex(accent, "#ffffff", 0.35),
     mixHex(accent, "#ffffff", 0.65),
     "#ffffff",
   ];
-  return candidates.find((candidate) => contrastRatio(candidate, background) >= 3) || "#ffffff";
+  return (
+    candidates.find(
+      (candidate) => getCustomThemeContrast(candidate, background) >= ACCENT_TEXT_DERIVATION_MIN_CONTRAST,
+    ) ?? "#ffffff"
+  );
+}
+
+export interface CustomThemeAccentContrast {
+  /** The picked accent against the background — governs borders, rails, icons. */
+  accentRatio: number;
+  /** The derived accent-text color against the background — governs type. */
+  textRatio: number;
+  /** Null when both clear their thresholds; otherwise what is short and by how much. */
+  note: string | null;
+}
+
+/**
+ * Contrast readout for the accent/background pair. Two ratios because the theme
+ * renders the pair twice: the picked accent for non-text UI, and a lightened
+ * version of it for text. A pair can fail either bar independently — a dark
+ * accent on a dark background makes accent borders invisible while the derived
+ * text still reads fine, and a mid-tone accent can clear 3:1 as text while the
+ * picked color never stands out as a border.
+ */
+export function getCustomThemeAccentContrast(background: string, accent: string): CustomThemeAccentContrast {
+  const accentRatio = getCustomThemeContrast(accent, background);
+  const textRatio = getCustomThemeContrast(readableAccentText(accent, background), background);
+  const shortfalls: string[] = [];
+  if (accentRatio < ACCENT_UI_MIN_CONTRAST) {
+    shortfalls.push(
+      `the accent sits ${accentRatio.toFixed(1)}:1 against the background — below ${ACCENT_UI_MIN_CONTRAST}:1 its borders, rails and icons will not stand out`,
+    );
+  }
+  if (textRatio < ACCENT_TEXT_MIN_CONTRAST) {
+    shortfalls.push(
+      `accent text resolves to ${textRatio.toFixed(1)}:1 — below ${ACCENT_TEXT_MIN_CONTRAST}:1 for body-size type`,
+    );
+  }
+  return {
+    accentRatio,
+    textRatio,
+    note: shortfalls.length > 0 ? `Low contrast: ${shortfalls.join("; ")}.` : null,
+  };
 }
 
 export function getCustomThemeCssVariables(theme: CustomTheme): Record<string, string> {

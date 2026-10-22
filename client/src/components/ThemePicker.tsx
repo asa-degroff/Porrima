@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CustomTheme, Theme, ThemePreset } from "../types";
-import { getCustomThemeBackgroundError, normalizeThemePresetName } from "../utils/custom-theme";
+import { getCustomThemeAccentContrast, getCustomThemeBackgroundError, normalizeThemePresetName } from "../utils/custom-theme";
 import { OklchColorPicker } from "./OklchColorPicker";
 
 export const THEME_OPTIONS: Array<{ value: Theme; label: string; preview: string }> = [
@@ -76,6 +76,14 @@ export function ThemePicker({
   presetError,
 }: ThemePickerProps) {
   const backgroundError = getCustomThemeBackgroundError(customTheme.background);
+  // The contrast readout only has jurisdiction over a pair the app would
+  // actually render: with a background that fails the dark gate, every CSS
+  // variable falls back to the default theme, so measuring this pair against
+  // that background would report a combination that never reaches the screen.
+  const accentContrast =
+    backgroundError === null
+      ? getCustomThemeAccentContrast(customTheme.background, customTheme.accent)
+      : null;
   const presets = themePresets ?? [];
   const presetSupport = Boolean(onLoadPreset && onSavePreset && onDeletePreset);
   const boundPreset = activeThemePresetId
@@ -223,14 +231,22 @@ export function ThemePicker({
               label="Background"
               value={customTheme.background}
               onChange={(background) => onCustomThemeChange({ ...customTheme, background })}
+              contrastAgainst={accentContrast ? customTheme.accent : undefined}
               darkOnly
             />
             <OklchColorPicker
               label="Accent"
               value={customTheme.accent}
               onChange={(accent) => onCustomThemeChange({ ...customTheme, accent })}
+              contrastAgainst={accentContrast ? customTheme.background : undefined}
             />
           </div>
+
+          {accentContrast?.note && (
+            <p className="text-xs text-amber-200/75" role="status">
+              {accentContrast.note}
+            </p>
+          )}
 
           {presetSupport && (
             <div className="space-y-2">

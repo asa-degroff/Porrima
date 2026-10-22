@@ -79,16 +79,24 @@ interface SwatchInk {
    *  indistinguishable from the card it sits in, since the card is itself a
    *  translucent panel over that same background. */
   boxShadow: string;
+  /** WCAG relative luminance of the swatch, measured once per color. */
+  luminance: number;
 }
 
 export function inkForSwatch(hex: string): SwatchInk {
   const luminance = relativeLuminanceHex(hex) ?? 0;
-  const light =
-    contrastRatio(1, luminance) >= contrastRatio(luminance, INK_DARK_LUMINANCE);
+  const light = contrastRatio(1, luminance) >= contrastRatio(luminance, INK_DARK_LUMINANCE);
   return light
-    ? { color: INK_LIGHT, rgb: "255,255,255", boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.14)" }
-    : { color: INK_DARK, rgb: "5,6,10", boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.18)" };
+    ? { color: INK_LIGHT, rgb: "255,255,255", boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.14)", luminance }
+    : { color: INK_DARK, rgb: "5,6,10", boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.18)", luminance };
 }
+
+/** Shown on the bar when a control knows the color its own color is used
+ *  against. A measurement, not a verdict — the thresholds it means something
+ *  against (3:1 for borders and icons, 4.5:1 for text) are interpreted by the
+ *  caller that owns the pair. */
+const CONTRAST_TITLE =
+  "Contrast against the other color — 3:1 is the floor for borders and icons, 4.5:1 for text.";
 
 interface OklchColorPickerProps {
   label: string;
@@ -99,9 +107,18 @@ interface OklchColorPickerProps {
   /** Constrain the lightness range and hatch the plane region that fails the
    *  dark-background luminance gate (the background color control). */
   darkOnly?: boolean;
+  /** The color this one is used against (the other knob of a theme pair). When
+   *  set, the bar carries the WCAG contrast ratio of the pair. */
+  contrastAgainst?: string;
 }
 
-export function OklchColorPicker({ label, value, onChange, darkOnly = false }: OklchColorPickerProps) {
+export function OklchColorPicker({
+  label,
+  value,
+  onChange,
+  darkOnly = false,
+  contrastAgainst,
+}: OklchColorPickerProps) {
   const [lch, setLch] = useState<Oklch>(() => hexToOklch(value));
   const [hexDraft, setHexDraft] = useState(value);
   // The color the app is rendering right now. The swatch bar paints this rather
@@ -204,6 +221,8 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
   const cursorTop = (1 - lch.l) * 100;
 
   const ink = inkForSwatch(committedHex);
+  const partnerLuminance = contrastAgainst ? relativeLuminanceHex(contrastAgainst) : null;
+  const pairContrast = partnerLuminance === null ? null : contrastRatio(partnerLuminance, ink.luminance);
   const swatchStyle = {
     background: committedHex,
     color: ink.color,
@@ -228,17 +247,24 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
         style={swatchStyle}
       >
         <span className="text-xs font-medium">{label}</span>
-        <input
-          value={hexDraft}
-          onChange={(event) => setHexDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") commitHexDraft();
-          }}
-          onBlur={commitHexDraft}
-          spellCheck={false}
-          aria-label={`${label} hex value`}
-          className="w-[4.5rem] rounded border border-[rgba(var(--ink-rgb),0.3)] bg-transparent px-2 py-0.5 text-right text-[11px] font-mono uppercase focus:border-[rgba(var(--ink-rgb),0.7)] focus:outline-none"
-        />
+        <div className="flex items-center gap-2">
+          {pairContrast !== null && (
+            <span className="text-[11px] font-mono tabular-nums" title={CONTRAST_TITLE}>
+              {pairContrast.toFixed(1)}:1
+            </span>
+          )}
+          <input
+            value={hexDraft}
+            onChange={(event) => setHexDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitHexDraft();
+            }}
+            onBlur={commitHexDraft}
+            spellCheck={false}
+            aria-label={`${label} hex value`}
+            className="w-[4.5rem] rounded border border-[rgba(var(--ink-rgb),0.3)] bg-transparent px-2 py-0.5 text-right text-[11px] font-mono uppercase focus:border-[rgba(var(--ink-rgb),0.7)] focus:outline-none"
+          />
+        </div>
       </div>
 
       <div className="relative overflow-hidden rounded-md border border-white/10 bg-black/40">

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CUSTOM_THEME,
+  getCustomThemeAccentContrast,
   getCustomThemeBackgroundError,
+  getCustomThemeContrast,
   getCustomThemeCssVariables,
+  getRelativeLuminance,
   isCustomThemeBackgroundDark,
   normalizeHexColor,
   normalizeThemePresetName,
@@ -158,5 +161,54 @@ describe("theme presets", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("name");
+  });
+
+  it("measures contrast with the shared oklch luminance math", () => {
+    expect(getRelativeLuminance("#ffffff")).toBeCloseTo(1, 6);
+    // The gate limit is where white text hits 4.5:1 — the reason the gate is 0.183.
+    expect(getCustomThemeContrast("#ffffff", "#1e1b4b")).toBeGreaterThan(4.5);
+    expect(getCustomThemeContrast("#808080", "#808080")).toBeCloseTo(1, 6);
+    // An unparseable hex falls back to the default background, as before.
+    expect(getRelativeLuminance("nope")).toBeCloseTo(getRelativeLuminance(DEFAULT_CUSTOM_THEME.background), 6);
+  });
+
+  it("reports an accent/background pair that clears both bars", () => {
+    const pair = getCustomThemeAccentContrast(DEFAULT_CUSTOM_THEME.background, DEFAULT_CUSTOM_THEME.accent);
+
+    expect(pair.accentRatio).toBeGreaterThan(9);
+    expect(pair.textRatio).toBeGreaterThan(9);
+    expect(pair.note).toBeNull();
+  });
+
+  it("flags an accent too close to the background to read as UI", () => {
+    // Nearly-black accent on a dark background: borders and icons vanish, but
+    // the derived text color is rescued by whitening and stays legible.
+    const pair = getCustomThemeAccentContrast("#1e1b4b", "#111827");
+
+    expect(pair.accentRatio).toBeLessThan(3);
+    expect(pair.textRatio).toBeGreaterThanOrEqual(4.5);
+    expect(pair.note).toContain("borders");
+    expect(pair.note).not.toContain("body-size");
+  });
+
+  it("flags a pair whose accent stands out but whose text does not", () => {
+    // A bright-but-low-chroma accent on a background sitting at the top of the
+    // admissible range: the picked color clears 3:1, and even the whitened text
+    // color only reaches 3.5:1 — a WCAG AA miss no current guard catches.
+    const pair = getCustomThemeAccentContrast("#008474", "#94dfd0");
+
+    expect(pair.accentRatio).toBeGreaterThanOrEqual(3);
+    expect(pair.textRatio).toBeLessThan(4.5);
+    expect(pair.note).toContain("body-size");
+    expect(pair.note).not.toContain("borders");
+  });
+
+  it("reports both shortfalls when a pair fails both bars", () => {
+    const pair = getCustomThemeAccentContrast("#1e1b4b", "#1f2937");
+
+    expect(pair.accentRatio).toBeLessThan(3);
+    expect(pair.textRatio).toBeLessThan(4.5);
+    expect(pair.note).toContain("borders");
+    expect(pair.note).toContain("body-size");
   });
 });

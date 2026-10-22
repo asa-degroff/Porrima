@@ -143,4 +143,22 @@ describe("OklchColorPicker", () => {
     const [r, g, b] = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16));
     expect(screen.getByTestId("swatch")).toHaveStyle({ background: `rgb(${r}, ${g}, ${b})` });
   });
+
+  it("carries the pair contrast on the bar when a partner is given", () => {
+    const { rerender } = render(
+      <OklchColorPicker label="Accent" value="#fbbf24" onChange={() => {}} contrastAgainst="#1e1b4b" />
+    );
+    expect(screen.getByText("9.6:1")).toBeInTheDocument();
+
+    rerender(
+      <OklchColorPicker label="Accent" value="#fbbf24" onChange={() => {}} contrastAgainst="#ffffff" />
+    );
+    expect(screen.getByText("1.7:1")).toBeInTheDocument();
+  });
+
+  it("carries no contrast readout without a partner", () => {
+    render(<OklchColorPicker label="Accent" value="#fbbf24" onChange={() => {}} />);
+
+    expect(screen.queryByText(/^\d+(\.\d)?:1$/)).toBeNull();
+  });
 });
