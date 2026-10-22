@@ -91,6 +91,11 @@ _pump_err: "_Pump"
 # their spawning cell's output attribution. Threads start with a fresh context.
 _current_cell: contextvars.ContextVar[str | None] = contextvars.ContextVar("_current_cell", default=None)
 
+# Forwarded-byte ledger per (cell-or-job id, stream), plus the ids that hit the
+# ceiling. Pruned when a request finishes.
+_cell_stream_bytes: dict[tuple[str, str], int] = {}
+_cell_stream_capped: set[tuple[str, str]] = set()
+
 _active: dict[str, Any] = {"task": None, "rid": None, "interrupted": False}
 # Background jobs: job_id -> {"task": inner Task | None, "interrupted": bool}.
 # Jobs run concurrently and never occupy _active, so their interrupt handling
@@ -129,6 +134,13 @@ def _env_int(name: str, fallback: int) -> int:
 
 
 _L2_GRACE_MS = _env_int("PORRIMA_KERNEL_L2_GRACE_MS", _DEFAULT_L2_GRACE_MS)
+
+# Per-cell output ceiling. The frame cap above bounds one write; this bounds the
+# whole cell. 64 MB is chosen to match the host's spill ceiling
+# (DEFAULT_SPILL_MAX_BYTES), so nothing the driver forwards is more than the host
+# can keep, and a runaway cell cannot stream without end across the protocol pipe
+# — or, on an SSH host, across the network.
+_MAX_CELL_STREAM_BYTES = _env_int("PORRIMA_KERNEL_MAX_CELL_STREAM_BYTES", 64 * 1024 * 1024)
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +480,34 @@ class _TaggedBuffer(io.RawIOBase):
         return True
 
 
+def _cell_stream_cap_marker() -> str:
+    limit = _MAX_CELL_STREAM_BYTES // (1024 * 1024)
+    return (
+        f"\n[porrima: this cell exceeded the {limit}MB output-forwarding cap. The rest of its "
+        "output was never sent to the host; the cell itself kept running. Re-run the printing "
+        "part with a smaller slice, or write it to a file and read it back.]"
+    )
+
+
+def _reserve_stream_bytes(key: tuple[str, str], amount: int) -> tuple[int, bool]:
+    """How much of this write may still be forwarded for the cell.
+
+    Returns (room, capped_now). `capped_now` is True exactly once per cell+stream,
+    so the marker frame is sent after the last bytes that fit — which lands it in
+    the host's tail window instead of being scrolled out of it.
+    """
+    if key in _cell_stream_capped:
+        return 0, False
+    used = _cell_stream_bytes.get(key, 0)
+    if used + amount <= _MAX_CELL_STREAM_BYTES:
+        _cell_stream_bytes[key] = used + amount
+        return amount, False
+    room = max(0, _MAX_CELL_STREAM_BYTES - used)
+    _cell_stream_capped.add(key)
+    _cell_stream_bytes[key] = _MAX_CELL_STREAM_BYTES
+    return room, True
+
+
 class _TaggedWriter(io.TextIOBase):
     """sys.stdout/sys.stderr replacement tagging writes with the cell id."""
 
@@ -482,10 +522,17 @@ class _TaggedWriter(io.TextIOBase):
             raise TypeError(f"write() argument must be str, not {type(text).__name__}")
         if text:
             cell_id = _current_cell.get()
+            key = (cell_id or "", self._stream)
             with self._frame_lock:
-                for start in range(0, len(text), _STREAM_FRAME_TEXT_CAP):
+                room, capped_now = _reserve_stream_bytes(key, len(text))
+                for start in range(0, min(room, len(text)), _STREAM_FRAME_TEXT_CAP):
                     _send({"event": self._stream, "id": cell_id,
                            "text": text[start:start + _STREAM_FRAME_TEXT_CAP]})
+                if capped_now:
+                    _send({"event": self._stream, "id": cell_id,
+                           "text": _cell_stream_cap_marker()})
+        # A writer reports what it consumed, not what it forwarded: the cell's own
+        # accounting (print, sys.stdout.write) must not see a partial write.
         return len(text)
 
     def flush(self) -> None:
@@ -779,6 +826,9 @@ def _finish_locked(rid: str) -> None:
 
 
 def _finish_request(rid: str) -> None:
+    for stream in ("stdout", "stderr"):
+        _cell_stream_bytes.pop((rid, stream), None)
+        _cell_stream_capped.discard((rid, stream))
     with _interrupt_lock:
         _finish_locked(rid)
 

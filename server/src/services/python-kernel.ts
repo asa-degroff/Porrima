@@ -16,8 +16,13 @@ import { getStoredSystemPauseState } from "./system-pause.js";
 import { assertSafePathSegment } from "../utils/safe-path.js";
 import {
   capCellResultText,
+  cellInlineAllowance,
+  CELL_VIEW_BYTES,
+  countInlineParts,
   createCellOutputCapture,
-  renderCellOutput,
+  renderCellWindows,
+  renderOutputPointers,
+  type CellOutputBudget,
 } from "./kernel-output.js";
 import {
   isGroupAlive,
@@ -214,6 +219,14 @@ export interface KernelRunOptions {
    *  `kernelToolsEnabled()`; the manager registers it for the cell's (or
    *  job's) lifetime and refuses calls otherwise. */
   toolDispatcher?: KernelToolDispatcher;
+  /**
+   * The character budget the tool-result wrapper will head-keep for this call
+   * (`max(8000, contextWindow * 4 * 0.15)` at the chat's effective context
+   * window). The inline output windows are sized from it so the composition
+   * arrives whole instead of being amputated by a wrapper that cannot see its
+   * shape. Absent means the standalone ceilings apply.
+   */
+  resultBudgetChars?: number;
 }
 
 export interface KernelToolCallResult {
@@ -270,6 +283,11 @@ interface PendingExecution {
   /** Background acks resolve with the started message, not cell output. */
   background?: boolean;
   notice?: string | null;
+  /** Whether a spilled stream's full copy lands where read_file can reach it
+   *  (false for a kernel running on another host — §4.6). */
+  spillAllowed: boolean;
+  /** The wrapper's own head-keep budget, carried so the render can split it. */
+  resultBudgetChars?: number;
   /** Dispatcher handed to the cell this pending tracks (§4.9); background
    *  pending re-keys it onto the jobId when the ack lands. */
   toolDispatcher?: KernelToolDispatcher;
@@ -759,27 +777,41 @@ async function settlePending(
     pending.stdout.finish(),
     pending.stderr.finish(),
   ]);
-  const output = renderCellOutput(stdoutSnapshot, stderrSnapshot);
-  const resultText = capCellResultText(pending.resultText);
+  // Pointers first, windows second: the tool-result wrapper head-keeps, so a
+  // recovery path rendered at the tail is the first thing it removes.
+  const allowance = cellInlineAllowance(
+    pending.resultBudgetChars ? { resultBudgetChars: pending.resultBudgetChars } : undefined,
+    countInlineParts(stdoutSnapshot, stderrSnapshot, pending.resultText),
+  );
+  const pointers = renderOutputPointers(
+    stdoutSnapshot,
+    stderrSnapshot,
+    allowance,
+    pending.spillAllowed ? undefined : "the kernel runs on another host",
+  );
+  const output = renderCellWindows(stdoutSnapshot, stderrSnapshot, allowance);
+  const resultText = capCellResultText(pending.resultText, allowance);
   const parts: string[] = [];
   if (output) parts.push(output);
   if (resultText !== null) parts.push(resultText);
-  let content = parts.join("\n") || "(no output)";
+  const body = parts.join("\n") || "(no output)";
+  let content = body;
   let isError = false;
 
   if (pending.timedOut) {
-    content = `Python execution timed out after ${pending.timeoutSec}s\n${content}`;
+    content = `Python execution timed out after ${pending.timeoutSec}s\n${body}`;
     isError = true;
   } else if (pending.aborted) {
-    content = `Python execution aborted\n${content}`.trimEnd();
+    content = `Python execution aborted\n${body}`.trimEnd();
     isError = true;
   } else if (pending.error) {
     content = formatError(pending.error, output);
     isError = true;
   } else if (status === "error") {
-    content = `Python execution failed\n${content}`;
+    content = `Python execution failed\n${body}`;
     isError = true;
   }
+  if (pointers) content = `${pointers}\n${content}`;
   instance.executions++;
   scheduleSnapshot(instance);
   const outcome: {
@@ -1432,16 +1464,22 @@ function makePendingBase(
   signal: AbortSignal | undefined,
   onUpdate: ((text: string) => void) | undefined,
   notice: string | null,
+  budget: CellOutputBudget,
 ): PendingExecution {
   let pending!: PendingExecution;
+  const spillAllowed = budget.spillAllowed !== false;
   const output = createCellOutputCapture(chatId, id, () => {
     if (!pending || pending.settled) return;
-    pending.pendingUpdateText = renderCellOutput(
+    // The live view is re-sent on a throttle, so it gets its own cap instead of
+    // the settled window: a 60 s chatty cell would otherwise ship the full
+    // window once per tick for a result that ends up being that window.
+    pending.pendingUpdateText = renderCellWindows(
       pending.stdout.snapshot(),
       pending.stderr.snapshot(),
+      CELL_VIEW_BYTES,
     );
     schedulePendingUpdate(pending);
-  });
+  }, budget);
   pending = {
     id,
     timeoutSec: Math.max(1, Math.round(timeoutMs / 1000)),
@@ -1460,6 +1498,8 @@ function makePendingBase(
     onUpdate,
     images: [],
     notice,
+    spillAllowed,
+    resultBudgetChars: budget.resultBudgetChars,
     resolve: () => {},
   };
   return pending;
@@ -1491,7 +1531,10 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
     const id = randomUUID();
     const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
     return new Promise<KernelRunOutcome>((resolve) => {
-      const pending = makePendingBase(chatId, id, timeoutMs, signal, undefined, notice);
+      const pending = makePendingBase(chatId, id, timeoutMs, signal, undefined, notice, {
+        resultBudgetChars: opts.resultBudgetChars,
+        spillAllowed: host.kind === "local",
+      });
       pending.background = true;
       pending.toolDispatcher = dispatcher;
       pending.resolve = resolve;
@@ -1549,7 +1592,13 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
   const id = randomUUID();
   const dispatcher = kernelToolsEnabled() ? opts.toolDispatcher : undefined;
   return new Promise<KernelRunOutcome>((resolve) => {
-    const pending = makePendingBase(chatId, id, timeoutMs, signal, opts.onUpdate, notice);
+    const pending = makePendingBase(chatId, id, timeoutMs, signal, opts.onUpdate, notice, {
+      resultBudgetChars: opts.resultBudgetChars,
+      // The spill store is server-local. A remote kernel's read_file resolves
+      // against the remote workspace root, so a pointer into this store would
+      // name a file the cell cannot reach: truncate honestly instead (§4.6).
+      spillAllowed: host.kind === "local",
+    });
     pending.toolDispatcher = dispatcher;
     pending.resolve = (outcome) => {
       if (notice && outcome.mode === "kernel") {

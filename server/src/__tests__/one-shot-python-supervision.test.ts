@@ -112,7 +112,10 @@ describe("one-shot Python supervision", () => {
 
     expect(result.isError).toBe(false);
     expect(result.content.length).toBeLessThan(110 * 1024);
-    expect(result.content).toContain("saved to");
+    // The pointer renders as a header (kernel-output.ts), so the path survives a
+    // head-keeping tool-result truncation instead of sitting where it would be cut.
+    expect(result.content.startsWith("[output truncated")).toBe(true);
+    expect(result.content).toContain("full output ->");
 
     const spillDir = join(dataDir, "tool-output", "chat-output");
     const files = readdirSync(spillDir);

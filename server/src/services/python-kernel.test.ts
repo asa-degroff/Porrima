@@ -70,6 +70,7 @@ function run(
     background?: boolean;
     toolDispatcher?: KernelToolDispatcher;
     host?: KernelHost;
+    resultBudgetChars?: number;
   } = {},
 ): Promise<KernelRunOutcome> {
   return executeInKernel({
@@ -82,6 +83,7 @@ function run(
     background: opts.background,
     toolDispatcher: opts.toolDispatcher,
     host: opts.host,
+    resultBudgetChars: opts.resultBudgetChars,
   });
 }
 
@@ -292,6 +294,122 @@ describe("python kernel manager", () => {
     expect(views[0]).toContain("one");
     // The final result (not the throttled live view) carries the full output.
     expect(outcome.content).toContain("two");
+  });
+
+
+  describe("foreground output budgets", () => {
+    // The tool-result wrapper head-keeps at max(8000, contextWindow * 4 * 0.15)
+    // characters. The cell's inline parts are sized from the same number so the
+    // wrapper never has to cut anything — least of all a spill pointer.
+    const BUDGET = Math.floor(262144 * 4 * 0.15); // 157,286 at the live window
+
+    function remoteHost(): KernelHost {
+      const driver = localDriverInfo();
+      if (!driver) throw new Error("driver unavailable");
+      // Fake transport, real local driver: only the manager's spill decision
+      // keys on host.kind.
+      return {
+        kind: "ssh:test",
+        failureReason: "transport",
+        async prepare(chatId: string, cwd: string) {
+          const stateDir = join(root, "ssh-fg-state", chatId);
+          await mkdir(stateDir, { recursive: true, mode: 0o700 }).catch(() => {});
+          return {
+            command: process.env.PORRIMA_PYTHON || "python3",
+            args: ["-u", driver.path],
+            cwd,
+            env: { ...process.env, PORRIMA_KERNEL_DIR: stateDir, PYTHONDONTWRITEBYTECODE: "1" },
+            stateDir,
+            driverHash: driver.hash,
+          };
+        },
+        async readSnapshotManifest() {
+          return null;
+        },
+        async statMtime() {
+          return null;
+        },
+        async removeState() {},
+      };
+    }
+
+    it("fits a chatty cell inside the wrapper budget with the pointers first", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg");
+      const outcome = kernel(
+        await run("fg-window", 'print("A" * 2_000_000)\nprint("B" * 200_000)', {
+          resultBudgetChars: BUDGET,
+        }),
+      );
+      expect(outcome.isError).toBe(false);
+      expect(outcome.content.length).toBeLessThanOrEqual(BUDGET);
+      expect(outcome.content.startsWith("[output truncated")).toBe(true);
+      const path = outcome.content.match(/full output -> (\S+)/)?.[1];
+      expect(path).toBeTruthy();
+      // The pointer the model is handed is a file that holds the whole stream.
+      const saved = readFileSync(path!, "utf8");
+      expect(saved.length).toBeGreaterThanOrEqual(2_000_000);
+      expect(saved).toContain("B".repeat(1000));
+    });
+
+    it("keeps the pointer header ahead of a traceback", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-raise");
+      const outcome = kernel(
+        await run("fg-raise", 'print("C" * 1_500_000)\nraise ValueError("boom")', {
+          resultBudgetChars: BUDGET,
+        }),
+      );
+      expect(outcome.isError).toBe(true);
+      expect(outcome.content.length).toBeLessThanOrEqual(BUDGET);
+      // The head the wrapper keeps starts with where the output actually is.
+      expect(outcome.content.slice(0, 1024)).toContain("full output ->");
+      expect(outcome.content).toContain("ValueError: boom");
+    });
+
+    it("streams a live view far smaller than the settled window", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-view");
+      const views: string[] = [];
+      const outcome = kernel(
+        await run("fg-view", "for i in range(20000):\n    print('x' * 200)", {
+          onUpdate: (text) => views.push(text),
+        }),
+      );
+      expect(outcome.isError).toBe(false);
+      expect(views.length).toBeGreaterThan(1);
+      // Each tick ships the view, not the window: the cost of a chatty cell is
+      // its duration, not duration x window.
+      expect(Math.max(...views.map((v) => v.length))).toBeLessThanOrEqual(16 * 1024 * 2 + 32);
+    });
+
+    it("stops forwarding at the driver's per-cell ceiling", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-cap");
+      process.env.PORRIMA_KERNEL_MAX_CELL_STREAM_BYTES = "1048576"; // 1MB
+      try {
+        const outcome = kernel(
+          await run("fg-cap", 'print("D" * 3_000_000)', { resultBudgetChars: BUDGET }),
+        );
+        expect(outcome.isError).toBe(false);
+        expect(outcome.content).toContain("output-forwarding cap");
+        // 3MB printed, 1MB forwarded: the reported total is the forwarded total.
+        expect(outcome.content).toContain("1MB total");
+      } finally {
+        delete process.env.PORRIMA_KERNEL_MAX_CELL_STREAM_BYTES;
+      }
+    });
+
+    it("truncates a remote cell honestly — no pointer into the server-local store", async () => {
+      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-ssh-fg");
+      const outcome = kernel(
+        await run("ssh-fg", 'print("E" * 500_000)', {
+          resultBudgetChars: BUDGET,
+          host: remoteHost(),
+        }),
+      );
+      expect(outcome.isError).toBe(false);
+      expect(outcome.content).toContain("no copy was written (the kernel runs on another host)");
+      expect(outcome.content).not.toContain("read_file");
+      expect(outcome.content).not.toContain(process.env.PORRIMA_TOOL_OUTPUT_DIR!);
+      expect(existsSync(join(process.env.PORRIMA_TOOL_OUTPUT_DIR!, "ssh-fg"))).toBe(false);
+    });
   });
 
   describe("background jobs", () => {

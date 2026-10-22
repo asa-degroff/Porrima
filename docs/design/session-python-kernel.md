@@ -405,7 +405,7 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   (`~/.porrima/tool-output/<chatId>/py-<cellId>.txt`;
   [pi-1.0-migration.md](pi-1.0-migration.md) §4) — the same store the bash
   rewrite uses, because pi 1.0 removed the harness spill and the two paths
-  converge by necessity; the truncated result footer points at
+  converge by necessity; the result's pointer header names the spill path for
   `read_file(path, offset=…)`. No new read tool needed. The 1 MiB cap is the
   retained background-job output window (§4.7); the spill is the full output
   up to the store's per-file byte cap (migration doc §4.3), after which it
@@ -416,6 +416,38 @@ yields a protocol error event and the runtime keeps serving; stdin EOF is
   restart cannot silently overwrite a retained file from an earlier generation
   inside the 24 h window (and a `read_file` footer can never point at the
   wrong cell).
+
+**Inline budget, and why the pointers lead.** `kernel-output.ts` owns two rules
+that only work together. A cell's three inline parts (stdout tail, stderr tail,
+the last-expression `repr`) are each sized to a quarter of the character budget
+the tool-result wrapper head-keeps at — `max(8000, contextWindow * 4 * 0.15)`,
+passed in as `resultBudgetChars` — with a 100 KiB ceiling and a 4 KiB floor. Two
+caps that cannot see each other compound: at a 262k window the wrapper keeps
+157,286 characters, so three parts that each took the ceiling (~300 KB) were cut
+mid-body, and at 128k the wrapper budget (76,800) is smaller than a single
+ceiling-sized window. Deriving the parts from the wrapper's number makes the
+composition arrive whole. And where a stream did spill, its path renders in a
+**header at the front** of the result, never as a footer at the tail: a
+head-keeping truncator removes the tail first, so a footer-placed recovery path
+is the first thing it eats — the failure is silent, because the result still
+looks complete. The header's instruction line appears only when a line beneath it
+actually names a file; promising a `read_file` path that does not exist is worse
+than reporting that the output is gone.
+- **Head versus tail.** A print stream is informative from its end; a `repr` from
+  its front. stdout/stderr windows keep their tail, the capped `repr` keeps its
+  head, and its marker names the recovery move (`repr(x)[:5000]`, or write the
+  value to a file) because a stateful kernel still holds the value. The
+  asymmetry is deliberate.
+- **Producer-side ceiling.** The driver forwards at most
+  `PORRIMA_KERNEL_MAX_CELL_STREAM_BYTES` (default 64 MB — deliberately the store's
+  own per-file cap) per cell per stream, then emits one marker frame and drops the
+  rest. The window and spill bound what the server *keeps*; this bounds what
+  crosses the protocol pipe, which over an SSH host is the entire cost. The cell
+  keeps running — only its output forwarding stops, and the marker says so.
+- **Live view is capped separately** (`CELL_VIEW_BYTES`, 16 KiB per stream). It is
+  re-sent on every throttle tick, so shipping the settled window there makes a
+  chatty cell cost `duration × window` in transport for a result that ends up
+  being one window.
 
 ### 4.7 Background jobs
 

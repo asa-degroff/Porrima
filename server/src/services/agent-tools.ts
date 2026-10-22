@@ -1253,6 +1253,10 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             // Kernel tools ride the same per-execute seam; the manager gates
             // on its env flag and registers this for the cell/job lifetime.
             toolDispatcher: kernelToolsEnabled() ? createKernelToolDispatcher(workspace, chatId) : undefined,
+            // The cell's inline windows are sized from the same budget this
+            // tool's own wrapper head-keeps at, so the composition arrives whole
+            // and the spill pointers are never the part that gets cut.
+            resultBudgetChars: getMaxToolResultChars(contextWindow),
             onUpdate: onUpdate
               ? (text) => onUpdate({ content: [{ type: "text", text }], details: {} })
               : undefined,

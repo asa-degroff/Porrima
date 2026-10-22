@@ -302,6 +302,7 @@ Run records (`docs/records/`) — evaluation outputs referenced by design docs:
 - [Code Search Probe B1](docs/records/code-search-probe-b1.md) — v3-era probe results (arm B)
 - [Code Search Battery v4](docs/records/code-search-battery-v4.md) — 54-run three-arm battery results
 - [Route Traversal Probe](docs/records/route-traversal-probe.md) — route-layer guard results, guard witnesses, and the settings secret contract
+- [Kernel Output Budget](docs/records/kernel-output-budget.md) — cell/one-shot output budgets, the wrapper collision, and five mutation witnesses
 
 Release and onboarding:
 
