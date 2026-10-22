@@ -5,7 +5,7 @@ import { join } from "path";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { buildWebTools, executeWebTool, resolveWebSearchProvider, type WebSearchProvider } from "./web-tools.js";
 import { BROWSER_TOOLS, executeBrowserTool } from "./browser-tools.js";
-import { executePython, createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
+import { createArtifact, createVisual, updateArtifact, updateVisual, existsVisual } from "./sandbox.js";
 import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
 import { formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
@@ -1270,7 +1270,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
               : outcome.content;
             return wrapResult({ content, isError: outcome.isError }, "run_python");
           }
-          const oneShot = await workspace.runPython(args, signal);
+          const oneShot = await workspace.runPython(args, signal, { chatId });
           const notice = background
             ? `${KERNEL_FALLBACK_NOTICES[outcome.reason]} (background unavailable; ran synchronously)`
             : KERNEL_FALLBACK_NOTICES[outcome.reason];
@@ -1282,7 +1282,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             "run_python",
           );
         }
-        const oneShot = await workspace.runPython(args, signal);
+        const oneShot = await workspace.runPython(args, signal, { chatId });
         // Reached only by remote workspaces without a kernel host now — local
         // chats fell through the kernel path (or its one-shot fallback with
         // its own notice).
@@ -1564,7 +1564,6 @@ async function executeReadPdf(
   }
 
   let pdfBuffer: Buffer | null = null;
-  let imageDir: string | undefined;
 
   try {
     // Handle URL vs local path
@@ -1592,41 +1591,26 @@ async function executeReadPdf(
     const pythonCode = await readFile(PDF_EXTRACT_SCRIPT, "utf-8");
 
     try {
-      const result = await executePython(
-        pythonCode,
-        30,
-        undefined,
-        {
-          args: [pdfFilePath, String(extractImages), String(ocr), pages],
-          maxBuffer: 10 * 1024 * 1024,
-          signal,
-        },
+      // Same one-shot path as the local branch: supervised group, and the
+      // internal maxBuffer keeps the JSON payload complete for parsing.
+      const result = await workspace.runPython({
+        code: pythonCode,
+        argv: [pdfFilePath, String(extractImages), String(ocr), pages],
+        timeout: 30,
+      }, signal, { trusted: true, maxBuffer: 10 * 1024 * 1024 });
+
+      return await parsePdfExecutionResult(
+        result,
+        ocr,
+        result.content,
+        result.isError ? result.content : "",
+        extractImages,
       );
-
-      // Capture image_dir from parsed JSON for cleanup after hydration
-      if (result.exitCode === 0) {
-        try {
-          const parsed = JSON.parse(result.stdout);
-          imageDir = parsed.image_dir;
-        } catch { /* ignore parse errors */ }
-      }
-
-      return await parsePdfExecutionResult({
-        content: [result.stdout.trimEnd(), result.stderr ? `[stderr] ${result.stderr.trimEnd()}` : ""].filter(Boolean).join("\n"),
-        isError: result.exitCode !== 0,
-      }, ocr, result.stdout, result.stderr, extractImages);
     } finally {
       rmTmp(pdfSandboxDir, { recursive: true, force: true }).catch(() => {});
-      // Clean up image dir after the result has been consumed
-      if (imageDir) {
-        rm(imageDir, { recursive: true, force: true }).catch(() => {});
-      }
     }
 
   } catch (e: any) {
-    if (imageDir) {
-      rm(imageDir, { recursive: true, force: true }).catch(() => {});
-    }
     return { content: `PDF processing failed: ${e.message}`, isError: true };
   }
 }
@@ -1666,13 +1650,14 @@ async function parsePdfExecutionResult(
   }
   try {
     const parsed = JSON.parse(stdout);
+    const parsedImageDir = typeof parsed.image_dir === "string" ? parsed.image_dir : undefined;
     const formatted = formatPdfResult(parsed, extractImages);
     const textContent = !ocr && parsed.text.trim().length < 10 && parsed.metadata.pages > 0
       ? `⚠️ This PDF appears to be scanned. Try again with ocr=true.\n\n${formatted}`
       : formatted;
 
     // Build multi-part content when images are available
-    if (extractImages && parsed.image_dir && parsed.images?.length > 0) {
+    if (extractImages && parsedImageDir && parsed.images?.length > 0) {
       const content: any[] = [{ type: "text", text: textContent }];
       const maxImages = 5;
       const images = parsed.images.slice(0, maxImages);
@@ -1698,11 +1683,15 @@ async function parsePdfExecutionResult(
       }
 
       // Clean up image directory — safe to do here since we've already read all image data
-      if (parsed.image_dir) {
-        rm(parsed.image_dir, { recursive: true, force: true }).catch(() => {});
-      }
+      rm(parsedImageDir, { recursive: true, force: true }).catch(() => {});
 
       return { content, isError: false };
+    }
+
+    // No images requested (or none found): the extractor may still have created
+    // a scratch image directory.
+    if (parsedImageDir) {
+      rm(parsedImageDir, { recursive: true, force: true }).catch(() => {});
     }
 
     return { content: textContent, isError: false };

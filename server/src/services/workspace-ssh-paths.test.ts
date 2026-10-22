@@ -37,14 +37,17 @@ describe("SSH workspace path policy", () => {
     const workspace = new SshWorkspaceAdapter({ ...connection, id: "ssh-python-test" }, "/srv/project");
     const exec = vi.spyOn(workspace, "exec")
       .mockResolvedValueOnce({ content: "/usr/bin/python3", isError: false })
+      .mockResolvedValueOnce({ content: "timeout\nsetsid\n", isError: false })
       .mockResolvedValueOnce({ content: "ok", isError: false });
 
     const result = await workspace.runPython({ code: "print('ok')", argv: ["one"] });
 
     expect(result).toEqual({ content: "ok", isError: false });
-    expect(exec.mock.calls[1][0]).toContain("cd -- '/srv/project'");
-    expect(exec.mock.calls[1][0]).toContain("'/usr/bin/python3' - 'one'");
-    expect(exec.mock.calls[1][2]).toBe("print('ok')");
+    expect(String(exec.mock.calls[1][0])).toContain("command -v timeout");
+    expect(String(exec.mock.calls[2][0])).toContain("cd -- '/srv/project'");
+    expect(String(exec.mock.calls[2][0])).toContain("setsid sh -c");
+    expect(String(exec.mock.calls[2][0])).toContain("'/usr/bin/python3' - 'one'");
+    expect(exec.mock.calls[2][2]).toBe("print('ok')");
   });
 
   it("spills large Bash output inside the remote workspace", async () => {

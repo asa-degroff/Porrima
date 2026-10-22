@@ -27,10 +27,10 @@ Four consequences:
    this by spilling to a file (`runStreamingBash`, `workspace.ts:169`), but
    Python does not.
 
-`sandbox.ts`'s persistent sessions persist only a *directory* (`executePython`),
-not a namespace, and per `docs/tool-system.md:67` are reachable only from
-`read_pdf`'s URL branch — which is also dormant today: its sole caller passes
-no `sessionId`, so the session map is never populated.
+The legacy `sandbox.ts` executor persisted only a *directory* (`executePython`),
+not a namespace; it was reachable only from `read_pdf`'s URL branch and has
+since been removed. Per-call Python now runs through `workspace.ts` under the
+process supervisor, so a timeout or abort kills the whole group.
 
 ## 2. Prior art
 
@@ -133,7 +133,7 @@ unchanged in 1.0.
 **Non-goals**
 
 - A security sandbox. The kernel runs with the user's full permissions, exactly
-  like `bash` and today's `run_python`; `sandbox.ts` already says so.
+  like `bash` and today's `run_python`; the legacy `sandbox.ts` comment said so.
 - A kernel process that survives server restarts while live. The server owns
   the process; snapshots are the recovery path.
 - Collapsing Porrima's tool surface into CodeMode.
@@ -922,7 +922,6 @@ only the human-facing stream.
 - Albedo: <https://tangled.org/okami.mom/albedo> —
   `robot-docs/kernel.md`, `robot-docs/kernel-state.md`,
   `priv/python/albedo_kernel.py`
-- Porrima today: `server/src/services/workspace.ts` (`runPython`),
-  `server/src/services/agent-tools.ts` (`RUN_PYTHON_TOOL`, `wrapResult`),
-  `server/src/services/sandbox.ts` (legacy session dirs),
-  `server/src/services/turn-gate.ts`
+- Porrima today: `server/src/services/workspace.ts` (`runPython` one-shot and
+  the SSH wrapper), `server/src/services/agent-tools.ts` (`RUN_PYTHON_TOOL`,
+  `wrapResult`), `server/src/services/turn-gate.ts`

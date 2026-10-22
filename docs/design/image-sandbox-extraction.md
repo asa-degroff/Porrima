@@ -73,7 +73,7 @@ declared in both `types.ts` files, read by nothing (`resolveVisionModelId()` fel
 
 **Trap:** `ImageLightbox.tsx` and `ProgressiveImage.tsx` read as a matched pair, but the import lists tell a different story: `ImageLightbox` stays (chat renders it), `ProgressiveImage` moved with the sandbox. The pairing is not evidence of shared ownership.
 
-**Not the Image Sandbox:** `services/sandbox.ts` is the Python executor and artifact writer — unrelated to the Image Sandbox and never part of this extraction. Likewise the Chromium `--no-sandbox` flags in `browser-session.ts`, `artifact-preview.ts`, and `web-tools.ts`, and CorpusView's HTML `sandbox="allow-scripts allow-same-origin"` attribute.
+**Not the Image Sandbox:** `services/sandbox.ts` is the artifact writer (Python execution moved to `workspace.ts`) — unrelated to the Image Sandbox and never part of this extraction. Likewise the Chromium `--no-sandbox` flags in `browser-session.ts`, `artifact-preview.ts`, and `web-tools.ts`, and CorpusView's HTML `sandbox="allow-scripts allow-same-origin"` attribute.
 
 ---
 

@@ -34,7 +34,7 @@ See [docs/tool-system.md](docs/tool-system.md) for full details.
 
 Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, browser, and web tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state; its optional `options` (preset answers) ride the SSE event, the pending-state row, and `/chat/status` so the client's answer picker survives refresh. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
 
-Tool surface is split across specialists: `browser-tools.ts` drives a user-attached Chrome over the DevTools Protocol (`chrome.ts`) with a consent handshake (`browser-session.ts`), `web-tools.ts` covers fetch/search, `workspace.ts` provides local and remote-SSH filesystem access, and `sandbox.ts` runs Python. `turn-gate.ts` serializes all turns on **one global slot** (not per chat) with foreground-over-background priority and stale-lease recovery.
+Tool surface is split across specialists: `browser-tools.ts` drives a user-attached Chrome over the DevTools Protocol (`chrome.ts`) with a consent handshake (`browser-session.ts`), `web-tools.ts` covers fetch/search, `workspace.ts` provides local and remote-SSH filesystem access plus the one-shot Python runner, and `sandbox.ts` writes versioned artifact HTML. `turn-gate.ts` serializes all turns on **one global slot** (not per chat) with foreground-over-background priority and stale-lease recovery.
 
 ## Memory System
 
@@ -147,7 +147,7 @@ porrima/
 │   │   ├── browser-session.ts       # Remote-debugging Chrome session
 │   │   ├── chrome.ts                # Chrome DevTools Protocol client
 │   │   ├── web-tools.ts             # Web fetch/search tools
-│   │   ├── sandbox.ts               # Python execution helper (NOT a security sandbox)
+│   │   ├── sandbox.ts               # Artifact HTML writer/versioner (no Python execution)
 │   │   ├── workspace.ts             # Workspace paths + remote SSH filesystem
 │   │   ├── memory-storage.ts        # Memory + block SQLite + sqlite-vec + FTS5 persistence
 │   │   ├── memory-block-scope.ts    # Scope/project resolution invariants for memory blocks

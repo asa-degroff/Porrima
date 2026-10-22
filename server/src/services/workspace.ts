@@ -9,7 +9,8 @@ import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
 import { isValidSshIdentityFile, isValidSshTarget } from "../utils/ssh-target.js";
-import { createOutputCapture, type CaptureSnapshot } from "./output-capture.js";
+import { createOutputCapture, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
+import { renderCellOutput } from "./kernel-output.js";
 import { spawnSupervised } from "./process-supervisor.js";
 import {
   DEFAULT_SPILL_MAX_BYTES,
@@ -34,6 +35,8 @@ const SSH_KNOWN_HOSTS = appDataPath("ssh-known-hosts");
 // crossed the full output is spilled to a file the model can read_file.
 const BASH_OUTPUT_WINDOW_BYTES = 100 * 1024;
 const BASH_OUTPUT_MAX_LINES = 1_000_000;
+const PY_OUTPUT_WINDOW_BYTES = 100 * 1024;
+const PY_OUTPUT_MAX_LINES = 1_000_000;
 // Remote (SSH) spill threshold — the wrapped remote script spills when the
 // captured output exceeds this and prints only the tail.
 const SSH_BASH_OUTPUT_BYTE_CAP = 50 * 1024;
@@ -88,7 +91,12 @@ export interface WorkspaceReadFileOptions {
 
 export interface WorkspacePythonOptions {
   trusted?: boolean;
+  /** Internal callers (read_pdf) need the complete stdout payload; the value is
+   *  a hard byte cap and overflow is an error, not a tail window. Model-facing
+   *  calls omit it and get the bounded window + spill instead. */
   maxBuffer?: number;
+  /** Chat key for the shared spill store; omit to skip spilling. */
+  chatId?: string;
 }
 
 export interface WorkspaceBashOptions {
@@ -321,6 +329,122 @@ async function runStreamingBash(
   return { content: content || "(no output)", isError: false };
 }
 
+interface SupervisedPythonOptions {
+  chatId?: string;
+  cwd: string;
+  code: string;
+  argv?: unknown[];
+  timeoutSec: number;
+  signal?: AbortSignal;
+  maxBuffer?: number;
+}
+
+function createPythonCapture(
+  limitBytes: number,
+  spillPath: string | undefined,
+): OutputCapture {
+  return createOutputCapture({
+    limits: { maxBytes: limitBytes, maxLines: PY_OUTPUT_MAX_LINES, retain: "tail" },
+    spill: spillPath ? { path: spillPath, maxBytes: DEFAULT_SPILL_MAX_BYTES } : undefined,
+  });
+}
+
+/**
+ * One-shot Python in a supervised process group.
+ *
+ * `execFile` killed only the direct `python3` on timeout/abort, leaving
+ * subprocess children (and anything they spawned) running. This mirrors
+ * `runStreamingBash`: detached group, TERM → grace → KILL, bounded capture.
+ *
+ * Two output contracts share the mechanical path:
+ * - model-facing: 100 KB tail window + 64 MB spill + standard footer;
+ * - internal (`maxBuffer`): complete stdout/stderr up to a hard byte cap,
+ *   because read_pdf parses a JSON payload from stdout. Overflow is an error.
+ */
+async function runSupervisedPython(
+  opts: SupervisedPythonOptions,
+): Promise<{ content: string; isError: boolean }> {
+  if (opts.signal?.aborted) {
+    return { content: "Python execution aborted", isError: true };
+  }
+
+  const internal = typeof opts.maxBuffer === "number" && opts.maxBuffer > 0;
+  const captureLimit = internal ? opts.maxBuffer! : PY_OUTPUT_WINDOW_BYTES;
+  const captureId = randomUUID().slice(0, 8);
+  const spill = (stream: "out" | "err") =>
+    !internal && opts.chatId
+      ? createSpillPath(opts.chatId, "py", `${captureId}-${stream}`)
+      : undefined;
+
+  const stdoutCapture = createPythonCapture(captureLimit, spill("out"));
+  const stderrCapture = createPythonCapture(captureLimit, spill("err"));
+
+  const proc = spawnSupervised({
+    command: "python3",
+    args: ["-", ...(opts.argv ?? []).map(String)],
+    cwd: opts.cwd,
+    env: { ...process.env, HOME, PYTHONDONTWRITEBYTECODE: "1" },
+    key: `py:${opts.chatId ?? "internal"}:${captureId}`,
+    stdinPayload: opts.code,
+  });
+  proc.stdout?.on("data", (chunk: Buffer) => stdoutCapture.push(chunk));
+  proc.stderr?.on("data", (chunk: Buffer) => stderrCapture.push(chunk));
+
+  let timedOut = false;
+  let aborted = false;
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    void proc.kill();
+  }, opts.timeoutSec * 1000);
+  const onAbort = () => {
+    aborted = true;
+    void proc.kill();
+  };
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
+  if (opts.signal?.aborted) onAbort();
+
+  const exit = await proc.exited;
+  clearTimeout(timeoutTimer);
+  opts.signal?.removeEventListener("abort", onAbort);
+  const [stdoutSnapshot, stderrSnapshot] = await Promise.all([
+    stdoutCapture.finish(),
+    stderrCapture.finish(),
+  ]);
+
+  let content: string;
+  if (internal) {
+    if (stdoutSnapshot.truncation.truncated || stderrSnapshot.truncation.truncated) {
+      return {
+        content: `Python output exceeded ${opts.maxBuffer} bytes`,
+        isError: true,
+      };
+    }
+    const stdout = stdoutSnapshot.text.trimEnd();
+    const stderr = stderrSnapshot.text.trimEnd();
+    content = [stdout, stderr ? `[stderr] ${stderr}` : ""].filter(Boolean).join("\n");
+  } else {
+    content = renderCellOutput(stdoutSnapshot, stderrSnapshot);
+  }
+
+  if (exit.error) {
+    return { content: exit.error.message || "Python failed to start", isError: true };
+  }
+  if (timedOut) {
+    return {
+      content: `Python execution timed out after ${opts.timeoutSec}s\n${content || "(no output)"}`,
+      isError: true,
+    };
+  }
+  if (aborted || opts.signal?.aborted) {
+    return { content: `Python execution aborted\n${content || "(no output)"}`.trimEnd(), isError: true };
+  }
+  const exitCode = exit.code ?? (exit.signal ? 128 + (osConstants.signals[exit.signal] ?? 0) : 1);
+  if (exitCode !== 0) {
+    return { content: content || `Python exited with code ${exitCode}`, isError: true };
+  }
+  return { content: content || "(no output)", isError: false };
+}
+
 export class LocalWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
   readonly kind = "local" as const;
@@ -403,22 +527,14 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
 
   async runPython(args: Record<string, any>, signal?: AbortSignal, opts: WorkspacePythonOptions = {}): Promise<{ content: string; isError: boolean }> {
     const timeout = Math.min(300, Math.max(1, args.timeout || 30));
-    return new Promise((resolveResult) => {
-      if (signal?.aborted) {
-        resolveResult({ content: "Python execution aborted", isError: true });
-        return;
-      }
-      const proc = execFile("python3", ["-", ...(args.argv ?? []).map(String)], {
-        cwd: this.root,
-        timeout: timeout * 1000,
-        maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
-        signal,
-        env: { ...process.env, HOME, PYTHONDONTWRITEBYTECODE: "1" },
-      }, (error, stdout, stderr) => {
-        const output = [stdout?.trimEnd(), stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n") || "(no output)";
-        resolveResult({ content: error ? (signal?.aborted ? `Python execution aborted\n${output}` : output || error.message) : output, isError: !!error });
-      });
-      proc.stdin?.end(String(args.code || ""));
+    return runSupervisedPython({
+      chatId: opts.chatId,
+      cwd: this.root,
+      code: String(args.code || ""),
+      argv: args.argv,
+      timeoutSec: timeout,
+      signal,
+      maxBuffer: opts.maxBuffer,
     });
   }
 
@@ -514,6 +630,96 @@ function assertValidSshConnection(connection: SshConnection): void {
   }
 }
 
+export interface RemotePythonTools {
+  timeout: boolean;
+  setsid: boolean;
+}
+
+export interface RemotePythonCommand {
+  command: string;
+  /** Remote pidfile used to cancel the run; null when no wrapper is available. */
+  pidFile: string | null;
+  /** Negative-PID kill reaches the whole session (setsid). */
+  groupKill: boolean;
+}
+
+/**
+ * Per-call Python over SSH cannot rely on the local `ssh` kill: it terminates
+ * the client, not the remote command. When the host has GNU `timeout` and/or
+ * `setsid`, run the cell in the background under them, record the wrapper PID,
+ * and let the deadline (and abort, via a second exec) kill the group.
+ *
+ * `$HOME` is expanded remotely; the rest of the path is a server-generated id.
+ */
+export function buildRemotePythonCommand(input: {
+  root: string;
+  pythonPath: string;
+  argv: string[];
+  timeoutSec: number;
+  tools: RemotePythonTools;
+  runId: string;
+}): RemotePythonCommand {
+  const target = `${shellQuote(input.pythonPath)} -${
+    input.argv.length
+      ? ` ${input.argv.map((value) => shellQuote(String(value))).join(" ")}`
+      : ""
+  }`;
+  const runnerArgs = `${
+    input.tools.timeout ? `timeout -s TERM -k 5 ${input.timeoutSec} ` : ""
+  }${target}`;
+  const cd = `cd -- ${shellQuote(input.root)} || exit 1`;
+
+  if (!input.tools.timeout && !input.tools.setsid) {
+    return { command: `${cd}\n${runnerArgs}`, pidFile: null, groupKill: false };
+  }
+
+  const pidFile = `$HOME/.porrima/tmp/run-${input.runId}.pid`;
+  const pidRef = `"${pidFile}"`;
+  // Foreground wrapper: the inner shell writes its own PID (it becomes
+  // `timeout`/python after exec) and keeps stdin inherited. Backgrounding with
+  // `&` would give it /dev/null in a non-interactive shell, and `python3 -`
+  // would read EOF immediately. setsid makes that PID the session leader, so a
+  // negative-PID kill reaches the whole tree.
+  const inner = `sh -c 'echo $$ > "$1"; shift; exec "$@"' sh ${pidRef} ${runnerArgs}`;
+  const runner = `${input.tools.setsid ? "setsid " : ""}${inner}`;
+  const lines = [
+    cd,
+    `mkdir -p -- "$HOME/.porrima/tmp"`,
+    runner,
+    `status=$?`,
+    `rm -f -- ${pidRef}`,
+  ];
+  if (input.tools.timeout) {
+    lines.push(
+      `if [ "$status" -eq 124 ]; then echo "Python execution timed out after ${input.timeoutSec}s" >&2; fi`,
+    );
+  }
+  lines.push(`exit "$status"`);
+  return { command: lines.join("\n"), pidFile, groupKill: input.tools.setsid };
+}
+
+export function buildRemotePythonKillCommand(pidFile: string, groupKill: boolean): string {
+  const pidRef = `"${pidFile}"`;
+  const term = groupKill
+    ? `kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true`
+    : `kill -TERM "$pid" 2>/dev/null || true`;
+  const kill = groupKill
+    ? `kill -KILL -- -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true`
+    : `kill -KILL "$pid" 2>/dev/null || true`;
+  return [
+    `pid=$(cat ${pidRef} 2>/dev/null)`,
+    `if [ -n "$pid" ]; then`,
+    `  ${term}`,
+    `  sleep 2`,
+    `  pid=$(cat ${pidRef} 2>/dev/null)`,
+    `  if [ -n "$pid" ]; then`,
+    `    ${kill}`,
+    `  fi`,
+    `fi`,
+    `rm -f -- ${pidRef}`,
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Shared master state — keyed by connection ID so multiple adapters
 // (different projects, different chats) sharing the same connection
@@ -525,6 +731,8 @@ interface MasterState {
   pythonInfo: Promise<PythonInfo | null> | null;
   /** Resolved $HOME on the host (remote-python-kernel.md §4.3); retried on failure. */
   remoteHome: Promise<string | null> | null;
+  /** Cached capability probe for per-call Python wrappers. */
+  posixTools: Promise<RemotePythonTools> | null;
 }
 
 interface PythonInfo {
@@ -537,7 +745,7 @@ const masterRegistry = new Map<string, MasterState>();
 function getMasterState(connectionId: string): MasterState {
   let state = masterRegistry.get(connectionId);
   if (!state) {
-    state = { establishing: null, pythonInfo: null, remoteHome: null };
+    state = { establishing: null, pythonInfo: null, remoteHome: null, posixTools: null };
     masterRegistry.set(connectionId, state);
   }
   return state!;
@@ -772,6 +980,23 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     }
     const info = await state.pythonInfo;
     return info?.path ?? "python3";
+  }
+
+  /** Probe once per connection; cached on the shared master state. */
+  private async remoteTools(): Promise<RemotePythonTools> {
+    const state = getMasterState(this.connection.id);
+    if (!state.posixTools) {
+      state.posixTools = this.exec(
+        "command -v timeout >/dev/null 2>&1 && echo timeout; command -v setsid >/dev/null 2>&1 && echo setsid",
+        10000,
+      )
+        .then((result) => {
+          const text = result.isError ? "" : result.content;
+          return { timeout: /\btimeout\b/.test(text), setsid: /\bsetsid\b/.test(text) };
+        })
+        .catch(() => ({ timeout: false, setsid: false }));
+    }
+    return state.posixTools;
   }
 
   private python(script: string, payload: unknown, timeoutMs = 30000, signal?: AbortSignal): Promise<{ content: string; isError: boolean }> {
@@ -1023,10 +1248,60 @@ else:
     if (!opts.trusted && !this.connection.allowBash) {
       return { content: "Python execution is disabled because Bash is disabled for this SSH connection", isError: true };
     }
-    const timeoutMs = Math.min(300, Math.max(1, args.timeout || 30)) * 1000;
+    const timeoutSec = Math.min(300, Math.max(1, args.timeout || 30));
     const py = await this.resolvePython();
-    const argv = (args.argv ?? []).map((value: unknown) => shellQuote(String(value))).join(" ");
-    return this.inRoot(`${shellQuote(py)} -${argv ? ` ${argv}` : ""}`, timeoutMs, String(args.code || ""), signal, opts.maxBuffer);
+    const tools = await this.remoteTools();
+    const command = buildRemotePythonCommand({
+      root: this.root,
+      pythonPath: py,
+      argv: (args.argv ?? []).map((value: unknown) => String(value)),
+      timeoutSec,
+      tools,
+      runId: randomUUID().slice(0, 8),
+    });
+
+    const onAbort = command.pidFile
+      ? () => {
+          // The local ssh kill only closes the client. The wrapper's pidfile
+          // lets a second exec TERM (then KILL) the remote session.
+          void this.exec(
+            buildRemotePythonKillCommand(command.pidFile!, command.groupKill),
+            8000,
+          ).catch(() => {});
+        }
+      : undefined;
+    if (onAbort) {
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    }
+
+    try {
+      // Give the remote timeout a grace window to report its own 124 before
+      // the local ssh client is killed for a hung channel.
+      const localTimeoutMs = command.pidFile ? timeoutSec * 1000 + 10_000 : timeoutSec * 1000;
+      const result = await this.exec(
+        command.command,
+        localTimeoutMs,
+        String(args.code || ""),
+        signal,
+        opts.maxBuffer,
+      );
+      if (signal?.aborted) {
+        return {
+          content: `Python execution aborted\n${result.content}`.trimEnd(),
+          isError: true,
+        };
+      }
+      if (!command.pidFile && result.isError && /timed out|aborted/i.test(result.content)) {
+        return {
+          content: `${result.content}\n[note: remote host lacks timeout/setsid; the remote process may still be running]`,
+          isError: true,
+        };
+      }
+      return result;
+    } finally {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   /** Cached `$HOME` on the host (the same login-shell environment run_python
