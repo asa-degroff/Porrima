@@ -212,6 +212,19 @@ export function relativeLuminanceRgb(r: number, g: number, b: number): number {
   );
 }
 
+/** WCAG relative luminance of a hex color. Null when the hex is unparseable. */
+export function relativeLuminanceHex(hex: string): number | null {
+  const rgb = hexToRgbUnit(hex);
+  return rgb ? relativeLuminanceRgb(rgb.r, rgb.g, rgb.b) : null;
+}
+
+/** WCAG contrast ratio between two relative luminances. 1 (identical) to 21. */
+export function contrastRatio(first: number, second: number): number {
+  const high = Math.max(first, second);
+  const low = Math.min(first, second);
+  return (high + 0.05) / (low + 0.05);
+}
+
 /** WCAG relative luminance of the neutral gray at the given lightness. */
 export function neutralGrayLuminance(l: number): number {
   const srgb = oklchToSrgb(l, 0, 0);

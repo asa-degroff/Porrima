@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { Oklch } from "../utils/oklch";
 import {
   clampChroma,
+  contrastRatio,
   hexToOklch,
   inSrgbGamut,
   lightnessForLuminance,
@@ -9,6 +16,7 @@ import {
   maxChroma,
   oklchToHex,
   oklchToLinearSrgb,
+  relativeLuminanceHex,
   relativeLuminanceRgb,
 } from "../utils/oklch";
 import { CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE, normalizeHexColor } from "../utils/custom-theme";
@@ -42,6 +50,46 @@ const SLIDER_CLASSES =
 
 const HUE_TRACK = `linear-gradient(to right, ${Array.from({ length: 13 }, (_, i) => `oklch(0.7 0.25 ${i * 30})`).join(", ")})`;
 
+// Ink for the label and hex readout, which ride on a swatch bar painted with
+// the color the user is choosing — a color this component cannot constrain
+// (the accent control has no luminance gate at all). So the ink is picked per
+// swatch by WCAG contrast rather than fixed.
+//
+// The pair is chosen so the rule never has a blind spot: white ink and dark
+// ink reach equal contrast at a swatch luminance of sqrt(1.05 × (darkLum +
+// 0.05)) − 0.05, and that common contrast is the floor of the whole rule. At
+// #05060a the floor is 4.50:1 — WCAG AA — so the bar stays legible for every
+// selectable color, not merely most of them. A softer dark ink (#0b0d12, the
+// app's usual panel tint) would drop the floor to 4.41:1.
+//
+// The crossover lands at swatch luminance 0.1833, which is the same line as
+// CUSTOM_THEME_MAX_BACKGROUND_LUMINANCE (0.183) — i.e. every background the
+// dark control accepts takes light ink, and white ink is exactly at the AA
+// floor at the very top of that range.
+const INK_LIGHT = "#ffffff";
+const INK_DARK = "#05060a";
+const INK_DARK_LUMINANCE = relativeLuminanceHex(INK_DARK) ?? 0;
+
+interface SwatchInk {
+  /** Solid ink for the label and the hex readout. */
+  color: string;
+  /** "r,g,b" of that ink — the hairline classes build rgba() from it. */
+  rgb: string;
+  /** Hairline under the bar. A near-black background color would otherwise be
+   *  indistinguishable from the card it sits in, since the card is itself a
+   *  translucent panel over that same background. */
+  boxShadow: string;
+}
+
+export function inkForSwatch(hex: string): SwatchInk {
+  const luminance = relativeLuminanceHex(hex) ?? 0;
+  const light =
+    contrastRatio(1, luminance) >= contrastRatio(luminance, INK_DARK_LUMINANCE);
+  return light
+    ? { color: INK_LIGHT, rgb: "255,255,255", boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.14)" }
+    : { color: INK_DARK, rgb: "5,6,10", boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.18)" };
+}
+
 interface OklchColorPickerProps {
   label: string;
   /** Current color as hex (the app's storage format). */
@@ -56,6 +104,10 @@ interface OklchColorPickerProps {
 export function OklchColorPicker({ label, value, onChange, darkOnly = false }: OklchColorPickerProps) {
   const [lch, setLch] = useState<Oklch>(() => hexToOklch(value));
   const [hexDraft, setHexDraft] = useState(value);
+  // The color the app is rendering right now. The swatch bar paints this rather
+  // than the field's draft: while a half-typed hex sits in the input, the bar
+  // keeps reporting what is actually on screen.
+  const [committedHex, setCommittedHex] = useState(() => normalizeHexColor(value) ?? value);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef(false);
   // Last hex this control emitted; external value changes that differ from it
@@ -69,6 +121,7 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
     lastEmittedRef.current = normalized;
     setLch(hexToOklch(normalized));
     setHexDraft(normalized);
+    setCommittedHex(normalized);
   }, [value]);
 
   const chromaMax = maxChroma(lch.l, lch.h);
@@ -80,6 +133,7 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
     const hex = oklchToHex(lightness, chroma, hue);
     setLch({ l: lightness, c: chroma, h: hue });
     setHexDraft(hex);
+    setCommittedHex(hex);
     lastEmittedRef.current = hex;
     if (hex !== value) onChange(hex);
   };
@@ -149,10 +203,31 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
   const cursorLeft = (lch.c / PLANE_CHROMA_MAX) * 100;
   const cursorTop = (1 - lch.l) * 100;
 
+  const ink = inkForSwatch(committedHex);
+  const swatchStyle = {
+    background: committedHex,
+    color: ink.color,
+    caretColor: ink.color,
+    boxShadow: ink.boxShadow,
+    "--ink-rgb": ink.rgb,
+  } as CSSProperties;
+
   return (
-    <div className="space-y-2.5 rounded-md border border-white/10 bg-black/10 p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-white/60">{label}</span>
+    <div className="space-y-2.5 overflow-hidden rounded-md border border-white/10 bg-black/10 p-2.5">
+      {/* The header doubles as the swatch, bleeding to the card's inner edges.
+          Before this the selected color existed only as a position on the plane
+          — a point inside a continuous field carries positional information,
+          not color information. A flat field is the only honest readout of
+          "this is what I picked", and on the background control it is also a
+          literal preview of the surface the whole app sits on. The bar paints
+          the committed color, not the field's draft, so it keeps telling the
+          truth while a half-typed hex is in the input. */}
+      <div
+        data-testid="swatch"
+        className="-mx-2.5 -mt-2.5 flex items-center justify-between gap-2 px-2.5 py-2"
+        style={swatchStyle}
+      >
+        <span className="text-xs font-medium">{label}</span>
         <input
           value={hexDraft}
           onChange={(event) => setHexDraft(event.target.value)}
@@ -162,7 +237,7 @@ export function OklchColorPicker({ label, value, onChange, darkOnly = false }: O
           onBlur={commitHexDraft}
           spellCheck={false}
           aria-label={`${label} hex value`}
-          className="w-[4.5rem] rounded border border-white/10 bg-black/20 px-2 py-0.5 text-right text-[11px] font-mono uppercase text-white/80 placeholder:text-white/30 focus:border-white/30 focus:outline-none"
+          className="w-[4.5rem] rounded border border-[rgba(var(--ink-rgb),0.3)] bg-transparent px-2 py-0.5 text-right text-[11px] font-mono uppercase focus:border-[rgba(var(--ink-rgb),0.7)] focus:outline-none"
         />
       </div>
 

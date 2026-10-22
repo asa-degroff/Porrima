@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  contrastRatio,
   hexToOklch,
   inSrgbGamut,
   lightnessForLuminance,
@@ -7,6 +8,7 @@ import {
   mixHexOklab,
   neutralGrayLuminance,
   oklchToHex,
+  relativeLuminanceHex,
 } from "./oklch";
 
 describe("oklch conversions", () => {
@@ -89,6 +91,20 @@ describe("oklch conversions", () => {
     expect(mixed).not.toBe("#ffffff");
     const resolved = hexToOklch(mixed);
     expect(inSrgbGamut(resolved.l, resolved.c, resolved.h)).toBe(true);
+  });
+
+  it("measures relative luminance straight from hex", () => {
+    expect(relativeLuminanceHex("#ffffff")).toBeCloseTo(1, 6);
+    expect(relativeLuminanceHex("#000000")).toBeCloseTo(0, 6);
+    expect(relativeLuminanceHex("#808080")).toBeCloseTo(0.216, 3);
+    expect(relativeLuminanceHex("#abc")).toBeCloseTo(relativeLuminanceHex("#aabbcc") ?? 0, 6);
+    expect(relativeLuminanceHex("nope")).toBeNull();
+  });
+
+  it("computes WCAG contrast ratios", () => {
+    expect(contrastRatio(1, 0)).toBeCloseTo(21, 6);
+    expect(contrastRatio(0.183, 1)).toBeCloseTo(4.506, 3);
+    expect(contrastRatio(0.4, 0.4)).toBeCloseTo(1, 6);
   });
 
   it("throws on invalid hex input", () => {

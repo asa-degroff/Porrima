@@ -103,4 +103,44 @@ describe("OklchColorPicker", () => {
     expect(Number(lightness.max)).toBeGreaterThan(0.5);
     expect(Number(lightness.max)).toBeLessThan(0.65);
   });
+
+  it("paints the header bar with the committed color", () => {
+    render(<OklchColorPicker label="Accent" value="#fbbf24" onChange={() => {}} />);
+
+    expect(screen.getByTestId("swatch")).toHaveStyle({ background: "rgb(251, 191, 36)" });
+  });
+
+  it("flips the bar ink to whichever side of the swatch is legible", () => {
+    const { rerender } = render(<OklchColorPicker label="Accent" value="#fbbf24" onChange={() => {}} />);
+    // A bright accent takes the dark ink (11.6:1 vs 1.7:1 for white).
+    expect(screen.getByTestId("swatch")).toHaveStyle({ color: "rgb(5, 6, 10)" });
+
+    rerender(<OklchColorPicker label="Accent" value="#1e1b4b" onChange={() => {}} />);
+    // A dark swatch takes white (16:1 vs 1.2:1 for dark ink).
+    expect(screen.getByTestId("swatch")).toHaveStyle({ color: "rgb(255, 255, 255)" });
+  });
+
+  it("keeps the bar on the committed color when a typed hex is rejected", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<OklchColorPicker label="Accent" value="#fbbf24" onChange={onChange} />);
+
+    const field = screen.getByRole("textbox", { name: "Accent hex value" });
+    await user.clear(field);
+    await user.type(field, "#zz{enter}");
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId("swatch")).toHaveStyle({ background: "rgb(251, 191, 36)" });
+  });
+
+  it("follows the swatch when a slider moves it", () => {
+    const onChange = vi.fn();
+    render(<OklchColorPicker label="Accent" value="#fbbf24" onChange={onChange} />);
+
+    fireEvent.change(screen.getByRole("slider", { name: "Accent hue" }), { target: { value: "180" } });
+
+    const hex = onChange.mock.calls[0][0] as string;
+    const [r, g, b] = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16));
+    expect(screen.getByTestId("swatch")).toHaveStyle({ background: `rgb(${r}, ${g}, ${b})` });
+  });
 });
