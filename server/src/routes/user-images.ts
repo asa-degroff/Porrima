@@ -4,6 +4,7 @@ import { getChat, saveChat } from "../services/chat-storage.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import { join } from "path";
+import { isSafePathSegment } from "../utils/safe-path.js";
 
 const router = Router();
 
@@ -13,6 +14,9 @@ const router = Router();
  */
 router.delete("/chat/:chatId/image/:imageId", async (req, res) => {
   const { chatId, imageId } = req.params;
+  if (!isSafePathSegment(chatId) || !isSafePathSegment(imageId)) {
+    return res.status(400).json({ error: "Invalid image id" });
+  }
   const chat = await getChat(chatId);
   if (!chat) {
     return res.status(404).json({ error: "Chat not found" });
@@ -38,6 +42,9 @@ router.delete("/chat/:chatId/image/:imageId", async (req, res) => {
  * Serve thumbnail (WebP)
  */
 router.get("/:id/thumb", async (req, res) => {
+  if (!isSafePathSegment(req.params.id)) {
+    return res.status(400).json({ error: "Invalid image id" });
+  }
   const thumbPath = join(getUserImageDir(req.params.id), "thumb.webp");
   try {
     await access(thumbPath);
@@ -54,6 +61,9 @@ router.get("/:id/thumb", async (req, res) => {
  * Serve full-resolution image
  */
 router.get("/:id/image.:ext", async (req, res) => {
+  if (!isSafePathSegment(req.params.id)) {
+    return res.status(400).json({ error: "Invalid image id" });
+  }
   const dir = getUserImageDir(req.params.id);
   const ext = req.params.ext;
   const validExts = ["jpg", "jpeg", "png", "webp", "gif"];

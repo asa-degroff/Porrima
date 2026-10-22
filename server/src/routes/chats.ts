@@ -12,6 +12,7 @@ import { discoverAllModels, getEffectiveContextWindow } from "../services/models
 import type { Chat } from "../types.js";
 import type { ChatMetadataUpdate } from "../services/chat-storage.js";
 import { parseMessageLimit, parsePositiveInt } from "../utils/message-window.js";
+import { isSafePathSegment } from "../utils/safe-path.js";
 
 const router = Router();
 
@@ -103,6 +104,11 @@ router.get("/:id", async (req, res) => {
 // Create a new chat
 router.post("/", async (req, res) => {
   const { id: clientId, modelId, contextWindow, projectId } = req.body;
+  // Chat ids double as filesystem keys (queue files, kernel state, spill
+  // output), so they must be literal path segments.
+  if (clientId !== undefined && !isSafePathSegment(clientId)) {
+    return res.status(400).json({ error: "Invalid chat id" });
+  }
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId;
   
@@ -231,6 +237,11 @@ router.get("/:id/context-breakdown", async (req, res) => {
 
 // Delete a chat
 router.delete("/:id", async (req, res) => {
+  // Cleanup below derives filesystem paths from the id before the row is
+  // checked, so an unsafe id must be rejected here rather than 404ing later.
+  if (!isSafePathSegment(req.params.id)) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
   await cancelDeletedChatWork(req.params.id);
   const deleted = await deleteChat(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Chat not found" });

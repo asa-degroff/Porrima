@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm, stat, unlink } from "fs/promises";
 import { join } from "path";
 import { appDataPath } from "./paths.js";
+import { assertSafePathSegment } from "../utils/safe-path.js";
 
 // ---------------------------------------------------------------------------
 // Shared tool-output spill store — one policy for bash capture and kernel cell
@@ -33,6 +34,9 @@ export function toolOutputRoot(): string {
 }
 
 export function toolOutputDir(chatId: string): string {
+  // Chat ids are persisted filesystem keys; a traversal here would let a
+  // delete/write escape the spill root (see docs/key-patterns.md).
+  assertSafePathSegment(chatId, "chat id");
   return join(toolOutputRoot(), chatId);
 }
 

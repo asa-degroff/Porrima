@@ -243,6 +243,15 @@ function joinArgs(parts: string[]): string {
   return parts.join(" \\\n    ");
 }
 
+/** Values interpolated into a systemd unit must not be able to start a new
+ *  directive. Quoting is not enough: a newline inside quotes still terminates
+ *  the ExecStart line, so `ExecStartPre=` could be injected. */
+function assertSingleLine(field: string, value: string | undefined): void {
+  if (value !== undefined && /[\r\n]/.test(value)) {
+    throw new Error(`${field} cannot contain newlines`);
+  }
+}
+
 export async function validateServiceConfig(id: LlamaServerId, config: LlamaServiceConfig): Promise<void> {
   if (config.mode === "router" && !canUseRouterMode(id)) {
     throw new Error(`${id} does not support router mode`);
@@ -252,6 +261,20 @@ export async function validateServiceConfig(id: LlamaServerId, config: LlamaServ
   }
   if (config.mode === "router" && !config.modelsDir) {
     throw new Error("modelsDir is required in router mode");
+  }
+  for (const [field, value] of [
+    ["binaryPath", config.binaryPath],
+    ["modelPath", config.modelPath],
+    ["modelId", config.modelId],
+    ["modelsDir", config.modelsDir],
+    ["host", config.host],
+    ["reasoningFormat", config.reasoningFormat],
+    ["chatTemplateKwargs", config.chatTemplateKwargs],
+  ] as const) {
+    assertSingleLine(field, value);
+  }
+  if (config.reasoningFormat && !/^[A-Za-z0-9._-]+$/.test(config.reasoningFormat)) {
+    throw new Error("reasoningFormat contains invalid characters");
   }
   if (config.extraArgs.some((arg) => /[\n\r]/.test(arg))) {
     throw new Error("extraArgs cannot contain newlines");
@@ -284,7 +307,7 @@ export function renderServiceExecStart(id: LlamaServerId, config: LlamaServiceCo
   if (config.parallel) args.push("--parallel", String(config.parallel));
   if (config.batchSize) args.push("--batch-size", String(config.batchSize));
   if (config.ubatchSize) args.push("--ubatch-size", String(config.ubatchSize));
-  if (config.reasoningFormat) args.push("--reasoning-format", config.reasoningFormat);
+  if (config.reasoningFormat) args.push("--reasoning-format", shellQuote(config.reasoningFormat));
   if (config.chatTemplateKwargs) args.push("--chat-template-kwargs", shellQuote(config.chatTemplateKwargs));
   // KV snapshot parking (docs/design/kv-snapshot-parking.md §6): the inference
   // slot always advertises its snapshot directory so the `/slots` save/restore

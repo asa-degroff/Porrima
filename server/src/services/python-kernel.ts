@@ -13,6 +13,7 @@ import {
   ensureToolOutputDir,
 } from "./tool-output-store.js";
 import { getStoredSystemPauseState } from "./system-pause.js";
+import { assertSafePathSegment } from "../utils/safe-path.js";
 import {
   isGroupAlive,
   killProcessGroup,
@@ -351,6 +352,7 @@ export function kernelRoot(): string {
 }
 
 export function kernelStateDir(chatId: string): string {
+  assertSafePathSegment(chatId, "chat id");
   return join(kernelRoot(), chatId);
 }
 

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { promisify } from "util";
 import { APP_DATA_DIR } from "./paths.js";
+import { resolveWithin } from "../utils/safe-path.js";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -171,7 +172,8 @@ export async function listPersonaHistory(): Promise<string[]> {
 export async function getPersonaVersion(
   filename: string
 ): Promise<string | null> {
-  const filepath = path.join(PERSONA_HISTORY_DIR, filename);
+  const filepath = resolveWithin(PERSONA_HISTORY_DIR, filename);
+  if (!filepath) return null;
   try {
     return await readFile(filepath, "utf-8");
   } catch {

@@ -2,6 +2,7 @@ import { readFile, writeFile, unlink, mkdir, readdir } from "fs/promises";
 import { join } from "path";
 import type { ImageAttachment } from "../types.js";
 import { appDataPath } from "./paths.js";
+import { isSafePathSegment } from "../utils/safe-path.js";
 
 const QUEUE_DIR = appDataPath("queue");
 const MAX_QUEUE_SIZE = 10;
@@ -26,10 +27,16 @@ export interface QueuedUserMessage {
 /** In-memory queues per chat */
 const queues = new Map<string, QueuedUserMessage[]>();
 
+/** Queue files are keyed by chat id, so the id must be a literal segment. */
+function queueFilePath(chatId: string): string {
+  if (!isSafePathSegment(chatId)) throw new Error("Invalid chat id");
+  return join(QUEUE_DIR, `${chatId}.json`);
+}
+
 async function persistQueue(chatId: string): Promise<void> {
   const queue = queues.get(chatId);
   await mkdir(QUEUE_DIR, { recursive: true });
-  const filePath = join(QUEUE_DIR, `${chatId}.json`);
+  const filePath = queueFilePath(chatId);
   if (!queue || queue.length === 0) {
     await unlink(filePath).catch(() => {});
     return;
@@ -86,7 +93,7 @@ export function peek(chatId: string): QueuedUserMessage | null {
 export async function loadFromDisk(chatId: string): Promise<void> {
   if (queues.has(chatId) && queues.get(chatId)!.length > 0) return;
   try {
-    const filePath = join(QUEUE_DIR, `${chatId}.json`);
+    const filePath = queueFilePath(chatId);
     const content = await readFile(filePath, "utf-8");
     const items = JSON.parse(content) as QueuedUserMessage[];
     if (items.length > 0) {

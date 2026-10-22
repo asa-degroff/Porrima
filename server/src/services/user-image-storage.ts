@@ -3,6 +3,7 @@ import { join } from "path";
 import sharp from "sharp";
 import type { ImageAttachment } from "../types.js";
 import { appDataPath } from "./paths.js";
+import { resolveWithin } from "../utils/safe-path.js";
 
 const USER_IMAGES_DIR = appDataPath("user-images");
 const THUMB_WIDTH = 384;
@@ -28,7 +29,8 @@ export async function saveUserImage(
   mimeType: string,
   name: string
 ): Promise<UserImageRecord> {
-  const imageDir = join(USER_IMAGES_DIR, id);
+  const imageDir = resolveWithin(USER_IMAGES_DIR, id);
+  if (!imageDir) throw new Error("Invalid image id");
   await mkdir(imageDir, { recursive: true });
 
   const ext = mimeTypeToExt(mimeType);
@@ -91,7 +93,8 @@ export function stripImageAttachmentData(image: ImageAttachment): ImageAttachmen
 export async function hydrateUserImageAttachment(image: ImageAttachment): Promise<ImageAttachment> {
   if (image.data || !image.id) return image;
 
-  const imageDir = getUserImageDir(image.id);
+  const imageDir = resolveWithin(USER_IMAGES_DIR, image.id);
+  if (!imageDir) return image;
   const candidates = [
     imageExtensionFromUrl(image.url),
     mimeTypeToExt(image.mimeType),
@@ -124,11 +127,14 @@ export async function hydrateUserImageAttachments(images?: ImageAttachment[]): P
 }
 
 export function getUserImageDir(id: string): string {
-  return join(USER_IMAGES_DIR, id);
+  const dir = resolveWithin(USER_IMAGES_DIR, id);
+  if (!dir) throw new Error("Invalid image id");
+  return dir;
 }
 
 export async function deleteUserImage(id: string): Promise<boolean> {
-  const imageDir = join(USER_IMAGES_DIR, id);
+  const imageDir = resolveWithin(USER_IMAGES_DIR, id);
+  if (!imageDir) return false;
   try {
     await access(imageDir);
     await rm(imageDir, { recursive: true, force: true });

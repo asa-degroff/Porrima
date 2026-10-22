@@ -8,6 +8,7 @@ import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
+import { isValidSshTarget } from "../utils/ssh-target.js";
 import { createOutputCapture, type CaptureSnapshot } from "./output-capture.js";
 import { spawnSupervised } from "./process-supervisor.js";
 import {
@@ -499,6 +500,16 @@ function sshTarget(connection: SshConnection): string {
   return connection.username ? `${connection.username}@${connection.host}` : connection.host;
 }
 
+/** `ssh` parses any argument starting with `-` as an option (e.g.
+ *  `-oProxyCommand=...`, which runs a local command). Settings validation
+ *  rejects those values on write; this is the execution-point backstop for
+ *  connections stored before that validation existed. */
+function assertValidSshTarget(connection: SshConnection): void {
+  if (!isValidSshTarget(sshTarget(connection))) {
+    throw new Error("Invalid SSH connection target");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared master state — keyed by connection ID so multiple adapters
 // (different projects, different chats) sharing the same connection
@@ -531,9 +542,10 @@ function getMasterState(connectionId: string): MasterState {
 /** Build SSH args for a multiplexed client command.
  *  Client connections inherit all options from the master — only need -S, target, and command. */
 function sshClientArgs(controlSocket: string, connection: SshConnection, remoteCommand: string): string[] {
+  assertValidSshTarget(connection);
   return [
     "-S", controlSocket,
-    sshTarget(connection),
+    "--", sshTarget(connection),
     remoteCommand,
   ];
 }
@@ -560,7 +572,8 @@ function sshMasterArgs(controlSocket: string, connection: SshConnection): string
   if (connection.identityFile) {
     args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
   }
-  args.push(sshTarget(connection));
+  assertValidSshTarget(connection);
+  args.push("--", sshTarget(connection));
   return args;
 }
 
@@ -582,7 +595,8 @@ function sshDirectArgs(connection: SshConnection, remoteCommand: string): string
   if (connection.identityFile) {
     args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
   }
-  args.push(sshTarget(connection), remoteCommand);
+  assertValidSshTarget(connection);
+  args.push("--", sshTarget(connection), remoteCommand);
   return args;
 }
 

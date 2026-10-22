@@ -32,6 +32,7 @@ import { getStorageMigrationDiagnostics } from "../services/storage-diagnostics.
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import type { Settings, SshConnection } from "../types.js";
+import { sshConnectionFieldError } from "../utils/ssh-target.js";
 
 const router = Router();
 
@@ -126,13 +127,21 @@ router.post("/ssh-connections", async (req, res) => {
   if (!host || typeof host !== "string") {
     return res.status(400).json({ error: "host is required" });
   }
+  const hostValue = host.trim();
+  const usernameValue = typeof username === "string" && username.trim() ? username.trim() : undefined;
+  // Host and username become argv entries to `ssh`; option-shaped values would
+  // run a local command (see utils/ssh-target.ts).
+  const fieldError = sshConnectionFieldError(hostValue, usernameValue);
+  if (fieldError) {
+    return res.status(400).json({ error: fieldError });
+  }
   const now = new Date().toISOString();
   const connection: SshConnection = {
     id: crypto.randomUUID(),
     name: name.trim(),
-    host: host.trim(),
+    host: hostValue,
     port: Number(port) || 22,
-    username: typeof username === "string" && username.trim() ? username.trim() : undefined,
+    username: usernameValue,
     identityFile: typeof identityFile === "string" && identityFile.trim() ? identityFile.trim() : undefined,
     knownHostsMode: knownHostsMode === "strict" || knownHostsMode === "off" ? knownHostsMode : "accept-new",
     enabled: enabled !== false,
@@ -149,6 +158,17 @@ router.post("/ssh-connections", async (req, res) => {
 router.patch("/ssh-connections/:id", async (req, res) => {
   const existing = await getSshConnection(req.params.id);
   if (!existing) return res.status(404).json({ error: "SSH connection not found" });
+
+  if (req.body.host !== undefined || req.body.username !== undefined) {
+    const host = req.body.host !== undefined ? String(req.body.host).trim() : existing.host;
+    const username = req.body.username !== undefined
+      ? String(req.body.username || "").trim() || undefined
+      : existing.username;
+    const fieldError = sshConnectionFieldError(host, username);
+    if (fieldError) {
+      return res.status(400).json({ error: fieldError });
+    }
+  }
 
   const updates: Partial<SshConnection> = {};
   if (req.body.name !== undefined) updates.name = String(req.body.name).trim();
@@ -244,10 +264,13 @@ router.post("/llama-path/validate", async (req, res) => {
   }
 });
 
-// GET /api/settings/llama-binaries — List discovered llama-server binaries
-router.get("/llama-binaries", async (_req, res) => {
+// POST /api/settings/llama-binaries — List discovered llama-server binaries.
+// POST (not GET) because the scan executes each candidate binary with
+// `--version`: a same-site GET navigation would carry the session cookie and
+// turn this into CSRF. JSON-only bodies are also unreachable from HTML forms.
+router.post("/llama-binaries", async (req, res) => {
   try {
-    const queryDir = typeof _req.query.dir === "string" ? _req.query.dir : "";
+    const queryDir = typeof req.body?.dir === "string" ? req.body.dir : "";
     const settings = await getSettings();
     const scanDir = queryDir.trim() || settings.llamaBinaryScanDir || getDefaultLlamaScanDir();
     const binaries = await listLlamaBinaries(scanDir);

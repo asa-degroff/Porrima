@@ -1611,8 +1611,11 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
 }
 
 export async function listLlamaBinaries(scanDir?: string): Promise<LlamaBinaryInfo[]> {
-  const qs = scanDir ? `?${new URLSearchParams({ dir: scanDir }).toString()}` : "";
-  const res = await apiFetch(`${BASE}/settings/llama-binaries${qs}`);
+  const res = await apiFetch(`${BASE}/settings/llama-binaries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dir: scanDir ?? "" }),
+  });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error((data as any).error || "Failed to list binaries");

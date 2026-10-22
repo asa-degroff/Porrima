@@ -3,6 +3,7 @@ import { access } from "fs/promises";
 import { join } from "path";
 import { Router } from "express";
 import { getToolResultImageDir } from "../services/tool-result-image-storage.js";
+import { isSafePathSegment } from "../utils/safe-path.js";
 
 const router = Router();
 
@@ -11,6 +12,9 @@ router.get("/:id/image.:ext", async (req, res) => {
   const validExts = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "bin"];
   if (!validExts.includes(ext)) {
     return res.status(400).json({ error: "Invalid extension" });
+  }
+  if (!isSafePathSegment(req.params.id)) {
+    return res.status(400).json({ error: "Invalid image id" });
   }
 
   const imagePath = join(getToolResultImageDir(req.params.id), `image.${ext}`);

@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { v4 as uuid } from "uuid";
 import { appDataPath } from "./paths.js";
+import { assertSafePathSegment } from "../utils/safe-path.js";
 
 const ARTIFACTS_DIR = appDataPath("artifacts");
 const VISUALS_DIR = appDataPath("visuals");
@@ -185,6 +186,7 @@ export async function createVisual(
   html: string,
   title?: string
 ): Promise<{ url: string; version: number }> {
+  assertSafePathSegment(id, "visual id");
   const visualDir = join(VISUALS_DIR, id);
   const versionsDir = join(visualDir, "versions", "1");
   await mkdir(versionsDir, { recursive: true });
@@ -217,6 +219,7 @@ export async function updateVisual(
   html: string,
   changeSummary?: string
 ): Promise<{ url: string; version: number }> {
+  assertSafePathSegment(id, "visual id");
   const visualDir = join(VISUALS_DIR, id);
   const metadataPath = join(visualDir, "metadata.json");
 
@@ -263,6 +266,7 @@ export async function createArtifact(
   html: string,
   title?: string
 ): Promise<{ url: string; version: number }> {
+  assertSafePathSegment(id, "artifact id");
   const artifactDir = join(ARTIFACTS_DIR, id);
   const versionsDir = join(artifactDir, "versions", "1");
   await mkdir(versionsDir, { recursive: true });
@@ -295,6 +299,7 @@ export async function updateArtifact(
   html: string,
   changeSummary?: string
 ): Promise<{ url: string; version: number }> {
+  assertSafePathSegment(id, "artifact id");
   const artifactDir = join(ARTIFACTS_DIR, id);
   const metadataPath = join(artifactDir, "metadata.json");
 
