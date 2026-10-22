@@ -2,6 +2,7 @@ import { writeFile, mkdir, access, rm, stat } from "fs/promises";
 import { join } from "path";
 import sharp from "sharp";
 import { appDataPath } from "./paths.js";
+import { resolveWithin } from "../utils/safe-path.js";
 
 const HEADER_IMAGE_DIR = appDataPath("header-image");
 const HEADER_SIZE = 96;
@@ -149,6 +150,11 @@ export async function deleteHeaderImage(): Promise<boolean> {
   }
 }
 
+/** Every current caller passes a literal or an allow-listed extension, but the
+ *  containment lives here so a future caller cannot turn this into a read
+ *  outside the header root. */
 export function getHeaderImagePath(filename: string): string {
-  return join(HEADER_IMAGE_DIR, filename);
+  const resolved = resolveWithin(HEADER_IMAGE_DIR, filename);
+  if (!resolved) throw new Error("Invalid header image filename");
+  return resolved;
 }

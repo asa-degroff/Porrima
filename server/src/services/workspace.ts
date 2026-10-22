@@ -8,7 +8,7 @@ import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
-import { isValidSshTarget } from "../utils/ssh-target.js";
+import { isValidSshIdentityFile, isValidSshTarget } from "../utils/ssh-target.js";
 import { createOutputCapture, type CaptureSnapshot } from "./output-capture.js";
 import { spawnSupervised } from "./process-supervisor.js";
 import {
@@ -501,12 +501,16 @@ function sshTarget(connection: SshConnection): string {
 }
 
 /** `ssh` parses any argument starting with `-` as an option (e.g.
- *  `-oProxyCommand=...`, which runs a local command). Settings validation
- *  rejects those values on write; this is the execution-point backstop for
- *  connections stored before that validation existed. */
-function assertValidSshTarget(connection: SshConnection): void {
+ *  `-oProxyCommand=...`, which runs a local command), and the identity file is
+ *  passed as its own argv entry. Settings validation rejects those values on
+ *  write; this is the execution-point backstop for connections stored before
+ *  that validation existed, so it runs before any argument is built. */
+function assertValidSshConnection(connection: SshConnection): void {
   if (!isValidSshTarget(sshTarget(connection))) {
     throw new Error("Invalid SSH connection target");
+  }
+  if (!isValidSshIdentityFile(connection.identityFile)) {
+    throw new Error("Invalid SSH connection identity file");
   }
 }
 
@@ -542,7 +546,7 @@ function getMasterState(connectionId: string): MasterState {
 /** Build SSH args for a multiplexed client command.
  *  Client connections inherit all options from the master — only need -S, target, and command. */
 function sshClientArgs(controlSocket: string, connection: SshConnection, remoteCommand: string): string[] {
-  assertValidSshTarget(connection);
+  assertValidSshConnection(connection);
   return [
     "-S", controlSocket,
     "--", sshTarget(connection),
@@ -552,6 +556,7 @@ function sshClientArgs(controlSocket: string, connection: SshConnection, remoteC
 
 /** Build SSH args for establishing a master connection. */
 function sshMasterArgs(controlSocket: string, connection: SshConnection): string[] {
+  assertValidSshConnection(connection);
   const strictMode = connection.knownHostsMode === "strict"
     ? "yes"
     : connection.knownHostsMode === "off"
@@ -572,13 +577,13 @@ function sshMasterArgs(controlSocket: string, connection: SshConnection): string
   if (connection.identityFile) {
     args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
   }
-  assertValidSshTarget(connection);
   args.push("--", sshTarget(connection));
   return args;
 }
 
 /** Build SSH args for a direct (non-multiplexed) connection — used as fallback. */
 function sshDirectArgs(connection: SshConnection, remoteCommand: string): string[] {
+  assertValidSshConnection(connection);
   const strictMode = connection.knownHostsMode === "strict"
     ? "yes"
     : connection.knownHostsMode === "off"
@@ -595,7 +600,6 @@ function sshDirectArgs(connection: SshConnection, remoteCommand: string): string
   if (connection.identityFile) {
     args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
   }
-  assertValidSshTarget(connection);
   args.push("--", sshTarget(connection), remoteCommand);
   return args;
 }

@@ -173,9 +173,10 @@ router.post("/ssh-connections", async (req, res) => {
   }
   const hostValue = host.trim();
   const usernameValue = typeof username === "string" && username.trim() ? username.trim() : undefined;
-  // Host and username become argv entries to `ssh`; option-shaped values would
-  // run a local command (see utils/ssh-target.ts).
-  const fieldError = sshConnectionFieldError(hostValue, usernameValue);
+  const identityValue = typeof identityFile === "string" && identityFile.trim() ? identityFile.trim() : undefined;
+  // Host, username, and identity file all become argv entries to `ssh`;
+  // option-shaped values would run a local command (see utils/ssh-target.ts).
+  const fieldError = sshConnectionFieldError(hostValue, usernameValue, identityValue);
   if (fieldError) {
     return res.status(400).json({ error: fieldError });
   }
@@ -186,7 +187,7 @@ router.post("/ssh-connections", async (req, res) => {
     host: hostValue,
     port: Number(port) || 22,
     username: usernameValue,
-    identityFile: typeof identityFile === "string" && identityFile.trim() ? identityFile.trim() : undefined,
+    identityFile: identityValue,
     knownHostsMode: knownHostsMode === "strict" || knownHostsMode === "off" ? knownHostsMode : "accept-new",
     enabled: enabled !== false,
     allowBash: allowBash !== false,
@@ -203,12 +204,15 @@ router.patch("/ssh-connections/:id", async (req, res) => {
   const existing = await getSshConnection(req.params.id);
   if (!existing) return res.status(404).json({ error: "SSH connection not found" });
 
-  if (req.body.host !== undefined || req.body.username !== undefined) {
+  if (req.body.host !== undefined || req.body.username !== undefined || req.body.identityFile !== undefined) {
     const host = req.body.host !== undefined ? String(req.body.host).trim() : existing.host;
     const username = req.body.username !== undefined
       ? String(req.body.username || "").trim() || undefined
       : existing.username;
-    const fieldError = sshConnectionFieldError(host, username);
+    const identityFile = req.body.identityFile !== undefined
+      ? String(req.body.identityFile || "").trim() || undefined
+      : existing.identityFile;
+    const fieldError = sshConnectionFieldError(host, username, identityFile);
     if (fieldError) {
       return res.status(400).json({ error: fieldError });
     }

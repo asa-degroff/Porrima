@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import type { ImageAttachment } from "../types.js";
 import { appDataPath } from "./paths.js";
+import { resolveWithin } from "../utils/safe-path.js";
 
 const TOOL_RESULT_IMAGES_DIR = appDataPath("tool-result-images");
 
@@ -42,8 +43,13 @@ function imageExtensionFromUrl(url?: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
+/** The image id is a persisted filesystem key, so it is contained here rather
+ *  than at each call site — a route that forgets the check should not be able to
+ *  read or delete outside the image root. */
 export function getToolResultImageDir(id: string): string {
-  return join(TOOL_RESULT_IMAGES_DIR, id);
+  const dir = resolveWithin(TOOL_RESULT_IMAGES_DIR, id);
+  if (!dir) throw new Error("Invalid image id");
+  return dir;
 }
 
 export function stripToolResultImageData(image: ImageAttachment): ImageAttachment {
@@ -104,14 +110,4 @@ export async function hydrateToolResultImageAttachment(image: ImageAttachment): 
 export async function hydrateToolResultImageAttachments(images?: ImageAttachment[]): Promise<ImageAttachment[] | undefined> {
   if (!images?.length) return images;
   return Promise.all(images.map((image) => hydrateToolResultImageAttachment(image)));
-}
-
-export async function deleteToolResultImage(id: string): Promise<boolean> {
-  try {
-    await access(getToolResultImageDir(id));
-    await rm(getToolResultImageDir(id), { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
 }
