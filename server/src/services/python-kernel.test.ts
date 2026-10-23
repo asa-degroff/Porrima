@@ -47,6 +47,11 @@ beforeEach(async () => {
   // (manager).
   process.env.PORRIMA_KERNEL_L2_GRACE_MS = "300";
   process.env.PORRIMA_KERNEL_WEDGE_GRACE_MS = "1000";
+  // The spill store is sandboxed for the whole file, not per test. Set it per
+  // test and one test that forgets lands its output in the real tool-output
+  // store: the P4b delivery test wrote a 1.3 MB job spill to
+  // ~/.porrima/tool-output/r-job/ on every run.
+  process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output");
 });
 
 afterEach(async () => {
@@ -334,7 +339,6 @@ describe("python kernel manager", () => {
     }
 
     it("fits a chatty cell inside the wrapper budget with the pointers first", async () => {
-      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg");
       const outcome = kernel(
         await run("fg-window", 'print("A" * 2_000_000)\nprint("B" * 200_000)', {
           resultBudgetChars: BUDGET,
@@ -352,7 +356,6 @@ describe("python kernel manager", () => {
     });
 
     it("keeps the pointer header ahead of a traceback", async () => {
-      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-raise");
       const outcome = kernel(
         await run("fg-raise", 'print("C" * 1_500_000)\nraise ValueError("boom")', {
           resultBudgetChars: BUDGET,
@@ -366,7 +369,6 @@ describe("python kernel manager", () => {
     });
 
     it("spills a sub-ceiling stream when the render allowance trims it", async () => {
-      process.env.PORRIMA_TOOL_OUTPUT_DIR = join(root, "tool-output-fg-trim");
       const outcome = kernel(
         await run(
           "fg-trim",

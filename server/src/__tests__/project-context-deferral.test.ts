@@ -98,6 +98,15 @@ interface ProjectContextFixture {
 
 function mockProjectContextDeps(fixture: ProjectContextFixture) {
   const projectRows = new Map<string, { source: string; content: string }>();
+  const blockRows = new Map<string, {
+    globalSection: string;
+    projectSection: string;
+    contentHash: string;
+    hasIndexedBlocks: boolean;
+    globalBudget: number;
+    projectBudget: number;
+    updatedAt: number;
+  }>();
 
   vi.resetModules();
   vi.doMock("../services/embeddings.js", () => ({
@@ -134,6 +143,28 @@ function mockProjectContextDeps(fixture: ProjectContextFixture) {
     }),
     deleteProjectContextState: vi.fn((chatId: string) => {
       projectRows.delete(chatId);
+    }),
+    hashMemoryBlockSections: (globalSection: string, projectSection: string) =>
+      sha1(`${globalSection}\u0000${projectSection}`),
+    getMemoryBlockState: vi.fn((chatId: string) => {
+      const r = blockRows.get(chatId);
+      return r ? { chatId, ...r } : null;
+    }),
+    upsertMemoryBlockState: vi.fn((chatId: string, s: {
+      globalSection: string;
+      projectSection: string;
+      hasIndexedBlocks: boolean;
+      globalBudget: number;
+      projectBudget: number;
+    }) => {
+      blockRows.set(chatId, {
+        ...s,
+        contentHash: sha1(`${s.globalSection}\u0000${s.projectSection}`),
+        updatedAt: 0,
+      });
+    }),
+    deleteMemoryBlockState: vi.fn((chatId: string) => {
+      blockRows.delete(chatId);
     }),
   }));
   vi.doMock("../services/reranker.js", () => ({
@@ -188,7 +219,7 @@ function mockProjectContextDeps(fixture: ProjectContextFixture) {
   vi.doMock("../services/logger.js", () => ({ log: logMock }));
 
   const module = import("../services/memory-context.js");
-  return { module, projectRows, log: logMock };
+  return { module, projectRows, blockRows, log: logMock };
 }
 
 describe("project context deferral (service)", () => {

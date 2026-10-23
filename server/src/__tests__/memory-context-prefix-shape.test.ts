@@ -61,6 +61,25 @@ function expectInOrder(text: string, markers: string[]): void {
 // pre-seed it to exercise the AGENTS.md deferral path.
 const projectContextRows = new Map<string, { source: string; content: string; contentHash: string; updatedAt: number }>();
 
+type BlockStateRow = {
+  globalSection: string;
+  projectSection: string;
+  contentHash: string;
+  hasIndexedBlocks: boolean;
+  globalBudget: number;
+  projectBudget: number;
+  updatedAt: number;
+};
+const memoryBlockRows = new Map<string, BlockStateRow>();
+
+function hashBlockSections(globalSection: string, projectSection: string): string {
+  return createHash("sha1")
+    .update(globalSection, "utf8")
+    .update("\u0000", "utf8")
+    .update(projectSection, "utf8")
+    .digest("hex");
+}
+
 function mockMemoryContextDeps(options: {
   globalBlocks?: MemoryBlock[];
   projectBlocks?: MemoryBlock[];
@@ -72,6 +91,7 @@ function mockMemoryContextDeps(options: {
 
   vi.resetModules();
   projectContextRows.clear();
+  memoryBlockRows.clear();
   vi.doMock("../services/embeddings.js", () => ({
     embed: vi.fn(async () => [1, 0]),
     cosineSimilarity: vi.fn(() => 1),
@@ -103,6 +123,21 @@ function mockMemoryContextDeps(options: {
     }),
     deleteProjectContextState: vi.fn((chatId: string) => {
       projectContextRows.delete(chatId);
+    }),
+    hashMemoryBlockSections: hashBlockSections,
+    getMemoryBlockState: vi.fn((chatId: string) => {
+      const r = memoryBlockRows.get(chatId);
+      return r ? { chatId, ...r } : null;
+    }),
+    upsertMemoryBlockState: vi.fn((chatId: string, s: Omit<BlockStateRow, "contentHash" | "updatedAt">) => {
+      memoryBlockRows.set(chatId, {
+        ...s,
+        contentHash: hashBlockSections(s.globalSection, s.projectSection),
+        updatedAt: 0,
+      });
+    }),
+    deleteMemoryBlockState: vi.fn((chatId: string) => {
+      memoryBlockRows.delete(chatId);
     }),
   }));
   vi.doMock("../services/reranker.js", () => ({

@@ -95,7 +95,7 @@ the symptom and worsens the warm's hit rate; the fix below removes the need for 
 | Memory blocks | SQLite `memory_blocks` | ✓ |
 | Conversation history | SQLite `chat_messages` | ✓ |
 | Base system prompt | SQLite `chats.systemPrompt` | ✓ |
-| `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable (AGENTS.md caveat: §11) |
+| `stablePrefix` | derived — deterministic from durable inputs (blocks, persona, user doc, AGENTS.md, static hints) | ✓ rebuildable (caveats: AGENTS.md §11, memory blocks §11.6) |
 | **Frozen set (ids + section text)** | **process Map** (`contextState`) | **✗ ← the bug** |
 | `deltaIds` | process Map | ✗ (minor: dedup only) |
 | `promptCache` / `stablePrefixCache` / `promptBreakdownCache` | process Maps | ✗ (derived, cheap) |

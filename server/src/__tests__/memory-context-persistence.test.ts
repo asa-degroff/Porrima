@@ -236,6 +236,15 @@ function mockStorageModule(rows: Map<string, EmulatedRow>, projectRows: Map<stri
     deleteProjectContextState: vi.fn((chatId: string) => {
       projectRows.delete(chatId);
     }),
+    hashMemoryBlockSections: (globalSection: string, projectSection: string) =>
+      createHash("sha1")
+        .update(globalSection, "utf8")
+        .update("\u0000", "utf8")
+        .update(projectSection, "utf8")
+        .digest("hex"),
+    getMemoryBlockState: vi.fn(() => null),
+    upsertMemoryBlockState: vi.fn(),
+    deleteMemoryBlockState: vi.fn(),
   };
 }
 

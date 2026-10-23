@@ -7,7 +7,10 @@ import {
   getMemoryContextState, upsertMemoryContextState, deleteMemoryContextState,
   setMemoryContextDirty, setAllMemoryContextDirty, getBlockTokenBudgets,
   getProjectContextState, upsertProjectContextState, deleteProjectContextState,
+  getMemoryBlockState, upsertMemoryBlockState, deleteMemoryBlockState,
+  hashMemoryBlockSections,
   type MemoryBlock, type BlockTokenBudgets, type ProjectContextStateRow,
+  type MemoryBlockStateRow,
 } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats, buildSelectedResult } from "./reranker-stats.js";
@@ -340,6 +343,11 @@ export function resetMemoryContext(chatId: string): void {
   } catch (e) {
     console.warn(`[memory-context] chat=${chatId} failed to delete project-context row:`, e);
   }
+  try {
+    deleteMemoryBlockState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete memory-block row:`, e);
+  }
 }
 
 /**
@@ -402,6 +410,16 @@ export function softResetMemoryContext(chatId: string): void {
   // so block edits land at compaction for every chat, not only project
   // chats whose snapshot row happens to exist.
   stablePrefixCache.delete(chatId);
+
+  // The last-served block sections are durable so a restart cannot land an
+  // edit early. Compaction is the landing point: drop the row and let the
+  // next build read CURRENT block bytes (which pays no extra prefill — the
+  // prompt is being reprocessed anyway).
+  try {
+    deleteMemoryBlockState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete memory-block snapshot:`, e);
+  }
 
   // Never resurrect state from nothing: only soften what already exists.
   // Hydrate first so a soft reset after a process restart lands on the row.
@@ -495,6 +513,11 @@ export function invalidateAllCaches(chatId: string): void {
     deleteProjectContextState(chatId);
   } catch (e) {
     console.warn(`[memory-context] chat=${chatId} failed to delete project-context row:`, e);
+  }
+  try {
+    deleteMemoryBlockState(chatId);
+  } catch (e) {
+    console.warn(`[memory-context] chat=${chatId} failed to delete memory-block row:`, e);
   }
 }
 
@@ -1198,14 +1221,83 @@ export async function buildStablePrefix(
   let projectBlocksSection = "";
   let combinedBlocksSection = "";
   let hasIndexedBlocks = false;
+
+  // Snapshot of the last-served block sections (persisted, survives process
+  // death like the frozen memory section and the project context). The KV
+  // cache was built against THESE bytes; a rebuild after a restart must not
+  // swap in a block edited since the last compaction. Synthetic cache keys
+  // (the context-viewer fallback and the new-agent-chat baseline) stay
+  // stateless: the baseline must track current global blocks to be warmable.
+  const blockSnapshotChat =
+    cacheKey === "_default" || cacheKey === NEW_AGENT_CHAT_BASELINE_CACHE_ID
+      ? null
+      : chatId;
+  let blockSnapshot: MemoryBlockStateRow | null = null;
+  if (blockSnapshotChat) {
+    try {
+      blockSnapshot = getMemoryBlockState(blockSnapshotChat);
+    } catch (e) {
+      console.warn(
+        `[memory] chat=${blockSnapshotChat} failed to read memory-block snapshot, applying fresh:`,
+        e,
+      );
+    }
+  }
+
   try {
     const sections = buildStableMemoryBlockSections(projectId, budgets);
-    globalBlocksSection = sections.globalSection;
-    projectBlocksSection = sections.projectSection;
-    combinedBlocksSection = sections.combinedBlocksSection;
-    hasIndexedBlocks = sections.hasIndexedBlocks;
+    const freshHash = hashMemoryBlockSections(sections.globalSection, sections.projectSection);
+
+    if (
+      blockSnapshot &&
+      blockSnapshotChat !== null &&
+      blockSnapshot.globalBudget === budgets.global &&
+      blockSnapshot.projectBudget === budgets.project &&
+      blockSnapshot.contentHash !== freshHash
+    ) {
+      // Blocks changed since the last serve (agent tool, UI, synthesis),
+      // possibly reordering the loaded set. Serve the last-applied bytes and
+      // let the edit land at the next compaction — the same deferral a
+      // mid-conversation edit gets while the process stays up.
+      globalBlocksSection = blockSnapshot.globalSection;
+      projectBlocksSection = blockSnapshot.projectSection;
+      hasIndexedBlocks = blockSnapshot.hasIndexedBlocks;
+      log(
+        `[memory-context] chat=${blockSnapshotChat} memory blocks diverged — deferring to next ` +
+        `compaction (served snapshot ${blockSnapshot.contentHash}, fresh ${freshHash})`,
+      );
+    } else {
+      globalBlocksSection = sections.globalSection;
+      projectBlocksSection = sections.projectSection;
+      hasIndexedBlocks = sections.hasIndexedBlocks;
+      if (blockSnapshotChat && !preview) {
+        try {
+          upsertMemoryBlockState(blockSnapshotChat, {
+            globalSection: globalBlocksSection,
+            projectSection: projectBlocksSection,
+            hasIndexedBlocks,
+            globalBudget: budgets.global,
+            projectBudget: budgets.project,
+          });
+        } catch (e) {
+          console.warn(
+            `[memory] chat=${blockSnapshotChat} failed to persist memory-block snapshot:`,
+            e,
+          );
+        }
+      }
+    }
+    combinedBlocksSection = `${globalBlocksSection}${projectBlocksSection}`;
   } catch (e) {
     console.error("[memory] Failed to load memory blocks:", e);
+    if (blockSnapshot) {
+      // A transient memory-DB read failure must not empty the sections: the
+      // snapshot still matches the KV prefix, so serve it (old behavior).
+      globalBlocksSection = blockSnapshot.globalSection;
+      projectBlocksSection = blockSnapshot.projectSection;
+      hasIndexedBlocks = blockSnapshot.hasIndexedBlocks;
+      combinedBlocksSection = `${globalBlocksSection}${projectBlocksSection}`;
+    }
   }
 
   // Load zeitgeist continuity block (global scope)

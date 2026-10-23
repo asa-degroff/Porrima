@@ -393,6 +393,25 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // Memory-block state — durable mirror of the two memory-block sections last
+  // SERVED for a chat (`## Memory Blocks` + `## Project Memory Blocks`). Same
+  // rationale as the project-context snapshot: the KV cache was built against
+  // these exact bytes, and a prefix rebuild after a process restart must not
+  // swap in a block that was edited since the last compaction. Deferred edits
+  // land at the next compaction, where the prompt is reprocessed anyway.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_memory_block_state (
+      chat_id             TEXT PRIMARY KEY,
+      global_section      TEXT NOT NULL,
+      project_section     TEXT NOT NULL,
+      content_hash        TEXT NOT NULL,
+      has_indexed_blocks  INTEGER NOT NULL DEFAULT 0,
+      global_budget       INTEGER NOT NULL,
+      project_budget      INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL
+    );
+  `);
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -2609,6 +2628,99 @@ export function upsertProjectContextState(
 export function deleteProjectContextState(chatId: string): void {
   getDb()
     .prepare("DELETE FROM chat_project_context_state WHERE chat_id = ?")
+    .run(chatId);
+}
+
+// ---------------------------------------------------------------------------
+// Memory-block state — durable mirror of the last-served block sections
+// ---------------------------------------------------------------------------
+// Persists the exact `## Memory Blocks` and `## Project Memory Blocks` strings.
+// A stable-prefix rebuild after a restart serves the same block bytes instead
+// of applying edits that were deliberately deferred to the next compaction.
+// Budgets are part of validity: a deliberate budget change applies fresh
+// immediately, the same way it invalidates the in-process prefix cache.
+
+export interface MemoryBlockStateRow {
+  chatId: string;
+  globalSection: string;
+  projectSection: string;
+  contentHash: string;
+  hasIndexedBlocks: boolean;
+  globalBudget: number;
+  projectBudget: number;
+  updatedAt: number;
+}
+
+interface MemoryBlockStateRowDb {
+  chat_id: string;
+  global_section: string;
+  project_section: string;
+  content_hash: string;
+  has_indexed_blocks: number;
+  global_budget: number;
+  project_budget: number;
+  updated_at: number;
+}
+
+/** Hash of the served block sections. The NUL separator keeps the global and
+ *  project strings from colliding across their boundary. */
+export function hashMemoryBlockSections(globalSection: string, projectSection: string): string {
+  return createHash("sha1")
+    .update(globalSection, "utf8")
+    .update("\u0000", "utf8")
+    .update(projectSection, "utf8")
+    .digest("hex");
+}
+
+export function getMemoryBlockState(chatId: string): MemoryBlockStateRow | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM chat_memory_block_state WHERE chat_id = ?")
+    .get(chatId) as MemoryBlockStateRowDb | undefined;
+  if (!row) return null;
+  return {
+    chatId: row.chat_id,
+    globalSection: row.global_section,
+    projectSection: row.project_section,
+    contentHash: row.content_hash,
+    hasIndexedBlocks: row.has_indexed_blocks === 1,
+    globalBudget: row.global_budget,
+    projectBudget: row.project_budget,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function upsertMemoryBlockState(
+  chatId: string,
+  state: {
+    globalSection: string;
+    projectSection: string;
+    hasIndexedBlocks: boolean;
+    globalBudget: number;
+    projectBudget: number;
+  }
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO chat_memory_block_state
+      (chat_id, global_section, project_section, content_hash, has_indexed_blocks,
+       global_budget, project_budget, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chatId,
+    state.globalSection,
+    state.projectSection,
+    hashMemoryBlockSections(state.globalSection, state.projectSection),
+    state.hasIndexedBlocks ? 1 : 0,
+    state.globalBudget,
+    state.projectBudget,
+    Date.now()
+  );
+}
+
+export function deleteMemoryBlockState(chatId: string): void {
+  getDb()
+    .prepare("DELETE FROM chat_memory_block_state WHERE chat_id = ?")
     .run(chatId);
 }
 
