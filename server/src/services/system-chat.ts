@@ -700,8 +700,9 @@ export async function buildMaintenancePhase2Trigger(
 
   // 4. Build compact inventory string. Attached-status markers use the SAME
   // split the prefix builder applies (same function, same settings-derived
-  // budgets), so the inventory's claim about what each chat receives can't
-  // drift from it — including after a budget change.
+  // budgets), so the inventory's claim about what a fresh build receives can't
+  // drift from it — including after a budget change. A chat serving a deferred
+  // block snapshot keeps its last-served split until compaction.
   const { global: globalBudget, project: projectBudget } = await getBlockTokenBudgets();
   const globalSplit = splitMemoryBlocksForPrefix(globalBlocks, globalBudget);
   const globalMode = (id: string) =>

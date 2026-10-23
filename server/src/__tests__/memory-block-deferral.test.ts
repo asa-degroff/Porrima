@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Memory } from "../types.js";
 
 function hashBlockSections(globalSection: string, projectSection: string): string {
   return createHash("sha1")
@@ -146,6 +147,22 @@ function block(overrides: Partial<TestBlock>): TestBlock {
   };
 }
 
+function memory(overrides: Partial<Memory>): Memory {
+  return {
+    id: overrides.id || "memory-1",
+    text: overrides.text || "Remembered context.",
+    category: overrides.category || "context",
+    importance: overrides.importance ?? 5,
+    embedding: overrides.embedding || [1, 0],
+    createdAt: overrides.createdAt || new Date(0).toISOString(),
+    lastAccessed: overrides.lastAccessed || new Date(0).toISOString(),
+    accessCount: overrides.accessCount ?? 0,
+    subject: overrides.subject || "",
+    durability: overrides.durability || "durable",
+    ...overrides,
+  };
+}
+
 function fixture(overrides?: Partial<BlockFixture>): BlockFixture {
   return {
     blocks: [
@@ -192,7 +209,9 @@ function mockBlockDeps(f: BlockFixture) {
     cosineSimilarity: vi.fn(() => 1),
   }));
   vi.doMock("../services/memory-storage.js", () => ({
-    searchMemories: vi.fn(async () => []),
+    searchMemories: vi.fn(async () => [
+      { memory: memory({ id: "mem-1", text: "A relevant retrieved memory." }), score: 0.9 },
+    ]),
     mmrRerank: vi.fn((items: unknown[], _embedding, limit: number) => items.slice(0, limit)),
     updateMemory: vi.fn(async () => true),
     getBlockTokenBudgets: vi.fn(async () => f.budgets),
@@ -239,7 +258,16 @@ function mockBlockDeps(f: BlockFixture) {
   }));
   vi.doMock("../services/reranker.js", () => ({
     RERANK_INSTRUCTIONS: { agent: "agent", system: "system", "passive-memory": "passive-memory" },
-    rerank: vi.fn(async () => ({ results: [], usedModel: false, latencyMs: 0, documentCount: 0 })),
+    rerank: vi.fn(async (_query: string, documents: string[]) => ({
+      results: documents.length > 0 ? [{ index: 0, score: 0.9 }] : [],
+      usedModel: false,
+      latencyMs: 0,
+      documentCount: documents.length,
+      totalTokens: 0,
+      scoreMin: documents.length > 0 ? 0.9 : 0,
+      scoreMax: documents.length > 0 ? 0.9 : 0,
+      scoreMedian: documents.length > 0 ? 0.9 : 0,
+    })),
   }));
   vi.doMock("../services/reranker-stats.js", () => ({
     recordRerankerStats: vi.fn(),
@@ -465,6 +493,29 @@ describe("memory block deferral (service)", () => {
     const { NEW_AGENT_CHAT_BASELINE_CACHE_ID } = await import("../services/llama-cache-residency.js");
     await mod.buildStablePrefix(NEW_AGENT_CHAT_BASELINE_CACHE_ID);
     expect(blockRows.size).toBe(0);
+  });
+
+  it("the split prompt's block hint follows the snapshot, not the fresh block set", async () => {
+    const f = fixture();
+    const { mod } = await load(f);
+
+    await mod.buildStablePrefix(CHAT, PROJECT);
+
+    // Fresh blocks now all fit, so a fresh build would drop the index — but
+    // the deferred snapshot still carries one, and the hint must match it.
+    f.blocks.find((b) => b.id === "blk-kernel")!.tokenEstimate = 1;
+    f.blocks.find((b) => b.id === "blk-implementation")!.tokenEstimate = 1;
+    mod.resetAllMemoryContextCaches();
+
+    const split = await mod.buildSplitAugmentedPrompt(
+      [{ role: "user", content: "what changed?", timestamp: 1000 }],
+      CHAT,
+      PROJECT,
+      "agent",
+    );
+
+    expect(split.systemPrompt).toContain("## Available Project Memory Blocks");
+    expect(split.systemPrompt).toContain("Additional context may be available in memory blocks listed above");
   });
 
   it("a block-load failure serves the snapshot rather than emptying the section", async () => {

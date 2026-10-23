@@ -327,8 +327,9 @@ export function invalidateAllMemoriesCaches(): void {
  * NOT use this — they are follow-up messages in a persistent chat and their
  * cache behavior depends on keeping the existing frozen section byte-exact.
  *
- * The project-context snapshot goes with it: a rebuild is imminent and owes no
- * cache continuity, so deferred AGENTS.md changes land immediately here.
+ * The project-context and memory-block snapshots go with it: a rebuild is
+ * imminent and owes no cache continuity, so deferred AGENTS.md and block
+ * changes land immediately here.
  */
 export function resetMemoryContext(chatId: string): void {
   contextState.delete(chatId);
@@ -391,15 +392,15 @@ function applyProjectContextLanding(chatId: string): void {
  * re-reads the file at zero additional cache cost.
  *
  * Also the landing point for mid-conversation block edits: the cached stable
- * prefix (persona / user doc / blocks / zeitgeist / project section) is
- * dropped here too, so the post-compaction rebuild reads CURRENT block bytes.
- * A block written mid-conversation (agent tool or UI) carries its new content
- * in the editing chat's transcript, so invalidating at write time would turn
- * the next turn into a needless mid-chat head re-prefill; the cost lands here
- * instead — where the prompt is already being reprocessed — coalescing every
- * edit since the last compaction into one rebuild. The rebuild is
- * byte-identical when nothing changed, so a clean compaction costs nothing
- * (the head KV still hits).
+ * prefix (persona / user doc / blocks / zeitgeist / project section) and the
+ * durable block snapshot are dropped here, so the post-compaction rebuild
+ * reads CURRENT block bytes. A block written mid-conversation (agent tool or
+ * UI) carries its new content in the editing chat's transcript, so
+ * invalidating at write time would turn the next turn into a needless
+ * mid-chat head re-prefill; the cost lands here instead — where the prompt is
+ * already being reprocessed — coalescing every edit since the last compaction
+ * into one rebuild. The rebuild is byte-identical when nothing changed, so a
+ * clean compaction costs nothing (the head KV still hits).
  */
 export function softResetMemoryContext(chatId: string): void {
   applyProjectContextLanding(chatId);
@@ -484,11 +485,12 @@ export function commitMemoryDelta(chatId: string, memoryIds: string[]): void {
 
 /**
  * Invalidate the stable prefix cache for a chat (e.g., after block modifications).
- * The durable project-context snapshot deliberately SURVIVES this: a global
- * rebuild reason (synthesis, block edit, budget change) still lets a project
- * chat's prefix match byte-for-byte if its non-project sections are unchanged,
- * and wiping the snapshot there would land a deferred AGENTS.md edit on that
- * chat's next turn — busting its prefix for a reason unrelated to compaction.
+ * The durable project-context and memory-block snapshots deliberately SURVIVE
+ * this: a global rebuild reason (synthesis, block edit, budget change) still
+ * lets a project chat's prefix match byte-for-byte if its non-project sections
+ * are unchanged, and wiping the snapshots there would land deferred AGENTS.md
+ * or block edits on that chat's next turn — busting its prefix for a reason
+ * unrelated to compaction.
  */
 export function invalidateStablePrefixCache(chatId: string): void {
   stablePrefixCache.delete(chatId);
@@ -497,13 +499,13 @@ export function invalidateStablePrefixCache(chatId: string): void {
 /**
  * Invalidate all derived caches for a chat (stable prefix + prompt caches).
  * Used for workspace moves: the move is a deliberate edit, so the project
- * context snapshot is dropped too and the new workspace's AGENTS.md applies
- * immediately. The frozen memory state (Map entry AND durable row) is
- * deliberately kept: the stablePrefix changes → the prefill is owed anyway,
- * and re-rolling the frozen set on top would only manufacture a pool orphan
- * plus a second source of prefix churn for zero benefit.
- * (The frozen section embeds blockHint/zeitgeistHint, both derived from
- * durable inputs, so the persisted string stays valid.)
+ * context and memory-block snapshots are dropped too and the new workspace's
+ * AGENTS.md / current blocks apply immediately. The frozen memory state (Map
+ * entry AND durable row) is deliberately kept: the stablePrefix changes → the
+ * prefill is owed anyway, and re-rolling the frozen set on top would only
+ * manufacture a pool orphan plus a second source of prefix churn for zero
+ * benefit. (The frozen section embeds blockHint/zeitgeistHint, both derived
+ * from durable inputs, so the persisted string stays valid.)
  */
 export function invalidateAllCaches(chatId: string): void {
   stablePrefixCache.delete(chatId);
@@ -531,10 +533,11 @@ export function invalidateAllStablePrefixCaches(): void {
 
 /**
  * Clear all in-memory state (e.g., after a snapshot restore). Map-only on
- * purpose: the durable rows live inside the memory DB file, so they
- * time-travel with the corpus and arrive consistent with the restored state.
- * Wiping them here would force re-rolls across all chats — the exact cost
- * persistence exists to remove.
+ * purpose: the durable rows (frozen context, project-context snapshot,
+ * memory-block snapshot) live inside the memory DB file, so they time-travel
+ * with the corpus and arrive consistent with the restored state. Wiping them
+ * here would force re-rolls across all chats — the exact cost persistence
+ * exists to remove.
  */
 export function resetAllMemoryContextCaches(): void {
   contextState.clear();

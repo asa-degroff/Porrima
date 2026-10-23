@@ -246,7 +246,9 @@ never points at the bad file.
 ### 5.3a Post-warm save
 
 Block edits land at each chat's own compaction (`memory-context-persistence.md`
-§10.4); no path refreshes cached heads globally. The post-synthesis warm pass
+§10.4); no path refreshes cached heads globally. A restart serves the
+last-served block sections from `chat_memory_block_state` until that
+compaction (§11.6). The post-synthesis warm pass
 remains the point where synthesis reaches the disk tier: its Case-1 re-roll
 rebuilds the frozen-memories section, which is part of the head digest (§5.2).
 Without an explicit park it discards the fresh head it just built, for three

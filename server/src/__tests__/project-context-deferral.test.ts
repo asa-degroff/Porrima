@@ -342,7 +342,7 @@ describe("project context deferral (service)", () => {
     expect(projectRows.get(CHAT)!.content).toContain("AGENTS v2 content");
   });
 
-  it("compaction soft reset lands mid-conversation block edits (non-project chat, no snapshot row)", async () => {
+  it("compaction soft reset lands mid-conversation block edits (non-project chat, no project-context row)", async () => {
     const f = fixture();
     const { module } = mockProjectContextDeps(f);
     const mod = await module;

@@ -324,9 +324,10 @@ when Phase 2 lands, not a live behavior change.
 ## 5. What this does NOT fix (scope)
 
 - **Block-edit prefills.** Editing a memory block changes `stablePrefix`
-  legitimately → the prefill is owed, payer ≠ editor. That externality is the
-  turn-engine's territory (activity-based timeout, false-success detection), not
-  this one.
+  legitimately. The edit itself is deferred to the next compaction, including
+  across restarts (§11.6), but the resulting prefill is still owed there,
+  payer ≠ editor. That externality is the turn-engine's territory
+  (activity-based timeout, false-success detection), not this one.
 - **Server-side loss.** Crashes and evictions are unavoidable; server-side
   cache-loss events remain an open watch item regardless.
 - **Compaction re-roll nondeterminism.** Deferred as "owed; see option C",
@@ -529,7 +530,9 @@ and the post-compaction rebuild reads CURRENT block bytes exactly when the
 in-context tool call gets cut. The rebuild is byte-identical when nothing
 changed, so a clean compaction costs no head re-prefill. This closes the
 hole where non-project chats (and project chats without a snapshot row)
-served pre-edit block bytes indefinitely after compaction.
+served pre-edit block bytes indefinitely after compaction. Across restarts,
+the durable block snapshot (§11.6) serves the same last-served bytes until
+this landing point.
 
 ### 10.5 Fix C — hysteresis re-roll at the delta-overflow valve (deferred)
 
@@ -567,7 +570,7 @@ Canary update (standing): `full retrieval: N memories frozen` legitimate only
 at genuine first turns and delta-valve re-rolls; `full retrieval: 0 memories`
 should be extinct.
 
-## 11. The project-context snapshot (deferred AGENTS.md)
+## 11. The last-served section snapshots (AGENTS.md and memory blocks)
 
 The §2 inventory marked `stablePrefix` as "✓ rebuildable" — deterministic from
 durable inputs. That held only while nobody edits AGENTS.md between sessions.
@@ -632,13 +635,14 @@ Deferred content applies where the prompt is reprocessed (or re-warmed)
 anyway:
 
 - `softResetMemoryContext` (every compaction path) → `applyProjectContextLanding`:
-  drop row + Map entry, and drop the cached stable prefix entry
-  unconditionally — mid-conversation block edits land here too. Runs before
-  the no-state early-return, since a chat with no memory context still
-  compacted.
-- `resetMemoryContext` (chat deletion, cache-warm prep) → drop row + entry;
-  the warm then pre-fills fresh bytes at zero additional cost.
-- `invalidateAllCaches` (workspace move) → drop row.
+  drop the project row + Map entry, and drop the cached stable prefix entry
+  unconditionally — mid-conversation block edits land here too, and the block
+  snapshot is deleted in the same reset. Runs before the no-state early-return,
+  since a chat with no memory context still compacted.
+- `resetMemoryContext` (chat deletion, cache-warm prep) → drop both snapshots
+  and the Map entry; the warm then pre-fills fresh bytes at zero additional
+  cost.
+- `invalidateAllCaches` (workspace move) → drop both snapshots.
 
 Explicitly NOT landing points: `invalidateStablePrefixCache` /
 `invalidateAllStablePrefixCaches` (Map-only clears; no production path calls
@@ -649,17 +653,55 @@ a reason unrelated to compaction.
 
 ### 11.5 Scope notes
 
-- Only the PROJECT SECTION defers its snapshot. AGENTS.md edits arrive with no
-  event at all, which is why they get the deferral treatment. Block edits likewise
-  defer: agent-tool and UI writes are not invalidated at write time;
-  they land at each chat's next compaction (the soft reset re-reads the
-  blocks). No path clears cached heads globally: a global clear rewrites
-  every chat's head on its next build and stales the prefix digest of every
-  parked KV snapshot (`kv-snapshot-parking.md` §5.4), so each cold return
-  pays a full re-prefill before its re-park heals it.
+- Only the PROJECT SECTION and the two memory-block sections have last-served
+  snapshots. AGENTS.md edits arrive with no event at all, which is why they get
+  the deferral treatment. Block edits are event-backed but deliberately
+  deferred; both land at each chat's next compaction. Persona and zeitgeist
+  changes still apply at the next prefix build. No path clears cached heads
+  globally: a global clear rewrites every chat's head on its next build and
+  stales the prefix digest of every parked KV snapshot
+  (`kv-snapshot-parking.md` §5.4), so each cold return pays a full re-prefill
+  before its re-park heals it.
 - The agent's own AGENTS.md edits defer like any others; the per-turn notice
   says "read AGENTS.md / check git status", so a working agent sees the newer
   file immediately.
 - Per-chat keying means each chat lands at ITS next compaction; two chats on
   one project can serve different versions concurrently. Correct by
   construction — each chat's KV cache was built against its own bytes.
+
+### 11.6 The memory-block snapshot
+
+The same restart inconsistency applied to `## Memory Blocks` and `## Project
+Memory Blocks`. Mid-session, block edits defer until compaction because the
+stable-prefix Map is never re-validated against the block table. A restart
+emptied the Map and the rebuild re-read the table, re-sorted project blocks by
+`updatedAt DESC`, and could promote an edited block into the loaded set while
+displacing another. A change anywhere in the section rewrites the prompt from
+that offset, so the restart paid the whole retained history.
+
+`chat_memory_block_state` in the memory DB mirrors the last-SERVED pair of
+sections (`global_section`, `project_section`, `content_hash`), the
+`has_indexed_blocks` flag that drives the read-memory-block hint, and the
+global/project budgets used to build them. Both sections are stored because
+they sit at different offsets in the prefix (zeitgeist and project context
+between them); a single combined string would not be placeable.
+
+Rules on a cache-miss rebuild:
+
+| Disk vs snapshot | Behavior |
+|---|---|
+| No row / first build | Render fresh, persist both sections and budgets. |
+| Hash match, budgets match | Serve fresh bytes (identical), re-persist. |
+| Hash mismatch, budgets match | Serve snapshot sections; `memory blocks diverged` canary. No notice: block edits already defer silently mid-session, and `read_memory_block` always reads current content. |
+| Budgets differ | A budget change is a deliberate recomposition: serve fresh, overwrite the row. |
+| Block load throws | Serve the snapshot rather than emptying the sections; no write. |
+
+`preview: true` consults the snapshot under the same rules but never writes.
+Synthetic cache keys (`_default`, `NEW_AGENT_CHAT_BASELINE_CACHE_ID`) stay
+stateless: the baseline must track current global blocks to remain warmable.
+
+Landing points match §11.4. `softResetMemoryContext` deletes the row
+unconditionally, so block edits land at every compaction even for chats with
+no project-context row. `resetMemoryContext` (deletion, cache-warm prep) and
+`invalidateAllCaches` (workspace move) delete it; Map-only global invalidation
+keeps it.
