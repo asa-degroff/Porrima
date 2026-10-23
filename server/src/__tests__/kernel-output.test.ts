@@ -11,13 +11,26 @@ import {
   cellInlineAllowance,
   countInlineParts,
   createCellOutputCapture,
-  renderCellOutput,
+  finalizeBoundedOutput,
   renderCellWindows,
   renderOutputPointers,
   spillTrimmedStreams,
 } from "../services/kernel-output.js";
 
 const tempDirs: string[] = [];
+
+/** The composition every producer actually sends: header above the windows. */
+async function settle(input: {
+  chatId: string;
+  captureId: string;
+  stdout: Awaited<ReturnType<typeof finalizeBoundedOutput>>["stdout"];
+  stderr: Awaited<ReturnType<typeof finalizeBoundedOutput>>["stderr"];
+  resultText?: string | null;
+  budget?: { resultBudgetChars?: number; spillAllowed?: boolean };
+}): Promise<string> {
+  const out = await finalizeBoundedOutput(input);
+  return out.header ? `${out.header}\n${out.windows}` : out.windows;
+}
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "porrima-kernel-output-"));
@@ -45,7 +58,12 @@ describe("foreground kernel output", () => {
     expect(snapshot.text.length).toBeLessThan(110 * 1024);
     expect(snapshot.spillPath).toBeTruthy();
 
-    const rendered = renderCellOutput(snapshot, await capture.stderr.finish());
+    const rendered = await settle({
+      chatId: "chat1",
+      captureId: "cell-12345678",
+      stdout: snapshot,
+      stderr: await capture.stderr.finish(),
+    });
     expect(rendered.startsWith("[output truncated")).toBe(true);
     expect(rendered).toContain("read_file the paths below");
 
@@ -62,10 +80,12 @@ describe("foreground kernel output", () => {
     capture.stdout.push("hello\n");
     capture.stderr.push("warning\n");
 
-    const rendered = renderCellOutput(
-      await capture.stdout.finish(),
-      await capture.stderr.finish(),
-    );
+    const rendered = await settle({
+      chatId: "chat2",
+      captureId: "cell-abcdef12",
+      stdout: await capture.stdout.finish(),
+      stderr: await capture.stderr.finish(),
+    });
     expect(rendered).toBe("hello\n[stderr] warning");
     expect(rendered).not.toContain("read_file");
 
@@ -126,8 +146,12 @@ describe("budget coordination with the tool-result wrapper", () => {
     // The capture holds the ceiling regardless of the budget; the budget decides
     // how much of that ceiling is shown inline.
     expect(snapshot.truncation.maxBytes).toBe(CELL_OUTPUT_WINDOW_BYTES);
-    const rendered = renderCellOutput(snapshot, await capture.stderr.finish(), {
-      resultBudgetChars: BUDGET_262K,
+    const rendered = await settle({
+      chatId: "chat-b",
+      captureId: "cell-00000001",
+      stdout: snapshot,
+      stderr: await capture.stderr.finish(),
+      budget: { resultBudgetChars: BUDGET_262K },
     });
     expect(rendered).toContain("last 100KB inline");
     expect(rendered.length).toBeLessThanOrEqual(BUDGET_262K);
@@ -166,7 +190,9 @@ describe("budget coordination with the tool-result wrapper", () => {
     const head = content.slice(0, 1024);
     expect(head).toContain(stdout.spillPath!);
     expect(head).toContain(stderr.spillPath!);
-    expect(head).toContain("last 49KB inline");
+    // The inline label rounds down: 49,698 characters is 48.5 KiB, and the
+    // number is a promise about what the reader receives.
+    expect(head).toContain("last 48KB inline");
     expect(content).toContain("[stderr]");
 
     capture.stdout.dispose();

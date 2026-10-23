@@ -81,7 +81,7 @@ Tool results are dynamically truncated based on the effective context window to 
 - **Permission flags**: `allowBash`, `allowFileWrite`, and `allowAbsolutePaths` are enforced per connection. When absolute paths are disallowed, every script enforces `target.relative_to(root)` containment — including glob matches.
 - **Spill protocol**: remote bash output spills to `.porrima-tool-output/bash-*.log` inside the workspace at 50KB; the remote command emits a pointer header naming that path (tail sized from the tool-result budget) and the model reads the rest with `read_file`.
 
-> One-shot `run_python` (kernel fallback and SSH) runs through `workspace.ts` under the shared process supervisor. `sandbox.ts` only writes artifact HTML; it is not an execution path.
+> One-shot `run_python` (kernel fallback and SSH) runs through `workspace.ts` under the shared process supervisor, and its output settles through the same `finalizeBoundedOutput()` as a foreground cell: the capture window is sized from the tool result's own budget, overflow spills to `~/.porrima/tool-output/<chatId>/py-*.txt`, a stream the budget would trim is spilled before the header is written, and the result opens with the pointer header. `sandbox.ts` only writes artifact HTML; it is not an execution path.
 
 ## Tool Result Images
 

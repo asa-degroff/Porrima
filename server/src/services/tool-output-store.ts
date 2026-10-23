@@ -52,32 +52,6 @@ export async function ensureToolOutputDir(chatId: string): Promise<string> {
   return dir;
 }
 
-/**
- * Footer appended to a truncated tool result. The path is result text, so this
- * format is replay-visible and must stay byte-stable; it preserves the
- * pre-migration bash wording for the uncapped case.
- */
-export function formatSpillFooter(info: {
-  path: string;
-  totalBytes: number;
-  windowBytes: number;
-  capped?: boolean;
-  capBytes?: number;
-}): string {
-  const windowKb = Math.round(info.windowBytes / 1024);
-  const totalKb = Math.round(info.totalBytes / 1024);
-  const lead = info.capped
-    ? `[Output exceeded ${windowKb}KB. The spill was capped at ${formatMib(info.capBytes)}; the captured output was saved to: ${info.path}`
-    : `[Output exceeded ${windowKb}KB. The full output (${totalKb}KB) was saved to: ${info.path}`;
-  return `\n\n${lead}\nUse read_file(path="${info.path}", offset=N) to read more. The tail is shown above.]`;
-}
-
-function formatMib(bytes: number | undefined): string {
-  if (!bytes || bytes <= 0) return "the configured cap";
-  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))}MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
-}
-
 async function listFiles(dir: string): Promise<Array<{ path: string; mtimeMs: number }>> {
   let names: string[];
   try {

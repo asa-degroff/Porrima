@@ -448,6 +448,20 @@ than reporting that the output is gone.
   re-sent on every throttle tick, so shipping the settled window there makes a
   chatty cell cost `duration × window` in transport for a result that ends up
   being one window.
+- **One settle path.** `finalizeBoundedOutput()` owns the order the rules have to
+  happen in: allowance from the parts that exist, spill any stream the allowance
+  will trim, header, windows, capped `repr`. A stream under the capture ceiling
+  can still be over the allowance — three parts, or a small context budget — and
+  trimming it without a copy leaves only the dishonest sentence "no copy was
+  written" about bytes that existed a moment earlier, so the copy is written
+  before the header is rendered. Foreground cells and one-shot `run_python` both
+  settle through this function; `bash` shares the allowance derivation and the
+  header-before-body placement but keeps its own header wording, since its spill
+  always holds the whole output.
+- **Inline labels round down.** "last N inline" and "last N shown below" are
+  promises, and the number is what decides how much of a spill file the model
+  opens, so `formatInlineLabel` floors. Reported sizes (a stream's total) keep
+  `formatCapLabel`'s rounding.
 
 ### 4.7 Background jobs
 

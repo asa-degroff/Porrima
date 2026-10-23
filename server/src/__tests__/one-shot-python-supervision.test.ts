@@ -124,6 +124,79 @@ describe("one-shot Python supervision", () => {
     expect(spill.length).toBeGreaterThan(1_500_000);
   }, 15_000);
 
+  /**
+   * The band between the two thresholds. 15 KB of stdout is under the capture
+   * ceiling, so the capture writes no spill file; a 30 KB wrapper budget leaves a
+   * 10,904-char allowance per stream, so the render step is what discards the
+   * bytes. Spilling before the header is written is the only way the result can
+   * name a copy instead of reporting that none exists.
+   */
+  it("spills a sub-ceiling stream when the wrapper budget trims it", async () => {
+    const dataDir = makeTempDir("porrima-oneshot-band-");
+    const cwd = makeTempDir("porrima-oneshot-cwd-");
+    const { LocalWorkspaceAdapter } = await loadWorkspace(dataDir);
+    const adapter = new LocalWorkspaceAdapter(cwd);
+
+    const result = await adapter.runPython(
+      {
+        code: "import sys\nprint('a' * 15000)\nprint('e' * 1000, file=sys.stderr)\n",
+        timeout: 30,
+      },
+      undefined,
+      { chatId: "chat-band", resultBudgetChars: 30_000 },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.content.startsWith("[output truncated")).toBe(true);
+    // Both streams are present, so each gets half of the budget minus headroom.
+    expect(result.content).toContain("last 10KB inline");
+    expect(result.content.length).toBeLessThan(13_000);
+    expect(result.content).toContain("[stderr] ");
+
+    const spillDir = join(dataDir, "tool-output", "chat-band");
+    const files = readdirSync(spillDir);
+    expect(files.length).toBe(1);
+    expect(files[0]).toContain("-out-trim");
+    const copy = readFileSync(join(spillDir, files[0]), "utf-8");
+    // "full output" is a claim, so measure it: the copy is the whole captured
+    // stream (15,000 characters plus the newline print adds), not the trimmed
+    // window the model saw.
+    expect(copy.length).toBe(15_001);
+    expect(result.content).toContain(files[0]);
+  }, 15_000);
+
+  /**
+   * The other half of the same rule: the budget reaches the capture too, so a
+   * stream that overflows the *sized* window spills at the source and the copy is
+   * the whole stream. If the capture kept its old 100 KB ceiling here, this case
+   * would produce a `-trim` copy of a 40 KB window instead, and the pointer would
+   * describe a partial copy as the full one.
+   */
+  it("spills at the capture when the budget-sized window overflows", async () => {
+    const dataDir = makeTempDir("porrima-oneshot-capture-");
+    const cwd = makeTempDir("porrima-oneshot-cwd-");
+    const { LocalWorkspaceAdapter } = await loadWorkspace(dataDir);
+    const adapter = new LocalWorkspaceAdapter(cwd);
+
+    const result = await adapter.runPython(
+      { code: "print('a' * 40000)\n", timeout: 30 },
+      undefined,
+      { chatId: "chat-capture", resultBudgetChars: 30_000 },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.content.startsWith("[output truncated")).toBe(true);
+    // One stream present, so it gets the whole allowance: 30,000 - 8,192 headroom.
+    expect(result.content).toContain("last 21KB inline");
+    expect(result.content.length).toBeLessThanOrEqual(30_000);
+
+    const spillDir = join(dataDir, "tool-output", "chat-capture");
+    const files = readdirSync(spillDir);
+    expect(files.length).toBe(1);
+    expect(files[0]).not.toContain("-trim");
+    expect(readFileSync(join(spillDir, files[0]), "utf-8").length).toBe(40_001);
+  }, 15_000);
+
   it("keeps complete stdout for internal maxBuffer callers and rejects overflow", async () => {
     const dataDir = makeTempDir("porrima-oneshot-internal-");
     const cwd = makeTempDir("porrima-oneshot-cwd-");

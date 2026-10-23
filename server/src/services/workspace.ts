@@ -9,8 +9,14 @@ import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
 import { isValidSshIdentityFile, isValidSshTarget } from "../utils/ssh-target.js";
-import { createOutputCapture, formatCapLabel, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
-import { cellInlineAllowance, renderCellOutput } from "./kernel-output.js";
+import {
+  createOutputCapture,
+  formatCapLabel,
+  formatInlineLabel,
+  type CaptureSnapshot,
+  type OutputCapture,
+} from "./output-capture.js";
+import { cellInlineAllowance, finalizeBoundedOutput } from "./kernel-output.js";
 import { spawnSupervised } from "./process-supervisor.js";
 import {
   DEFAULT_SPILL_MAX_BYTES,
@@ -96,6 +102,9 @@ export interface WorkspacePythonOptions {
   maxBuffer?: number;
   /** Chat key for the shared spill store; omit to skip spilling. */
   chatId?: string;
+  /** The tool-result wrapper's head-keep budget; sizes the settled window so the
+   *  result arrives whole instead of being amputated by the wrapper. */
+  resultBudgetChars?: number;
 }
 
 export interface WorkspaceBashOptions {
@@ -312,10 +321,10 @@ async function runStreamingBash(
   if (captured.truncation.truncated) {
     const shown = Math.min(captured.truncation.outputBytes, allowance);
     const header = !captured.spillPath
-      ? `[output truncated — the full output was not captured; last ${formatCapLabel(shown)} shown below.]`
+      ? `[output truncated — the full output was not captured; last ${formatInlineLabel(shown)} shown below.]`
       : captured.capped
-        ? `[output truncated — the spill was capped at ${formatCapLabel(DEFAULT_SPILL_MAX_BYTES)}; later output was not captured. Copy: ${captured.spillPath}. Last ${formatCapLabel(shown)} shown below.]`
-        : `[output truncated — full output (${formatCapLabel(captured.truncation.totalBytes)}) at ${captured.spillPath}; last ${formatCapLabel(shown)} shown below. Use read_file(path="${captured.spillPath}", offset=N) for more.]`;
+        ? `[output truncated — the spill was capped at ${formatCapLabel(DEFAULT_SPILL_MAX_BYTES)}; later output was not captured. Copy: ${captured.spillPath}. Last ${formatInlineLabel(shown)} shown below.]`
+        : `[output truncated — full output (${formatCapLabel(captured.truncation.totalBytes)}) at ${captured.spillPath}; last ${formatInlineLabel(shown)} shown below. Use read_file(path="${captured.spillPath}", offset=N) for more.]`;
     content = `${header}\n${content}`;
   }
 
@@ -338,6 +347,7 @@ async function runStreamingBash(
 
 interface SupervisedPythonOptions {
   chatId?: string;
+  resultBudgetChars?: number;
   cwd: string;
   code: string;
   argv?: unknown[];
@@ -376,7 +386,12 @@ async function runSupervisedPython(
   }
 
   const internal = typeof opts.maxBuffer === "number" && opts.maxBuffer > 0;
-  const captureLimit = internal ? opts.maxBuffer! : PY_OUTPUT_WINDOW_BYTES;
+  // The capture keeps its ceiling and spills past it; the render step is what
+  // splits the wrapper's budget across the parts that exist. Sizing the capture
+  // for the worst-case composition would shrink the common case for free.
+  const captureLimit = internal
+    ? opts.maxBuffer!
+    : cellInlineAllowance({ resultBudgetChars: opts.resultBudgetChars }, 1);
   const captureId = randomUUID().slice(0, 8);
   const spill = (stream: "out" | "err") =>
     !internal && opts.chatId
@@ -430,7 +445,14 @@ async function runSupervisedPython(
     const stderr = stderrSnapshot.text.trimEnd();
     content = [stdout, stderr ? `[stderr] ${stderr}` : ""].filter(Boolean).join("\n");
   } else {
-    content = renderCellOutput(stdoutSnapshot, stderrSnapshot);
+    const settled = await finalizeBoundedOutput({
+      chatId: opts.chatId,
+      captureId,
+      stdout: stdoutSnapshot,
+      stderr: stderrSnapshot,
+      budget: { resultBudgetChars: opts.resultBudgetChars },
+    });
+    content = settled.header ? `${settled.header}\n${settled.windows}` : settled.windows;
   }
 
   if (exit.error) {
@@ -536,6 +558,7 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
     const timeout = Math.min(300, Math.max(1, args.timeout || 30));
     return runSupervisedPython({
       chatId: opts.chatId,
+      resultBudgetChars: opts.resultBudgetChars,
       cwd: this.root,
       code: String(args.code || ""),
       argv: args.argv,
@@ -1240,7 +1263,7 @@ else:
     const outputPath = `.porrima-tool-output/bash-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.log`;
     // Pointer first: the tool-result wrapper head-keeps, so a footer at the end
     // is exactly what it cuts when the context window is small.
-    const header = `[output truncated — full output ($((size/1024))KB) at ${outputPath}; last ${Math.max(1, Math.round(tailBytes / 1024))}KB shown below. Use read_file(path=${outputPath}, offset=N) for more.]`;
+    const header = `[output truncated — full output ($((size/1024))KB) at ${outputPath}; last ${Math.max(1, Math.floor(tailBytes / 1024))}KB shown below. Use read_file(path=${outputPath}, offset=N) for more.]`;
     const wrapped = [
       `mkdir -p -- ${shellQuote(dirname(outputPath))}`,
       `/bin/bash -lc ${shellQuote(args.command)} > ${shellQuote(outputPath)} 2>&1`,

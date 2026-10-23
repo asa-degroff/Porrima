@@ -1,6 +1,12 @@
 import { mkdir, writeFile } from "fs/promises";
 import { dirname } from "path";
-import { createOutputCapture, type CaptureSnapshot, type OutputCapture } from "./output-capture.js";
+import {
+  createOutputCapture,
+  formatCapLabel,
+  formatInlineLabel,
+  type CaptureSnapshot,
+  type OutputCapture,
+} from "./output-capture.js";
 import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js";
 
 /**
@@ -24,12 +30,10 @@ import { DEFAULT_SPILL_MAX_BYTES, createSpillPath } from "./tool-output-store.js
  * 2. **Pointers come first.** A spilled stream is only recoverable if the result
  *    still says where the copy is. A footer at the tail is exactly what a
  *    head-keeping truncator removes, so the pointers render as a header.
+ * 3. **A stream the allowance will trim is spilled before the header is
+ *    written.** Otherwise the only honest sentence left is "no copy was written",
+ *    about bytes that existed a moment earlier.
  */
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))}MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
-}
-
 export const CELL_OUTPUT_WINDOW_BYTES = 100 * 1024;
 export const CELL_OUTPUT_MAX_LINES = 1_000_000; // bytes bind first for real text
 export const CELL_RESULT_TEXT_LIMIT_CHARS = 100 * 1024;
@@ -128,9 +132,9 @@ function pointerLine(
   const where = !snapshot.spillPath
     ? `no copy was written${uncapturedReason ? ` (${uncapturedReason})` : ""}`
     : snapshot.capped
-      ? `copy capped at ${formatSize(DEFAULT_SPILL_MAX_BYTES)}, later output not captured -> ${snapshot.spillPath}`
+      ? `copy capped at ${formatCapLabel(DEFAULT_SPILL_MAX_BYTES)}, later output not captured -> ${snapshot.spillPath}`
       : `full output -> ${snapshot.spillPath}`;
-  return `  ${stream}: ${formatSize(total)} total, last ${formatSize(shown)} inline; ${where}`;
+  return `  ${stream}: ${formatCapLabel(total)} total, last ${formatInlineLabel(shown)} inline; ${where}`;
 }
 
 /**
@@ -180,23 +184,66 @@ export function renderCellWindows(
   return parts.join("\n");
 }
 
-/** Settled result: pointers, then the inline windows. */
-export function renderCellOutput(
-  stdout: CaptureSnapshot,
-  stderr: CaptureSnapshot,
-  budget?: CellOutputBudget,
-): string {
-  const allowance = cellInlineAllowance(budget, countInlineParts(stdout, stderr));
-  const header = renderOutputPointers(
+/** The settled shape of one bounded output. */
+export interface BoundedOutput {
+  /** Pointer header; empty string when no stream was trimmed or spilled. */
+  header: string;
+  /** Inline windows, each already trimmed to `allowance`. */
+  windows: string;
+  /** Last-expression repr capped to the same allowance; null when there was none. */
+  resultText: string | null;
+  allowance: number;
+  stdout: CaptureSnapshot;
+  stderr: CaptureSnapshot;
+}
+
+/**
+ * The one settle path for python output that lands in model context. Kernel cells
+ * and one-shot `run_python` both call it, so the ordering that makes recovery
+ * survive — allowance from the real composition, spill before the header, pointers
+ * above the body — has a single owner instead of being re-derived per producer.
+ */
+export async function finalizeBoundedOutput(input: {
+  /** Chat key for the spill store; omit to skip the trim-spill entirely. */
+  chatId?: string;
+  /** Groups this call's spill files: a cell id or a capture id. */
+  captureId: string;
+  stdout: CaptureSnapshot;
+  stderr: CaptureSnapshot;
+  resultText?: string | null;
+  budget?: CellOutputBudget;
+  /** Appended to the "no copy was written" line when spilling is impossible. */
+  uncapturedReason?: string;
+}): Promise<BoundedOutput> {
+  const spillAllowed = input.budget?.spillAllowed !== false && Boolean(input.chatId);
+  const allowance = cellInlineAllowance(
+    input.budget,
+    countInlineParts(input.stdout, input.stderr, input.resultText),
+  );
+  let stdout = input.stdout;
+  let stderr = input.stderr;
+  if (spillAllowed) {
+    ({ stdout, stderr } = await spillTrimmedStreams({
+      chatId: input.chatId!,
+      cellId: input.captureId,
+      stdout,
+      stderr,
+      allowance,
+    }));
+  }
+  return {
+    header: renderOutputPointers(
+      stdout,
+      stderr,
+      allowance,
+      input.budget?.spillAllowed === false ? input.uncapturedReason : undefined,
+    ),
+    windows: renderCellWindows(stdout, stderr, allowance),
+    resultText: capCellResultText(input.resultText ?? null, allowance),
+    allowance,
     stdout,
     stderr,
-    allowance,
-    budget?.spillAllowed === false ? "no spill store is reachable from this kernel" : undefined,
-  );
-  const windows = renderCellWindows(stdout, stderr, allowance);
-  if (!header) return windows;
-  if (!windows) return header;
-  return `${header}\n${windows}`;
+  };
 }
 
 /**
@@ -258,7 +305,7 @@ export function countInlineParts(stdout: CaptureSnapshot, stderr: CaptureSnapsho
  */
 export function capCellResultText(text: string | null, limitChars = CELL_RESULT_TEXT_LIMIT_CHARS): string | null {
   if (!text || text.length <= limitChars) return text;
-  const marker = `\n... [result truncated: ${formatSize(limitChars)} of ${formatSize(
+  const marker = `\n... [result truncated: ${formatCapLabel(limitChars)} of ${formatCapLabel(
     text.length,
   )} kept from the front. The value is still bound in the namespace — re-emit a slice (repr(x)[:5000]) or write it to a file and read_file it]`;
   const keep = Math.max(0, limitChars - marker.length);

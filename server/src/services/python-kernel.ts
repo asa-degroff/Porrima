@@ -15,14 +15,10 @@ import {
 import { getStoredSystemPauseState } from "./system-pause.js";
 import { assertSafePathSegment } from "../utils/safe-path.js";
 import {
-  capCellResultText,
-  cellInlineAllowance,
+  finalizeBoundedOutput,
   CELL_VIEW_BYTES,
-  countInlineParts,
   createCellOutputCapture,
   renderCellWindows,
-  renderOutputPointers,
-  spillTrimmedStreams,
   type CellOutputBudget,
 } from "./kernel-output.js";
 import {
@@ -778,32 +774,24 @@ async function settlePending(
     pending.stdout.finish(),
     pending.stderr.finish(),
   ]);
-  const allowance = cellInlineAllowance(
-    pending.resultBudgetChars ? { resultBudgetChars: pending.resultBudgetChars } : undefined,
-    countInlineParts(stdoutSnapshot, stderrSnapshot, pending.resultText),
-  );
-  // A sub-ceiling stream can still be trimmed by the render allowance; give it
-  // a spill file so the header can name a real copy instead of "none".
-  let [renderStdout, renderStderr] = [stdoutSnapshot, stderrSnapshot];
-  if (pending.spillAllowed) {
-    ({ stdout: renderStdout, stderr: renderStderr } = await spillTrimmedStreams({
-      chatId: instance.chatId,
-      cellId: pending.id,
-      stdout: stdoutSnapshot,
-      stderr: stderrSnapshot,
-      allowance,
-    }));
-  }
-  // Pointers first, windows second: the tool-result wrapper head-keeps, so a
-  // recovery path rendered at the tail is the first thing it removes.
-  const pointers = renderOutputPointers(
-    renderStdout,
-    renderStderr,
-    allowance,
-    pending.spillAllowed ? undefined : "the kernel runs on another host",
-  );
-  const output = renderCellWindows(renderStdout, renderStderr, allowance);
-  const resultText = capCellResultText(pending.resultText, allowance);
+  // Allowance, trim-spill, header, windows, capped repr: one owned sequence in
+  // finalizeBoundedOutput, shared with one-shot run_python.
+  const settled = await finalizeBoundedOutput({
+    chatId: instance.chatId,
+    captureId: pending.id,
+    stdout: stdoutSnapshot,
+    stderr: stderrSnapshot,
+    resultText: pending.resultText,
+    budget: {
+      resultBudgetChars: pending.resultBudgetChars,
+      spillAllowed: pending.spillAllowed,
+    },
+    uncapturedReason: "the kernel runs on another host",
+  });
+  const allowance = settled.allowance;
+  const pointers = settled.header;
+  const output = settled.windows;
+  const resultText = settled.resultText;
   const parts: string[] = [];
   if (output) parts.push(output);
   if (resultText !== null) parts.push(resultText);

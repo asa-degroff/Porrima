@@ -6,7 +6,6 @@ import {
   cleanupChat,
   createSpillPath,
   ensureToolOutputDir,
-  formatSpillFooter,
   pruneChat,
   sweepExpired,
   toolOutputDir,
@@ -30,30 +29,6 @@ describe("tool-output store", () => {
   it("lays out per-call spill paths", () => {
     expect(createSpillPath("chat1", "bash", "abc")).toBe(join(root, "chat1", "bash-abc.log"));
     expect(createSpillPath("chat1", "py", "cell1")).toBe(join(root, "chat1", "py-cell1.txt"));
-  });
-
-  it("formats the uncapped footer byte-compatibly with the bash pattern", () => {
-    const footer = formatSpillFooter({
-      path: "/tmp/x.log",
-      totalBytes: 123456,
-      windowBytes: 100 * 1024,
-    });
-    expect(footer).toBe(
-      '\n\n[Output exceeded 100KB. The full output (121KB) was saved to: /tmp/x.log\n' +
-        'Use read_file(path="/tmp/x.log", offset=N) to read more. The tail is shown above.]',
-    );
-  });
-
-  it("formats the capped footer", () => {
-    const footer = formatSpillFooter({
-      path: "/tmp/x.log",
-      totalBytes: 999999,
-      windowBytes: 100 * 1024,
-      capped: true,
-      capBytes: 64 * 1024 * 1024,
-    });
-    expect(footer).toContain("The spill was capped at 64MB");
-    expect(footer).toContain("read_file(path=\"/tmp/x.log\", offset=N)");
   });
 
   it("prunes a chat to the newest 64 files", async () => {

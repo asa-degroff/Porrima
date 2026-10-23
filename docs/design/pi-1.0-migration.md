@@ -360,7 +360,6 @@ because `read_file` resolves against the remote workspace root (kernel doc
 ```ts
 // server/src/services/tool-output-store.ts
 export function createSpillPath(chatId: string, tool: "bash" | "py", id: string): string;
-export function formatSpillFooter(info: { path: string; totalBytes: number; windowBytes: number; capped?: boolean }): string;
 export async function pruneChat(chatId: string): Promise<void>;   // newest 64
 export async function cleanupChat(chatId: string): Promise<void>; // chat deletion
 export async function sweepExpired(): Promise<void>;              // 24 h TTL, scheduler tick

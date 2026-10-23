@@ -355,6 +355,18 @@ export function formatCapLabel(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))}KB`;
 }
 
+/**
+ * The same label for an amount the reader is *promised* — "last N inline",
+ * "last N shown below". Rounding up would claim bytes the reader does not get,
+ * and the number is what decides how much of a spill file to open, so it rounds
+ * down. Sizes that are merely reported keep `formatCapLabel`.
+ */
+export function formatInlineLabel(bytes: number): string {
+  if (!Number.isFinite(bytes)) return "the configured cap";
+  if (bytes >= 1024 * 1024) return `${Math.floor(bytes / (1024 * 1024))}MB`;
+  return `${Math.max(1, Math.floor(bytes / 1024))}KB`;
+}
+
 function countNewlines(text: string): number {
   let count = 0;
   for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {

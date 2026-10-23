@@ -110,3 +110,49 @@ no file. The header now decides from `snapshot.spillPath`: no file, no promise.
   to a spill file before rendering, so the pointer names a real copy instead of
   "no copy was written". Witnesses: the unit case in `kernel-output.test.ts`
   and the real-driver case `fg-trim` in `python-kernel.test.ts`.
+
+## One settle path
+
+`finalizeBoundedOutput()` in `kernel-output.ts` now owns the order: allowance from
+the parts that exist → spill any stream the allowance will trim → header → windows
+→ capped repr. `renderCellOutput()` is gone. Foreground cells (`settlePending`) and
+one-shot `run_python` (`runSupervisedPython`) both settle through it, and one-shot
+finally receives the wrapper budget: `resultBudgetChars` threads from
+`getMaxToolResultChars(contextWindow)` through `WorkspacePythonOptions` into the
+capture sizing, so the producer's window is budget-sized too. Bash shares the
+allowance derivation and the header-before-body placement, and deliberately keeps
+its own header wording — its spill always holds the whole stream, so the wording
+that names `read_file(path=…, offset=N)` inline is the useful one there.
+
+Measured at a 30,000-character wrapper budget (allowance 21,808 for one stream,
+10,904 for two):
+
+| Case | Result |
+| --- | --- |
+| 15,001-char stdout + 1,000-char stderr | header `15KB total, last 10KB inline; full output -> …`, one spill file `py-<id>-out-trim.txt` holding **all 15,001 characters**, result 12,263 chars |
+| 40,001-char stdout | the budget-sized capture truncates and spills at the source: one file, **no `-trim` suffix**, holding all 40,001 characters; result ≤ 30,000 |
+
+Witnesses, each a revert of what it guards:
+
+| Mutation | Result |
+| --- | --- |
+| Trim-spill unwired inside `finalizeBoundedOutput` | **2 failures** — the new one-shot band case and `fg-trim` in `python-kernel.test.ts`. One owner, both producers |
+| `resultBudgetChars` not threaded to the one-shot path | both one-shot budget cases fail |
+| One-shot capture keeps its old 100 KiB ceiling | exactly the capture-sizing case fails (a `-trim` copy appears where the capture should have spilled) |
+| Header suppressed in `finalizeBoundedOutput` | **10 failures** across three files |
+
+Two cleanups rode along. `formatSpillFooter` (and its private `formatMib`) had no
+production caller left once bash moved to a header, so it is removed — a tested but
+unused export is how the tail-placed shape gets reachadopted — along with its two
+tests and its line in `pi-1.0-migration.md` §4.2, which lists the module's surface
+and had become drift. `kernel-output.ts`'s private `formatSize` duplicated the
+exported `formatCapLabel`; one formatter now exists, plus `formatInlineLabel` for
+the promise direction. The migration document's prose about byte-stable footer
+wording stays: it describes why spill paths are short per-call ids, which is still
+true, and it is a record rather than a description of today's renderer.
+
+`kernel-output.test.ts`'s three-part assertion moved from `last 49KB inline` to
+`last 48KB inline`: the allowance is 49,698 characters = 48.5 KiB, and a label that
+rounds a promise up claims bytes the reader does not get.
+
+Suite after this run: 140 files / 1286 pass / 1 todo; tsc clean both sides.

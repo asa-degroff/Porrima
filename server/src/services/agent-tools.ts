@@ -1275,7 +1275,10 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
               : outcome.content;
             return wrapResult({ content, isError: outcome.isError }, "run_python");
           }
-          const oneShot = await workspace.runPython(args, signal, { chatId });
+          const oneShot = await workspace.runPython(args, signal, {
+            chatId,
+            resultBudgetChars: getMaxToolResultChars(contextWindow),
+          });
           const notice = background
             ? `${KERNEL_FALLBACK_NOTICES[outcome.reason]} (background unavailable; ran synchronously)`
             : KERNEL_FALLBACK_NOTICES[outcome.reason];
@@ -1287,7 +1290,10 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             "run_python",
           );
         }
-        const oneShot = await workspace.runPython(args, signal, { chatId });
+        const oneShot = await workspace.runPython(args, signal, {
+          chatId,
+          resultBudgetChars: getMaxToolResultChars(contextWindow),
+        });
         // Reached only by remote workspaces without a kernel host now — local
         // chats fell through the kernel path (or its one-shot fallback with
         // its own notice).
