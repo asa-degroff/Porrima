@@ -998,6 +998,7 @@ function MessageSegments({
                     streamingSegmentIndex={streamingSegmentIndex}
                     chatId={chatId}
                     onArtifactRuntimeError={onArtifactRuntimeError}
+                    inGroup
                   />
                 ))}
               </ScrollableToolContainer>
@@ -1155,6 +1156,7 @@ function ToolCallsList({
           toolCall={tc}
           toolResult={tr}
           settled
+          inGroup={useScrollContainer}
         />
       );
     });
@@ -1226,6 +1228,7 @@ function SegmentRenderer({
   streamingSegmentIndex,
   chatId,
   onArtifactRuntimeError,
+  inGroup,
 }: {
   segment: NonNullable<ChatMessage["segments"]>[number];
   index: number;
@@ -1235,6 +1238,8 @@ function SegmentRenderer({
   streamingSegmentIndex: number | null;
   chatId?: string;
   onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
+  /** The segment renders inside a grouped tool-call scroller. */
+  inGroup?: boolean;
 }) {
   const { isPinned, unpin } = usePinnedItem();
   const isDesktop = useIsDesktop();
@@ -1281,6 +1286,7 @@ function SegmentRenderer({
           isPreview={segment._preview || undefined}
           previewRaw={segment.previewRaw}
           settled={!showStreaming}
+          inGroup={inGroup}
         />
       ) : null;
     }

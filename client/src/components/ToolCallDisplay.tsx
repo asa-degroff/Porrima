@@ -76,10 +76,15 @@ interface Props {
    *  result then renders "settled" (neutral) instead of "running" — a
    *  persisted row can never still be executing. */
   settled?: boolean;
+  /** This chip sits inside a grouped tool-call container that already
+   *  scrolls. Expanded bodies then grow inline instead of capping their own
+   *  max-height — one scroll container per stack, never nested ones. */
+  inGroup?: boolean;
 }
 
-export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText, isPreview, previewRaw, settled }: Props) {
+export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText, isPreview, previewRaw, settled, inGroup }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   // Lightbox for tool-returned images (screenshots, generated art…).
   // Self-owned so every ToolCallDisplay usage site gets the viewer without
   // threading an open callback down through segment renderers.
@@ -133,8 +138,44 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText,
 
   const iconInfo = getToolIcon(name);
 
+  // Grouped chips live inside a container that already scrolls. Capping the
+  // expanded body here as well would stack a second scrollbar inside the
+  // first, so inside a group the body grows to full height and the group
+  // scroller owns the overflow.
+  const expandedBodyClass = inGroup
+    ? "border-t border-white/5 px-3 py-2 max-w-full"
+    : "border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full";
+
+  // Clicking the card body (not a control) folds an expanded chip. Inside a
+  // grouped tool scroller the header can be scrolled out of view, so relying
+  // on the chevron alone makes a long expanded result hard to close.
+  const handleSurfaceClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!expanded || lightboxImage) return;
+    const target = event.target;
+    // Controls own their click — the header, the call row, images, and the
+    // live-output jump pill must not also fold the card.
+    if (
+      target instanceof Element &&
+      target.closest("button, a, input, select, textarea, label, img, [contenteditable='true']")
+    ) {
+      return;
+    }
+    // A drag-select is a read gesture, not a collapse gesture. Scope the
+    // check to this card so a selection elsewhere in the chat does not block
+    // folding the row.
+    const selection = window.getSelection();
+    if (selection?.toString() && selection.anchorNode && rootRef.current?.contains(selection.anchorNode)) {
+      return;
+    }
+    setExpanded(false);
+  };
+
   return (
-    <div className={`my-2 relative depth-raised rounded-lg border ${statusBorders[status]} max-w-full`}>
+    <div
+      ref={rootRef}
+      className={`my-2 relative depth-raised rounded-lg border ${statusBorders[status]} max-w-full`}
+      onClick={handleSurfaceClick}
+    >
       <div className={`overflow-hidden rounded-lg ${statusBgs[status]}`}>
       {/* Header - clickable to expand */}
       <button
@@ -232,14 +273,14 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText,
           </button>
           {showCall && (
             isEditDiff ? (
-              <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden">
+              <div className={expandedBodyClass}>
                 <DiffView
                   oldString={toolCall!.arguments.old_string}
                   newString={toolCall!.arguments.new_string ?? ""}
                 />
               </div>
             ) : callDetail ? (
-              <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full">
+              <div className={expandedBodyClass}>
                 {callDetail.label && (
                   <div className="text-xs text-white/40 mb-1.5 font-medium">{callDetail.label}</div>
                 )}
@@ -252,7 +293,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText,
         </>
       )}
       {expanded && result && name !== "bash" && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && (
-        <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
+        <div className={`${expandedBodyClass} ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
           <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed max-w-full">
             {result}
           </pre>
@@ -261,7 +302,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus, partialText,
       {expanded && name === "bash" && result && (
         <div className="border-t border-white/5 px-3 py-2 max-w-full">
           <div className="text-xs text-white/40 mb-1.5 font-medium">Output</div>
-          <div className="max-h-[300px] overflow-y-auto overflow-x-hidden custom-scrollbar">
+          <div className={inGroup ? "max-w-full" : "max-h-[300px] overflow-y-auto overflow-x-hidden custom-scrollbar"}>
             <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed max-w-full">
               {result}
             </pre>
