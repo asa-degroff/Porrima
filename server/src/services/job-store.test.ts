@@ -115,4 +115,37 @@ describe("job store", () => {
     store.pruneEvents(1);
     expect(store.eventsSince(0).map((event) => event.event)).toEqual(["job_finished"]);
   });
+
+  it("keeps a long-running job visible when terminal rows flood the ledger", () => {
+    // A service started first, so it is the oldest row in the table.
+    store.insertStarting(newJob("a-live-service"));
+    store.markRunning("a-live-service", {
+      pid: 4242,
+      pgid: 4242,
+      start_id: "proc:1",
+      boot_id: "boot-1",
+      started_at: new Date().toISOString(),
+    });
+    for (let i = 0; i < 501; i += 1) {
+      const id = `z-fill-${String(i).padStart(3, "0")}`;
+      store.insertStarting(newJob(id));
+      store.finish(id, {
+        exit_code: 0,
+        signal: null,
+        ended_at: new Date().toISOString(),
+        duration_ms: 10,
+      });
+    }
+
+    // A window over every state does not contain the live row. This is the
+    // shape of the defect that marked long-lived services lost.
+    const windowed = store.list({ limit: 500 }).map((job) => job.id);
+    expect(windowed).toHaveLength(500);
+    expect(windowed).not.toContain("a-live-service");
+
+    // A states-filtered list is complete: live rows are bounded by the
+    // supervisor's caps, so what it omits is real evidence.
+    const live = store.list({ states: ["starting", "running"], limit: 1000 });
+    expect(live.map((job) => job.id)).toEqual(["a-live-service"]);
+  });
 });

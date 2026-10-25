@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readBootId } from "./job-lock.js";
+import { appendJobJournal, latestJournalRecords, type JobJournalRecord } from "./job-journal.js";
 import { JobStore } from "./job-store.js";
 import { JobSupervisor, type StartJobInput } from "./job-supervisor.js";
-import { isGroupAlive } from "./process-supervisor.js";
+import { isGroupAlive, killProcessGroup, readProcessStartId } from "./process-supervisor.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const roots = new Set<string>();
@@ -216,5 +217,115 @@ describe("job supervisor", () => {
     await expect(
       harness.supervisor.start(startInput(harness, { command: "sleep 30" })),
     ).rejects.toThrow(/job limit/);
+  });
+
+  it("journals the spawned group before the ledger row is updated", async () => {
+    const harness = await makeHarness();
+    const realMarkRunning = harness.store.markRunning.bind(harness.store);
+    let journalAtWriteTime: JobJournalRecord | undefined;
+    harness.store.markRunning = ((
+      id: string,
+      identity: Parameters<JobStore["markRunning"]>[1],
+    ) => {
+      // Snapshot the journal at the exact moment the ledger write is about to
+      // happen: if the record is already there, a crash between the two leaves
+      // a group that recovery can still find.
+      journalAtWriteTime = latestJournalRecords(harness.journalPath).get(identity.pid);
+      return realMarkRunning(id, identity);
+    }) as JobStore["markRunning"];
+
+    const job = await harness.supervisor.start(startInput(harness, { command: "echo journaled" }));
+
+    expect(journalAtWriteTime).toBeDefined();
+    expect(journalAtWriteTime?.job_id).toBe(job.id);
+    expect(journalAtWriteTime?.pid).toBe(job.pid);
+    expect(journalAtWriteTime?.pgid).toBe(job.pgid);
+    expect(journalAtWriteTime?.active).toBe(true);
+    expect(typeof journalAtWriteTime?.start_id).toBe("string");
+    await waitForState(harness, job.id, "finished");
+  });
+
+  it("recovers a command that finished while no supervisor was present", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 0.4; echo finished-while-gone" }),
+    );
+    // A daemon death: tracking is dropped, the detached group keeps running
+    // and keeps writing to its own files. Nothing is watching when it exits.
+    harness.supervisor.close();
+    await delay(1200);
+
+    const store2 = JobStore.open(harness.dbPath);
+    const supervisor2 = new JobSupervisor({
+      store: store2,
+      jobsDir: harness.jobsDir,
+      journalPath: harness.journalPath,
+      bootId: harness.bootId,
+    });
+    cleanups.push(async () => {
+      supervisor2.close();
+      store2.close();
+    });
+    await supervisor2.recover();
+
+    const recovered = store2.get(job.id);
+    expect(recovered?.state).toBe("finished");
+    expect(recovered?.exit_code).toBe(0);
+    expect(recovered?.duration_ms ?? 0).toBeGreaterThan(0);
+    expect(await readFile(job.stdout_path, "utf8")).toContain("finished-while-gone");
+  });
+
+  it("reaps an unclaimed group only on positive identity", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(startInput(harness, { command: "sleep 30" }));
+    const pgid = job.pgid;
+    const pid = job.pid;
+    expect(pgid).toBeTruthy();
+    expect(pid).toBeTruthy();
+    cleanups.push(async () => {
+      if (pgid) await killProcessGroup(pgid, { graceMs: 200 }).catch(() => {});
+    });
+    harness.supervisor.close();
+    // Ledger loses its live row; the group is still running and untracked.
+    harness.store.markFailed(job.id);
+
+    const supervisor2 = new JobSupervisor({
+      store: harness.store,
+      jobsDir: harness.jobsDir,
+      journalPath: harness.journalPath,
+      bootId: harness.bootId,
+    });
+    cleanups.push(async () => supervisor2.close());
+
+    appendJobJournal(harness.journalPath, {
+      version: 1,
+      job_id: job.id,
+      pid: pid!,
+      pgid: pgid!,
+      start_id: "proc:not-this-process",
+      boot_id: harness.bootId,
+      active: true,
+      recorded_at: new Date().toISOString(),
+    });
+    await supervisor2.recover();
+    // Absence of confirming identity is not a licence to kill a live group.
+    expect(isGroupAlive(pgid!)).toBe(true);
+
+    appendJobJournal(harness.journalPath, {
+      version: 1,
+      job_id: job.id,
+      pid: pid!,
+      pgid: pgid!,
+      start_id: readProcessStartId(pid!) ?? "",
+      boot_id: harness.bootId,
+      active: true,
+      recorded_at: new Date().toISOString(),
+    });
+    await supervisor2.recover();
+    const deadline = Date.now() + 3000;
+    while (isGroupAlive(pgid!) && Date.now() < deadline) {
+      await delay(50);
+    }
+    expect(isGroupAlive(pgid!)).toBe(false);
   });
 });

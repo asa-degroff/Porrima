@@ -209,7 +209,10 @@ Alongside `jobs.db`, the supervisor keeps an append-only
 `~/.porrima/jobs/journal.jsonl` (`{version, job_id, pid, pgid, start_id, boot_id, active,
 recordedAt}`), fsynced on spawn and on confirmed group death. It exists for the same reason the
 server's supervisor journal does: a crash can leave a live group whose row was never updated or
-whose database write was lost. The journal is pruned per record on confirmed group death, never
+whose database write was lost. The active record is appended immediately after the spawn, before
+the ledger row is marked running, so the record exists before the write it is meant to cover. The
+job directory's own `pid`/`start_id`/`boot_id` files (written by the wrapper) are a second path
+back for the same window. The journal is pruned per record on confirmed group death, never
 truncated as a whole, because an adopted record must survive the next restart.
 
 ## 5. Protocol
@@ -244,9 +247,9 @@ job ends before a match; `pattern` is a literal substring by default, with a reg
 addable later without changing the request shape. This is the readiness primitive for services.
 
 Events (`job_started`, `job_finished`, `job_stopped`, `job_lost`) carry a durable `seq`. On
-connect the server does a full `list` reconcile, then subscribes from the current sequence. A
-long event backlog is not the correctness mechanism: `list` is truth, events are promptness.
-The event log is pruned aggressively.
+connect the server reconciles from a `list` restricted to the live states, then subscribes from
+the current sequence. A long event backlog is not the correctness mechanism: `list` is truth,
+events are promptness. The event log is pruned aggressively.
 
 The server's client connects lazily, retries with backoff, and degrades cleanly. A background
 start while the supervisor is unavailable fails with a clear error; the server does not fall
@@ -307,7 +310,9 @@ On supervisor start:
    and becomes `lost` unless its status file says it finished. Otherwise find the group by
    `pid`/`pgid`/`start_id`; adopt if alive and matching; read `status.json` if present; mark
    `finished` or `lost`.
-4. Reap journal groups with no ledger row.
+4. Reap journal groups with no ledger row, and only where the record's `start_id` matches the
+   live process. A record whose start time cannot be confirmed is not evidence that the group is
+   the supervisor's to kill.
 5. Bind the socket, emit `welcome`, serve.
 
 Adoption matrix:
@@ -340,10 +345,15 @@ Lifecycle behavior:
 
 On server start:
 
-1. Connect to the supervisor and `list` all jobs. If the supervisor is unavailable, do **not**
-   mark `job_view` rows `lost`; leave the last known state and report "supervisor unavailable."
-2. Reconcile `job_view`; rows missing from a *connected* supervisor become `lost` (or `finished`
-   if a status file says so).
+1. Connect to the supervisor and `list` its live jobs. If the supervisor is unavailable, do
+   **not** mark `job_view` rows `lost`; leave the last known state and report "supervisor
+   unavailable."
+2. Reconcile `job_view` against that list. Live rows are bounded by the supervisor's caps, so a
+   list restricted to `starting`/`running` is complete, while a window over every state is not —
+   a service older than a few hundred short commands would fall off the page. A live view row the
+   list did not mention is asked about by id: a row the supervisor reports (usually a terminal
+   state reached while the server was away) is mirrored, a row the supervisor does not have becomes
+   `lost`, and a lookup that failed leaves the row alone.
 3. Stop jobs whose chat no longer exists (on startup and on each reconnect).
 4. Deliver `lost`/`finished` notices for unread work (§3.3 of kernel-durability.md).
 

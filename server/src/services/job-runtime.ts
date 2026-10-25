@@ -11,9 +11,11 @@ import {
   markKernelJobsLostAtStartup,
   recordSupervisorStarting,
   reconcileSupervisorJobs,
+  liveSupervisorJobIds,
   upsertSupervisorJob,
   type JobViewRow,
   type JobViewState,
+  type MissingSupervisorJob,
 } from "./job-view.js";
 import type { JobRecord } from "./job-protocol.js";
 
@@ -111,12 +113,49 @@ export async function ensureSupervisorConnection(): Promise<boolean> {
   }
 }
 
-/** Pull the connected supervisor's full list into `job_view`. */
+/**
+ * Pull the connected supervisor's live jobs into `job_view`.
+ *
+ * The list is filtered to the live states on purpose. Live rows are bounded by
+ * the supervisor's own caps, so a states-filtered list is complete, while a
+ * window over every state is not: a service started before 500 short commands
+ * would fall off the page and be mistaken for a lost job. Rows the live list
+ * does not mention are resolved individually — a command that finished while
+ * the server was disconnected is `finished`, not `lost`.
+ */
+const LIVE_STATES: JobViewState[] = ["starting", "running"];
+const LIVE_LIST_LIMIT = 1000;
+
+async function reconcileAgainstSupervisor(chatId?: string): Promise<void> {
+  const c = getJobsClient();
+  const live = await c.listJobs({
+    chat_id: chatId,
+    states: LIVE_STATES,
+    limit: LIVE_LIST_LIMIT,
+  });
+  const liveIds = new Set(live.map((job) => job.id));
+  const unresolved = liveSupervisorJobIds(chatId).filter((id) => !liveIds.has(id));
+  const resolutions = new Map<string, MissingSupervisorJob>();
+  await Promise.all(
+    unresolved.map(async (jobId) => {
+      try {
+        const job = await c.getJob(jobId);
+        resolutions.set(jobId, job ? { status: "found", job } : { status: "absent" });
+      } catch {
+        resolutions.set(jobId, { status: "unknown" });
+      }
+    }),
+  );
+  reconcileSupervisorJobs(live, {
+    chatId,
+    resolveMissing: (jobId) => resolutions.get(jobId) ?? { status: "unknown" },
+  });
+}
+
 export async function reconcileJobRuntime(): Promise<void> {
   if (!(await ensureSupervisorConnection())) return;
   try {
-    const jobs = await getJobsClient().listJobs({ limit: 500 });
-    reconcileSupervisorJobs(jobs);
+    await reconcileAgainstSupervisor();
   } catch (error) {
     console.warn("[jobs] supervisor reconcile failed:", error);
   }
@@ -196,7 +235,7 @@ export async function waitForSupervisorJob(
   return result;
 }
 
-/** Refresh supervisor rows, then return this chat's unified view. */
+/** Refresh this chat's supervisor rows, then return its unified view. */
 export async function listJobsForChat(
   chatId: string,
   stateFilter?: JobViewState[],
@@ -204,8 +243,7 @@ export async function listJobsForChat(
   const c = getJobsClient();
   if (c.connected) {
     try {
-      const jobs = await c.listJobs({ limit: 500 });
-      reconcileSupervisorJobs(jobs);
+      await reconcileAgainstSupervisor(chatId);
     } catch {
       // Keep the durable view.
     }

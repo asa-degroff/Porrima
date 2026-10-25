@@ -34,11 +34,12 @@ afterEach(async () => {
 function supervisorJob(
   id: string,
   state: JobRecord["state"] = "running",
+  chatId = "chat-1",
 ): JobRecord {
   const now = new Date().toISOString();
   return {
     id,
-    chat_id: "chat-1",
+    chat_id: chatId,
     kind: "command",
     command: "echo hi",
     cwd: "/tmp",
@@ -141,5 +142,56 @@ describe("job view", () => {
     expect(markChatJobsStopped("chat-1", "chat-deleted")).toBe(1);
     expect(getJobView("sup-3")?.state).toBe("stopped");
     expect(getJobView("sup-3")?.stop_reason).toBe("chat-deleted");
+  });
+
+  it("mirrors a resolved terminal row instead of declaring a live job lost", () => {
+    recordSupervisorStarting({
+      jobId: "sup-4",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 10",
+      cwd: "/tmp",
+    });
+    upsertSupervisorJob({ job: supervisorJob("sup-4") });
+
+    // The live list omits sup-4 because it finished while the server was away.
+    // Asking about that id individually recovers the real outcome.
+    reconcileSupervisorJobs([], {
+      resolveMissing: (jobId) =>
+        jobId === "sup-4"
+          ? { status: "found", job: supervisorJob("sup-4", "finished") }
+          : { status: "absent" },
+    });
+    expect(getJobView("sup-4")?.state).toBe("finished");
+  });
+
+  it("leaves a live row alone when the supervisor lookup itself failed", () => {
+    recordSupervisorStarting({
+      jobId: "sup-5",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 10",
+      cwd: "/tmp",
+    });
+    upsertSupervisorJob({ job: supervisorJob("sup-5") });
+
+    reconcileSupervisorJobs([], { resolveMissing: () => ({ status: "unknown" }) });
+    expect(getJobView("sup-5")?.state).toBe("running");
+  });
+
+  it("scopes a chat reconcile so other chats' live rows are not judged", () => {
+    recordSupervisorStarting({
+      jobId: "sup-6",
+      chatId: "chat-2",
+      kind: "service",
+      command: "sleep 60",
+      cwd: "/tmp",
+    });
+    upsertSupervisorJob({ job: supervisorJob("sup-6", "running", "chat-2") });
+
+    // chat-1's reconcile sees no live rows at all, and must not reach into
+    // chat-2 to declare its service lost.
+    reconcileSupervisorJobs([], { chatId: "chat-1" });
+    expect(getJobView("sup-6")?.state).toBe("running");
   });
 });

@@ -64,6 +64,13 @@ export interface JobSupervisorOptions {
   caps?: Partial<SupervisorCaps>;
 }
 
+/** Process identity captured at spawn time, before any ledger write exists. */
+interface SpawnIdentity {
+  pid: number;
+  pgid: number;
+  start_id: string | null;
+}
+
 interface SupervisorCaps {
   per_chat: number;
   box: number;
@@ -212,7 +219,12 @@ export class JobSupervisor extends EventEmitter {
           });
         }
         this.adopted.set(row.id, adopted);
-        this.appendJournalActive(adopted);
+        this.appendJournalActive({
+          id: adopted.id,
+          pid,
+          pgid,
+          start_id: adopted.start_id,
+        });
         continue;
       }
 
@@ -263,6 +275,7 @@ export class JobSupervisor extends EventEmitter {
     let stdoutFd = -1;
     let stderrFd = -1;
     let child: ChildProcess | null = null;
+    let spawnIdentity: SpawnIdentity | null = null;
     try {
       stdoutFd = openSync(stdoutPath, "a", 0o600);
       stderrFd = openSync(stderrPath, "a", 0o600);
@@ -276,16 +289,25 @@ export class JobSupervisor extends EventEmitter {
       if (!spawned.pid) {
         throw new Error("spawn did not return a pid");
       }
-      const startedAt = new Date().toISOString();
-      const running = this.store.markRunning(job.id, {
+      spawnIdentity = {
         pid: spawned.pid,
         pgid: spawned.pid,
         start_id: readProcessStartId(spawned.pid) ?? null,
+      };
+      // Journal before the ledger write. The record is the witness that a
+      // process was created, so it has to exist before the write it is meant
+      // to cover; a crash between spawn and markRunning then still leaves a
+      // group that recovery can find. (The job dir's own pid/start_id files
+      // are a second path back, but only if the wrapper got that far.)
+      this.appendJournalActive({ id: job.id, ...spawnIdentity });
+      const running = this.store.markRunning(job.id, {
+        pid: spawnIdentity.pid,
+        pgid: spawnIdentity.pgid,
+        start_id: spawnIdentity.start_id,
         boot_id: this.bootId,
-        started_at: startedAt,
+        started_at: new Date().toISOString(),
       });
       this.children.set(job.id, spawned);
-      this.appendJournalActive(running);
       spawned.once("exit", (code, signal) => {
         void this.finishChild(job.id, code, signal);
       });
@@ -311,7 +333,10 @@ export class JobSupervisor extends EventEmitter {
         void killProcessGroup(child.pid, { graceMs: 500 });
       }
       this.store.markFailed(job.id);
-      this.appendJournalInactive(job.id);
+      // The journal already carries this group (it was written before the
+      // ledger update), so close it out with the identity we hold rather than
+      // leaving an active record for a group we just killed ourselves.
+      this.appendJournalInactive(job.id, spawnIdentity ?? undefined);
       throw new Error(`failed to spawn job ${job.id}: ${error?.message ?? error}`);
     } finally {
       if (stdoutFd >= 0) closeSync(stdoutFd);
@@ -557,7 +582,11 @@ export class JobSupervisor extends EventEmitter {
       // boot and start-time identity matches this generation.
       if (record.boot_id !== this.bootId) continue;
       const actualStart = readProcessStartId(record.pid);
-      if (record.start_id && actualStart && record.start_id !== actualStart) continue;
+      // Reaping needs positive identity. A record whose start time cannot be
+      // confirmed against the live process is not evidence that this group is
+      // ours to kill — and with the journal written before the ledger update,
+      // unconfirmed records are now expected to exist.
+      if (!record.start_id || !actualStart || record.start_id !== actualStart) continue;
       if (isGroupAlive(record.pgid)) {
         console.warn(`[jobs] reaping unclaimed group ${record.pgid} (${record.job_id})`);
         await killProcessGroup(record.pgid, { graceMs: 500 });
@@ -573,8 +602,8 @@ export class JobSupervisor extends EventEmitter {
     pruneJobJournal(this.journalPath, keep);
   }
 
-  private appendJournalActive(job: JobRecord): void {
-    if (job.pid == null || job.pgid == null) return;
+  /** Identity captured at spawn time — may exist before any ledger write does. */
+  private appendJournalActive(job: { id: string } & SpawnIdentity): void {
     appendJobJournal(this.journalPath, {
       version: 1,
       job_id: job.id,
@@ -587,15 +616,17 @@ export class JobSupervisor extends EventEmitter {
     });
   }
 
-  private appendJournalInactive(id: string): void {
+  private appendJournalInactive(id: string, identity?: SpawnIdentity): void {
     const row = this.store.get(id);
-    if (!row || row.pid == null || row.pgid == null) return;
+    const pid = identity?.pid ?? row?.pid ?? null;
+    const pgid = identity?.pgid ?? row?.pgid ?? pid;
+    if (pid == null || pgid == null) return;
     appendJobJournal(this.journalPath, {
       version: 1,
-      job_id: row.id,
-      pid: row.pid,
-      pgid: row.pgid,
-      start_id: row.start_id,
+      job_id: id,
+      pid,
+      pgid,
+      start_id: identity?.start_id ?? row?.start_id ?? null,
       boot_id: this.bootId,
       active: false,
       recorded_at: new Date().toISOString(),

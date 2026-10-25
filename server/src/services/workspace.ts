@@ -215,7 +215,7 @@ const BASH_KILL_GRACE_MS = 500;
  * have no usable stdin, so an editor, credential prompt, or pager can only
  * hang until the timeout. Inline assignments in the command still win.
  */
-const BASH_ENV_HARDENING: NodeJS.ProcessEnv = {
+export const BASH_ENV_HARDENING: NodeJS.ProcessEnv = {
   NO_COLOR: "1",
   TERM: "dumb",
   CLICOLOR: "0",

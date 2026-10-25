@@ -189,4 +189,107 @@ describe("bash background + jobs tools", () => {
     const rows = await runtime!.listJobsForChat(CHAT);
     expect(rows.every((row) => row.state === "stopped")).toBe(true);
   });
+
+  it("gives background commands the same hardened environment as the foreground shell", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-env",
+      {
+        command: "printf '%s|%s|%s|%s\\n' \"$TERM\" \"$GIT_TERMINAL_PROMPTS\" \"$PAGER\" \"$DEBIAN_FRONTEND\"",
+        background: true,
+      },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    await delay(300);
+    const tail = resultText(await jobs.execute("call-env-tail", { action: "tail", jobId }, signal));
+    expect(tail).toContain("dumb|0|cat|noninteractive");
+  });
+
+  it("does not mistake a service for lost when terminal rows flood the ledger", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-flood-start",
+      { command: "sleep 30", service: true },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started service (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    // 501 terminal rows, all newer than the service and belonging to another
+    // chat: a window over every state would not contain the live service.
+    const { JobStore } = await import("./job-store.js");
+    const store = JobStore.open(process.env.PORRIMA_JOBS_DB!);
+    const now = new Date().toISOString();
+    for (let i = 0; i < 501; i += 1) {
+      const id = `z-flood-${String(i).padStart(3, "0")}`;
+      store.insertStarting({
+        id,
+        chat_id: "flood-chat",
+        kind: "command",
+        command: "echo flood",
+        cwd: "/tmp",
+        stdout_path: `/tmp/${id}/stdout.log`,
+        stderr_path: `/tmp/${id}/stderr.log`,
+        status_path: `/tmp/${id}/status.json`,
+        origin_turn_id: null,
+      });
+      store.markRunning(id, {
+        pid: 900000 + i,
+        pgid: 900000 + i,
+        start_id: `proc:${i}`,
+        boot_id: "flood-boot",
+        started_at: now,
+      });
+      store.finish(id, { exit_code: 0, signal: null, ended_at: now, duration_ms: 5 });
+    }
+    store.close();
+
+    const rows = await runtime!.listJobsForChat(CHAT);
+    const service = rows.find((row) => row.job_id === jobId);
+    expect(service?.state).toBe("running");
+    expect(service?.stop_reason).not.toBe("supervisor-no-row");
+
+    await runtime!.stopChatSupervisorJobs(CHAT);
+  });
+
+  it("mirrors a command that finished while the server was disconnected", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-away",
+      { command: "sleep 0.6; echo done-while-away", background: true },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    // The server loses its supervisor connection before the completion event
+    // arrives, so the view keeps a 'running' row with no mirror to update it.
+    runtime!.shutdownJobRuntime();
+    runtime = null;
+    await delay(1200);
+
+    runtime = await import("./job-runtime.js");
+    await runtime.initJobRuntime();
+    await delay(200);
+    const rows = await runtime.listJobsForChat(CHAT);
+    const row = rows.find((job) => job.job_id === jobId);
+    expect(row?.state).toBe("finished");
+    expect(row?.exit_code).toBe(0);
+  });
 });

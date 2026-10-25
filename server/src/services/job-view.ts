@@ -353,20 +353,62 @@ export function markKernelJobsLostAtStartup(): number {
   return info.changes;
 }
 
-/** Reconcile supervisor rows against a connected supervisor's full list. */
-export function reconcileSupervisorJobs(jobs: JobRecord[]): number {
+/**
+ * What the supervisor says about one row that its live list did not mention.
+ * A list that is not complete for the live states is not evidence of absence,
+ * so absence has to be established per job id rather than inferred from a page:
+ *   found   — the supervisor knows this job (usually a terminal state reached
+ *             while the server was away); mirror it instead of declaring loss
+ *   absent  — the supervisor has no row for it; that is real evidence
+ *   unknown — the lookup itself failed; leave the row alone
+ */
+export type MissingSupervisorJob =
+  | { status: "found"; job: JobRecord }
+  | { status: "absent" }
+  | { status: "unknown" };
+
+/** Rows the view believes are live on the supervisor side, optionally per chat. */
+export function liveSupervisorJobIds(chatId?: string): string[] {
+  const rows = chatId
+    ? (getDb()
+        .prepare(
+          `SELECT job_id FROM job_view
+           WHERE source = 'supervisor' AND state IN ('starting', 'running') AND chat_id = ?`,
+        )
+        .all(chatId) as Array<{ job_id: string }>)
+    : (getDb()
+        .prepare(
+          `SELECT job_id FROM job_view
+           WHERE source = 'supervisor' AND state IN ('starting', 'running')`,
+        )
+        .all() as Array<{ job_id: string }>);
+  return rows.map((row) => row.job_id);
+}
+
+/**
+ * Mirror a supervisor list into the view, then resolve the live rows it left
+ * out one id at a time. `jobs` must be complete for the live states it was
+ * asked for; terminal rows outside it are never treated as missing.
+ */
+export function reconcileSupervisorJobs(
+  jobs: JobRecord[],
+  options: {
+    chatId?: string;
+    resolveMissing?: (jobId: string) => MissingSupervisorJob;
+  } = {},
+): number {
   for (const job of jobs) upsertSupervisorJob({ job });
-  const live = new Set(jobs.map((job) => job.id));
-  const rows = getDb()
-    .prepare(
-      `SELECT job_id FROM job_view
-       WHERE source = 'supervisor' AND state IN ('starting', 'running')`,
-    )
-    .all() as Array<{ job_id: string }>;
+  const listed = new Set(jobs.map((job) => job.id));
   let lost = 0;
-  for (const row of rows) {
-    if (live.has(row.job_id)) continue;
-    markJobViewLost(row.job_id, "supervisor-no-row");
+  for (const jobId of liveSupervisorJobIds(options.chatId)) {
+    if (listed.has(jobId)) continue;
+    const resolution = options.resolveMissing?.(jobId) ?? { status: "absent" };
+    if (resolution.status === "unknown") continue;
+    if (resolution.status === "found") {
+      upsertSupervisorJob({ job: resolution.job });
+      continue;
+    }
+    markJobViewLost(jobId, "supervisor-no-row");
     lost += 1;
   }
   return lost;

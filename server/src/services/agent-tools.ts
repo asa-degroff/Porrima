@@ -12,7 +12,7 @@ import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artif
 import { getSettings } from "./chat-storage.js";
 import { getStoredSystemPauseState } from "./system-pause.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
-import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
+import { BASH_ENV_HARDENING, getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
 import { codeSearchEnabled, runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, type CodeSearchParams } from "./code-search.js";
 import {
   executeInKernel,
@@ -1317,7 +1317,11 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             kind: service ? "service" : "command",
             command: String(args.command ?? ""),
             cwd: workspace.localRoot,
-            env: process.env,
+            // Same hardening the foreground shell gets: a background command
+            // has no stdin either, and an editor, credential prompt, or pager
+            // would otherwise hang toward the timeout in a process that
+            // outlives the server.
+            env: { ...process.env, ...BASH_ENV_HARDENING },
             timeout_ms: service ? undefined : Math.round(timeoutSec * 1000),
             workspace: workspace.label,
           });
