@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,9 +14,11 @@ import {
   markJobViewFailed,
   markJobViewLost,
   markKernelJobsLostAtStartup,
+  markSupervisorJobsProbed,
   recordCellStarted,
   recordSupervisorStarting,
   reconcileSupervisorJobs,
+  uncertainSupervisorJobIds,
   upsertSupervisorJob,
 } from "./job-view.js";
 
@@ -63,6 +66,26 @@ function supervisorJob(
     created_at: now,
     updated_at: now,
   };
+}
+
+function seedUncertainJob(id: string, chatId = "chat-1"): void {
+  recordSupervisorStarting({
+    jobId: id,
+    chatId,
+    kind: "command",
+    command: "echo hi",
+    cwd: "/tmp",
+  });
+  markJobViewFailed(id, "spawn-failed");
+}
+
+function setEndedAt(id: string, endedAt: string): void {
+  const db = new Database(dbPath);
+  try {
+    db.prepare("UPDATE job_view SET ended_at = ? WHERE job_id = ?").run(endedAt, id);
+  } finally {
+    db.close();
+  }
 }
 
 describe("job view", () => {
@@ -195,6 +218,67 @@ describe("job view", () => {
     // chat-2 to declare its service lost.
     reconcileSupervisorJobs([], { chatId: "chat-1" });
     expect(getJobView("sup-6")?.state).toBe("running");
+  });
+
+  it("sweeps uncertain rows in rotating batches instead of re-asking the newest", () => {
+    const now = Date.now();
+    const recheckMs = 10 * 60_000;
+    const total = 120;
+    for (let i = 0; i < total; i += 1) {
+      seedUncertainJob(`uncertain-${String(i).padStart(3, "0")}`);
+    }
+
+    const seen = new Set<string>();
+    let batches = 0;
+    for (;;) {
+      const batch = uncertainSupervisorJobIds("chat-1", 50, { nowMs: now, recheckMs });
+      if (batch.length === 0) break;
+      for (const id of batch) {
+        expect(seen.has(id)).toBe(false);
+        seen.add(id);
+      }
+      markSupervisorJobsProbed(batch, new Date(now).toISOString());
+      batches += 1;
+      expect(batches).toBeLessThanOrEqual(3);
+    }
+
+    expect(batches).toBe(3);
+    expect(seen.size).toBe(total);
+
+    // The same list a moment later must not re-ask rows inside the recheck
+    // window; otherwise every `jobs list` fans out over the same ids.
+    expect(uncertainSupervisorJobIds("chat-1", 50, { nowMs: now, recheckMs })).toEqual([]);
+
+    // After the window, the least-recently-probed batch is due again.
+    expect(
+      uncertainSupervisorJobIds("chat-1", 50, {
+        nowMs: now + recheckMs + 1,
+        recheckMs,
+      }),
+    ).toHaveLength(50);
+  });
+
+  it("stops automatic probes once uncertainty ages past the horizon", () => {
+    const now = Date.now();
+    seedUncertainJob("probe-fresh");
+    seedUncertainJob("probe-in-window");
+    seedUncertainJob("probe-stale");
+    setEndedAt("probe-in-window", new Date(now - 6 * 24 * 60 * 60_000).toISOString());
+    setEndedAt("probe-stale", new Date(now - 8 * 24 * 60 * 60_000).toISOString());
+
+    const ids = uncertainSupervisorJobIds("chat-1", 50, { nowMs: now });
+    expect(ids).toContain("probe-fresh");
+    expect(ids).toContain("probe-in-window");
+    expect(ids).not.toContain("probe-stale");
+  });
+
+  it("stamps the probe clock only on uncertain supervisor rows", () => {
+    upsertSupervisorJob({ job: supervisorJob("done-1", "finished") });
+    const before = getJobView("done-1")?.last_synced_at;
+    expect(before).toBeTruthy();
+
+    expect(markSupervisorJobsProbed(["done-1"], "2000-01-01T00:00:00.000Z")).toBe(0);
+    expect(getJobView("done-1")?.last_synced_at).toBe(before);
   });
 
   it("corrects a false lost/failed row only from an authoritative supervisor report", () => {

@@ -10,6 +10,7 @@ import {
   markJobViewFailed,
   markJobViewLost,
   markKernelJobsLostAtStartup,
+  markSupervisorJobsProbed,
   recordSupervisorStarting,
   reconcileSupervisorJobs,
   liveSupervisorJobIds,
@@ -163,6 +164,10 @@ async function reconcileAgainstSupervisor(chatId?: string): Promise<void> {
       }
     }),
   );
+  // Stamp the uncertain ids we just asked about, including absent and failed
+  // lookups. Without this clock the same newest rows are re-asked on every
+  // `jobs list` and older uncertainty is never swept.
+  if (uncertain.length > 0) markSupervisorJobsProbed(uncertain);
   reconcileSupervisorJobs(live, {
     chatId,
     resolveMissing: (jobId) => resolutions.get(jobId) ?? { status: "unknown" },

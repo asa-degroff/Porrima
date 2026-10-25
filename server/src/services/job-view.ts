@@ -288,7 +288,7 @@ export function markJobViewFailed(jobId: string, reason: string): void {
   getDb()
     .prepare(
       `UPDATE job_view SET state = 'failed', stop_reason = ?, ended_at = ?,
-       updated_at = ? WHERE job_id = ?`,
+       updated_at = ?, last_synced_at = NULL WHERE job_id = ?`,
     )
     .run(reason, now, now, jobId);
 }
@@ -366,7 +366,8 @@ export function markJobViewLost(
   getDb()
     .prepare(
       `UPDATE job_view SET state = 'lost', stop_reason = COALESCE(?, stop_reason),
-       ended_at = COALESCE(ended_at, ?), updated_at = ? WHERE job_id = ?`,
+       ended_at = COALESCE(ended_at, ?), updated_at = ?, last_synced_at = NULL
+       WHERE job_id = ?`,
     )
     .run(reason, endedAt, new Date().toISOString(), jobId);
 }
@@ -415,15 +416,53 @@ export function liveSupervisorJobIds(chatId?: string): string[] {
   return rows.map((row) => row.job_id);
 }
 
+/** How long a probed uncertain row waits before it is worth another `get`. */
+const UNCERTAIN_RECHECK_MS = 10 * 60_000;
 /**
- * Uncertain rows that are not in the live list. One `get` can resolve a job
- * that finished while the server was away, turning a false `lost`/`failed`
- * into the real terminal outcome. Bounded so a `jobs list` does not fan out
- * over the whole history.
+ * Past this age, automatic repair stops. A week-old lost/failed outcome is
+ * no longer worth recurring supervisor round trips; `jobs status <jobId>`
+ * remains the explicit on-demand path.
  */
-export function uncertainSupervisorJobIds(chatId?: string, limit = 50): string[] {
-  const clauses = ["source = 'supervisor'", "state IN ('lost', 'failed')"];
-  const params: unknown[] = [];
+const UNCERTAIN_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+export interface UncertainJobProbeOptions {
+  /** Clock to evaluate due/horizon cutoffs against. Test seam. */
+  nowMs?: number;
+  /** Minimum interval between probes of the same row. */
+  recheckMs?: number;
+  /** Uncertainty older than this is left for an explicit status call. */
+  maxAgeMs?: number;
+}
+
+/**
+ * Uncertain rows that are due for a supervisor `get`. One `get` can resolve a
+ * job that finished while the server was away, turning a false `lost`/`failed`
+ * into the real terminal outcome.
+ *
+ * The window is bounded per call and rotates: never-probed rows come first
+ * (most recent uncertainty first, so fresh losses are repaired promptly), then
+ * the rows probed longest ago. `markSupervisorJobsProbed` records every attempt, so a
+ * burst of `jobs list` calls cannot re-ask the same ids, and 200+ uncertain
+ * rows are swept in successive batches instead of starving the oldest.
+ */
+export function uncertainSupervisorJobIds(
+  chatId?: string,
+  limit = 50,
+  options: UncertainJobProbeOptions = {},
+): string[] {
+  const nowMs = options.nowMs ?? Date.now();
+  const recheckMs = options.recheckMs ?? UNCERTAIN_RECHECK_MS;
+  const maxAgeMs = options.maxAgeMs ?? UNCERTAIN_MAX_AGE_MS;
+  const dueBefore = new Date(nowMs - recheckMs).toISOString();
+  const notBefore = new Date(nowMs - maxAgeMs).toISOString();
+
+  const clauses = [
+    "source = 'supervisor'",
+    "state IN ('lost', 'failed')",
+    "COALESCE(ended_at, updated_at) >= ?",
+    "(last_synced_at IS NULL OR last_synced_at <= ?)",
+  ];
+  const params: unknown[] = [notBefore, dueBefore];
   if (chatId) {
     clauses.push("chat_id = ?");
     params.push(chatId);
@@ -431,10 +470,41 @@ export function uncertainSupervisorJobIds(chatId?: string, limit = 50): string[]
   const rows = getDb()
     .prepare(
       `SELECT job_id FROM job_view WHERE ${clauses.join(" AND ")}
-       ORDER BY created_at DESC LIMIT ?`,
+       ORDER BY (last_synced_at IS NOT NULL) ASC,
+                CASE WHEN last_synced_at IS NULL
+                     THEN COALESCE(ended_at, updated_at) END DESC,
+                last_synced_at ASC,
+                COALESCE(ended_at, updated_at) ASC,
+                job_id ASC
+       LIMIT ?`,
     )
     .all(...params, Math.max(1, Math.min(limit, 200))) as Array<{ job_id: string }>;
   return rows.map((row) => row.job_id);
+}
+
+/**
+ * Record that the supervisor was asked about these uncertain rows. Called for
+ * found, absent, and failed lookups alike: the point is to pace attempts, not
+ * to claim a result. Found rows leave the uncertain set as `upsertSupervisorJob`
+ * mirrors their terminal state; absent/unknown rows simply wait out the
+ * recheck interval.
+ */
+export function markSupervisorJobsProbed(
+  jobIds: string[],
+  at = new Date().toISOString(),
+): number {
+  if (jobIds.length === 0) return 0;
+  const ids = [...new Set(jobIds)].slice(0, 300);
+  const placeholders = ids.map(() => "?").join(", ");
+  const info = getDb()
+    .prepare(
+      `UPDATE job_view SET last_synced_at = ?
+       WHERE job_id IN (${placeholders})
+         AND source = 'supervisor'
+         AND state IN ('lost', 'failed')`,
+    )
+    .run(at, ...ids);
+  return info.changes;
 }
 
 /**
@@ -461,6 +531,8 @@ export function reconcileSupervisorJobs(
       continue;
     }
     markJobViewLost(jobId, "supervisor-no-row");
+    // The absent result was itself a probe; do not immediately ask again.
+    markSupervisorJobsProbed([jobId]);
     lost += 1;
   }
   return lost;
@@ -482,7 +554,8 @@ export function markChatJobsLost(chatId: string, reason: string): number {
   const info = getDb()
     .prepare(
       `UPDATE job_view SET state = 'lost', stop_reason = ?, ended_at = COALESCE(ended_at, ?),
-       updated_at = ? WHERE chat_id = ? AND state IN ('starting', 'running')`,
+       updated_at = ?, last_synced_at = NULL
+       WHERE chat_id = ? AND state IN ('starting', 'running')`,
     )
     .run(reason, now, now, chatId);
   return info.changes;

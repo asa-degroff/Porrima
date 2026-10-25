@@ -294,6 +294,39 @@ describe("bash background + jobs tools", () => {
     expect(row?.exit_code).toBe(0);
   });
 
+  it("stamps uncertain rows after a list and does not re-probe inside the window", async () => {
+    const { agentTools } = await setup();
+    // Drain the connect-time reconcile so the clock under test belongs to the
+    // list calls below, not to startup.
+    await runtime!.ensureSupervisorConnection();
+    await delay(50);
+
+    const { getJobView, markJobViewFailed, recordSupervisorStarting } = await import(
+      "./job-view.js"
+    );
+    recordSupervisorStarting({
+      jobId: "uncertain-list",
+      chatId: CHAT,
+      kind: "command",
+      command: "echo never-started",
+      cwd: dataDir,
+    });
+    markJobViewFailed("uncertain-list", "spawn-failed");
+    expect(getJobView("uncertain-list")?.last_synced_at).toBeNull();
+
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    await jobs.execute("call-list-probe-1", { action: "list" }, signal);
+    const firstProbe = getJobView("uncertain-list")?.last_synced_at;
+    expect(firstProbe).toBeTruthy();
+
+    await delay(10);
+    await jobs.execute("call-list-probe-2", { action: "list" }, signal);
+    expect(getJobView("uncertain-list")?.last_synced_at).toBe(firstProbe);
+  });
+
   it("mirrors a job when the start response is lost but the daemon spawned it", async () => {
     await setup();
     const runtimeMod = runtime!;

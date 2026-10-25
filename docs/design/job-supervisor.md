@@ -362,9 +362,11 @@ On server start:
    a service older than a few hundred short commands would fall off the page. A live view row the
    list did not mention is asked about by id: a row the supervisor reports (usually a terminal
    state reached while the server was away) is mirrored, a row the supervisor does not have becomes
-   `lost`, and a lookup that failed leaves the row alone. A bounded set of `lost`/`failed` rows is
-   also asked about by id, so a start-timeout row that actually ran can be corrected to its real
-   outcome; absence or a failed lookup leaves the uncertainty in place.
+   `lost`, and a lookup that failed leaves the row alone. A bounded, rotating set of recent
+   `lost`/`failed` rows is also asked about by id, so a start-timeout row that actually ran can be
+   corrected to its real outcome. Each probe is recorded, a row is not re-asked until its recheck
+   interval elapses, and uncertainty older than the probe horizon is left for an explicit
+   `jobs status`; absence or a failed lookup leaves the uncertainty in place.
 3. Stop jobs whose chat no longer exists (on startup and on each reconnect).
 4. Deliver `lost`/`finished` notices for unread work (§3.3 of kernel-durability.md).
 
