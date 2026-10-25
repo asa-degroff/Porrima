@@ -64,8 +64,8 @@ Create `~/.config/systemd/user/porrima.service`:
 ```ini
 [Unit]
 Description=Porrima Server
-After=network-online.target
-Wants=network-online.target
+After=network-online.target porrima-jobs.service
+Wants=network-online.target porrima-jobs.service
 
 [Service]
 Type=simple
@@ -81,7 +81,31 @@ Environment=RP_ID=localhost
 WantedBy=default.target
 ```
 
+The `Wants=`/`After=` entries for the optional job supervisor are non-fatal: the server starts normally if `porrima-jobs.service` is not installed.
+
 For remote access, replace `ORIGIN` and `RP_ID` with the final HTTPS browser origin and hostname before registering passkeys, for example `ORIGIN=https://porrima.example.com` and `RP_ID=porrima.example.com`.
+
+### Job Supervisor (L2a)
+
+`bash background: true` / `bash service: true` and the `jobs` tool use the durable job supervisor. It is a separate user service so a server restart does not kill its jobs. Install both unit files from `install/templates/`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp install/templates/porrima-jobs.service ~/.config/systemd/user/
+cp install/templates/porrima-jobs.slice ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now porrima-jobs.service
+```
+
+`porrima.service` declares `Wants=`/`After=porrima-jobs.service`; restart it once after installing the supervisor. The service runs `dist/jobs-daemon.js`, so build the server first (`cd server && npm run build`).
+
+Lifecycle:
+
+- `systemctl --user restart porrima` leaves jobs running.
+- `systemctl --user restart porrima-jobs` restarts the supervisor; the new daemon adopts live jobs (the unit uses `KillMode=process`).
+- `systemctl --user stop porrima-jobs.service` stops the control plane but leaves jobs running.
+- `systemctl --user stop porrima-jobs.slice` stops the daemon and every job.
+- The model-facing `jobs kill` / global stop call the daemon's `stop_all` path; use the CLI for manual checks: `cd server && npm run jobs-cli -- stats` (production: `node dist/scripts/jobs-cli.js stats`).
 
 On first run, Porrima prints the raw owner setup token to the `porrima.service` journal and stores only hash/state metadata at `~/.porrima/auth/setup-token.txt`. Read the raw token with `journalctl --user -u porrima.service`; do not paste the `tokenSha256` value from the file into the browser. The setup token expires after 30 minutes and locks for 15 minutes after 10 failed attempts. It is single-use across clients: the first browser to present it owns it until the process restarts (a failed passkey ceremony can retry in the same browser). It is removed after the first successful owner passkey registration.
 

@@ -14,6 +14,7 @@ import {
 } from "./tool-output-store.js";
 import { getStoredSystemPauseState } from "./system-pause.js";
 import { assertSafePathSegment } from "../utils/safe-path.js";
+import { finishCellJob, recordCellStarted } from "./job-view.js";
 import {
   finalizeBoundedOutput,
   CELL_VIEW_BYTES,
@@ -288,6 +289,8 @@ interface PendingExecution {
   /** Dispatcher handed to the cell this pending tracks (§4.9); background
    *  pending re-keys it onto the jobId when the ack lands. */
   toolDispatcher?: KernelToolDispatcher;
+  /** Bounded cell snippet for the job view (background acks). */
+  snippet?: string;
   resolve: (outcome: KernelRunOutcome) => void;
 }
 
@@ -591,6 +594,27 @@ async function finishJob(instance: KernelInstance, event: Record<string, any>): 
       }
     } else {
       job.spillPath = result.spillPath;
+    }
+  }
+  if (jobId) {
+    const finishedAt = job.finishedAt ?? Date.now();
+    const outputPaths = job.spillPath
+      ? [job.spillPath]
+      : job.capture.snapshot().spillPath
+        ? [job.capture.snapshot().spillPath!]
+        : null;
+    try {
+      finishCellJob(jobId, {
+        state: "finished",
+        exitCode: job.status === "done" ? 0 : 1,
+        signal: null,
+        stopReason: job.timedOut ? "timeout" : null,
+        endedAt: new Date(finishedAt).toISOString(),
+        durationMs: finishedAt - job.startedAt,
+        outputPaths,
+      });
+    } catch (error) {
+      console.warn(`[kernel] job_view finish failed for ${shortId(jobId)}:`, error);
     }
   }
   pruneJobs(instance);
@@ -956,8 +980,20 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
         pending.stderr.dispose();
         const jobId = typeof event.job_id === "string" ? event.job_id : null;
         if (jobId && event.status === "ok") {
-          instance.jobs.set(jobId, createJob(instance, jobId));
+          const created = createJob(instance, jobId);
+          instance.jobs.set(jobId, created);
           instance.jobOrder.push(jobId);
+          try {
+            recordCellStarted({
+              jobId,
+              chatId: instance.chatId,
+              command: pending.snippet ?? null,
+              cwd: instance.cwd,
+              startedAt: new Date(created.startedAt).toISOString(),
+            });
+          } catch (error) {
+            console.warn(`[kernel] job_view start failed for ${shortId(jobId)}:`, error);
+          }
           // The job's cell identity is the driver-minted jobId (§4.8): re-key
           // the dispatcher onto it so arriving tool_call frames find it.
           if (pending.toolDispatcher) {
@@ -970,7 +1006,7 @@ function handleEvent(instance: KernelInstance, event: Record<string, any>): void
             mode: "kernel",
             isError: false,
             jobId,
-            content: `${pending.notice ? `${pending.notice}\n` : ""}Started background job ${jobId}. It runs without holding the turn; end your turn and check python_jobs on a later turn.`,
+            content: `${pending.notice ? `${pending.notice}\n` : ""}Started background cell ${jobId}. It runs without holding the turn and is transient (dies with the kernel); end your turn and check jobs on a later turn. Use bash background/service for work that must survive a restart.`,
           });
         } else {
           cleanupKernelToolCell(instance, pending.id);
@@ -1538,6 +1574,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       });
       pending.background = true;
       pending.toolDispatcher = dispatcher;
+      pending.snippet = code.slice(0, 1000);
       pending.resolve = resolve;
       // The ack deadline is short: the driver acks before running the job.
       pending.deadline = setTimeout(() => {
@@ -1585,7 +1622,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       content:
         `[foreground execution rejected: ${runningJobIds.length} background job(s) still running in this kernel (${runningJobIds.join(", ")}). ` +
         "A synchronous job blocks the kernel's event loop, so this cell would queue past its deadline and the wedge policy would kill a healthy kernel — and the job with it. " +
-        "Inspect or kill the job with python_jobs, or send this work as a background job.",
+        "Inspect or kill the job with jobs, or send this work as a background job.",
     };
   }
   const notice = consumeNotice(instance, acquisition.recreated);
@@ -1601,6 +1638,7 @@ export async function executeInKernel(opts: KernelRunOptions): Promise<KernelRun
       spillAllowed: host.kind === "local",
     });
     pending.toolDispatcher = dispatcher;
+    pending.snippet = code.slice(0, 1000);
     pending.resolve = (outcome) => {
       if (notice && outcome.mode === "kernel") {
         resolve({ ...outcome, content: `${notice}\n${outcome.content}` });
@@ -1690,8 +1728,21 @@ export async function disposeKernel(
   for (const job of instance.jobs.values()) {
     if (job.status !== "running") continue;
     job.status = "error";
-    job.finishedAt = Date.now();
+    const finishedAt = Date.now();
+    job.finishedAt = finishedAt;
     void job.capture.finish().catch(() => {});
+    const spill = job.spillPath ?? job.capture.snapshot().spillPath;
+    try {
+      finishCellJob(job.id, {
+        state: "lost",
+        stopReason: "kernel-disposed",
+        endedAt: new Date(finishedAt).toISOString(),
+        durationMs: finishedAt - job.startedAt,
+        outputPaths: spill ? [spill] : null,
+      });
+    } catch {
+      // The job view is a read model; disposal must never block on it.
+    }
   }
   if (!instance.wedged && !opts?.force) {
     // A wedged loop cannot process the shutdown request; skip straight to the

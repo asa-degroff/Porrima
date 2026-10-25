@@ -7,4 +7,4 @@
  * without creating a module cycle.
  */
 export const KERNEL_STATE_COMPACT_NOTICE =
-  "\n\nKernel note: if this thread used run_python, the kernel namespace survives compaction — variables, imports, and background jobs (checkable via python_jobs) are still live.";
+  "\n\nKernel note: if this thread used run_python, the kernel namespace survives compaction — variables, imports, and background jobs (checkable via jobs) are still live.";

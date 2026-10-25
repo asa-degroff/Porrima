@@ -471,8 +471,8 @@ than reporting that the output is gone.
 ### 4.7 Background jobs
 
 P1–P3 describe the kernel's `python_jobs` surface. The durable-work design keeps cells
-transient, renames the tool to `jobs` when supervisor-owned commands land, and routes work that
-must survive a restart to the job supervisor
+transient; the tool is now `jobs` (`python_jobs` remains a deprecated alias), and work that
+must survive a restart goes to the job supervisor
 ([kernel-durability.md](kernel-durability.md), [job-supervisor.md](job-supervisor.md)).
 
 - `run_python(..., background: true)` returns immediately with a `jobId`; the

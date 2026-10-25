@@ -8,6 +8,7 @@ import { cleanupChat } from "./tool-output-store.js";
 import { clearLlmRequests } from "./request-log.js";
 import { invalidateKvSnapshot } from "./kv-snapshot.js";
 import { disposeKernel } from "./python-kernel.js";
+import { stopChatSupervisorJobs } from "./job-runtime.js";
 
 /**
  * Clear process-local work that can continue after the chat row is deleted.
@@ -31,6 +32,10 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   await closeBrowserSession(chatId).catch(() => {});
   await cleanupChat(chatId).catch(() => {});
   await disposeKernel(chatId, { removeState: true }).catch(() => {});
+  // Supervisor-owned commands/services are a separate process plane: stop the
+  // groups, then mark their view rows (chat-deleted). A missing supervisor
+  // marks the rows lost instead of pretending they stopped.
+  await stopChatSupervisorJobs(chatId).catch(() => {});
   // porrima.db side of the ledger: drop this chat's recorded LLM requests.
   clearLlmRequests(chatId);
   // ...and its parked KV snapshot + file (docs/design/kv-snapshot-parking.md).

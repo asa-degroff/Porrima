@@ -81,6 +81,13 @@ const gracefulShutdown = async () => {
   } catch {
     // Non-fatal
   }
+  try {
+    const { shutdownJobRuntime } = await import("./services/job-runtime.js");
+    shutdownJobRuntime();
+    console.log("[shutdown] Job supervisor client closed (jobs left running)");
+  } catch {
+    // Non-fatal
+  }
   await destroyAllMasters();
   // Shut down TTS workers
   try {
@@ -291,6 +298,15 @@ try {
 } catch (error) {
   // Non-fatal — kernels fall back to one-shot.
   console.warn("[kernel] startup sweep failed:", error);
+}
+
+// Unified job read model + supervisor client. Never blocks startup on the
+// daemon: a missing supervisor leaves durable command rows in the view.
+try {
+  const { initJobRuntime } = await import("./services/job-runtime.js");
+  await initJobRuntime();
+} catch (error) {
+  console.warn("[jobs] runtime init failed:", error);
 }
 
 // TTS worker is lazily initialized on first TTS request via getWorker().

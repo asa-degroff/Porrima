@@ -10,6 +10,7 @@ import { SKILL_TOOLS, executeSkillTool } from "./skills.js";
 import { formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
 import { getSettings } from "./chat-storage.js";
+import { getStoredSystemPauseState } from "./system-pause.js";
 import { applyTimeMarker, type TimeMarkerState } from "./time-marker.js";
 import { getWorkspaceForProject, type WorkspaceAdapter } from "./workspace.js";
 import { codeSearchEnabled, runCodeSearch, runCodeSearchOnSnippet, renderSnippetText, CodeSearchError, type CodeSearchParams } from "./code-search.js";
@@ -17,12 +18,21 @@ import {
   executeInKernel,
   kernelToolsEnabled,
   killKernelJob,
-  listKernelJobs,
   tailKernelJob,
   type KernelFallbackReason,
   type KernelToolCallResult,
   type KernelToolDispatcher,
 } from "./python-kernel.js";
+import {
+  isSupervisorConnected,
+  listJobsForChat,
+  readJobOutputTail,
+  refreshSupervisorJob,
+  startSupervisorJob,
+  stopSupervisorJob,
+  waitForSupervisorJob,
+} from "./job-runtime.js";
+import { getJobView, type JobViewRow } from "./job-view.js";
 import { v4 as uuid } from "uuid";
 import { getToolResultImageDir, saveToolResultImage } from "./tool-result-image-storage.js";
 import type { Artifact, BrowserFrameEvent, InlineVisual, Project } from "../types.js";
@@ -117,17 +127,22 @@ const CODE_SEARCH_TOOL: Tool = {
 
 const BASH_TOOL: Tool = {
   name: "bash",
-  description: "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, running scripts, etc. For Python, use run_python instead.",
+  description:
+    "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, running scripts, etc. For Python, use run_python instead. Set background: true for long-running commands: the job is owned by the durable job supervisor and survives a server restart. Set service: true (implies background) for dev servers and watchers; a service has no completion timeout. Use ready_when to wait for a readiness line before returning. Background/service results carry a job id and output path; inspect them with jobs. Foreground commands hold the turn.",
   parameters: Type.Object({
     command: Type.String({ description: "The bash command to execute" }),
-    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30)", minimum: 1, maximum: 300 })),
+    timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30 foreground / 3600 background; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
+    background: Type.Optional(Type.Boolean({ description: "Run as a supervisor-owned background job and return immediately with a job id (default false)." })),
+    service: Type.Optional(Type.Boolean({ description: "Run as a long-lived service (implies background). Services have no completion timeout and are stopped explicitly." })),
+    ready_when: Type.Optional(Type.String({ description: "With background/service: wait until this literal line appears in the job output before returning." })),
+    ready_timeout: Type.Optional(Type.Integer({ description: "Readiness wait in seconds (default 30, max 300).", minimum: 1, maximum: 300 })),
   }),
 };
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
   description:
-    "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for anything expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with python_jobs on a later turn. Uses the project root." +
+    "Execute Python code in the active workspace and return stdout/stderr. Runs in a persistent kernel: variables and imports survive across calls, failures, and timeouts, and top-level await is supported. Set background: true for Python work expected to run long (>~60s): the call returns immediately with a job ID and does not hold the turn; end your turn and check progress with jobs on a later turn. Background cells are transient — they die with the kernel; use bash background/service for work that must survive a restart. Uses the project root." +
     // Capability line ships only when the kernel-tools flag is on (and rides
     // the same server restart as the flip — one intentional prefix bust,
     // docs/design/kernel-codemode.md §4.9). Gated identically for model and
@@ -138,22 +153,40 @@ const RUN_PYTHON_TOOL: Tool = {
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
     timeout: Type.Optional(Type.Integer({ description: "Timeout in seconds (default 30 foreground / 3600 background; max 300 foreground, 3600 background)", minimum: 1, maximum: 3600 })),
-    background: Type.Optional(Type.Boolean({ description: "Run as a background job and return immediately with a job ID (default false). Background jobs require the persistent kernel; use python_jobs to inspect them later." })),
+    background: Type.Optional(Type.Boolean({ description: "Run as a background cell and return immediately with a job ID (default false). Background cells are transient; use bash background/service for durable work. Inspect with jobs." })),
   }),
+};
+
+const JOBS_PARAMETERS = Type.Object({
+  action: Type.Enum(
+    { list: "list", status: "status", tail: "tail", kill: "kill", wait_for: "wait_for" },
+    { description: "list all jobs, status one, tail output, kill one, or wait for a readiness pattern" },
+  ),
+  jobId: Type.Optional(Type.String({ description: "Job ID (required for status/tail/kill/wait_for)" })),
+  lines: Type.Optional(Type.Integer({ description: "Tail line count (default 50, max 200)", minimum: 1, maximum: 200 })),
+  force: Type.Optional(Type.Boolean({ description: "kill only: force the stop. For a cell this escalates to a kernel kill (L3, loses the namespace)." })),
+  kind: Type.Optional(
+    Type.Enum(
+      { cell: "cell", command: "command", service: "service" },
+      { description: "list only: filter by job kind" },
+    ),
+  ),
+  pattern: Type.Optional(Type.String({ description: "wait_for only: literal text to wait for in the output" })),
+  timeout: Type.Optional(Type.Integer({ description: "wait_for timeout in seconds (default 30, max 300)", minimum: 1, maximum: 300 })),
+});
+
+const JOBS_TOOL: Tool = {
+  name: "jobs",
+  description:
+    "Inspect and control background jobs for this chat: kernel cells and supervisor-owned commands/services. list shows all jobs, status one job, tail its recent output, kill stops one, wait_for waits for a readiness line in a supervisor job's output. Jobs run without holding the turn. Check on a later turn — do not poll in a loop. A lost job's outcome is unknown: check side effects before re-running.",
+  parameters: JOBS_PARAMETERS,
 };
 
 const PYTHON_JOBS_TOOL: Tool = {
   name: "python_jobs",
-  description: "Inspect and control background run_python jobs for this chat. Jobs run in the persistent kernel and do not hold the turn. list shows all jobs, status one job, tail its recent output, kill stops one. A kill escalates to a kernel kill only with force: true (loses the namespace). Check jobs on a later turn — do not poll in a loop.",
-  parameters: Type.Object({
-    action: Type.Enum(
-      { list: "list", status: "status", tail: "tail", kill: "kill" },
-      { description: "list all jobs, status one job, tail one job's output, or kill one" },
-    ),
-    jobId: Type.Optional(Type.String({ description: "Job ID (required for status/tail/kill)" })),
-    lines: Type.Optional(Type.Integer({ description: "Tail line count (default 50, max 200)", minimum: 1, maximum: 200 })),
-    force: Type.Optional(Type.Boolean({ description: "kill only: kill the kernel when the job cannot be interrupted (L3, loses the namespace)" })),
-  }),
+  description:
+    "Deprecated alias for jobs (same actions). Prefer jobs. Inspect and control background run_python cells and supervisor-owned commands/services for this chat.",
+  parameters: JOBS_PARAMETERS,
 };
 
 const KERNEL_FALLBACK_NOTICES: Record<KernelFallbackReason, string> = {
@@ -171,6 +204,45 @@ function formatDurationMs(ms: number): string {
   if (minutes < 60) return `${minutes}m${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h${minutes % 60}m`;
+}
+
+function jobDuration(job: JobViewRow): string {
+  if (job.duration_ms != null) return formatDurationMs(job.duration_ms);
+  if (job.state === "running" && job.started_at) {
+    const elapsed = Date.now() - Date.parse(job.started_at);
+    if (Number.isFinite(elapsed)) return formatDurationMs(elapsed);
+  }
+  return "-";
+}
+
+function formatJobSummary(job: JobViewRow): string {
+  const outcome = [
+    job.exit_code != null ? `exit=${job.exit_code}` : "",
+    job.signal ? `signal=${job.signal}` : "",
+    job.stop_reason ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const command = job.command
+    ? job.command.replace(/\s+/g, " ").slice(0, 160)
+    : "(cell)";
+  return `${job.job_id}  ${job.state}  ${job.kind}  ${jobDuration(job)}${outcome ? `  ${outcome}` : ""}  ${command}`;
+}
+
+function formatJobDetail(job: JobViewRow): string {
+  const lines = [
+    formatJobSummary(job),
+    `source: ${job.source}`,
+    `cwd: ${job.cwd ?? "-"}`,
+  ];
+  if (job.pid != null) lines.push(`pid: ${job.pid}`);
+  if (job.started_at) lines.push(`started: ${job.started_at}`);
+  if (job.ended_at) lines.push(`ended: ${job.ended_at}`);
+  if (job.output_paths[0]) lines.push(`output: ${job.output_paths[0]}`);
+  if (job.state === "lost") {
+    lines.push("outcome unknown; check side effects before re-running.");
+  }
+  return lines.join("\n");
 }
 
 // In-turn polling guard: a second tail of the same still-running job within
@@ -468,6 +540,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
   ...(codeSearchEnabled() ? [CODE_SEARCH_TOOL] : []),
   BASH_TOOL,
   RUN_PYTHON_TOOL,
+  JOBS_TOOL,
   PYTHON_JOBS_TOOL,
   READ_PDF_TOOL,
   CREATE_ARTIFACT_TOOL,
@@ -487,7 +560,7 @@ const AUTOMATION_TOOLS: Tool[] = [
 // bounded by the pending-reminder cap, the 2-minute minimum lead time, and
 // per-run iteration/time budgets. What stays out are the tools that require a
 // live user: ask_user and the per-chat skill tools (system chats don't
-// activate skills). python_jobs is deliberately IN: the persistent kernel
+// activate skills). jobs is deliberately IN: the persistent kernel
 // runs in system chats too, and background jobs must be observable there —
 // list/tail is the only completion surface between scheduled runs, and kill
 // (force: true) is the only model-reachable L3/wedge escape
@@ -503,7 +576,7 @@ const SYSTEM_CHAT_EXCLUDED_TOOLS = new Set([
 ]);
 const SEQUENTIAL_TOOL_NAMES = new Set([
   "save_memory", "create_memory_block", "update_memory_block", "create_notebook_entry",
-  "write_file", "edit_file", "bash", "run_python", "python_jobs", "web_fetch",
+  "write_file", "edit_file", "bash", "run_python", "jobs", "python_jobs", "web_fetch",
   "browser_navigate", "browser_snapshot", "browser_click", "browser_hover", "browser_type", "browser_screenshot",
   "create_artifact", "update_artifact", "ask_user",
   "schedule_reminder", "schedule_chat_message", "update_automation", "install_skill", "remove_skill",
@@ -1202,9 +1275,117 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
     label: "bash",
     execute: async (_id, params, signal, onUpdate) => {
       const workspace = await workspacePromise;
+      const args = params as Record<string, any>;
+      const wantsBackground = args.background === true || args.service === true;
+      if (wantsBackground) {
+        if (workspace.kind !== "local" || !workspace.localRoot) {
+          return wrapResult(
+            {
+              content:
+                "[background commands are local-only for now; run this foreground on the SSH workspace]",
+              isError: true,
+            },
+            "bash",
+          );
+        }
+        const service = args.service === true;
+        const timeoutSec = Number(args.timeout ?? 3600);
+        if (!service && (!Number.isFinite(timeoutSec) || timeoutSec < 1 || timeoutSec > 3600)) {
+          return wrapResult(
+            { content: "background timeout must be between 1 and 3600 seconds", isError: true },
+            "bash",
+          );
+        }
+        const readyWhen =
+          typeof args.ready_when === "string" && args.ready_when.trim()
+            ? args.ready_when.trim()
+            : null;
+        const readyTimeoutSec = Math.min(
+          300,
+          Math.max(1, Number(args.ready_timeout ?? 30) || 30),
+        );
+        const pause = await getStoredSystemPauseState().catch(() => null);
+        if (pause?.active) {
+          return wrapResult(
+            { content: "[system paused: background jobs cannot start]", isError: true },
+            "bash",
+          );
+        }
+        try {
+          const job = await startSupervisorJob({
+            chat_id: chatId,
+            kind: service ? "service" : "command",
+            command: String(args.command ?? ""),
+            cwd: workspace.localRoot,
+            env: process.env,
+            timeout_ms: service ? undefined : Math.round(timeoutSec * 1000),
+            workspace: workspace.label,
+          });
+          let readiness: string | null = null;
+          if (readyWhen) {
+            try {
+              const result = await waitForSupervisorJob(
+                job.job_id,
+                readyWhen,
+                readyTimeoutSec * 1000,
+              );
+              if (result.matched) {
+                readiness = `Readiness: matched "${readyWhen}"${result.line ? `: ${result.line}` : ""}.`;
+              } else if (result.finished) {
+                readiness = `Readiness: the job exited before "${readyWhen}" appeared.`;
+              } else {
+                readiness = `Readiness: "${readyWhen}" did not appear within ${readyTimeoutSec}s; the job is still running.`;
+              }
+            } catch (error) {
+              readiness = `Readiness check failed: ${
+                error instanceof Error ? error.message : String(error)
+              }.`;
+            }
+          }
+          const output = job.output_paths[0] ? `\nOutput: ${job.output_paths[0]}` : "";
+          const label = service ? "service" : "background command";
+          return wrapResult(
+            {
+              content:
+                `Started ${label} ${job.job_id} (${job.state}).${output}` +
+                `${readiness ? `\n${readiness}` : ""}\n` +
+                "It runs without holding the turn. Check with jobs status/tail on a later turn; do not poll.",
+              isError: false,
+            },
+            "bash",
+          );
+        } catch (error) {
+          return wrapResult(
+            {
+              content: `Could not start background job: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              isError: true,
+            },
+            "bash",
+          );
+        }
+      }
+      const timeoutSec = Number(args.timeout ?? 30);
+      if (typeof args.ready_when === "string" && args.ready_when.trim()) {
+        return wrapResult(
+          { content: "ready_when requires background: true or service: true", isError: true },
+          "bash",
+        );
+      }
+      if (Number.isFinite(timeoutSec) && timeoutSec > 300) {
+        return wrapResult(
+          {
+            content:
+              "Foreground bash timeout is capped at 300s; use background: true for longer work.",
+            isError: true,
+          },
+          "bash",
+        );
+      }
       return withMutationLock(`workspace:${workspace.label}`, async () =>
         wrapResult(
-          await workspace.bash(params as Record<string, any>, signal, {
+          await workspace.bash(args, signal, {
             chatId,
             resultBudgetChars: getMaxToolResultChars(contextWindow),
             onUpdate: onUpdate
@@ -1313,59 +1494,158 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
     },
   });
 
+  const executeJobs = async (label: string, args: Record<string, any>) => {
+    const result = (content: string, isError = false) => wrapResult({ content, isError }, label);
+    const action = String(args.action || "list");
+    if (action === "list") {
+      const jobs = await listJobsForChat(chatId);
+      const kind = typeof args.kind === "string" ? args.kind : null;
+      const filtered = kind ? jobs.filter((job) => job.kind === kind) : jobs;
+      if (filtered.length === 0) return result("No background jobs for this chat.");
+      const note =
+        !isSupervisorConnected() &&
+        filtered.some((job) => job.source === "supervisor" && job.state === "running")
+          ? "\n[supervisor unavailable; showing last known state]"
+          : "";
+      return result(filtered.map(formatJobSummary).join("\n") + note);
+    }
+
+    const jobId = typeof args.jobId === "string" ? args.jobId.trim() : "";
+    if (!jobId) return result(`${label} ${action} requires jobId`, true);
+
+    if (action === "status") {
+      await refreshSupervisorJob(jobId);
+      const job = getJobView(jobId);
+      if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      return result(formatJobDetail(job));
+    }
+
+    if (action === "tail") {
+      const requested =
+        typeof args.lines === "number"
+          ? Math.min(200, Math.max(1, Math.floor(args.lines)))
+          : 50;
+      const job = getJobView(jobId);
+      if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      if (job.state === "running" && wasTailedRecently(chatId, jobId)) {
+        return result(
+          `[${jobId} is still running; output already tailed recently. End your turn and check again later — do not poll.]`,
+        );
+      }
+      let text = "";
+      if (job.source === "kernel") {
+        const live = tailKernelJob(chatId, jobId, requested);
+        if (live.found) text = live.text ?? "";
+      }
+      if (!text && job.output_paths[0]) {
+        try {
+          text = await readJobOutputTail(job.output_paths[0], requested);
+        } catch {
+          text = "";
+        }
+      }
+      if (job.source === "supervisor" && job.output_paths[1]) {
+        try {
+          const stderr = await readJobOutputTail(job.output_paths[1], requested);
+          if (stderr.trim()) text = `${text}${text ? "\n" : ""}${stderr}`;
+        } catch {
+          // No stderr file yet.
+        }
+      }
+      if (!text) {
+        text =
+          job.state === "running"
+            ? "(no output yet)"
+            : job.state === "lost"
+              ? "(no retained output; outcome unknown)"
+              : "(no output)";
+      }
+      if (job.state === "running") markTailed(chatId, jobId);
+      return result(`[${job.state}] ${jobId}\n${text.trimEnd()}`);
+    }
+
+    if (action === "kill") {
+      const job = getJobView(jobId);
+      if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      if (["finished", "stopped", "lost", "failed"].includes(job.state)) {
+        return result(`Job ${jobId} is already ${job.state}.`);
+      }
+      const force = args.force === true;
+      if (job.source === "supervisor") {
+        try {
+          const stopped = await stopSupervisorJob(jobId, force);
+          return result(
+            `Stopped ${jobId} (${stopped.stop_reason ?? stopped.state}).`,
+          );
+        } catch (error) {
+          return result(
+            `Could not stop ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
+            true,
+          );
+        }
+      }
+      const killed = killKernelJob(chatId, jobId, force);
+      if (!killed.ok) {
+        const hint =
+          killed.reason === "kernel wedged"
+            ? " Use force: true to kill the kernel (loses the namespace)."
+            : "";
+        return result(`Could not kill ${jobId}: ${killed.reason}.${hint}`, true);
+      }
+      return result(
+        force
+          ? `Killed the kernel for this chat; ${jobId} and the namespace are gone.`
+          : `Kill requested for ${jobId}; it ends at the next suspension point.`,
+      );
+    }
+
+    if (action === "wait_for") {
+      if (jobId) await refreshSupervisorJob(jobId);
+      const job = getJobView(jobId);
+      if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      if (job.source !== "supervisor") {
+        return result(
+          "wait_for applies to supervisor commands/services; use status/tail for a kernel cell.",
+          true,
+        );
+      }
+      const pattern = typeof args.pattern === "string" ? args.pattern.trim() : "";
+      if (!pattern) return result("wait_for requires pattern", true);
+      const timeoutSec = Math.min(300, Math.max(1, Number(args.timeout ?? 30) || 30));
+      try {
+        const waited = await waitForSupervisorJob(jobId, pattern, timeoutSec * 1000);
+        if (waited.matched) {
+          return result(
+            `Matched "${pattern}"${waited.line ? `: ${waited.line}` : ""}.`,
+          );
+        }
+        if (waited.finished) {
+          return result(`Job ${jobId} finished before "${pattern}" appeared.`);
+        }
+        return result(
+          `"${pattern}" did not appear within ${timeoutSec}s; the job is still running.`,
+        );
+      } catch (error) {
+        return result(
+          `wait_for failed: ${error instanceof Error ? error.message : String(error)}`,
+          true,
+        );
+      }
+    }
+
+    return result(`Unknown ${label} action: ${action}`, true);
+  };
+
+  tools.push({
+    ...JOBS_TOOL,
+    label: "jobs",
+    execute: async (_id, params) => executeJobs("jobs", params as Record<string, any>),
+  });
+
   tools.push({
     ...PYTHON_JOBS_TOOL,
     label: "python_jobs",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      const action = String(args.action || "list");
-      const result = (content: string, isError = false) => wrapResult({ content, isError }, "python_jobs");
-      if (action === "list") {
-        const jobs = listKernelJobs(chatId);
-        if (jobs.length === 0) return result("No background jobs for this chat.");
-        return result(
-          jobs
-            .map((job) => `${job.id}  ${job.status}  ${formatDurationMs(job.durationMs)}${job.timedOut ? "  (timed out)" : ""}`)
-            .join("\n"),
-        );
-      }
-      const jobId = typeof args.jobId === "string" ? args.jobId : "";
-      if (!jobId) return result(`python_jobs ${action} requires jobId`, true);
-      if (action === "status") {
-        const job = listKernelJobs(chatId).find((entry) => entry.id === jobId);
-        if (!job) return result(`Unknown job: ${jobId}`, true);
-        const spill = job.spillPath ? `\nFull output: ${job.spillPath}` : "";
-        return result(
-          `${job.id}  ${job.status}  ${formatDurationMs(job.durationMs)}${job.timedOut ? "  (timed out)" : ""}${spill}`,
-        );
-      }
-      if (action === "tail") {
-        const requested = typeof args.lines === "number" ? Math.min(200, Math.max(1, Math.floor(args.lines))) : 50;
-        const tail = tailKernelJob(chatId, jobId, requested);
-        if (!tail.found) return result(`Unknown job: ${jobId}`, true);
-        if (tail.status === "running" && wasTailedRecently(chatId, jobId)) {
-          return result(
-            `[${jobId} is still running; output already tailed recently. End your turn and check again later — do not poll.]`,
-          );
-        }
-        markTailed(chatId, jobId);
-        return result(`[${tail.status}] ${jobId}\n${tail.text?.trimEnd() || "(no output yet)"}`);
-      }
-      if (action === "kill") {
-        const force = args.force === true;
-        const killed = killKernelJob(chatId, jobId, force);
-        if (!killed.ok) {
-          const hint = killed.reason === "kernel wedged" ? " Use force: true to kill the kernel (loses the namespace)." : "";
-          return result(`Could not kill ${jobId}: ${killed.reason}.${hint}`, true);
-        }
-        return result(
-          force
-            ? `Killed the kernel for this chat; ${jobId} and the namespace are gone.`
-            : `Kill requested for ${jobId}; it ends at the next suspension point.`,
-        );
-      }
-      return result(`Unknown python_jobs action: ${action}`, true);
-    },
+    execute: async (_id, params) => executeJobs("python_jobs", params as Record<string, any>),
   });
 
   tools.push({

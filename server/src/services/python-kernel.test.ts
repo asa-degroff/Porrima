@@ -23,6 +23,7 @@ import {
   type KernelToolDispatcher,
 } from "./python-kernel.js";
 import { listSupervised } from "./process-supervisor.js";
+import { closeJobView, getJobView, initJobView } from "./job-view.js";
 
 // The manager consults the global system-pause setting before starting a
 // background job; mock it so tests never read or write the real settings DB.
@@ -42,6 +43,7 @@ let root: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "porrima-kernel-"));
   roots.push(root);
+  initJobView(join(root, "porrima.db"));
   process.env.PORRIMA_KERNEL_ROOT = root;
   // Fast interrupt escalation for tests (driver) and a matching wedge deadline
   // (manager).
@@ -56,6 +58,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await disposeAllKernels();
+  closeJobView();
   delete process.env.PORRIMA_KERNEL_ROOT;
   delete process.env.PORRIMA_KERNEL_L2_GRACE_MS;
   delete process.env.PORRIMA_KERNEL_WEDGE_GRACE_MS;
@@ -452,6 +455,24 @@ describe("python kernel manager", () => {
       expect(tail.text).toContain("job output");
     });
 
+    it("records the background cell in the job view", async () => {
+      const ack = kernel(
+        await run("job-view", "import time\ntime.sleep(0.2)\nprint('cell-view')", {
+          background: true,
+        }),
+      );
+      expect(ack.jobId).toBeTruthy();
+      await waitForJob("job-view", (jobs) => jobs[0]?.status === "done");
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline && getJobView(ack.jobId!)?.state !== "finished") {
+        await delay(50);
+      }
+      const view = getJobView(ack.jobId!);
+      expect(view?.state).toBe("finished");
+      expect(view?.source).toBe("kernel");
+      expect(view?.command).toContain("cell-view");
+    });
+
     it("times out a background job", async () => {
       const ack = kernel(await run("job-b", "import time\ntime.sleep(30)", { background: true, timeoutMs: 400 }));
       expect(ack.jobId).toBeTruthy();
@@ -508,7 +529,7 @@ describe("python kernel manager", () => {
       expect(rejected.isError).toBe(true);
       expect(rejected.content).toContain("foreground execution rejected");
       expect(rejected.content).toContain(jobId!);
-      expect(rejected.content).toContain("python_jobs");
+      expect(rejected.content).toContain("jobs");
       const settled = await waitForJob(
         "job-fg-a",
         (jobs) => jobs.every((job) => job.status !== "running"),

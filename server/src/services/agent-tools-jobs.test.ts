@@ -1,0 +1,192 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { JobsDaemonHandle } from "../jobs-daemon.js";
+
+const fake = vi.hoisted(() => ({ rootPath: "/tmp" }));
+
+vi.mock("./workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace.js")>();
+  const adapter = {
+    kind: "local" as const,
+    get label(): string {
+      return fake.rootPath;
+    },
+    get localRoot(): string {
+      return fake.rootPath;
+    },
+    async readFile() {
+      return { content: "", isError: false };
+    },
+    async bash() {
+      return { content: "foreground", isError: false };
+    },
+    async listFiles() {
+      return { content: "", isError: false };
+    },
+    async writeFile() {
+      return { content: "", isError: false };
+    },
+    async editFile() {
+      return { content: "", isError: false };
+    },
+    async runPython() {
+      throw new Error("run_python must not run in this test");
+    },
+  };
+  return { ...actual, getWorkspaceForProject: () => Promise.resolve(adapter as any) };
+});
+
+const effects = { onArtifact: () => {}, onVisual: () => {}, onAskUser: () => {} };
+const CHAT = "jobs-tools-chat";
+
+let dataDir = "";
+let jobsDir = "";
+let daemon: JobsDaemonHandle | null = null;
+let runtime: typeof import("./job-runtime.js") | null = null;
+
+async function setup() {
+  vi.resetModules();
+  dataDir = await mkdtemp(join(tmpdir(), "porrima-jobs-tools-"));
+  jobsDir = await mkdtemp(join(tmpdir(), "porrima-jobs-tools-plane-"));
+  fake.rootPath = dataDir;
+  process.env.PORRIMA_DATA_DIR = dataDir;
+  process.env.PORRIMA_JOBS_DIR = join(jobsDir, "jobs");
+  process.env.PORRIMA_JOBS_DB = join(jobsDir, "jobs.db");
+  process.env.PORRIMA_JOBS_SOCKET = join(jobsDir, "jobs.sock");
+  process.env.PORRIMA_JOBS_LOCK = join(jobsDir, "jobs.lock");
+
+  const { startJobsDaemon } = await import("../jobs-daemon.js");
+  daemon = await startJobsDaemon({
+    jobsDir: join(jobsDir, "jobs"),
+    dbPath: join(jobsDir, "jobs.db"),
+    socketPath: join(jobsDir, "jobs.sock"),
+    lockPath: join(jobsDir, "jobs.lock"),
+    journalPath: join(jobsDir, "jobs", "journal.jsonl"),
+  });
+  const agentTools = await import("./agent-tools.js");
+  runtime = await import("./job-runtime.js");
+  await runtime.initJobRuntime();
+  return { agentTools };
+}
+
+function resultText(result: { content: unknown }): string {
+  const content = result.content as Array<{ text?: string }>;
+  return content.map((part) => part?.text ?? "").join("\n");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+afterEach(async () => {
+  runtime?.shutdownJobRuntime();
+  runtime = null;
+  await daemon?.close().catch(() => {});
+  daemon = null;
+  for (const key of [
+    "PORRIMA_DATA_DIR",
+    "PORRIMA_JOBS_DIR",
+    "PORRIMA_JOBS_DB",
+    "PORRIMA_JOBS_SOCKET",
+    "PORRIMA_JOBS_LOCK",
+  ]) {
+    delete process.env[key];
+  }
+  if (dataDir) await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+  if (jobsDir) await rm(jobsDir, { recursive: true, force: true }).catch(() => {});
+  dataDir = "";
+  jobsDir = "";
+});
+
+describe("bash background + jobs tools", () => {
+  it("starts a supervisor command and lists, statuses, and tails it", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-start",
+      { command: "echo hi from supervisor", background: true },
+      signal,
+    );
+    const startedText = resultText(started);
+    expect(startedText).toContain("Started background command");
+    const jobId = startedText.match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    await delay(300);
+    const listed = resultText(await jobs.execute("call-list", { action: "list" }, signal));
+    expect(listed).toContain(jobId!);
+    expect(listed).toContain("command");
+
+    const status = resultText(
+      await jobs.execute("call-status", { action: "status", jobId }, signal),
+    );
+    expect(status).toContain("finished");
+
+    const tail = resultText(
+      await jobs.execute("call-tail", { action: "tail", jobId }, signal),
+    );
+    expect(tail).toContain("hi from supervisor");
+  });
+
+  it("waits for a service readiness line", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-ready",
+      {
+        command: "sleep 0.2; echo READY",
+        background: true,
+        ready_when: "READY",
+        ready_timeout: 5,
+      },
+      signal,
+    );
+    expect(resultText(started)).toContain('Readiness: matched "READY"');
+  });
+
+  it("starts and stops a service", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-service",
+      { command: "sleep 30", service: true },
+      signal,
+    );
+    const startedText = resultText(started);
+    expect(startedText).toContain("Started service");
+    const jobId = startedText.match(/Started service (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    const killed = resultText(
+      await jobs.execute("call-kill", { action: "kill", jobId, force: true }, signal),
+    );
+    expect(killed).toContain("Stopped");
+  });
+
+  it("stops every supervisor job for a chat", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const signal = new AbortController().signal;
+
+    await bash.execute("call-chat-stop", { command: "sleep 30", service: true }, signal);
+    await delay(100);
+    const count = await runtime!.stopChatSupervisorJobs(CHAT);
+    expect(count).toBe(1);
+    const rows = await runtime!.listJobsForChat(CHAT);
+    expect(rows.every((row) => row.state === "stopped")).toBe(true);
+  });
+});

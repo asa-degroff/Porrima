@@ -481,6 +481,7 @@ function formatArgs(toolName: string, args: Record<string, any>): string {
       return args.command?.slice(0, 100) || "";
     case "run_python":
       return args.code?.split("\n")[0]?.slice(0, 50) || "";
+    case "jobs":
     case "python_jobs":
       return [
         args.action,
@@ -515,6 +516,7 @@ function getToolIcon(name: string): ToolIconName {
     list_files: "list_files",
     bash: "bash",
     run_python: "run_python",
+    jobs: "python_jobs",
     python_jobs: "python_jobs",
     create_artifact: "create_artifact",
     update_artifact: "update_artifact",

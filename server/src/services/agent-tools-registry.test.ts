@@ -44,8 +44,10 @@ describe("agent tool registry", () => {
     expect(systemDefinitions).toContain("schedule_chat_message");
     expect(systemDefinitions).toContain("list_chats");
     // The persistent kernel runs in system chats, so its control surface must
-    // be present too — python_jobs is the only completion read between
-    // scheduled runs and the only model-reachable kill/wedge escape.
+    // be present too — jobs is the only completion read between scheduled runs
+    // and the only model-reachable kill/wedge escape. jobs is the general
+    // surface; python_jobs is the deprecated alias for one release.
+    expect(systemDefinitions).toContain("jobs");
     expect(systemDefinitions).toContain("python_jobs");
     expect((await getAgentToolDefinitions("agent")).map((tool) => tool.name)).toContain("schedule_reminder");
     expect((await getAgentToolDefinitions("agent")).map((tool) => tool.name)).toContain("schedule_chat_message");
@@ -57,6 +59,7 @@ describe("agent tool registry", () => {
 
     expect(byName.get("write_file")?.executionMode).toBe("sequential");
     expect(byName.get("run_python")?.executionMode).toBe("sequential");
+    expect(byName.get("jobs")?.executionMode).toBe("sequential");
     expect(byName.get("web_fetch")?.executionMode).toBe("sequential");
     expect(byName.get("read_file")?.executionMode).toBeUndefined();
     expect(byName.get("web_search")?.executionMode).toBeUndefined();
