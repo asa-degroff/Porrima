@@ -13,6 +13,8 @@ import {
   markChatJobsStopped,
   markJobViewFailed,
   markJobViewLost,
+  markJobNoticeAppended,
+  markJobNoticePending,
   markKernelJobsLostAtStartup,
   markSupervisorJobsProbed,
   pruneTerminalJobView,
@@ -219,6 +221,50 @@ describe("job view", () => {
     // chat-2 to declare its service lost.
     reconcileSupervisorJobs([], { chatId: "chat-1" });
     expect(getJobView("sup-6")?.state).toBe("running");
+  });
+
+  it("withdraws a queued notice when an authoritative report says the job is live", () => {
+    recordSupervisorStarting({
+      jobId: "sup-notice",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 30",
+      cwd: "/tmp",
+    });
+    markJobViewLost("sup-notice", "supervisor-no-row");
+    markJobNoticePending("sup-notice");
+    expect(getJobView("sup-notice")?.notice_state).toBe("pending");
+
+    // The row was queued to wake the chat with "outcome unknown". A supervisor
+    // report that the job is running makes that claim false, so the wake has
+    // to be withdrawn before it is delivered.
+    upsertSupervisorJob({ job: supervisorJob("sup-notice", "running") }, { authoritative: true });
+    const row = getJobView("sup-notice");
+    expect(row?.state).toBe("running");
+    expect(row?.notice_state).toBe("none");
+    expect(row?.notice_group).toBeNull();
+    expect(row?.notice_message_id).toBeNull();
+  });
+
+  it("keeps an appended notice as the record it was when the row is corrected", () => {
+    recordSupervisorStarting({
+      jobId: "sup-appended",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 30",
+      cwd: "/tmp",
+    });
+    markJobViewLost("sup-appended", "start-unknown");
+    markJobNoticePending("sup-appended");
+    markJobNoticeAppended(["sup-appended"], "group-1", "msg-1");
+
+    upsertSupervisorJob({ job: supervisorJob("sup-appended", "running") }, { authoritative: true });
+    const row = getJobView("sup-appended");
+    expect(row?.state).toBe("running");
+    // The notice row already exists in the transcript. Rewriting its state
+    // would orphan it, and the claim was true when it was written.
+    expect(row?.notice_state).toBe("appended");
+    expect(row?.notice_message_id).toBe("msg-1");
   });
 
   it("sweeps uncertain rows in rotating batches instead of re-asking the newest", () => {

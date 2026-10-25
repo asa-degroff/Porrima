@@ -176,7 +176,10 @@ Ownership rules:
 - The supervisor wins for command/service execution state; the server wins for notice state.
 - `lost` and `failed` are uncertainty/server-side start states, not execution outcomes. An
   authoritative supervisor list or `get` may correct them to `running`/`finished`; `finished`
-  and `stopped` never regress to a non-terminal state from an event.
+  and `stopped` never regress to a non-terminal state from an event. Correcting a row to a live
+  state also withdraws a notice that is still `pending` for it — the notice claims the outcome
+  is unknown, and the view no longer believes that. A notice already `appended` stays as the
+  record it truthfully was when it was written.
 - Cell rows are written by the server's kernel manager (`source="kernel"`); the supervisor
   never sees them.
 - On conflict, `job_view` is a mirror, not a second authority. The server reconciles from the

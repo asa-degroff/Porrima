@@ -240,9 +240,30 @@ export function upsertSupervisorJob(
       (current.state === "lost" || current.state === "failed") &&
       job.state !== current.state
     ) {
-      getDb()
-        .prepare("UPDATE job_view SET state = ?, updated_at = ? WHERE job_id = ?")
-        .run(job.state, now, job.id);
+      // A queued notice claims the outcome is unknown. If the supervisor
+      // reports the job live, the view no longer believes that claim, so the
+      // pending wake is withdrawn before it can be delivered. A notice already
+      // `appended` is in the transcript and stays as the record it truthfully
+      // was at the time.
+      const reportsLive = job.state === "running" || job.state === "starting";
+      if (reportsLive) {
+        getDb()
+          .prepare(
+            `UPDATE job_view SET state = ?, updated_at = ?,
+             notice_state = CASE WHEN notice_state = 'pending'
+               THEN 'none' ELSE notice_state END,
+             notice_group = CASE WHEN notice_state = 'pending'
+               THEN NULL ELSE notice_group END,
+             notice_message_id = CASE WHEN notice_state = 'pending'
+               THEN NULL ELSE notice_message_id END
+             WHERE job_id = ?`,
+          )
+          .run(job.state, now, job.id);
+      } else {
+        getDb()
+          .prepare("UPDATE job_view SET state = ?, updated_at = ? WHERE job_id = ?")
+          .run(job.state, now, job.id);
+      }
     }
   }
   return getJobView(job.id)!;
