@@ -2538,7 +2538,9 @@ export function getChatTitle(chatId: string): string | null {
 function computeChatPreview(messages: ChatMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (!msg._isCompactionSummary && msg.role !== "system") {
+    // Job notices are machine announcements, not conversation text; a sidebar
+    // preview should show the last real message instead.
+    if (!msg._isCompactionSummary && !msg._isJobNotice && msg.role !== "system") {
       return extractPreviewText(msg);
     }
   }

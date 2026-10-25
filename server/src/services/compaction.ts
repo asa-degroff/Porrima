@@ -1745,7 +1745,7 @@ export function buildArchivedTurnRecap(
     if (m._thinkingPromoted) continue;
     if (m.role !== "user" && m.role !== "assistant") continue;
     if (m._isSystemMessage || m._isMidTurnCompaction) continue;
-    if (m._isAutomationMessage || m._isSynthesisMessage) continue;
+    if (m._isAutomationMessage || m._isSynthesisMessage || m._isJobNotice) continue;
     const text = (m.content ?? "").trim();
     if (!text) continue;
     if (m.role === "user") {

@@ -32,7 +32,7 @@ import {
   stopSupervisorJob,
   waitForSupervisorJob,
 } from "./job-runtime.js";
-import { getJobView, type JobViewRow } from "./job-view.js";
+import { getJobView, suppressJobNotices, type JobViewRow } from "./job-view.js";
 import { v4 as uuid } from "uuid";
 import { getToolResultImageDir, saveToolResultImage } from "./tool-result-image-storage.js";
 import type { Artifact, BrowserFrameEvent, InlineVisual, Project } from "../types.js";
@@ -243,6 +243,10 @@ function formatJobDetail(job: JobViewRow): string {
     lines.push("outcome unknown; check side effects before re-running.");
   }
   return lines.join("\n");
+}
+
+function isTerminalJobState(state: string): boolean {
+  return state === "finished" || state === "stopped" || state === "lost" || state === "failed";
 }
 
 // In-turn polling guard: a second tail of the same still-running job within
@@ -1506,6 +1510,9 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       const kind = typeof args.kind === "string" ? args.kind : null;
       const filtered = kind ? jobs.filter((job) => job.kind === kind) : jobs;
       if (filtered.length === 0) return result("No background jobs for this chat.");
+      suppressJobNotices(
+        filtered.filter((job) => isTerminalJobState(job.state)).map((job) => job.job_id),
+      );
       const note =
         !isSupervisorConnected() &&
         filtered.some((job) => job.source === "supervisor" && job.state === "running")
@@ -1521,6 +1528,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       await refreshSupervisorJob(jobId);
       const job = getJobView(jobId);
       if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      if (isTerminalJobState(job.state)) suppressJobNotices([jobId]);
       return result(formatJobDetail(job));
     }
 
@@ -1531,6 +1539,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
           : 50;
       const job = getJobView(jobId);
       if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
+      if (isTerminalJobState(job.state)) suppressJobNotices([jobId]);
       if (job.state === "running" && wasTailedRecently(chatId, jobId)) {
         return result(
           `[${jobId} is still running; output already tailed recently. End your turn and check again later — do not poll.]`,
@@ -1572,12 +1581,14 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       const job = getJobView(jobId);
       if (!job || job.chat_id !== chatId) return result(`Unknown job: ${jobId}`, true);
       if (["finished", "stopped", "lost", "failed"].includes(job.state)) {
+        suppressJobNotices([jobId]);
         return result(`Job ${jobId} is already ${job.state}.`);
       }
       const force = args.force === true;
       if (job.source === "supervisor") {
         try {
           const stopped = await stopSupervisorJob(jobId, force);
+          suppressJobNotices([jobId]);
           if (stopped.state === "lost") {
             return result(
               `Stop requested for ${jobId}, but the process group did not confirm death; outcome unknown.`,
@@ -1602,6 +1613,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             : "";
         return result(`Could not kill ${jobId}: ${killed.reason}.${hint}`, true);
       }
+      suppressJobNotices([jobId]);
       return result(
         force
           ? `Killed the kernel for this chat; ${jobId} and the namespace are gone.`

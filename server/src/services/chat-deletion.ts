@@ -9,6 +9,7 @@ import { clearLlmRequests } from "./request-log.js";
 import { invalidateKvSnapshot } from "./kv-snapshot.js";
 import { disposeKernel } from "./python-kernel.js";
 import { stopChatSupervisorJobs } from "./job-runtime.js";
+import { setNoticesSuppressedForChat } from "./job-view.js";
 
 /**
  * Clear process-local work that can continue after the chat row is deleted.
@@ -31,6 +32,8 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   markChatInactive(chatId);
   await closeBrowserSession(chatId).catch(() => {});
   await cleanupChat(chatId).catch(() => {});
+  // No completion notice may outlive the chat that owns it.
+  setNoticesSuppressedForChat(chatId);
   await disposeKernel(chatId, { removeState: true }).catch(() => {});
   // Supervisor-owned commands/services are a separate process plane: stop the
   // groups, then mark their view rows (chat-deleted). A missing supervisor

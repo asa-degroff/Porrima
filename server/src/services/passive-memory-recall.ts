@@ -120,8 +120,11 @@ function activeRecallWindow(messages: ChatMessage[]): ChatMessage[] {
   return latestUserIndex >= 0 ? messages.slice(latestUserIndex) : messages;
 }
 
-function isAutomationUserPrompt(message: ChatMessage): boolean {
-  return message.role === "user" && Boolean(message._isAutomationMessage);
+function isSyntheticUserPrompt(message: ChatMessage): boolean {
+  return (
+    message.role === "user" &&
+    Boolean(message._isAutomationMessage || message._isJobNotice)
+  );
 }
 
 export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000): string {
@@ -146,7 +149,7 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
   const parts: string[] = [];
   for (const message of recent) {
     if (message.role === "user") {
-      if (isAutomationUserPrompt(message)) continue;
+      if (isSyntheticUserPrompt(message)) continue;
       const content = scrubOperationalNoise(clampText(message.content, 1200));
       if (content) parts.push(content);
       continue;
@@ -217,7 +220,7 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
   // The user's original request has already been searched for by the initial
   // retrieval and early passive recall turns. Deep into the run, trajectory matters more.
   const latestUser = scrubOperationalNoise(
-    [...active].reverse().find((message) => message.role === "user" && !isAutomationUserPrompt(message))?.content,
+    [...active].reverse().find((message) => message.role === "user" && !isSyntheticUserPrompt(message))?.content,
   );
 
   const trajectoryLength = (agentThinking?.trim().length ?? 0) + (toolCalls?.length ?? 0) + (latestAssistantContent?.length ?? 0);

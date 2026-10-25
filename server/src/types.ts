@@ -38,6 +38,26 @@ export interface MessageSegment {
   visual?: InlineVisual;
 }
 
+/** One job summarized by a server-generated completion notice row. */
+export interface JobNoticeJob {
+  id: string;
+  kind: "cell" | "command" | "service" | "remote";
+  state: string;
+  exitCode?: number | null;
+  signal?: string | null;
+  stopReason?: string | null;
+  command?: string | null;
+  outputPath?: string | null;
+}
+
+/** Structured payload behind a `_isJobNotice` row: one display line for the
+ *  UI and the model text in `content`, both derived from the same jobs. */
+export interface JobNoticeMetadata {
+  group: string;
+  jobs: JobNoticeJob[];
+  display: string;
+}
+
 /** Attribution carried on a cross-chat post row. */
 export interface CrossChatPostMetadata {
   fromChatId: string;
@@ -138,6 +158,11 @@ export interface ChatMessage {
   _model?: string;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Server-generated background-job completion notice. Not user speech:
+   *  extraction skips it, the UI renders it as a notice, and the content is a
+   *  bounded model-facing announcement rather than the job output. */
+  _isJobNotice?: boolean;
+  _jobNotice?: JobNoticeMetadata;
   /** Hidden system row containing passively recalled memories. */
   _isPassiveMemoryRecall?: boolean;
   _recalledMemoryIds?: string[];

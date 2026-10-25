@@ -175,6 +175,23 @@ export interface ImageAttachment {
   thumbUrl?: string;  // thumbnail URL (e.g. /api/user-images/:id/thumb)
 }
 
+export interface JobNoticeJob {
+  id: string;
+  kind: "cell" | "command" | "service" | "remote";
+  state: string;
+  exitCode?: number | null;
+  signal?: string | null;
+  stopReason?: string | null;
+  command?: string | null;
+  outputPath?: string | null;
+}
+
+export interface JobNoticeMetadata {
+  group: string;
+  jobs: JobNoticeJob[];
+  display: string;
+}
+
 export interface ChatMessage {
   /** Absolute server row sequence for stable edit/retry targeting. */
   _rowSequence?: number;
@@ -212,6 +229,9 @@ export interface ChatMessage {
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Server-generated background-job completion notice. Rendered as a notice, not user speech. */
+  _isJobNotice?: boolean;
+  _jobNotice?: JobNoticeMetadata;
   /** Hidden system row should be merged into the next user message, not replayed as prefix history. */
   _mergeIntoNextUserMessage?: boolean;
   _isMidTurnCompaction?: boolean;

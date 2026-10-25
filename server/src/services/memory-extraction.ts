@@ -3987,6 +3987,7 @@ export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): b
     // and stripped by an earlier compaction. Only the latter are skipped.
     (!message._outOfContext || message._isSplitHead === true) &&
     !message._isSynthesisMessage &&
+    !message._isJobNotice &&
     !isSyntheticAutomationPrompt(message) &&
     message.role !== "system"
   );
@@ -4520,6 +4521,8 @@ interface IndexedChatMessage {
 export function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
   // Skip persisted memory-delta messages — they're already memories.
   if (message.role === "system") return false;
+  // Server-generated job notices are announcements, not user speech.
+  if (message._isJobNotice) return false;
   // Skip synthetic automation trigger prompts — boilerplate re-sent every
   // run; memorizing them re-extracts the scheduler config as "facts".
   if (isSyntheticAutomationPrompt(message)) return false;

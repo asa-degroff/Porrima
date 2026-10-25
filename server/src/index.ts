@@ -88,6 +88,12 @@ const gracefulShutdown = async () => {
   } catch {
     // Non-fatal
   }
+  try {
+    const { shutdownJobNotices } = await import("./services/job-notices.js");
+    shutdownJobNotices();
+  } catch {
+    // Non-fatal
+  }
   await destroyAllMasters();
   // Shut down TTS workers
   try {
@@ -307,6 +313,12 @@ try {
   await initJobRuntime();
 } catch (error) {
   console.warn("[jobs] runtime init failed:", error);
+}
+try {
+  const { initJobNotices } = await import("./services/job-notices.js");
+  initJobNotices();
+} catch (error) {
+  console.warn("[jobs] notice scheduler init failed:", error);
 }
 
 // TTS worker is lazily initialized on first TTS request via getWorker().

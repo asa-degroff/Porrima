@@ -95,6 +95,15 @@ export async function ensureSupervisorConnection(): Promise<boolean> {
         unsubscribe = await c.subscribe((event) => {
           try {
             upsertSupervisorJob({ job: event.job });
+            if (
+              event.event === "job_finished" ||
+              event.event === "job_lost" ||
+              event.event === "job_stopped"
+            ) {
+              void import("./job-notices.js")
+                .then((notices) => notices.scheduleNoticeTick())
+                .catch(() => {});
+            }
           } catch (error) {
             console.warn("[jobs] failed to mirror supervisor event:", error);
           }
@@ -229,6 +238,9 @@ export async function startSupervisorJob(input: StartSupervisorJobInput): Promis
     }
     if (lookupFailed) {
       markJobViewLost(jobId, "start-unknown");
+      void import("./job-notices.js")
+        .then((notices) => notices.scheduleNoticeTick())
+        .catch(() => {});
       throw new Error(
         `job supervisor start outcome unknown for ${jobId}; check jobs status`,
       );

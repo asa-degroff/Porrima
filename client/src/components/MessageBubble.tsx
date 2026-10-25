@@ -267,6 +267,24 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
 
+  if (message._isJobNotice) {
+    const display =
+      message._jobNotice?.display ??
+      message.content.split("\n").find((line) => line.trim()) ??
+      "Background job update";
+    return (
+      <div className="my-2 flex justify-center px-4" data-job-notice>
+        <div
+          className="max-w-full rounded-lg border border-sky-400/15 bg-sky-500/6 px-3 py-2 text-xs text-sky-200/75"
+          title={message.content}
+        >
+          <span className="mr-1.5 font-medium text-sky-300/80">Job</span>
+          {display}
+        </div>
+      </div>
+    );
+  }
+
   // Render compaction indicator for summary messages
   if (message._isCompactionSummary && message._compactedMessageCount) {
     return (

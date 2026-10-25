@@ -519,9 +519,150 @@ export function setNoticesSuppressedForChat(chatId: string): void {
   getDb()
     .prepare(
       `UPDATE job_view SET notice_state = 'suppressed', updated_at = ?
-       WHERE chat_id = ? AND notice_state IN ('pending', 'appended')`,
+       WHERE chat_id = ? AND notice_state IN ('none', 'pending', 'appended')`,
     )
     .run(new Date().toISOString(), chatId);
+}
+
+/** Terminal rows not yet evaluated for a completion notice. */
+export function listJobNoticeCandidates(limit = 200): JobViewRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM job_view
+       WHERE notice_state = 'none'
+         AND state IN ('finished', 'stopped', 'lost', 'failed')
+       ORDER BY COALESCE(ended_at, created_at) ASC LIMIT ?`,
+    )
+    .all(Math.max(1, Math.min(limit, 1000))) as JobViewDbRow[];
+  return rows.map(rowToView);
+}
+
+export function listPendingJobNotices(chatId?: string, limit = 200): JobViewRow[] {
+  const rows = chatId
+    ? (getDb()
+        .prepare(
+          `SELECT * FROM job_view
+           WHERE notice_state = 'pending' AND chat_id = ?
+           ORDER BY COALESCE(ended_at, created_at) ASC LIMIT ?`,
+        )
+        .all(chatId, Math.max(1, Math.min(limit, 1000))) as JobViewDbRow[])
+    : (getDb()
+        .prepare(
+          `SELECT * FROM job_view
+           WHERE notice_state = 'pending'
+           ORDER BY COALESCE(ended_at, created_at) ASC LIMIT ?`,
+        )
+        .all(Math.max(1, Math.min(limit, 1000))) as JobViewDbRow[]);
+  return rows.map(rowToView);
+}
+
+export function listChatsWithPendingNotices(): string[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT chat_id FROM job_view WHERE notice_state = 'pending'`,
+    )
+    .all() as Array<{ chat_id: string }>;
+  return rows.map((row) => row.chat_id);
+}
+
+export function listAppendedJobNotices(): JobViewRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM job_view WHERE notice_state = 'appended'
+       ORDER BY COALESCE(ended_at, created_at) ASC LIMIT 500`,
+    )
+    .all() as JobViewDbRow[];
+  return rows.map(rowToView);
+}
+
+/** Promote an evaluated terminal row to the pending queue (once). */
+export function markJobNoticePending(jobId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE job_view SET notice_state = 'pending', updated_at = ?
+       WHERE job_id = ? AND notice_state = 'none'`,
+    )
+    .run(new Date().toISOString(), jobId);
+}
+
+/** Consumed/read or ineligible: never wake for these rows. */
+export function suppressJobNotices(jobIds: string[]): number {
+  if (jobIds.length === 0) return 0;
+  const ids = [...new Set(jobIds)].slice(0, 300);
+  const placeholders = ids.map(() => "?").join(", ");
+  const info = getDb()
+    .prepare(
+      `UPDATE job_view SET notice_state = 'suppressed', updated_at = ?
+       WHERE job_id IN (${placeholders})
+         AND notice_state IN ('none', 'pending', 'appended')`,
+    )
+    .run(new Date().toISOString(), ...ids);
+  return info.changes;
+}
+
+/**
+ * Persist the pre-minted notice row identity while rows are still `pending`.
+ *
+ * The append into `app.db` and this update cannot share a transaction. Writing
+ * the id first makes a crash between them recoverable: the retry sees the same
+ * id, skips the append when that row already exists, and never lands a second
+ * notice for the same batch.
+ */
+export function prepareJobNoticeDelivery(
+  jobIds: string[],
+  group: string,
+  messageId: string,
+): number {
+  if (jobIds.length === 0) return 0;
+  const ids = [...new Set(jobIds)].slice(0, 100);
+  const placeholders = ids.map(() => "?").join(", ");
+  const info = getDb()
+    .prepare(
+      `UPDATE job_view SET notice_group = ?, notice_message_id = ?, updated_at = ?
+       WHERE job_id IN (${placeholders}) AND notice_state = 'pending'
+         AND (notice_message_id IS NULL OR notice_message_id = ?)`,
+    )
+    .run(group, messageId, new Date().toISOString(), ...ids, messageId);
+  return info.changes;
+}
+
+export function markJobNoticeAppended(
+  jobIds: string[],
+  group: string,
+  messageId: string,
+): number {
+  if (jobIds.length === 0) return 0;
+  const ids = [...new Set(jobIds)].slice(0, 100);
+  const placeholders = ids.map(() => "?").join(", ");
+  const info = getDb()
+    .prepare(
+      `UPDATE job_view SET notice_state = 'appended', notice_group = ?,
+       notice_message_id = ?, updated_at = ?
+       WHERE job_id IN (${placeholders}) AND notice_state = 'pending'`,
+    )
+    .run(group, messageId, new Date().toISOString(), ...ids);
+  return info.changes;
+}
+
+export function markJobNoticeDelivered(group: string): number {
+  const info = getDb()
+    .prepare(
+      `UPDATE job_view SET notice_state = 'delivered', updated_at = ?
+       WHERE notice_group = ? AND notice_state IN ('pending', 'appended')`,
+    )
+    .run(new Date().toISOString(), group);
+  return info.changes;
+}
+
+/** Re-open an appended row whose message was not found on restart. */
+export function reopenJobNotice(jobId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE job_view SET notice_state = 'pending', notice_group = NULL,
+       notice_message_id = NULL, updated_at = ?
+       WHERE job_id = ? AND notice_state = 'appended'`,
+    )
+    .run(new Date().toISOString(), jobId);
 }
 
 interface JobViewDbRow {
