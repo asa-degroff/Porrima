@@ -346,6 +346,71 @@ describe("job supervisor", () => {
     expect(journal?.active).toBe(true);
   });
 
+  it("settles an unconfirmed stop once the wrapper records its own ending", async () => {
+    const harness = await makeHarness(undefined, async () => false);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 1; echo done" }),
+    );
+    await delay(50);
+    const stopped = await harness.supervisor.stop(job.id, { force: true });
+    expect(stopped.state).toBe("lost");
+    expect(stopped.stop_reason).toBe("user-force");
+
+    // The group was never killed, so the command runs to completion and the
+    // wrapper writes its status file. The ledger follows that evidence rather
+    // than carrying the uncertainty forever.
+    const settled = await waitForState(harness, job.id, "finished", 8000);
+    expect(settled.exit_code).toBe(0);
+    expect(settled.duration_ms).not.toBeNull();
+    expect(settled.duration_ms!).toBeGreaterThan(0);
+    // The uncertainty is not erased: it survives as the reason the row was
+    // marked lost, next to the outcome the wrapper proved.
+    expect(settled.stop_reason).toBe("user-force");
+    const journal = latestJournalRecords(harness.journalPath).get(job.pid!);
+    expect(journal?.active).toBeFalsy();
+  });
+
+  it("settles a lost row from its status file when a supervisor restarts", async () => {
+    const harness = await makeHarness(undefined, async () => false);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 1; echo done" }),
+    );
+    await delay(50);
+    expect((await harness.supervisor.stop(job.id, { force: true })).state).toBe("lost");
+    harness.supervisor.close();
+
+    // The untouched group runs on and records its own ending while no
+    // supervisor is watching it.
+    const deadline = Date.now() + 6000;
+    for (;;) {
+      try {
+        await access(job.status_path);
+        break;
+      } catch {
+        if (Date.now() > deadline) throw new Error("status file never appeared");
+        await delay(50);
+      }
+    }
+
+    const store2 = JobStore.open(harness.dbPath);
+    const supervisor2 = new JobSupervisor({
+      store: store2,
+      jobsDir: harness.jobsDir,
+      journalPath: harness.journalPath,
+      bootId: harness.bootId,
+    });
+    cleanups.push(async () => {
+      supervisor2.close();
+      store2.close();
+    });
+    await supervisor2.recover();
+
+    const row = store2.get(job.id);
+    expect(row?.state).toBe("finished");
+    expect(row?.exit_code).toBe(0);
+    expect(row?.stop_reason).toBe("user-force");
+  });
+
   it("prunes old output before its ledger row", async () => {
     const harness = await makeHarness();
     const job = await harness.supervisor.start(
@@ -462,5 +527,4 @@ describe("job supervisor", () => {
     });
     await expect(access(finished.stdout_path)).resolves.toBeUndefined();
   });
-
 });

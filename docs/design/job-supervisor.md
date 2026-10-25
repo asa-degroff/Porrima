@@ -278,7 +278,9 @@ back to a non-durable child, because that would make durability unpredictable.
   running the command, waits for it, and writes `status.json` atomically (`exit_code`,
   `signal`, `started_at`, `ended_at`, `duration_ms`) before exiting. If the supervisor and the
   server are both down when the command finishes, the status file still records the outcome.
-  `lost` is reserved for a group that vanished without a status file.
+  `lost` is reserved for a group that vanished without a status file. A `lost` row is not
+  final: when its status file appears later, the row settles to the outcome the file records,
+  and the earlier uncertainty survives in `stop_reason` rather than being erased.
 - **File-backed stdio.** The supervisor opens `stdout.log` and `stderr.log` and passes the file
   descriptors to the child (`stdio: ["ignore", stdoutFd, stderrFd]`), with `detached: true`.
   Output must never be a pipe back to the supervisor or the server: a detached command writing
@@ -350,7 +352,11 @@ Lifecycle behavior:
   restarts the daemon.
 - An unconfirmed stop or daemonized-group kill marks the row `lost` and keeps its journal record
   active. Recovery retries the reap with the recorded identity; the group is never reported as
-  `stopped`/`finished` while it may still be alive.
+  `stopped`/`finished` while it may still be alive. Such a row stays held and re-observed: when
+  its status file appears and the group is gone, the row settles to the recorded outcome; when
+  the group is gone with no status file, `lost` stands and the hold is released; when the wrapper
+  ended but the group outlived it, the group is ended and the row settles as `daemonized`. A
+  supervisor restart settles `lost` rows that have status files before reaping decides anything.
 - Upgrade: restart the daemon; it adopts; the server reconnects and reconciles. Restart the
   daemon before the server so the new server sees an adopting supervisor, not a gap.
 - Two daemons: the singleton lock. Two *servers* are prevented by the server's data-dir

@@ -228,7 +228,11 @@ export class JobStore {
     return this.getOrThrow(id);
   }
 
-  markLost(id: string, endedAt = new Date().toISOString()): JobRecord {
+  markLost(
+    id: string,
+    endedAt = new Date().toISOString(),
+    reason?: JobStopReason,
+  ): JobRecord {
     const row = this.get(id);
     const started = row?.started_at ? Date.parse(row.started_at) : NaN;
     const ended = Date.parse(endedAt);
@@ -236,10 +240,11 @@ export class JobStore {
       Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : null;
     this.db
       .prepare(
-        `UPDATE jobs SET state = 'lost', ended_at = ?, duration_ms = ?, updated_at = ?
+        `UPDATE jobs SET state = 'lost', stop_reason = COALESCE(?, stop_reason),
+         ended_at = ?, duration_ms = ?, updated_at = ?
          WHERE id = ?`,
       )
-      .run(endedAt, duration, new Date().toISOString(), id);
+      .run(reason ?? null, endedAt, duration, new Date().toISOString(), id);
     return this.getOrThrow(id);
   }
 

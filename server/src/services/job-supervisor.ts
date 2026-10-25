@@ -499,6 +499,19 @@ export class JobSupervisor extends EventEmitter {
       this.recoverFromStatus(row);
     }
 
+    // A row already declared `lost` can still acquire a status file: the
+    // wrapper outlived our watching and wrote its own ending. Settle those
+    // before reaping decides anything, so a proven outcome is never carried
+    // forward as uncertainty. Groups that are still alive are left to the reap,
+    // which owns them.
+    for (const row of this.store.list({ states: ["lost"], limit: 1000 })) {
+      const status = readStatusFile(row.status_path);
+      if (!status) continue;
+      const pgid = row.pgid ?? row.pid;
+      if (pgid != null && isGroupAlive(pgid)) continue;
+      this.finishFromStatus(row, status, row.stop_reason);
+    }
+
     await this.reapUnclaimedJournalGroups();
     this.ensurePoll();
     this.pruneJournal();
@@ -614,6 +627,7 @@ export class JobSupervisor extends EventEmitter {
       const lost = this.store.markLost(job.id);
       if (spawnIdentity) this.journalHolds.add(job.id);
       this.emitJob("job_lost", lost);
+      this.ensurePoll();
       throw new Error(
         `job ${job.id} started but its process group did not confirm death; outcome unknown`,
       );
@@ -643,12 +657,17 @@ export class JobSupervisor extends EventEmitter {
         // The process group did not confirm death. Do not claim `stopped`:
         // keep the journal record active for recovery and report the outcome
         // as unknown.
-        const lost = this.store.markLost(id);
+        const lost = this.store.markLost(
+          id,
+          undefined,
+          opts.reason ?? (opts.force ? "user-force" : "user"),
+        );
         this.journalHolds.add(id);
         this.children.delete(id);
         this.adopted.delete(id);
         this.clearTimeout(id);
         this.emitJob("job_lost", lost);
+        this.ensurePoll();
         this.pruneJournal();
         return lost;
       }
@@ -772,6 +791,7 @@ export class JobSupervisor extends EventEmitter {
         const lost = this.store.markLost(id);
         this.journalHolds.add(id);
         this.emitJob("job_lost", lost);
+        this.ensurePoll();
         return;
       }
       daemonized = true;
@@ -811,17 +831,7 @@ export class JobSupervisor extends EventEmitter {
   private recoverFromStatus(row: JobRecord): void {
     const status = readStatusFile(row.status_path);
     if (status) {
-      const endedAt = status.ended_at ?? new Date().toISOString();
-      const duration =
-        status.duration_ms ?? durationBetween(row.started_at, endedAt);
-      const updated = this.store.finish(row.id, {
-        exit_code: status.exit_code ?? null,
-        signal: status.signal ?? null,
-        ended_at: endedAt,
-        duration_ms: duration,
-      });
-      this.appendJournalInactive(row.id);
-      this.emitJob("job_finished", updated);
+      this.finishFromStatus(row, status, row.stop_reason);
       return;
     }
     if (row.state === "starting") {
@@ -831,6 +841,89 @@ export class JobSupervisor extends EventEmitter {
       return;
     }
     this.markLost(row);
+  }
+
+  /**
+   * Settle a row to the outcome its wrapper recorded. `priorReason` is carried
+   * through: the state is what the status file proves, and the reason keeps the
+   * record of how the row became uncertain in the first place.
+   */
+  private finishFromStatus(
+    row: JobRecord,
+    status: JobStatusFile,
+    priorReason: JobStopReason | null = null,
+  ): JobRecord {
+    const endedAt = status.ended_at ?? new Date().toISOString();
+    const duration =
+      status.duration_ms ?? durationBetween(row.started_at, endedAt);
+    const updated = this.store.finish(row.id, {
+      exit_code: status.exit_code ?? null,
+      signal: status.signal ?? null,
+      ended_at: endedAt,
+      duration_ms: duration,
+      stop_reason: priorReason,
+    });
+    this.appendJournalInactive(row.id);
+    this.emitJob("job_finished", updated);
+    return updated;
+  }
+
+  /**
+   * A row marked `lost` because a kill did not confirm is not a final state.
+   * The group was alive and un-killable at that moment, so its wrapper keeps
+   * running and will record its own ending — and the status file is the
+   * authority the design grants it. When it appears, the row settles to the
+   * outcome it records, with the earlier uncertainty preserved in
+   * `stop_reason`. Without this sweep the row stays `lost` forever, which is a
+   * lie with a delay.
+   */
+  private settleUnconfirmedHolds(): void {
+    if (this.journalHolds.size === 0) return;
+    let settled = false;
+    for (const id of [...this.journalHolds]) {
+      if (this.closed) return;
+      const row = this.store.get(id);
+      if (!row) {
+        this.journalHolds.delete(id);
+        continue;
+      }
+      if (row.state !== "lost") {
+        // Some other path already settled it; the hold has nothing left to do.
+        this.journalHolds.delete(id);
+        continue;
+      }
+      const pgid = row.pgid ?? row.pid;
+      const status = readStatusFile(row.status_path);
+      if (status) {
+        if (pgid != null && isGroupAlive(pgid)) {
+          // The wrapper ended but the group outlived it: same policy as a live
+          // child exit — the group is ours to end, and `daemonized` says so.
+          void this.killGroup(pgid, { graceMs: 1000 })
+            .then((killed) => {
+              if (this.closed || !killed) return; // still unkillable: ask again later
+              this.finishFromStatus(row, status, "daemonized");
+              this.journalHolds.delete(id);
+              this.pruneJournal();
+            })
+            .catch(() => {
+              // The hold stays; the next poll re-observes.
+            });
+          continue;
+        }
+        this.finishFromStatus(row, status, row.stop_reason);
+        this.journalHolds.delete(id);
+        settled = true;
+        continue;
+      }
+      if (pgid == null || !isGroupAlive(pgid)) {
+        // Group gone and no status file was ever written: `lost` is the
+        // truthful final state and there is nothing left for recovery to reap.
+        this.journalHolds.delete(id);
+        this.appendJournalInactive(row.id);
+        settled = true;
+      }
+    }
+    if (settled) this.pruneJournal();
   }
 
   private markLost(row: JobRecord): void {
@@ -858,11 +951,12 @@ export class JobSupervisor extends EventEmitter {
         this.adopted.delete(id);
       }
     }
+    this.settleUnconfirmedHolds();
     this.ensurePoll();
   }
 
   private ensurePoll(): void {
-    if (this.adopted.size === 0) {
+    if (this.adopted.size === 0 && this.journalHolds.size === 0) {
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
