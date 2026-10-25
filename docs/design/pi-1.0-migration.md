@@ -286,6 +286,12 @@ export function createOutputCapture(opts: {
 - **Not shared**: the Python-side child journal for subprocesses spawned
   inside cells (kernel doc §4.7) stays in the driver — the Node supervisor
   cannot see those.
+- **Not the durable job plane**: durable background commands and services are owned by the
+  separate job supervisor (`porrima-jobs.service`) described in
+  [job-supervisor.md](job-supervisor.md). The server-side supervisor remains for foreground
+  bash and kernels; TTS workers and SSH masters have their own teardown. Its journal and startup
+  sweep deliberately do not own supervisor jobs. See [kernel-durability.md](kernel-durability.md)
+  §2 for why the cgroup boundary forces the split.
 
 ### 3.5 Bash parity checklist
 

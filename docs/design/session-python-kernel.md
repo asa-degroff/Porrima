@@ -98,7 +98,7 @@ Albedo the kernel *is* the tool environment.
 
 | Adopt | Skip (for now) |
 |---|---|
-| Persistent namespace, one asyncio loop, top-level await | Detached bridge + seq/ack outbox (snapshot covers restarts) |
+| Persistent namespace, one asyncio loop, top-level await | Detached bridge + seq/ack outbox — settled against: durable *work* is supervisor-owned commands, not an adoptable kernel ([kernel-durability.md](kernel-durability.md) §2, §7) |
 | JSON-lines stdio protocol, fd 1/2 redirection, cell-tagged output | Live remote references |
 | Interrupt with parked interrupts, namespace preserved | Kernel version-skew swapping |
 | Background jobs + retained output + kill | Single-tool CodeMode (Porrima stays multi-tool) |
@@ -134,8 +134,11 @@ unchanged in 1.0.
 
 - A security sandbox. The kernel runs with the user's full permissions, exactly
   like `bash` and today's `run_python`; the legacy `sandbox.ts` comment said so.
-- A kernel process that survives server restarts while live. The server owns
-  the process; snapshots are the recovery path.
+- A kernel process that survives server restarts while live. **Still a non-goal**, and now
+  argued rather than assumed: [kernel-durability.md](kernel-durability.md) §2 shows that durable
+  work belongs to a dedicated job supervisor service that spawns and owns process groups, and
+  that a background *cell* cannot outlive its kernel in any design, since it is a task on the
+  kernel's own loop. The adoption alternative is kept open there (§7) behind a measurement gate.
 - Collapsing Porrima's tool surface into CodeMode.
 - Multi-user isolation.
 
@@ -189,9 +192,11 @@ unchanged in 1.0.
   monopolizes the loop, so a queued graceful shutdown would never run.
 - stdio: requests on the kernel's stdin, events on its stdout, stderr kept as a
   bounded diagnostics ring buffer (last ~64 KiB) surfaced in errors.
-- **No bridge, no socket, no daemon**: the kernel is server-owned and does not
+- **No bridge, no socket, no kernel daemon**: the kernel is server-owned and does not
   outlive a hard server crash by design. Snapshot + restore covers restarts
-  (G5). This is the single biggest simplification versus Albedo.
+  (G5). This is the single biggest simplification versus Albedo. Durable *commands* are a
+  separate component — the job supervisor ([job-supervisor.md](job-supervisor.md)) — not a
+  longer-lived kernel.
 - Driver file: `server/python/porrima_kernel.py`, resolved relative to the
   service module (`../../python/porrima_kernel.py`) so dev (`src/services`) and
   build (`dist/services`) both find it. No TS build step needed for Python.
@@ -465,6 +470,11 @@ than reporting that the output is gone.
 
 ### 4.7 Background jobs
 
+P1–P3 describe the kernel's `python_jobs` surface. The durable-work design keeps cells
+transient, renames the tool to `jobs` when supervisor-owned commands land, and routes work that
+must survive a restart to the job supervisor
+([kernel-durability.md](kernel-durability.md), [job-supervisor.md](job-supervisor.md)).
+
 - `run_python(..., background: true)` returns immediately with a `jobId`; the
   cell runs as an asyncio task in the kernel. It **does not hold the turn-gate
   lease** — this is the point. On the wire, the execute acks with
@@ -522,9 +532,11 @@ than reporting that the output is gone.
   `force: true` (L3) is a **server-side supervisor kill, never a protocol
   request** — a wedged kernel cannot process one, and L3 exists precisely for
   that state (§4.5).
-- Completion is visible on the next turn's `python_jobs list`; an optional
-  wake (P3, open question #3) can post a message into the chat through the
-  existing `schedule_chat_message` path. No automatic turn start in P1/P2.
+- Completion is visible on the next turn's `jobs list` (today `python_jobs`); the wake itself is
+  designed in [kernel-codemode.md](kernel-codemode.md) §4.5 — boundary-delivered,
+  coalesced per completion batch, gated on the result being unread. The notice is owed by the
+  server's `job_view`; a durable command is owned by the job supervisor
+  ([job-supervisor.md](job-supervisor.md)). No automatic turn start in P1/P2.
 - **No in-turn polling.** Every `python_jobs` call is an LLM iteration that
   holds the turn lease; a tail-polling loop is the background problem in
   miniature. The tool description says "end your turn; check on the next
@@ -551,12 +563,20 @@ than reporting that the output is gone.
   lets it adapt (inspect, kill, or resubmit as a background job).
 - Caps: 4 concurrent background jobs per kernel, **8 box-wide** (16 full-core
   jobs would fight the CPU-only inference services for every core), 1 MiB
-  output each, 64 retained; kernel restart kills jobs and says so. Jobs are
+  output each, 64 retained; kernel restart kills jobs and says so — and the durable
+  record that survives it is a `lost` row in the server's `job_view`
+  ([kernel-durability.md](kernel-durability.md) §3.1), not a live kernel. Durable commands
+  are a separate class with their own caps at the job supervisor
+  ([job-supervisor.md](job-supervisor.md) §6). Jobs are
   tasks inside one kernel process, so `nice()` cannot separate them from
   foreground work — the cap plus the tool description's thread-limit guidance
   (`OMP_NUM_THREADS`) are the controls.
 - `bash` remains the tool for shell pipelines; inside cells, plain
-  `subprocess` is allowed (Porrima is not Albedo's `run()`-only kernel).
+  `subprocess` is allowed (Porrima is not Albedo's `run()`-only kernel). Durable work that
+  must survive a restart belongs in a supervisor-owned command (`bash background`/`service`),
+  not in a cell. Whether the blocking subset of the in-cell allowance should be refused in
+  favour of a handle API is open —
+  [kernel-codemode.md](kernel-codemode.md) §4.5.8 and its question 10.
 
 ### 4.8 Snapshot / restore
 
@@ -930,15 +950,19 @@ only the human-facing stream.
    reported per name in the restore notice. On a system without `dill`, the
    provisioned venv (§4.9) is the escalation if full restore is needed there.
 3. **Job-completion wake**: none (poll), chat message via cross-chat, or push
-   notification? Current lean: none in P1/P2, `schedule_chat_message` with
-   `wake: true` in P3 — the existing path, respects inactivity gates, no new
-   mechanism. Prior art for the double-wake problem (prime-agent's bash
-   supervision): the kernel sends a `bash.completed` host request only after
-   the creating cell's completion barrier, and a later read of the result
-   ships a fire-and-forget `bash.consumed` frame *inside the read, before the
-   cell's `done`*, so the host withdraws a queued notice before it can
-   dispatch. If the P3 wake lands, copy that shape — a `python_jobs`
-   tail/status read should cancel a queued wake for the same job.
+   notification? **Settled as a design, staged as work**: the wake is a
+   boundary-delivered, coalesced notice gated on the result being unread, owed by the
+   server's `job_view` — designed in [kernel-codemode.md](kernel-codemode.md) §4.5,
+   sequenced in [kernel-durability.md](kernel-durability.md) §5 (ledger first, notices next,
+   the job supervisor and commands after that, kernel durability last and only if measured).
+   The double-wake problem keeps its prior art — prime-agent sends `bash.completed` only
+   after the creating cell's completion barrier, and a later read of the result ships a
+   fire-and-forget `bash.consumed` frame *inside the read, before the cell's `done`*, so the
+   server withdraws a queued notice before it can dispatch — but **that withdrawal event is
+   not needed here**: `jobs` (today `python_jobs`) is already served from the server's
+   `job_view` (§4.7), so the server can decline to queue the notice when it saw the read, and
+   boundary delivery refuses delivery to a busy chat in the first place. Only consumption by
+   an in-kernel await has to travel, as a one-way frame into `job_view`.
 4. **Output reading**: spill-to-file + `read_file` (bash pattern) or a
    dedicated `python_output` tool? Current lean: spill-to-file.
 5. **Tool naming**: keep `run_python` (yes — it is in prompts, skills, and

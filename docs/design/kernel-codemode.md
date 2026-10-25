@@ -50,9 +50,10 @@ and only the final result crosses the wire. The acceptance bar: it should be abl
 ## 2. Prior art
 
 Five lineages, plus structural navigation (§2.5) — a fourth axis the codemode survey
-missed. Full detail with sources lives in the archived project
-memory blocks ("Codemode Prior Art — Lineages", "Round 2" — out of active context, still
-searchable) and §8; this section is the design-relevant distillation.
+missed — plus completion notification (§2.6), a fifth axis that the survey never separated
+from yield/resume. Full detail with sources lives in the archived project
+memory blocks ("Codemode Prior Art — Lineages", "Round 2", "BG Notification — …" — out of
+active context, still searchable) and §8; this section is the design-relevant distillation.
 
 **"Codemode" conflates two separable ideas** — (A) in-language *tool composition*
 (pipe outputs to inputs without round-tripping through model context) and (B) *persistent
@@ -170,6 +171,43 @@ the CI ratchet-gate role) lives in [code-search.md](code-search.md),
 with the design refinements it validated (pagination,
 parse-error reporting, pattern pre-validation).
 
+### 2.6 Completion notification — how the agent learns that background work ended
+
+Yield and resume (§4.5) answer *how work detaches*. A separate axis answers *how the agent
+finds out it ended*, and every harness that has background work has solved it one of three
+ways. Porrima has not solved it at all: `run_python`'s description already forbids polling
+("end your turn and check progress with `python_jobs` on a later turn") while offering no way
+to satisfy the prohibition. That is the gap §4.5 closes.
+
+| Family | How it works | Who pays the cost | Examples |
+|---|---|---|---|
+| **Steer** | the notice is injected into the running conversation at the next step boundary | needs a withdrawal mechanism (a notice can race the agent's own read) and a durable pending record | opencode (`Inbox`, `delivery: "steer"`, `execution.wake`); prime-agent (steering row with `queueIfBusy` + `resumeIfIdle`, and `bash.consumed` to withdraw a stale queued notice) |
+| **Boundary** | a busy session *refuses* the notice; the sender retries until the session is idle, then lands one coalesced notice | no withdrawal machinery, because consumption during the turn retires the notice before it can land | albedo (`owed` = finished-with-result-unread, one announcer, 2 s retry, "jobs still owed when the retry lands share one notice, and so one turn"); OpenClaw (completion turn in the originating session, "waits behind existing work") |
+| **Pull** | the agent holds a handle and asks | nothing to deliver, but a turn can end with work outstanding and nobody noticing | Codex (`exec`/`wait`/`write_stdin`); Claude Code (`TaskOutput` removed in favour of `Read` on the output file) |
+
+Five independent implementations agree on four rules:
+
+1. **A backgrounded call returns a handle plus a named output pointer**, never a promise of
+   results. The pointer *is* the primitive — Claude Code retired its retrieval tool rather than
+   its output file.
+2. **Anti-polling is written into the tool result**, not only the system prompt, and the most
+   robust harnesses enforce it structurally: albedo's shell guard refuses a raw shell line,
+   `subprocess`, and `time.sleep` of a second or more from inside a cell, and each refusal names
+   the `run()` call the line means — explicitly "guidance, not a sandbox".
+3. **Coalescing is default, not a guard.** N completions → one notice → one turn. This matters
+   more here than anywhere else in the survey: a notice turn costs a fresh prefill.
+4. **Something long-lived must own the ledger of owed completions**, and it should not be the
+   component that deploys most often. prime-agent puts it in the daemon; albedo puts it in the
+   kernel (with a host-side registry mapping session id → submit closure, and a loader that
+   *starts* an idle session so an owed wake can land); opencode puts it in the host store as a
+   pre-minted message id with a typed recovery record.
+
+Which family Porrima uses is decided by where the ledger lives, not by taste: the long-lived
+execution owner is the job supervisor, while the owed-completion ledger is the server's SQLite,
+so the **boundary** family applies directly and the steer family's withdrawal machinery is not
+needed. That position is settled in [kernel-durability.md](kernel-durability.md) §2; §4.5 states
+the notification design itself.
+
 ## 3. Design axes, and where Porrima sits
 
 | Axis | CF | opencode | Codex | prime-agent | smolagents | **Porrima (today)** |
@@ -180,9 +218,10 @@ parse-error reporting, pattern pre-validation).
 | Tool catalog discovery | `search`/`describe` lazy | `search` builtin | schema-size cap on injection | static layered prompt | static | static (grows with surface) |
 | Durable replay / approval | yes | no | no | no (snapshots for refine) | no | no (out of scope, §1) |
 | Model surface size | one tool | full + codemode | full (+codemode) | **three tools** | zero (code only) | ~30 tools |
+| Completion notification | durable replay | steer + wake | pull only | steer + wake + consumed-withdrawal | n/a | **pull only, no wake** |
 
-The only axis Porrima lacks is the composition axis itself — the kernel-side tools API.
-That is what this document designs.
+Porrima lacks two axes: the composition axis (the kernel-side tools API) and the completion
+axis (§2.6) — the ability for background work to bring the agent back. Both are designed here.
 
 ## 4. Design
 
@@ -335,20 +374,138 @@ Kernel-originated tool calls must be attributable end to end:
 Tier 2 is gated on this seam — a memory write that cannot be attributed to a
 program is an identity-level defect, not a convenience gap.
 
-### 4.5 Yield / resume semantics
+### 4.5 Yield, resume, and completion notices
 
-Codex's `exec`/`wait`/`terminate` pair (yield at a time budget, resume or kill by
-cell_id, explicit model-visible status strings: "Script running with cell ID …" /
-"Script completed|failed") is the reference shape. Mapping onto Porrima:
+Two separable halves, and the survey (§2.6) shows harnesses routinely confuse them: **detaching**
+work (yield) and **re-engaging** the agent when it ends (notice). Codex's
+`exec`/`wait`/`terminate` triple — yield at a time budget, resume or kill by cell id, explicit
+model-visible status strings ("Script running with cell ID …" / "Script completed|failed") — is
+the reference shape for the first half. It is the *only* surveyed harness with no second half at
+all, and it gets away with it because the agent always holds the handle. Porrima does not: a
+background cell can end its turn with work outstanding and nothing to bring it back.
 
-- **Phase A:** no new surface. `run_python` already yields (background jobs),
-  `python_jobs` inspects/kills them, and the status vocabulary exists.
-- **Phase B+:** consider a codex-style first-class handle — a `wait(job_id, timeout_ms,
-  terminate)` equivalent, cell-identity in the status strings, and the hook-bypass
-  property codex implements for its wait loop ("wait is runtime control for an existing
-  code cell, not a standalone user action… hooks should not block or rewrite the wait
-  loop itself"). The design must decide which Porrima turn machinery (turn gate,
-  steering) the wait loop bypasses, and say so in the doc.
+**4.5.1 Adopt the unread contract.** A job that finishes **with its result unread** produces a
+completion notice. Reading the result, awaiting the handle, or stopping the job retires the wake;
+an await cut short by an interrupt or a deadline read nothing, so it leaves the wake owed. The
+predicate is local to the job, and Porrima already has every consumption channel it needs:
+
+| Consumption channel | Where it happens | Retires the wake |
+|---|---|---|
+| `jobs tail` / `status` (today `python_jobs`) | model-level tool, server `job_view` | yes |
+| awaiting a handle | inside a kernel cell | yes |
+| `jobs kill` (L2 or `force` L3) | model-level tool | yes — an explicit stop is its own report |
+| UI viewing of job output | artifact panel / stats screens | **no** — a viewer is not the agent |
+
+That last row is the one a naive implementation gets wrong, and albedo states it as a rule: its
+job-view reads deliberately bypass the consuming read path "so watching a job never withdraws the
+wake its result is owed".
+
+**4.5.2 Handles, not strings.** In-kernel `tools.bash` currently returns a string. The handle shape
+replaces it: `h = tools.bash(cmd, background=True)` starts the work and returns immediately;
+`await h` collects it (instant if already finished) and yields exit status, duration, output, and a
+`running` discriminator; `h.poll()` / `h.tail(n)` / `h.kill()` inspect and stop out of band. What a
+handle points at is the durability decision: a **command** handle refers to a process group owned by
+the job supervisor ([job-supervisor.md](job-supervisor.md) §6) and recorded in `jobs.db` and the
+server's `job_view` ([kernel-durability.md](kernel-durability.md) §3.2), so it survives the kernel
+that created it, while a plain `subprocess` from a cell stays in the kernel's family and dies with
+it. The handle API is the *client* of that ledger, not a second bookkeeping system. Three rules
+travel with it:
+
+- **Ownership is explicit.** A handle awaited before any other API use owns the process group —
+  cancelling that await kills the group. Touching `poll`/`tail`/`running` first marks it a
+  background handle, and later awaits only wait. Without this rule the interrupt ladder (§4.5 of
+  session-python-kernel) kills the wrong thing.
+- **Bounded await degrades instead of failing.** An inline await past a yield budget (order 10 s,
+  capped well below the cell timeout) returns a snapshot carrying the live handle rather than an
+  error, and **must not cancel the inner wait** — cancelling an owned wait would kill the command
+  the degrade exists to preserve. Degrade hints are budgeted per kernel, not per job.
+- **Bind before awaiting.** `h = await run(...)` blocks before the assignment, so a cell
+  interrupted mid-wait leaves the running work addressable only by id. Worth one line in the
+  capability text; it is the difference between an orphan and a handle.
+
+**4.5.3 Delivery is boundary-shaped, and coalesced.** Completion notices land at the turn
+boundary (`getFollowUpMessages` / the next turn), never as mid-turn steering:
+
+- Mid-turn injection diverges the wire at the injection point. Tail-shaped delivery is
+  append-shaped, which is the cheap shape for the prompt cache — the same lever as every other
+  intentional rewrite.
+- Boundary delivery is also what makes the race impossible: a notice that only lands when the
+  chat is idle can never overtake the read that satisfies it, because a read during the turn
+  retires it first. Steer-shaped delivery buys immediacy and pays for it in withdrawal machinery.
+- A busy chat is *refused*, and the server retries until it is idle. One notice per completion
+  batch: N jobs finishing during one turn produce one row and one turn. This is not a nicety
+  here — a notice turn costs a fresh prefill, so coalescing is the economics answer as well as
+  the noise answer.
+- A notice for a chat mid-turn waits behind that work rather than displacing it, and takes a
+  **background-priority** turn-gate lease when it does run.
+
+**4.5.4 Notice shape.** Each notice carries two renderings and a pre-minted row id, so the
+transcript row and the model-facing text cannot drift apart:
+
+- a **display** line for the human transcript (`job finished (exit_code=0, ran 1.2s): <command>`),
+- a **model text** row, marker-wrapped, bounded, naming each job, its outcome, its handle, and the
+  read call that consumes it, plus provenance and an anti-noise instruction in the row itself
+  (no user sent this; use the result if the work needs it, otherwise acknowledge briefly and stay
+  idle) rather than in the system prompt, where it would cost prefix bytes on every turn.
+- the payload stays behind the handle: the notice announces and points, `jobs tail` / the
+  spill file carry content. This keeps the injected row small, which is what makes a notice cheap
+  on the wire.
+- Byte stability and replay rules apply unchanged: normalized content, deterministic ordering, no
+  wall-clock durations computed at replay (record `duration_ms` at completion), and the row must
+  survive compaction archiving and re-reconstruction.
+
+**4.5.5 Wake eligibility is a property of the job.** A job started as a service (a dev server, a
+watcher) is expected to keep running; its normal continuation is not what anyone waits for, so it
+does not wake while it runs. But a service that **exits unexpectedly** — a crash, or a clean exit
+nobody asked for — is exactly what the agent needs to know, so that wakes. An explicit stop does
+not. The kind is recorded at start, visible in `jobs list`, and queryable without asking the
+kernel — the counterpart in cache-warm/residency logic asks the same question the way albedo's
+`awaited_jobs` does. Combined with a readiness primitive (`wait_for(pattern, timeout)` — wait
+until a line of output matches, counting output already written, never stopping the job) this
+settles the policy: **notify on completion, never on continuation.** Long-lived work is polled or
+ready-checked while it runs; unexpected exits announce themselves.
+
+**4.5.6 Where "owed" lives: the server's `job_view`.** The pending notice and the decision to
+deliver it belong to the server, because the server's store is the long-lived component
+([kernel-durability.md](kernel-durability.md) §2) and the server already answers `jobs` from its
+own `job_view`. The job supervisor reports execution facts — started, finished, lost — into that
+view; it never writes a notice. **Server-visible consumption needs no signal at all** — the
+process that would queue the notice saw the read, so it declines to queue it. Only in-kernel
+consumption (an awaited handle) has to travel, and it travels as a one-way consumption frame into
+`job_view`, not as a withdrawal protocol. A withdrawal event would only be necessary if a notice
+could be queued mid-turn and then have to be retracted; boundary delivery (§4.5.3) removes that
+case by refusing delivery while the chat is busy and re-checking "still unread?" in the same gated
+act that lands the row.
+
+**4.5.7 The pull arm stays.** A codex-style `job_wait(job_id, timeout_ms, terminate?)` is still
+worth having for the cases where waiting is genuinely cheaper than ending the turn — and, exactly
+as Codex documents for its own wait loop, the doc must name which Porrima turn machinery the wait
+bypasses: it holds the turn-gate lease, it is not a steering boundary, it does not trigger mid-turn
+compaction, and it is not a hook point for tool policy. An undeclared bypass is how a control
+primitive becomes a loophole.
+
+**4.5.8 Enforcement versus instruction.** The strongest anti-polling mechanism in the survey is
+not a prompt. albedo's shell plugin simply **refuses** a raw shell line, `subprocess`, and
+`time.sleep` of a second or more from inside a cell, and each refusal *names the `run()` call the
+line means* — "the refusal teaches by example". Its own docstring is the important part: **"This
+is guidance, not a sandbox: libraries and plugins still spawn."** Porrima has explicitly chosen the
+opposite posture (session-python-kernel §4.7: "`bash` remains the tool for shell pipelines; inside
+cells, plain `subprocess` is allowed"), and that choice is defensible — Porrima is a multi-tool,
+open-permission harness, not a `run()`-only kernel. The transferable piece is the *shape* of the
+refusal (name the replacement) rather than its breadth. The cheap, low-controversy application is
+refusing the **blocking** primitive only — a cell-wide `sleep` that stalls the kernel's own loop
+while a job waits on it — with the replacement named. Refusing `subprocess` outright is a surface
+decision with §7 open question 10 attached, not a notification decision.
+
+**4.5.9 Staging.** L0 ships the job view/ledger; L1 ships coalesced boundary notices with the
+server-owned unread check (no new model-visible surface: a row type, a delivery rule, and a line
+in the `run_python` description — batched with any other pending description change, because
+tool-surface churn is a cache event). L2a ships the job supervisor, supervisor-spawned command
+groups, and the `jobs` tool over `job_view`; L2b ships services, readiness, and in-kernel handles
+with the bounded await; L2c wires supervisor events, notices, global stop, and the UI. L3 is
+kernel durability, gated on measurement, and is not a prerequisite for any of the above. The
+ladder is named once, in [kernel-durability.md](kernel-durability.md) §5; this document's Phase
+A/B/C map onto L0–L1 / L2 / beyond.
 
 ### 4.6 Post-compaction kernel notice
 
@@ -611,8 +768,8 @@ places where the shape refines §4.9:
 
 | Phase | Scope | Model surface |
 |---|---|---|
-| **A — additive tier 1** | protocol v2 reverse RPC (§4.8) + dispatch mechanics (§4.9) + allowlist + serialization + budgets (§4.1); post-compaction notice (§4.6); the one capability line in the `run_python` description, batched with pending schema changes | unchanged (§4.9's line is description text, not a surface change) |
-| **B — provenance + tier 2** | provenance seam (§4.4); mutations + memory writes; nested rendering + the viewer's jobs axis; wait/terminate evaluation (§4.5); browser consent design | unchanged |
+| **A — additive tier 1** | protocol v2 reverse RPC (§4.8) + dispatch mechanics (§4.9) + allowlist + serialization + budgets (§4.1); post-compaction notice (§4.6); the job view/ledger + coalesced boundary completion notices (§4.5.1–§4.5.4); the one capability line in the `run_python` description, batched with pending schema changes | unchanged (§4.9's line is description text, not a surface change; notices are rows, not tools) |
+| **B — provenance + tier 2** | provenance seam (§4.4); mutations + memory writes; nested rendering + the viewer's jobs axis; in-kernel handles with bounded await, `wait_for`, and the `job_wait` pull arm (§4.5.2/§4.5.5/§4.5.7); browser consent design | unchanged |
 | **C — feature integrations** | browser tools in-kernel (consent + PiP); artifact authoring flow (in-kernel iteration, model-level commit); remote spill delivery (the `deliverJobOutput` pattern per nested call, §4.9) | unchanged |
 | **D — surface shrinkage (evidence-gated)** | retire model tools proven redundant by kernel usage; per-chat opt-in | shrinks |
 
@@ -713,6 +870,43 @@ results with explicit truncation markers, and per-call spill delivery follows th
     `@ast-grep/napi` as the dependency with the CLI fallback (note the `sg`
     name collision — §5 there), and the default-shift framing for
     the tool-set fit question (§4 there).
+10. **`subprocess` refusal inside cells** — §4.5.8's enforcement question. Porrima's kernel
+    deliberately allows plain `subprocess` (session-python-kernel §4.7) because it is a
+    multi-tool, open-permission harness, not an `run()`-only kernel; albedo reaches the same
+    openness from the other side ("guidance, not a sandbox: libraries and plugins still spawn").
+    Does the guard refuse only blocking primitives (`time.sleep` ≥ 1 s in a cell, unbounded
+    `subprocess.wait`), or the whole class, in exchange for a handle API that replaces them?
+    → Open: refuse the blocking class first — it is the one refusal that repairs a *kernel*
+    failure mode (a cell monopolizing its own event loop while a job waits on it) rather than a
+    model-behaviour preference. The wider refusal is a surface decision that only makes sense
+    together with handles, and only if handle usage telemetry shows the replacement is actually
+    used.
+11. **Where "wake owed" lives** — kernel-side (albedo: local, self-arbitrating, lost if the
+    kernel is hard-killed) or server-side (durable rows).
+    → Answered: server-side, permanently. The long-lived execution owner is the job supervisor,
+    but the notice lives in the server's `job_view`; server-visible consumption needs no signal
+    at all (§4.5.6, [kernel-durability.md](kernel-durability.md) §2–§3.3). The supervisor reports
+    execution facts, and the kernel reports only what only it can know — liveness, and
+    consumption by an in-kernel await — into that view.
+12. **Notice visibility to the model's own turn machinery** — does a completion notice run as an
+    ordinary turn (its own gate lease, its own compaction pass), or as a tail append that needs no
+    turn at all? The cheap option is a tail row that only *teaches* the next user-initiated turn;
+    the effective option is a wake turn that lets the agent act on the result immediately.
+    → Answered in shape, open in number: **the row append and the wake are one gated act,
+    idempotently recoverable**, because a tail row parked for a later turn can be overtaken by a
+    read and go stale — that is a correctness argument, not a cost one. The ledger and the notice
+    row live in different databases, so the act is not one transaction; `notice_state` and the
+    pre-minted message id make recovery idempotent. Cost is a separate dial: a per-chat wake budget
+    with backoff down to teach-only rows (§4.5.3, durability §3.4). The open part is the budget
+    number.
+13. **Job vocabulary split** — a background *cell* (an asyncio task on the kernel's loop, dies
+    with the kernel) and a background *command* (a supervised process group, can outlive it) are
+    not the same kind of job, and `jobs` currently presents them as one. Does the handle
+    API make commands the durable class and cells explicitly transient, or does the kernel grow a
+    process-level job type so cells can hand work off?
+    → Answered: commands are the durable class, cells are explicitly transient, the kind is recorded
+    on the row, and recovery is typed per kind ([kernel-durability.md](kernel-durability.md)
+    §3.1–§3.2). The handle API is the client of the supervisor's ledger, not a kernel-side job type.
 
 ## 8. Sources
 
@@ -747,7 +941,48 @@ Prior art (all read at primary source except where noted):
   (corroborated); LlamaIndex CodeNodeParser (tree-sitter RAG chunking — corroborated,
   not read)
 
+Completion notification (§2.6, §4.5):
+
+- albedo (`tangled.org/okami.mom/albedo`, read at source): `priv/python/albedo_plugins/run.py`
+  (`owed` = finished-with-result-unread, one announcer, retry-until-idle, one notice per batch,
+  `service` flag, bounded await that snapshots instead of failing), `priv/python/albedo_cells.py`
+  (cell auto-backgrounding under the same notice contract), `priv/python/albedo_shell.py` (the
+  refusals — `sh -c`, `subprocess`, and `time.sleep` of a second or more — each rejected with the
+  replacement call named in the error text),
+  `priv/python/albedo_output.py` (retention caps and the output/cell inventories a model can list),
+  `priv/python/albedo_link.py` + `albedo_bridge.py` (detached kernel, durable seq/ack outbox,
+  reattach), `src/albedo/daemon/albedo_wakes.erl` (session → submit closure registry, loader for
+  unloaded sessions), `src/albedo/daemon/turn.gleam` (turn-source delivery policies),
+  `src/albedo/daemon/session.gleam` (a wake is an ordinary submit),
+  `robot-docs/kernel.md` + `robot-docs/kernel-state.md` (notice framing, job views, observation
+  without polling)
+- opencode (`anomalyco/opencode`, read at source): `packages/core/src/job.ts` (job registry,
+  pre-minted notification id, typed recovery records), `packages/core/src/session/inbox.ts`
+  (`delivery: "steer"`, pending-only inbox), `packages/core/src/session/execution.ts`
+  (`execution.wake`), `packages/core/src/session/execution/restart.ts`
+  (startup replay; restart notices deliberately do not revive idle sessions),
+  `packages/core/src/tool/plugin/shell.ts` (auto-backgrounding),
+  `packages/core/src/session/runner/llm.ts` (inbox drain at the step boundary)
+- prime-agent: `crates/pa-core/src/session_engine/bash_notices.rs` (queued `bash.completed` host
+  request after the creating cell's barrier; `bash.consumed` inside a later read withdraws a
+  queued notice; the `queueIfBusy` / `resumeIfIdle` wake semantics, named after their TS-engine
+  parity), `crates/pa-daemon/src/bash_notices.rs` (the daemon worker's queue-lane sinks),
+  `crates/pa-core/src/prompts/layers/bash-over-subprocess.md` (a whole prompt layer whose point is
+  §4.5.8's question), `prime-agent-runtime/src/rlm/bash.py` (handle ownership, bounded await,
+  `_reap_group`), `crates/pa-daemon/tests/autobg_headless_e2e.rs` (auto-background end-to-end)
+- OpenClaw: docs.openclaw.ai/gateway/background-process (completion turn in the originating
+  session, waits behind existing work, one unknown-outcome completion turn after a gateway
+  restart, no notice on explicit stop), docs.openclaw.ai/tools/process (the process tool as the
+  pull arm)
+- Claude Code: `TaskOutput`/`KillShell` retired in favour of `Read` on a named output file;
+  `Monitor` for event streams; hooks as the completion-attention channel
+  (docs.claude.com/en/docs/claude-code/hooks) — corroborated, not read at source
+- Codex: `codex-rs/core/src/unified_exec/mod.rs` (process caps), `core/src/tools/code_mode/wait_spec.rs`
+  (pull semantics; no wake anywhere in the family)
+
 Porrima: [session-python-kernel.md](session-python-kernel.md),
+[kernel-durability.md](kernel-durability.md),
+[job-supervisor.md](job-supervisor.md),
 [remote-python-kernel.md](remote-python-kernel.md),
 [request-viewer.md](request-viewer.md),
 [turn-engine.md](turn-engine.md).

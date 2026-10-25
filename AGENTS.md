@@ -291,6 +291,9 @@ Design documents (`docs/design/`) — per-subsystem design rationale (not creati
 - [P0B Storage Concurrency](docs/design/p0b-storage-concurrency.md)
 - [Image Sandbox Extraction](docs/design/image-sandbox-extraction.md)
 - [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (P4a/P4b implemented; ships dark)
+- [Session Python Kernel](docs/design/session-python-kernel.md) — Persistent per-chat REPL: protocol, interrupt ladder, background jobs, snapshot/restore, lifecycle and orphan policy (P1–P3 implemented)
+- [Durable Work / Kernel Durability](docs/design/kernel-durability.md) — Job supervisor, command-level background jobs, and completion notices; kernels stay ephemeral, kernel adoption kept open behind a measurement gate (design; staged L0–L3)
+- [Job Supervisor](docs/design/job-supervisor.md) — The durable process plane: `porrima-jobs.service`, its ledger/protocol, command execution, adoption, and server integration (design; L2a–L2c)
 - [Browser Observability](docs/design/browser-observability.md) — Live browser-frame picture-in-picture viewer (Phases 1–2 implemented)
 - [KV Snapshot Parking](docs/design/kv-snapshot-parking.md) — Disk tier for idle slot KV: app-side save/restore orchestration around llama.cpp's `/slots` API
 - [Strata Inference Backend](docs/design/strata-backend.md) — OpenAI-only alternate backend for the inference slot: dispatch seam, stream-fed prefill, seeding warm, slot-0 parking (planned)
