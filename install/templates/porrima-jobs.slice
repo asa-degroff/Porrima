@@ -1,0 +1,10 @@
+[Unit]
+Description=Porrima background jobs
+
+[Slice]
+# Box-wide backstop for every supervisor-owned process. Per-job limits live in
+# the supervisor; this slice is what remains when the supervisor is down.
+MemoryHigh=8G
+MemoryMax=12G
+TasksMax=512
+CPUWeight=50

@@ -15,6 +15,7 @@
 - **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
 - **systemd services**:
   - `porrima.service` — main server. **USER scope** (`~/.config/systemd/user/porrima.service`, drop-in override): manage with `systemctl --user`; system-scope `systemctl` reports "could not be found"
+  - `porrima-jobs.service` — durable background job supervisor (user service; L2a-1 daemon skeleton, not yet wired to the chat tools)
   - `llama-server.service` — llama.cpp router (port 32100, GPU inference)
   - `extraction-model.service` — memory extraction server (port 32101, CPU-only)
   - `reranker.service` — Qwen3-Reranker-0.6B (port 32102, CPU-only, memory retrieval)
@@ -87,6 +88,7 @@ Only landmark files are named; `*.test.ts` files are omitted throughout.
 porrima/
 ├── server/src/
 │   ├── index.ts                     # Express app, route mounting, middleware, scheduler start
+│   ├── jobs-daemon.ts               # porrima-jobs entry: socket server, protocol, adoption
 │   ├── types.ts                     # Shared TypeScript interfaces
 │   ├── paths.ts                     # ~/.porrima root + legacy ~/.quje-agent rename migrations
 │   ├── middleware/
@@ -142,6 +144,13 @@ porrima/
 │   │   ├── pi-message-utils.ts      # pi-ai message helpers
 │   │   ├── tool-result-ordering.ts  # Canonical tool-result ordering
 │   │   ├── assistant-boundary.ts    # Mid-loop assistant row placement (fragment re-commit replacement)
+│   │   ├── job-paths.ts             # Job supervisor path/config resolution
+│   │   ├── job-lock.ts              # Supervisor singleton lock (pid + start id + boot id)
+│   │   ├── job-journal.ts           # Group journal for adoption and orphan reaping
+│   │   ├── job-store.ts             # jobs.db execution ledger (authoritative command state)
+│   │   ├── job-protocol.ts          # Job supervisor socket framing and message types
+│   │   ├── job-supervisor.ts        # Spawn/reap/adopt, wrapper, file-backed output/status
+│   │   ├── jobs-client.ts           # Server-side client for porrima-jobs
 │   │   ├── agent-tools.ts           # Tool registry + execution
 │   │   ├── browser-tools.ts         # Browser tool definitions
 │   │   ├── browser-session.ts       # Remote-debugging Chrome session
@@ -238,7 +247,7 @@ porrima/
 │   │   ├── time-marker.ts           # Time anchors injected into turns
 │   │   ├── time-format.ts           # Time formatting helpers
 │   │   ├── logger.ts                # Server logging
-│   ├── scripts/                    # CLI (not HTTP): analyze-token-estimates, migrate-inline-image-payloads, migrate-tool-result-image-payloads, smoke-request-log, smoke-remote-kernel (live-host P4a checklist)
+│   ├── scripts/                    # CLI (not HTTP): analyze-token-estimates, jobs-cli, migrate-inline-image-payloads, migrate-tool-result-image-payloads, smoke-request-log, smoke-remote-kernel (live-host P4a checklist)
 │   └── utils/                       # message-window, mime, path helpers
 ├── client/src/
 │   ├── App.tsx                      # Root app shell, routing, theme/legacy-key migration
@@ -293,7 +302,7 @@ Design documents (`docs/design/`) — per-subsystem design rationale (not creati
 - [Remote Python Kernel (P4)](docs/design/remote-python-kernel.md) — SSH-session kernels (P4a/P4b implemented; ships dark)
 - [Session Python Kernel](docs/design/session-python-kernel.md) — Persistent per-chat REPL: protocol, interrupt ladder, background jobs, snapshot/restore, lifecycle and orphan policy (P1–P3 implemented)
 - [Durable Work / Kernel Durability](docs/design/kernel-durability.md) — Job supervisor, command-level background jobs, and completion notices; kernels stay ephemeral, kernel adoption kept open behind a measurement gate (design; staged L0–L3)
-- [Job Supervisor](docs/design/job-supervisor.md) — The durable process plane: `porrima-jobs.service`, its ledger/protocol, command execution, adoption, and server integration (design; L2a–L2c)
+- [Job Supervisor](docs/design/job-supervisor.md) — The durable process plane: `porrima-jobs.service`, its ledger/protocol, command execution, adoption, and server integration (L2a-1 daemon skeleton implemented; L2a-2+ design)
 - [Browser Observability](docs/design/browser-observability.md) — Live browser-frame picture-in-picture viewer (Phases 1–2 implemented)
 - [KV Snapshot Parking](docs/design/kv-snapshot-parking.md) — Disk tier for idle slot KV: app-side save/restore orchestration around llama.cpp's `/slots` API
 - [Strata Inference Backend](docs/design/strata-backend.md) — OpenAI-only alternate backend for the inference slot: dispatch seam, stream-fed prefill, seeding warm, slot-0 parking (planned)

@@ -7,6 +7,8 @@
     "build": "tsc && node ../scripts/write-build-info.mjs && cp src/services/pdf-extract.py dist/services/pdf-extract.py && rm -rf dist/python && cp -r python dist/python",
     "start": "node dist/index.js",
     "test": "NODE_ENV=test vitest run",
+    "jobs-daemon": "tsx src/jobs-daemon.ts",
+    "jobs-cli": "tsx src/scripts/jobs-cli.ts",
     "analyze:token-estimates": "tsx src/scripts/analyze-token-estimates.ts"
   },
   "dependencies": {

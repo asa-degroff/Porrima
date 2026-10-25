@@ -1,0 +1,23 @@
+[Unit]
+Description=Porrima Job Supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PORRIMA_DIR}/server
+Environment=NODE_ENV=production
+ExecStart=${NODE_BIN} dist/jobs-daemon.js
+
+# A supervisor restart must not kill its jobs. systemd signals only the main
+# process; the children stay in porrima-jobs.slice and the new daemon adopts
+# them. A full stop is `systemctl --user stop porrima-jobs.slice`.
+KillMode=process
+Slice=porrima-jobs.slice
+
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

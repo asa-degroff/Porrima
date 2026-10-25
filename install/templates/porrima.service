@@ -1,7 +1,7 @@
 [Unit]
 Description=Porrima
-After=network-online.target
-Wants=network-online.target
+After=network-online.target porrima-jobs.service
+Wants=network-online.target porrima-jobs.service
 
 [Service]
 Type=simple
