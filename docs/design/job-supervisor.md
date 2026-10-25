@@ -173,6 +173,9 @@ job_view(
 Ownership rules:
 
 - The supervisor wins for command/service execution state; the server wins for notice state.
+- `lost` and `failed` are uncertainty/server-side start states, not execution outcomes. An
+  authoritative supervisor list or `get` may correct them to `running`/`finished`; `finished`
+  and `stopped` never regress to a non-terminal state from an event.
 - Cell rows are written by the server's kernel manager (`source="kernel"`); the supervisor
   never sees them.
 - On conflict, `job_view` is a mirror, not a second authority. The server reconciles from the
@@ -241,10 +244,13 @@ Requests:
 | `subscribe` | `{since_seq}` | stream of `event {seq, event, job}` |
 
 `start` is idempotent by the server-minted `job_id`: a retry returns the existing row instead
-of spawning twice. `stop` is idempotent. `wait_for` scans the job's output from the beginning
-(bounded to the retained window), counts output already written, and returns `finished` if the
-job ends before a match; `pattern` is a literal substring by default, with a regex option
-addable later without changing the request shape. This is the readiness primitive for services.
+of spawning twice. If the start response is lost, the server resolves the id with `get`: a found
+job is mirrored, absence is a start failure, and a failed lookup leaves the row `lost`/unknown
+rather than fabricating a failure. `stop` is idempotent. `wait_for` scans the job's output from
+the beginning (bounded to the retained window), counts output already written, and returns
+`finished` if the job ends before a match; `pattern` is a literal substring by default, with a
+regex option addable later without changing the request shape. This is the readiness primitive
+for services.
 
 Events (`job_started`, `job_finished`, `job_stopped`, `job_lost`) carry a durable `seq`. On
 connect the server reconciles from a `list` restricted to the live states, then subscribes from
@@ -334,6 +340,9 @@ Lifecycle behavior:
   leaves them; the next daemon adopts.
 - `SIGKILL`/crash: children survive; the DB, journal, and status files recover; systemd
   restarts the daemon.
+- An unconfirmed stop or daemonized-group kill marks the row `lost` and keeps its journal record
+  active. Recovery retries the reap with the recorded identity; the group is never reported as
+  `stopped`/`finished` while it may still be alive.
 - Upgrade: restart the daemon; it adopts; the server reconnects and reconciles. Restart the
   daemon before the server so the new server sees an adopting supervisor, not a gap.
 - Two daemons: the singleton lock. Two *servers* are prevented by the server's data-dir
@@ -353,7 +362,9 @@ On server start:
    a service older than a few hundred short commands would fall off the page. A live view row the
    list did not mention is asked about by id: a row the supervisor reports (usually a terminal
    state reached while the server was away) is mirrored, a row the supervisor does not have becomes
-   `lost`, and a lookup that failed leaves the row alone.
+   `lost`, and a lookup that failed leaves the row alone. A bounded set of `lost`/`failed` rows is
+   also asked about by id, so a start-timeout row that actually ran can be corrected to its real
+   outcome; absence or a failed lookup leaves the uncertainty in place.
 3. Stop jobs whose chat no longer exists (on startup and on each reconnect).
 4. Deliver `lost`/`finished` notices for unread work (§3.3 of kernel-durability.md).
 

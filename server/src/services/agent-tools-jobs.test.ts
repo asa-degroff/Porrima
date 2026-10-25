@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -289,6 +290,62 @@ describe("bash background + jobs tools", () => {
     await delay(200);
     const rows = await runtime.listJobsForChat(CHAT);
     const row = rows.find((job) => job.job_id === jobId);
+    expect(row?.state).toBe("finished");
+    expect(row?.exit_code).toBe(0);
+  });
+
+  it("mirrors a job when the start response is lost but the daemon spawned it", async () => {
+    await setup();
+    const runtimeMod = runtime!;
+    const client = runtimeMod.getJobsClient();
+    const realStart = client.startJob.bind(client);
+    const jobId = randomUUID();
+    const spy = vi.spyOn(client, "startJob").mockImplementationOnce(async (input) => {
+      await realStart(input);
+      throw new Error("simulated start timeout");
+    });
+
+    try {
+      const job = await runtimeMod.startSupervisorJob({
+        job_id: jobId,
+        chat_id: CHAT,
+        kind: "command",
+        command: "sleep 30",
+        cwd: dataDir,
+      });
+      expect(job.state).toBe("running");
+
+      // A false lost row must be corrected by the next authoritative read.
+      const { markJobViewLost } = await import("./job-view.js");
+      markJobViewLost(jobId, "test");
+      const rows = await runtimeMod.listJobsForChat(CHAT);
+      expect(rows.find((row) => row.job_id === jobId)?.state).toBe("running");
+    } finally {
+      spy.mockRestore();
+      await runtimeMod.stopSupervisorJob(jobId, true).catch(() => {});
+    }
+  });
+
+  it("resolves a false lost row after the command finishes while disconnected", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-lost-finish",
+      { command: "sleep 0.2; echo finished-after-lost", background: true },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    const { markJobViewLost } = await import("./job-view.js");
+    markJobViewLost(jobId!, "test");
+    await delay(1000);
+
+    const rows = await runtime!.listJobsForChat(CHAT);
+    const row = rows.find((entry) => entry.job_id === jobId);
     expect(row?.state).toBe("finished");
     expect(row?.exit_code).toBe(0);
   });

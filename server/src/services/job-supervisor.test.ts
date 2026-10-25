@@ -33,7 +33,7 @@ async function makeHarness(caps?: {
   box?: number;
   services_per_chat?: number;
   services_box?: number;
-}): Promise<Harness> {
+}, killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>): Promise<Harness> {
   const root = await mkdtemp(join(tmpdir(), "porrima-job-supervisor-"));
   roots.add(root);
   const dbPath = join(root, "jobs.db");
@@ -41,7 +41,7 @@ async function makeHarness(caps?: {
   const journalPath = join(jobsDir, "journal.jsonl");
   const bootId = readBootId();
   const store = JobStore.open(dbPath);
-  const supervisor = new JobSupervisor({ store, jobsDir, journalPath, bootId, caps });
+  const supervisor = new JobSupervisor({ store, jobsDir, journalPath, bootId, caps, killGroup });
   cleanups.push(async () => {
     await supervisor.stopAll().catch(() => {});
     supervisor.close();
@@ -327,5 +327,21 @@ describe("job supervisor", () => {
       await delay(50);
     }
     expect(isGroupAlive(pgid!)).toBe(false);
+  });
+
+  it("reports lost and keeps the journal active when a stop cannot confirm death", async () => {
+    const harness = await makeHarness(undefined, async () => false);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 30" }),
+    );
+    await delay(100);
+    cleanups.push(async () => {
+      if (job.pid) await killProcessGroup(job.pid, { graceMs: 200 }).catch(() => {});
+    });
+
+    const stopped = await harness.supervisor.stop(job.id, { force: true });
+    expect(stopped.state).toBe("lost");
+    const journal = latestJournalRecords(harness.journalPath).get(job.pid!);
+    expect(journal?.active).toBe(true);
   });
 });

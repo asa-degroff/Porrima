@@ -8,10 +8,12 @@ import {
   markChatJobsLost,
   markChatJobsStopped,
   markJobViewFailed,
+  markJobViewLost,
   markKernelJobsLostAtStartup,
   recordSupervisorStarting,
   reconcileSupervisorJobs,
   liveSupervisorJobIds,
+  uncertainSupervisorJobIds,
   upsertSupervisorJob,
   type JobViewRow,
   type JobViewState,
@@ -134,10 +136,16 @@ async function reconcileAgainstSupervisor(chatId?: string): Promise<void> {
     limit: LIVE_LIST_LIMIT,
   });
   const liveIds = new Set(live.map((job) => job.id));
-  const unresolved = liveSupervisorJobIds(chatId).filter((id) => !liveIds.has(id));
+  const unresolved = new Set(
+    liveSupervisorJobIds(chatId).filter((id) => !liveIds.has(id)),
+  );
+  const uncertain = uncertainSupervisorJobIds(chatId).filter(
+    (id) => !liveIds.has(id),
+  );
+  for (const id of uncertain) unresolved.add(id);
   const resolutions = new Map<string, MissingSupervisorJob>();
   await Promise.all(
-    unresolved.map(async (jobId) => {
+    [...unresolved].map(async (jobId) => {
       try {
         const job = await c.getJob(jobId);
         resolutions.set(jobId, job ? { status: "found", job } : { status: "absent" });
@@ -150,6 +158,15 @@ async function reconcileAgainstSupervisor(chatId?: string): Promise<void> {
     chatId,
     resolveMissing: (jobId) => resolutions.get(jobId) ?? { status: "unknown" },
   });
+  // An uncertain row is not live in the view, so reconcileSupervisorJobs does
+  // not judge it. A found row is authoritative; absent/unknown leaves the
+  // uncertainty in place rather than pretending to know.
+  for (const jobId of uncertain) {
+    const resolution = resolutions.get(jobId);
+    if (resolution?.status === "found") {
+      upsertSupervisorJob({ job: resolution.job }, { authoritative: true });
+    }
+  }
 }
 
 export async function reconcileJobRuntime(): Promise<void> {
@@ -180,12 +197,42 @@ export async function startSupervisorJob(input: StartSupervisorJobInput): Promis
   }
   try {
     const job = await getJobsClient().startJob({ ...input, job_id: jobId });
-    return upsertSupervisorJob({
-      job,
-      workspace: input.workspace,
-      notify: input.notify,
-    });
+    return upsertSupervisorJob(
+      {
+        job,
+        workspace: input.workspace,
+        notify: input.notify,
+      },
+      { authoritative: true },
+    );
   } catch (error) {
+    // The request can time out or lose its socket after the daemon already
+    // spawned the job. Ask by id before declaring failure; a found row is the
+    // real state, an absent row is a start failure, and a failed lookup is
+    // uncertainty rather than a fabricated failure.
+    let lookupFailed = false;
+    let found: JobRecord | null = null;
+    try {
+      found = await getJobsClient().getJob(jobId);
+    } catch {
+      lookupFailed = true;
+    }
+    if (found) {
+      const view = upsertSupervisorJob(
+        { job: found, workspace: input.workspace, notify: input.notify },
+        { authoritative: true },
+      );
+      if (view.state === "failed" || view.state === "lost") {
+        throw new Error(`job supervisor start failed for ${jobId} (${view.state})`);
+      }
+      return view;
+    }
+    if (lookupFailed) {
+      markJobViewLost(jobId, "start-unknown");
+      throw new Error(
+        `job supervisor start outcome unknown for ${jobId}; check jobs status`,
+      );
+    }
     markJobViewFailed(jobId, "spawn-failed");
     throw error;
   }
@@ -199,7 +246,7 @@ export async function stopSupervisorJob(
     throw new Error("job supervisor unavailable");
   }
   const job = await getJobsClient().stopJob(jobId, force);
-  return upsertSupervisorJob({ job });
+  return upsertSupervisorJob({ job }, { authoritative: true });
 }
 
 export async function stopChatSupervisorJobs(chatId: string): Promise<number> {
@@ -259,7 +306,7 @@ export async function refreshSupervisorJob(jobId: string): Promise<JobRecord | n
   if (!getJobsClient().connected) return null;
   try {
     const job = await getJobsClient().getJob(jobId);
-    if (job) upsertSupervisorJob({ job });
+    if (job) upsertSupervisorJob({ job }, { authoritative: true });
     return job;
   } catch {
     return null;

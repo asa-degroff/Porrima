@@ -55,6 +55,16 @@ export interface NewSupervisorView {
   notify?: boolean;
 }
 
+export interface UpsertSupervisorOptions {
+  /**
+   * The supervisor list/get is authoritative for execution state. This lets a
+   * false `lost`/`failed` (start in flight, timed-out start response) be
+   * corrected to `running`, while the event path keeps the terminal guard for
+   * out-of-order frames.
+   */
+  authoritative?: boolean;
+}
+
 export interface CellJobStart {
   jobId: string;
   chatId: string;
@@ -151,7 +161,10 @@ export function closeJobView(): void {
   }
 }
 
-export function upsertSupervisorJob(input: NewSupervisorView): JobViewRow {
+export function upsertSupervisorJob(
+  input: NewSupervisorView,
+  options: UpsertSupervisorOptions = {},
+): JobViewRow {
   const job = input.job;
   const now = new Date().toISOString();
   const outputPaths = JSON.stringify(
@@ -215,6 +228,23 @@ export function upsertSupervisorJob(input: NewSupervisorView): JobViewRow {
       job.created_at,
       now,
     );
+  if (options.authoritative) {
+    // `lost` and `failed` are uncertainty/server-side start failures, not
+    // execution outcomes. A live supervisor report corrects them; finished
+    // and stopped stay protected by the CASE above.
+    const current = getDb()
+      .prepare("SELECT state FROM job_view WHERE job_id = ?")
+      .get(job.id) as { state: string } | undefined;
+    if (
+      current &&
+      (current.state === "lost" || current.state === "failed") &&
+      job.state !== current.state
+    ) {
+      getDb()
+        .prepare("UPDATE job_view SET state = ?, updated_at = ? WHERE job_id = ?")
+        .run(job.state, now, job.id);
+    }
+  }
   return getJobView(job.id)!;
 }
 
@@ -386,6 +416,28 @@ export function liveSupervisorJobIds(chatId?: string): string[] {
 }
 
 /**
+ * Uncertain rows that are not in the live list. One `get` can resolve a job
+ * that finished while the server was away, turning a false `lost`/`failed`
+ * into the real terminal outcome. Bounded so a `jobs list` does not fan out
+ * over the whole history.
+ */
+export function uncertainSupervisorJobIds(chatId?: string, limit = 50): string[] {
+  const clauses = ["source = 'supervisor'", "state IN ('lost', 'failed')"];
+  const params: unknown[] = [];
+  if (chatId) {
+    clauses.push("chat_id = ?");
+    params.push(chatId);
+  }
+  const rows = getDb()
+    .prepare(
+      `SELECT job_id FROM job_view WHERE ${clauses.join(" AND ")}
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(...params, Math.max(1, Math.min(limit, 200))) as Array<{ job_id: string }>;
+  return rows.map((row) => row.job_id);
+}
+
+/**
  * Mirror a supervisor list into the view, then resolve the live rows it left
  * out one id at a time. `jobs` must be complete for the live states it was
  * asked for; terminal rows outside it are never treated as missing.
@@ -397,7 +449,7 @@ export function reconcileSupervisorJobs(
     resolveMissing?: (jobId: string) => MissingSupervisorJob;
   } = {},
 ): number {
-  for (const job of jobs) upsertSupervisorJob({ job });
+  for (const job of jobs) upsertSupervisorJob({ job }, { authoritative: true });
   const listed = new Set(jobs.map((job) => job.id));
   let lost = 0;
   for (const jobId of liveSupervisorJobIds(options.chatId)) {
@@ -405,7 +457,7 @@ export function reconcileSupervisorJobs(
     const resolution = options.resolveMissing?.(jobId) ?? { status: "absent" };
     if (resolution.status === "unknown") continue;
     if (resolution.status === "found") {
-      upsertSupervisorJob({ job: resolution.job });
+      upsertSupervisorJob({ job: resolution.job }, { authoritative: true });
       continue;
     }
     markJobViewLost(jobId, "supervisor-no-row");

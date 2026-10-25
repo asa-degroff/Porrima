@@ -62,6 +62,8 @@ export interface JobSupervisorOptions {
   journalPath: string;
   bootId: string;
   caps?: Partial<SupervisorCaps>;
+  /** Test/embedding seam; defaults to process-supervisor's group killer. */
+  killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>;
 }
 
 /** Process identity captured at spawn time, before any ledger write exists. */
@@ -96,17 +98,25 @@ const JOB_WRAPPER = `#!/bin/bash
 set -u
 job_dir=$1
 command=$2
+now_ms() {
+  if [ -r /proc/uptime ]; then
+    awk '{printf "%d", $1 * 1000}' /proc/uptime
+  else
+    date +%s%3N
+  fi
+}
 printf '%s\\n' "$$" > "$job_dir/pid"
 start_id=$(awk '{print $22}' "/proc/$$/stat" 2>/dev/null || true)
 if [ -n "$start_id" ]; then printf 'proc:%s\\n' "$start_id" > "$job_dir/start_id"; fi
 cat /proc/sys/kernel/random/boot_id > "$job_dir/boot_id" 2>/dev/null || true
 started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-start_ms=$(date +%s%3N)
+start_ms=$(now_ms)
 /bin/bash -c "$command"
 rc=$?
 ended_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-end_ms=$(date +%s%3N)
+end_ms=$(now_ms)
 duration_ms=$((end_ms - start_ms))
+if [ "$duration_ms" -lt 0 ]; then duration_ms=0; fi
 tmp="$job_dir/status.json.tmp"
 if [ "$rc" -gt 128 ]; then
   sig=$((rc - 128))
@@ -137,10 +147,13 @@ export class JobSupervisor extends EventEmitter {
   private readonly bootId: string;
   private readonly caps: SupervisorCaps;
   private readonly startedAt = Date.now();
+  private readonly killGroup: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>;
   private readonly children = new Map<string, ChildProcess>();
   private readonly adopted = new Map<string, JobRecord>();
   private readonly timeouts = new Map<string, NodeJS.Timeout>();
   private readonly stopping = new Set<string>();
+  /** Jobs whose group did not confirm death; their journal records must stay. */
+  private readonly journalHolds = new Set<string>();
   private pollTimer: NodeJS.Timeout | null = null;
   private closed = false;
 
@@ -150,6 +163,7 @@ export class JobSupervisor extends EventEmitter {
     this.jobsDir = options.jobsDir;
     this.journalPath = options.journalPath;
     this.bootId = options.bootId;
+    this.killGroup = options.killGroup ?? killProcessGroup;
     this.caps = {
       per_chat: options.caps?.per_chat ?? envInt("PORRIMA_JOBS_MAX_PER_CHAT", 4),
       box: options.caps?.box ?? envInt("PORRIMA_JOBS_MAX_BOX", 8),
@@ -329,15 +343,26 @@ export class JobSupervisor extends EventEmitter {
       this.emitJob("job_started", running);
       return running;
     } catch (error: any) {
+      let killed = true;
       if (child?.pid) {
-        void killProcessGroup(child.pid, { graceMs: 500 });
+        killed = await this.killGroup(child.pid, { graceMs: 500 });
       }
-      this.store.markFailed(job.id);
-      // The journal already carries this group (it was written before the
-      // ledger update), so close it out with the identity we hold rather than
-      // leaving an active record for a group we just killed ourselves.
-      this.appendJournalInactive(job.id, spawnIdentity ?? undefined);
-      throw new Error(`failed to spawn job ${job.id}: ${error?.message ?? error}`);
+      if (killed) {
+        this.store.markFailed(job.id);
+        // The journal already carries this group (it was written before the
+        // ledger update), so close it out with the identity we hold rather
+        // than leaving an active record for a group we just killed ourselves.
+        this.appendJournalInactive(job.id, spawnIdentity ?? undefined);
+        throw new Error(`failed to spawn job ${job.id}: ${error?.message ?? error}`);
+      }
+      // The group did not confirm death. Keep the active journal record so
+      // recovery can find it; the outcome is lost, not a clean failure.
+      const lost = this.store.markLost(job.id);
+      if (spawnIdentity) this.journalHolds.add(job.id);
+      this.emitJob("job_lost", lost);
+      throw new Error(
+        `job ${job.id} started but its process group did not confirm death; outcome unknown`,
+      );
     } finally {
       if (stdoutFd >= 0) closeSync(stdoutFd);
       if (stderrFd >= 0) closeSync(stderrFd);
@@ -356,8 +381,22 @@ export class JobSupervisor extends EventEmitter {
     this.stopping.add(id);
     try {
       const pgid = row.pgid ?? row.pid;
-      if (pgid != null) {
-        await killProcessGroup(pgid, { graceMs: opts.force ? 100 : 3000 });
+      const killed =
+        pgid != null
+          ? await this.killGroup(pgid, { graceMs: opts.force ? 100 : 3000 })
+          : true;
+      if (!killed) {
+        // The process group did not confirm death. Do not claim `stopped`:
+        // keep the journal record active for recovery and report the outcome
+        // as unknown.
+        const lost = this.store.markLost(id);
+        this.journalHolds.add(id);
+        this.children.delete(id);
+        this.adopted.delete(id);
+        this.clearTimeout(id);
+        this.emitJob("job_lost", lost);
+        this.pruneJournal();
+        return lost;
       }
       if (this.closed) return row;
       const after = this.store.get(id);
@@ -469,7 +508,14 @@ export class JobSupervisor extends EventEmitter {
     let daemonized = false;
     const pgid = row.pgid ?? row.pid;
     if (pgid != null && isGroupAlive(pgid)) {
-      await killProcessGroup(pgid, { graceMs: 1000 });
+      const killed = await this.killGroup(pgid, { graceMs: 1000 });
+      if (this.closed || this.stopping.has(id)) return;
+      if (!killed) {
+        const lost = this.store.markLost(id);
+        this.journalHolds.add(id);
+        this.emitJob("job_lost", lost);
+        return;
+      }
       daemonized = true;
     }
     if (this.closed || this.stopping.has(id)) return;
@@ -589,13 +635,17 @@ export class JobSupervisor extends EventEmitter {
       if (!record.start_id || !actualStart || record.start_id !== actualStart) continue;
       if (isGroupAlive(record.pgid)) {
         console.warn(`[jobs] reaping unclaimed group ${record.pgid} (${record.job_id})`);
-        await killProcessGroup(record.pgid, { graceMs: 500 });
+        await this.killGroup(record.pgid, { graceMs: 500 });
       }
     }
   }
 
   private pruneJournal(): void {
-    const keep = new Set<string>([...this.children.keys(), ...this.adopted.keys()]);
+    const keep = new Set<string>([
+      ...this.children.keys(),
+      ...this.adopted.keys(),
+      ...this.journalHolds,
+    ]);
     for (const row of this.store.list({ states: ["starting", "running"], limit: 1000 })) {
       keep.add(row.id);
     }

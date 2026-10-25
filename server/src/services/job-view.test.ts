@@ -10,6 +10,8 @@ import {
   initJobView,
   listJobView,
   markChatJobsStopped,
+  markJobViewFailed,
+  markJobViewLost,
   markKernelJobsLostAtStartup,
   recordCellStarted,
   recordSupervisorStarting,
@@ -193,5 +195,29 @@ describe("job view", () => {
     // chat-2 to declare its service lost.
     reconcileSupervisorJobs([], { chatId: "chat-1" });
     expect(getJobView("sup-6")?.state).toBe("running");
+  });
+
+  it("corrects a false lost/failed row only from an authoritative supervisor report", () => {
+    recordSupervisorStarting({
+      jobId: "sup-7",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 10",
+      cwd: "/tmp",
+    });
+    upsertSupervisorJob({ job: supervisorJob("sup-7") });
+    markJobViewLost("sup-7", "start-unknown");
+
+    // An event-shaped update keeps the terminal guard.
+    upsertSupervisorJob({ job: supervisorJob("sup-7", "running") });
+    expect(getJobView("sup-7")?.state).toBe("lost");
+
+    // The supervisor list/start response is authoritative: the job is live.
+    upsertSupervisorJob({ job: supervisorJob("sup-7", "running") }, { authoritative: true });
+    expect(getJobView("sup-7")?.state).toBe("running");
+
+    markJobViewFailed("sup-7", "spawn-failed");
+    upsertSupervisorJob({ job: supervisorJob("sup-7", "running") }, { authoritative: true });
+    expect(getJobView("sup-7")?.state).toBe("running");
   });
 });

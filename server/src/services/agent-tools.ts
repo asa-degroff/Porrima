@@ -1578,6 +1578,12 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       if (job.source === "supervisor") {
         try {
           const stopped = await stopSupervisorJob(jobId, force);
+          if (stopped.state === "lost") {
+            return result(
+              `Stop requested for ${jobId}, but the process group did not confirm death; outcome unknown.`,
+              true,
+            );
+          }
           return result(
             `Stopped ${jobId} (${stopped.stop_reason ?? stopped.state}).`,
           );
