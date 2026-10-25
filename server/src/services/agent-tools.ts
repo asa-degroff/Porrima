@@ -1546,6 +1546,7 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
         );
       }
       let text = "";
+      let outputMissing = false;
       if (job.source === "kernel") {
         const live = tailKernelJob(chatId, jobId, requested);
         if (live.found) text = live.text ?? "";
@@ -1553,16 +1554,22 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       if (!text && job.output_paths[0]) {
         try {
           text = await readJobOutputTail(job.output_paths[0], requested);
-        } catch {
+        } catch (error) {
           text = "";
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+            outputMissing = true;
+          }
         }
       }
       if (job.source === "supervisor" && job.output_paths[1]) {
         try {
           const stderr = await readJobOutputTail(job.output_paths[1], requested);
           if (stderr.trim()) text = `${text}${text ? "\n" : ""}${stderr}`;
-        } catch {
+        } catch (error) {
           // No stderr file yet.
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+            outputMissing = true;
+          }
         }
       }
       if (!text) {
@@ -1571,7 +1578,9 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
             ? "(no output yet)"
             : job.state === "lost"
               ? "(no retained output; outcome unknown)"
-              : "(no output)";
+              : outputMissing && (job.state === "finished" || job.state === "stopped")
+                ? "(output expired by retention)"
+                : "(no output)";
       }
       if (job.state === "running") markTailed(chatId, jobId);
       return result(`[${job.state}] ${jobId}\n${text.trimEnd()}`);

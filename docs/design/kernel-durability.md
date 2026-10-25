@@ -399,9 +399,9 @@ live *kernel/cell* work durable. Do not let the supervisor's success become an a
 
 ## 8. Open questions
 
-1. **Ledger retention.** `jobs.db` rows and `job_view` rows: how long do finished rows live, and
-   do they age out with the output files or later? The audit argument says keep the row after
-   the output is pruned.
+1. **Ledger retention.** Resolved: output files age out after 14 days; terminal `jobs.db` and
+   `job_view` rows after 30 days, with the view allowed a longer window. The audit row survives
+   the output; `jobs tail` reports expired output.
 2. **Does `bash` background auto-trigger on timeout**, or only on an explicit flag? Codex
    auto-backgrounds; `yield_after_ms` is the ergonomic middle ground, and auto-trigger makes a
    surprise handle appear mid-turn.

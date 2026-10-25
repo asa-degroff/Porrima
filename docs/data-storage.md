@@ -21,8 +21,8 @@ The project was renamed from `quje-agent` to `Porrima`. `paths.ts` performs both
 ~/.porrima/
 ├── app.db              # Main SQLite database — see schemas below
 ├── porrima.db          # Operational database (model/reranker stats, requests, jobs read model, KV snapshots)
-├── jobs.db             # Job supervisor execution ledger (owned by porrima-jobs.service)
-├── jobs/               # Job supervisor output dirs + group journal
+├── jobs.db             # Job supervisor execution ledger (owned by porrima-jobs.service; terminal rows pruned at 30d)
+├── jobs/               # Job supervisor output dirs + group journal (output pruned at 14d)
 ├── llama-slot-bindings.json # Persisted slot→chat lease bindings (only when slot binding is enabled)
 ├── tts.env             # Python interpreter overrides for the TTS backends
 ├── diagnostics/        # token-estimates.jsonl — token estimate observability
@@ -99,7 +99,7 @@ Opened via `memory-storage.ts` `getDb()`. Also the handle used by `notebook-stor
 
 - `model_stats` — per-request sampling rows: `modelId`, `provider`, `timestamp`, `promptTokens`, `predictedTokens`, `promptMs`, `predictedMs`, `sampleMs`, and derived `promptTokensPerSec` / `predictedTokensPerSec`
 - `reranker_stats` — per-call reranking rows: `usedModel`, `latencyMs`, `documentCount`, `topN`, `totalTokens`, score distribution (`scoreMin`/`scoreMax`/`scoreMedian`), plus `chatType` and `source` for attribution
-- `job_view` — unified job read model for the `jobs` tool: kernel cell rows plus supervisor command/service rows mirrored from `jobs.db`; also owns notice fields (`notice_group`, `notice_message_id`, `notice_state`) and is the fallback when the supervisor is unavailable. `jobs.db` remains authoritative for command execution; the job supervisor's output files live under `~/.porrima/jobs/<chat>/<job>/`
+- `job_view` — unified job read model for the `jobs` tool: kernel cell rows plus supervisor command/service rows mirrored from `jobs.db`; also owns notice fields (`notice_group`, `notice_message_id`, `notice_state`) and is the fallback when the supervisor is unavailable. `jobs.db` remains authoritative for command execution; the job supervisor's output files live under `~/.porrima/jobs/<chat>/<job>/`. Terminal `job_view` rows are pruned at 30 days (optionally longer than the supervisor ledger); output files at 14 days.
 
 ## Chat Message Compatibility
 

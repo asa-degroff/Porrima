@@ -7,6 +7,12 @@ import { startAutomationScheduler } from "./automation-scheduler.js";
 import { isSystemPauseActive } from "./system-pause.js";
 import { sweepExpired } from "./tool-output-store.js";
 import { pruneKvSnapshots } from "./kv-snapshot.js";
+import { pruneTerminalJobView } from "./job-view.js";
+import {
+  JOB_RETENTION_BATCH,
+  JOB_RETENTION_SWEEP_INTERVAL_MS,
+  jobViewRetentionMs,
+} from "./job-retention.js";
 
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const TOOL_OUTPUT_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -222,6 +228,22 @@ async function checkLlamaServerPids(): Promise<void> {
 // Scheduler Startup
 // ---------------------------------------------------------------------------
 
+function pruneJobViewRetention(): number {
+  const cutoff = new Date(Date.now() - jobViewRetentionMs()).toISOString();
+  let removed = 0;
+  for (let batch = 0; batch < 20; batch += 1) {
+    const count = pruneTerminalJobView(cutoff, JOB_RETENTION_BATCH);
+    removed += count;
+    if (count < JOB_RETENTION_BATCH) break;
+  }
+  if (removed > 0) {
+    console.log(
+      `[scheduler] pruned ${removed} terminal job_view rows older than ${cutoff}`,
+    );
+  }
+  return removed;
+}
+
 export function startScheduler(): void {
   // User-configurable automations own synthesis/wake scheduling.
   startAutomationScheduler();
@@ -268,5 +290,17 @@ export function startScheduler(): void {
   pruneKv();
   setInterval(pruneKv, TOOL_OUTPUT_SWEEP_INTERVAL_MS);
 
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min, tool-output sweep every 1h, kv-snapshot prune every 1h)");
+  // Terminal job_view rows are the server's audit/read-model half; the
+  // supervisor prunes its own ledger and output directories.
+  const pruneJobView = () => {
+    try {
+      pruneJobViewRetention();
+    } catch (error) {
+      console.warn("[scheduler] job_view retention prune failed:", error);
+    }
+  };
+  pruneJobView();
+  setInterval(pruneJobView, JOB_RETENTION_SWEEP_INTERVAL_MS);
+
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, llama PID check every 30s, turn-gate reap every 1min, tool-output sweep every 1h, kv-snapshot prune every 1h, job retention sweep every 24h)");
 }

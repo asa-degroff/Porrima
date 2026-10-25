@@ -50,6 +50,16 @@ export interface JobListFilter {
   limit?: number;
 }
 
+/** Paths and flags needed by the supervisor's retention sweep. */
+export interface JobRetentionRow {
+  id: string;
+  chat_id: string;
+  stdout_path: string;
+  stderr_path: string;
+  status_path: string;
+  outputs_pruned_at: string | null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
@@ -72,6 +82,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   stderr_path TEXT NOT NULL,
   status_path TEXT NOT NULL,
   origin_turn_id TEXT,
+  outputs_pruned_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -114,11 +125,17 @@ export class JobStore {
     db.pragma("busy_timeout = 5000");
     db.exec(SCHEMA);
     const version = Number(db.pragma("user_version", { simple: true }) ?? 0);
-    if (version > 1) {
+    if (version > 2) {
       db.close();
-      throw new Error(`jobs.db schema version ${version} is newer than supported version 1`);
+      throw new Error(`jobs.db schema version ${version} is newer than supported version 2`);
     }
-    if (version === 0) db.pragma("user_version = 1");
+    if (version < 2) {
+      const columns = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === "outputs_pruned_at")) {
+        db.exec("ALTER TABLE jobs ADD COLUMN outputs_pruned_at TEXT");
+      }
+      db.pragma("user_version = 2");
+    }
     if (dbPath !== ":memory:") {
       try {
         chmodSync(dbPath, 0o600);
@@ -264,6 +281,111 @@ export class JobStore {
       .prepare(`SELECT * FROM jobs ${where} ORDER BY created_at DESC, id DESC LIMIT ?`)
       .all(...params, limit) as JobRow[];
     return rows.map(rowToJob);
+  }
+
+  /**
+   * Terminal rows whose outcome is older than the cutoff. `excludeIds` keeps
+   * protected live/journal-held rows from consuming a batch window.
+   */
+  listTerminalBefore(
+    cutoffIso: string,
+    limit = 500,
+    excludeIds: string[] = [],
+    unprunedOutputsOnly = false,
+  ): JobRetentionRow[] {
+    const clauses = [
+      "state IN ('finished', 'stopped', 'lost', 'failed')",
+      "COALESCE(ended_at, updated_at) < ?",
+    ];
+    const params: unknown[] = [cutoffIso];
+    if (unprunedOutputsOnly) clauses.push("outputs_pruned_at IS NULL");
+    if (excludeIds.length > 0) {
+      const ids = [...new Set(excludeIds)].slice(0, 400);
+      clauses.push(`id NOT IN (${ids.map(() => "?").join(", ")})`);
+      params.push(...ids);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT id, chat_id, stdout_path, stderr_path, status_path, outputs_pruned_at
+         FROM jobs WHERE ${clauses.join(" AND ")}
+         ORDER BY COALESCE(ended_at, updated_at) ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(...params, Math.max(1, Math.min(limit, 500))) as JobRetentionRow[];
+    return rows;
+  }
+
+  /** Rows whose output is not yet marked as pruned. */
+  listOutputsToPrune(
+    cutoffIso: string,
+    limit = 500,
+    excludeIds: string[] = [],
+  ): JobRetentionRow[] {
+    return this.listTerminalBefore(cutoffIso, limit, excludeIds, true);
+  }
+
+  markOutputsPruned(ids: string[], at: string): number {
+    if (ids.length === 0) return 0;
+    const unique = [...new Set(ids)].slice(0, 400);
+    const info = this.db
+      .prepare(
+        `UPDATE jobs SET outputs_pruned_at = ?
+         WHERE id IN (${unique.map(() => "?").join(", ")})
+           AND state IN ('finished', 'stopped', 'lost', 'failed')
+           AND outputs_pruned_at IS NULL`,
+      )
+      .run(at, ...unique);
+    return info.changes;
+  }
+
+  /**
+   * Delete terminal ledger rows and their events. Re-checks state and cutoff
+   * inside the transaction so a row corrected back to running is never
+   * removed by a stale retention candidate.
+   */
+  deleteTerminal(ids: string[], cutoffIso: string): number {
+    if (ids.length === 0) return 0;
+    const unique = [...new Set(ids)].slice(0, 400);
+    const run = this.db.transaction(() => {
+      const placeholders = unique.map(() => "?").join(", ");
+      const deletable = this.db
+        .prepare(
+          `SELECT id FROM jobs
+           WHERE id IN (${placeholders})
+             AND state IN ('finished', 'stopped', 'lost', 'failed')
+             AND COALESCE(ended_at, updated_at) < ?`,
+        )
+        .all(...unique, cutoffIso) as Array<{ id: string }>;
+      if (deletable.length === 0) return 0;
+      const deleteIds = deletable.map((row) => row.id);
+      const deletePlaceholders = deleteIds.map(() => "?").join(", ");
+      this.db
+        .prepare(`DELETE FROM job_events WHERE job_id IN (${deletePlaceholders})`)
+        .run(...deleteIds);
+      const info = this.db
+        .prepare(`DELETE FROM jobs WHERE id IN (${deletePlaceholders})`)
+        .run(...deleteIds);
+      return info.changes;
+    });
+    return run();
+  }
+
+  /** Id + chat id for every row, used to identify orphaned job directories. */
+  directoryKeys(): Array<{ id: string; chat_id: string }> {
+    return this.db.prepare("SELECT id, chat_id FROM jobs").all() as Array<{
+      id: string;
+      chat_id: string;
+    }>;
+  }
+
+  hasLiveForChat(chatId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 FROM jobs WHERE chat_id = ? AND state IN ('starting', 'running') LIMIT 1",
+        )
+        .get(chatId),
+    );
   }
 
   countByState(): Record<JobState, number> {

@@ -196,6 +196,19 @@ export interface StopChatRequest {
   chat_id: string;
 }
 
+export interface DeleteChatOutputsRequest {
+  type: "delete_chat_outputs";
+  id?: string;
+  chat_id: string;
+}
+
+export interface ChatOutputsDeletedReply {
+  type: "chat_outputs_deleted";
+  id?: string;
+  deleted: boolean;
+  reason?: string;
+}
+
 export interface StopAllRequest {
   type: "stop_all";
   id?: string;
@@ -253,6 +266,7 @@ export type JobRequest =
   | WaitForRequest
   | StatsRequest
   | StopChatRequest
+  | DeleteChatOutputsRequest
   | StopAllRequest
   | SubscribeRequest
   | PingRequest;
@@ -266,6 +280,7 @@ export type JobReply =
   | WaitedReply
   | StatsReply
   | StoppedAllReply
+  | ChatOutputsDeletedReply
   | SubscribedReply
   | PongReply
   | EventFrame

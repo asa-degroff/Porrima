@@ -266,6 +266,25 @@ export async function stopSupervisorJob(
   return upsertSupervisorJob({ job }, { authoritative: true });
 }
 
+/**
+ * Drop a deleted chat's job output after its groups are confirmed stopped.
+ * Ledger/view rows stay for the normal record-retention window; the supervisor
+ * refuses while a live group or active journal record remains.
+ */
+export async function deleteChatSupervisorOutputs(
+  chatId: string,
+): Promise<{ deleted: boolean; reason?: string }> {
+  if (!(await ensureSupervisorConnection())) {
+    return { deleted: false, reason: "supervisor-unavailable" };
+  }
+  try {
+    return await getJobsClient().deleteChatOutputs(chatId);
+  } catch (error) {
+    console.warn(`[jobs] delete output for chat ${chatId} failed:`, error);
+    return { deleted: false, reason: "request-failed" };
+  }
+}
+
 export async function stopChatSupervisorJobs(chatId: string): Promise<number> {
   if (!(await ensureSupervisorConnection())) {
     const marked = markChatJobsLost(chatId, "supervisor-unavailable");

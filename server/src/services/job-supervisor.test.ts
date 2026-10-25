@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { access, mkdir, readFile, utimes } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,7 @@ const testEnv = {
   PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
   HOME: process.env.HOME ?? tmpdir(),
 };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function makeHarness(caps?: {
   per_chat?: number;
@@ -344,4 +345,122 @@ describe("job supervisor", () => {
     const journal = latestJournalRecords(harness.journalPath).get(job.pid!);
     expect(journal?.active).toBe(true);
   });
+
+  it("prunes old output before its ledger row", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "echo prune-me" }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+
+    const outputPass = await harness.supervisor.pruneRetention({
+      nowMs: Date.now() + 15 * DAY_MS,
+      outputRetentionMs: 14 * DAY_MS,
+      recordRetentionMs: 30 * DAY_MS,
+      orphanGraceMs: DAY_MS,
+    });
+    expect(outputPass.outputs).toBe(1);
+    await expect(access(finished.stdout_path)).rejects.toThrow();
+    expect(harness.store.get(job.id)?.state).toBe("finished");
+
+    const rowPass = await harness.supervisor.pruneRetention({
+      nowMs: Date.now() + 31 * DAY_MS,
+      outputRetentionMs: 14 * DAY_MS,
+      recordRetentionMs: 30 * DAY_MS,
+      orphanGraceMs: DAY_MS,
+    });
+    expect(rowPass.rows).toBe(1);
+    expect(harness.store.get(job.id)).toBeNull();
+  });
+
+  it("keeps live jobs and their directories through retention", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 30" }),
+    );
+
+    const result = await harness.supervisor.pruneRetention({
+      nowMs: Date.now() + 365 * DAY_MS,
+      outputRetentionMs: DAY_MS,
+      recordRetentionMs: 2 * DAY_MS,
+      orphanGraceMs: 0,
+    });
+    expect(result.outputs).toBe(0);
+    expect(result.rows).toBe(0);
+    expect(harness.store.get(job.id)?.state).toBe("running");
+    await expect(access(job.stdout_path)).resolves.toBeUndefined();
+  });
+
+  it("removes orphaned job directories after the grace period", async () => {
+    const harness = await makeHarness();
+    await mkdir(harness.jobsDir, { recursive: true });
+    const chatDir = join(harness.jobsDir, "orphan-chat");
+    const jobDir = join(chatDir, "orphan-job");
+    await mkdir(jobDir, { recursive: true });
+    const old = new Date(Date.now() - 2 * DAY_MS);
+    await utimes(jobDir, old, old);
+    await utimes(chatDir, old, old);
+
+    const result = await harness.supervisor.pruneRetention({
+      nowMs: Date.now(),
+      outputRetentionMs: DAY_MS,
+      recordRetentionMs: 2 * DAY_MS,
+      orphanGraceMs: DAY_MS,
+    });
+    expect(result.orphans).toBe(1);
+    await expect(access(jobDir)).rejects.toThrow();
+    await expect(access(chatDir)).rejects.toThrow();
+  });
+
+  it("deletes a chat's output tree after its jobs are terminal", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "echo bye" }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+
+    expect(await harness.supervisor.deleteChatOutputs("chat-1")).toEqual({
+      deleted: true,
+    });
+    await expect(access(finished.stdout_path)).rejects.toThrow();
+    expect(harness.store.get(job.id)?.state).toBe("finished");
+  });
+
+  it("refuses to delete chat output while a job is live", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 30" }),
+    );
+
+    expect(await harness.supervisor.deleteChatOutputs("chat-1")).toEqual({
+      deleted: false,
+      reason: "live-jobs",
+    });
+    expect(harness.store.get(job.id)?.state).toBe("running");
+  });
+
+  it("refuses to delete chat output while a journal record is active", async () => {
+    const harness = await makeHarness();
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "echo done" }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    appendJobJournal(harness.journalPath, {
+      version: 1,
+      job_id: job.id,
+      pid: finished.pid ?? 123,
+      pgid: finished.pgid ?? 123,
+      start_id: finished.start_id,
+      boot_id: harness.bootId,
+      active: true,
+      recorded_at: new Date().toISOString(),
+    });
+
+    expect(await harness.supervisor.deleteChatOutputs("chat-1")).toEqual({
+      deleted: false,
+      reason: "active-journal",
+    });
+    await expect(access(finished.stdout_path)).resolves.toBeUndefined();
+  });
+
 });

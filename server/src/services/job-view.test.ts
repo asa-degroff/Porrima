@@ -15,6 +15,7 @@ import {
   markJobViewLost,
   markKernelJobsLostAtStartup,
   markSupervisorJobsProbed,
+  pruneTerminalJobView,
   recordCellStarted,
   recordSupervisorStarting,
   reconcileSupervisorJobs,
@@ -270,6 +271,27 @@ describe("job view", () => {
     expect(ids).toContain("probe-fresh");
     expect(ids).toContain("probe-in-window");
     expect(ids).not.toContain("probe-stale");
+  });
+
+  it("prunes terminal rows past the record cutoff and leaves live rows", () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    upsertSupervisorJob({
+      job: { ...supervisorJob("old-view", "finished"), ended_at: old },
+    });
+    upsertSupervisorJob({ job: supervisorJob("new-view", "finished") });
+    recordSupervisorStarting({
+      jobId: "live-view",
+      chatId: "chat-1",
+      kind: "command",
+      command: "sleep 30",
+      cwd: "/tmp",
+    });
+    upsertSupervisorJob({ job: supervisorJob("live-view", "running") });
+
+    expect(pruneTerminalJobView("2025-01-01T00:00:00.000Z")).toBe(1);
+    expect(getJobView("old-view")).toBeNull();
+    expect(getJobView("new-view")?.state).toBe("finished");
+    expect(getJobView("live-view")?.state).toBe("running");
   });
 
   it("stamps the probe clock only on uncertain supervisor rows", () => {

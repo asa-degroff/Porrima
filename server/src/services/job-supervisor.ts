@@ -9,15 +9,24 @@ import {
   readFileSync,
   statSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   appendJobJournal,
+  latestJobJournalRecords,
   latestJournalRecords,
   pruneJobJournal,
 } from "./job-journal.js";
+import {
+  JOB_RETENTION_BATCH,
+  JOB_RETENTION_SWEEP_INTERVAL_MS,
+  jobOrphanGraceMs,
+  jobOutputRetentionMs,
+  jobRecordRetentionMs,
+} from "./job-retention.js";
 import {
   JOB_PROTOCOL_VERSION,
   type JobEvent,
@@ -64,6 +73,26 @@ export interface JobSupervisorOptions {
   caps?: Partial<SupervisorCaps>;
   /** Test/embedding seam; defaults to process-supervisor's group killer. */
   killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>;
+}
+
+export interface JobRetentionOptions {
+  nowMs?: number;
+  outputRetentionMs?: number;
+  recordRetentionMs?: number;
+  orphanGraceMs?: number;
+  batchSize?: number;
+  maxBatches?: number;
+}
+
+export interface JobRetentionResult {
+  outputs: number;
+  rows: number;
+  orphans: number;
+}
+
+export interface ChatOutputDeletionResult {
+  deleted: boolean;
+  reason?: "live-jobs" | "active-journal" | "io-error";
 }
 
 /** Process identity captured at spawn time, before any ledger write exists. */
@@ -155,6 +184,8 @@ export class JobSupervisor extends EventEmitter {
   /** Jobs whose group did not confirm death; their journal records must stay. */
   private readonly journalHolds = new Set<string>();
   private pollTimer: NodeJS.Timeout | null = null;
+  private retentionTimer: NodeJS.Timeout | null = null;
+  private pruningRetention = false;
   private closed = false;
 
   constructor(options: JobSupervisorOptions) {
@@ -200,6 +231,229 @@ export class JobSupervisor extends EventEmitter {
 
   eventsSince(seq: number): JobEvent[] {
     return this.store.eventsSince(seq);
+  }
+
+  /**
+   * Start the daily retention sweep. Called after recover(): lost groups must
+   * be reaped before their directories become deletion candidates.
+   */
+  startRetentionSweep(intervalMs = JOB_RETENTION_SWEEP_INTERVAL_MS): void {
+    if (this.closed || this.retentionTimer) return;
+    void this.pruneRetention().catch((error) => {
+      console.warn("[jobs] initial retention sweep failed:", error);
+    });
+    this.retentionTimer = setInterval(() => {
+      void this.pruneRetention().catch((error) => {
+        console.warn("[jobs] retention sweep failed:", error);
+      });
+    }, Math.max(60_000, intervalMs));
+    this.retentionTimer.unref?.();
+  }
+
+  /**
+   * Remove old output directories, then old terminal ledger rows. Output and
+   * row cutoffs are separate: the audit row survives the large files.
+   *
+   * Live jobs, adopted children, and journal-held groups are protected. A row
+   * whose output removal failed is left for the next sweep rather than
+   * deleting the row and orphaning the directory.
+   */
+  async pruneRetention(options: JobRetentionOptions = {}): Promise<JobRetentionResult> {
+    const result: JobRetentionResult = { outputs: 0, rows: 0, orphans: 0 };
+    if (this.closed || this.pruningRetention) return result;
+    this.pruningRetention = true;
+    try {
+      const nowMs = options.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const outputRetentionMs = options.outputRetentionMs ?? jobOutputRetentionMs();
+      const recordRetentionMs = options.recordRetentionMs ?? jobRecordRetentionMs();
+      const orphanGraceMs = options.orphanGraceMs ?? jobOrphanGraceMs();
+      const batchSize = Math.max(1, Math.min(options.batchSize ?? JOB_RETENTION_BATCH, 500));
+      const maxBatches = Math.max(1, Math.min(options.maxBatches ?? 20, 100));
+      const protectedIds = this.retentionProtectedIds();
+      const outputCutoff = new Date(nowMs - outputRetentionMs).toISOString();
+      const recordCutoff = new Date(nowMs - recordRetentionMs).toISOString();
+
+      // Output-only phase: keep the ledger row for audit, remove the files.
+      const outputExcluded = new Set(protectedIds);
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const batch = this.store.listOutputsToPrune(
+          outputCutoff,
+          batchSize,
+          [...outputExcluded],
+        );
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          const outcome = await this.removeJobOutput(row);
+          if (outcome === "failed") {
+            outputExcluded.add(row.id);
+            continue;
+          }
+          this.store.markOutputsPruned([row.id], nowIso);
+          if (outcome === "removed") result.outputs += 1;
+        }
+        if (batch.length < batchSize) break;
+      }
+
+      // Row phase: a row survives its output by the record retention delta.
+      const rowExcluded = new Set(protectedIds);
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const batch = this.store.listTerminalBefore(
+          recordCutoff,
+          batchSize,
+          [...rowExcluded],
+        );
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          const outcome = await this.removeJobOutput(row);
+          if (outcome === "failed") {
+            rowExcluded.add(row.id);
+            continue;
+          }
+          const deleted = this.store.deleteTerminal([row.id], recordCutoff);
+          if (deleted > 0) {
+            result.rows += deleted;
+          } else {
+            rowExcluded.add(row.id);
+          }
+        }
+        if (batch.length < batchSize) break;
+      }
+
+      result.orphans = await this.pruneOrphanDirs(nowMs, orphanGraceMs);
+      this.pruneJournal();
+      if (result.outputs > 0 || result.rows > 0 || result.orphans > 0) {
+        console.log(
+          `[jobs] retention: rows=${result.rows} outputs=${result.outputs} orphans=${result.orphans}`,
+        );
+      }
+      return result;
+    } finally {
+      this.pruningRetention = false;
+    }
+  }
+
+  /** Remove a deleted chat's output tree without touching its ledger rows. */
+  async deleteChatOutputs(chatId: string): Promise<ChatOutputDeletionResult> {
+    if (this.closed) return { deleted: false, reason: "io-error" };
+    if (this.store.hasLiveForChat(chatId)) {
+      return { deleted: false, reason: "live-jobs" };
+    }
+
+    for (const record of latestJobJournalRecords(this.journalPath).values()) {
+      if (!record.active) continue;
+      const row = this.store.get(record.job_id);
+      // An active group with no row cannot be attributed to a chat; keep the
+      // output rather than risk deleting a live job's directory.
+      if (!row || row.chat_id === chatId) {
+        return { deleted: false, reason: "active-journal" };
+      }
+    }
+
+    try {
+      await rm(this.chatDir(chatId), { recursive: true, force: true });
+      const rows = this.store.list({ chat_id: chatId, limit: 1000 });
+      this.store.markOutputsPruned(
+        rows.map((row) => row.id),
+        new Date().toISOString(),
+      );
+      return { deleted: true };
+    } catch (error) {
+      console.warn(`[jobs] deleting output for chat ${chatId} failed:`, error);
+      return { deleted: false, reason: "io-error" };
+    }
+  }
+
+  private retentionProtectedIds(): Set<string> {
+    const protectedIds = new Set<string>([
+      ...this.children.keys(),
+      ...this.adopted.keys(),
+      ...this.journalHolds,
+    ]);
+    for (const row of this.store.list({ states: ["starting", "running"], limit: 1000 })) {
+      protectedIds.add(row.id);
+    }
+    for (const record of latestJobJournalRecords(this.journalPath).values()) {
+      if (record.active) protectedIds.add(record.job_id);
+    }
+    return protectedIds;
+  }
+
+  private async removeJobOutput(
+    row: Pick<JobRecord, "id" | "chat_id">,
+  ): Promise<"removed" | "absent" | "failed"> {
+    const dir = this.jobDir(row.chat_id, row.id);
+    try {
+      await stat(dir);
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return "absent";
+      console.warn(`[jobs] cannot stat output dir ${dir}:`, error);
+      return "failed";
+    }
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return "removed";
+    } catch (error) {
+      console.warn(`[jobs] cannot remove output dir ${dir}:`, error);
+      return "failed";
+    }
+  }
+
+  /** Remove job directories with no ledger row and empty chat directories. */
+  private async pruneOrphanDirs(nowMs: number, graceMs: number): Promise<number> {
+    const known = new Set(
+      this.store.directoryKeys().map((row) => `${safeDir(row.chat_id)}/${safeDir(row.id)}`),
+    );
+    // A journal-only active group has no ledger row but its directory may
+    // still be the only place its pid/start_id identity lives.
+    const activeJournalDirs = new Set(
+      [...latestJobJournalRecords(this.journalPath).values()]
+        .filter((record) => record.active)
+        .map((record) => safeDir(record.job_id)),
+    );
+    let removed = 0;
+    let chatDirs: Dirent[];
+    try {
+      chatDirs = await readdir(this.jobsDir, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    for (const chatEntry of chatDirs) {
+      if (!chatEntry.isDirectory()) continue;
+      const chatDir = join(this.jobsDir, chatEntry.name);
+      let jobDirs: Dirent[];
+      try {
+        jobDirs = await readdir(chatDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const jobEntry of jobDirs) {
+        if (!jobEntry.isDirectory()) continue;
+        if (activeJournalDirs.has(jobEntry.name)) continue;
+        if (known.has(`${chatEntry.name}/${jobEntry.name}`)) continue;
+        const dir = join(chatDir, jobEntry.name);
+        try {
+          const info = await stat(dir);
+          if (nowMs - info.mtimeMs < graceMs) continue;
+          await rm(dir, { recursive: true, force: true });
+          removed += 1;
+        } catch {
+          // Vanished or unreadable; leave it for the next sweep.
+        }
+      }
+      try {
+        const remaining = await readdir(chatDir);
+        if (remaining.length === 0) await rm(chatDir, { recursive: true, force: true });
+      } catch {
+        // Best effort.
+      }
+    }
+    return removed;
+  }
+
+  private chatDir(chatId: string): string {
+    return join(this.jobsDir, safeDir(chatId));
   }
 
   async recover(): Promise<void> {
@@ -486,6 +740,10 @@ export class JobSupervisor extends EventEmitter {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.retentionTimer) {
+      clearInterval(this.retentionTimer);
+      this.retentionTimer = null;
     }
     for (const timer of this.timeouts.values()) clearTimeout(timer);
     this.timeouts.clear();

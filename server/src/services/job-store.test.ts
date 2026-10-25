@@ -148,4 +148,50 @@ describe("job store", () => {
     const live = store.list({ states: ["starting", "running"], limit: 1000 });
     expect(live.map((job) => job.id)).toEqual(["a-live-service"]);
   });
+
+  it("lists and deletes terminal rows by the retention cutoff", () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    const cutoff = "2025-01-01T00:00:00.000Z";
+    store.insertStarting(newJob("old-job"));
+    store.finish("old-job", {
+      exit_code: 0,
+      signal: null,
+      ended_at: old,
+      duration_ms: 10,
+    });
+    store.appendEvent("job_finished", store.get("old-job")!);
+
+    store.insertStarting(newJob("young-job"));
+    store.finish("young-job", {
+      exit_code: 0,
+      signal: null,
+      ended_at: new Date().toISOString(),
+      duration_ms: 10,
+    });
+
+    store.insertStarting(newJob("running-job"));
+    store.markRunning("running-job", {
+      pid: 99,
+      pgid: 99,
+      start_id: null,
+      boot_id: "boot-1",
+      started_at: new Date().toISOString(),
+    });
+
+    expect(store.listTerminalBefore(cutoff).map((job) => job.id)).toEqual(["old-job"]);
+    expect(store.listOutputsToPrune(cutoff).map((job) => job.id)).toEqual(["old-job"]);
+
+    expect(store.markOutputsPruned(["old-job"], cutoff)).toBe(1);
+    expect(store.listOutputsToPrune(cutoff)).toEqual([]);
+
+    expect(store.deleteTerminal(["old-job", "running-job"], cutoff)).toBe(1);
+    expect(store.get("old-job")).toBeNull();
+    expect(store.get("running-job")?.state).toBe("running");
+    expect(store.eventsSince(0).some((event) => event.job_id === "old-job")).toBe(false);
+
+    expect(store.hasLiveForChat("chat-1")).toBe(true);
+    expect(store.directoryKeys().map((row) => row.id)).toEqual(
+      expect.arrayContaining(["young-job", "running-job"]),
+    );
+  });
 });

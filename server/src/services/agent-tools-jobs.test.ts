@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -325,6 +325,43 @@ describe("bash background + jobs tools", () => {
     await delay(10);
     await jobs.execute("call-list-probe-2", { action: "list" }, signal);
     expect(getJobView("uncertain-list")?.last_synced_at).toBe(firstProbe);
+  });
+
+  it("deletes chat output after a finished job and reports an expired tail", async () => {
+    const { agentTools } = await setup();
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-retained-output",
+      { command: "echo retained-output", background: true },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+
+    const { getJobView } = await import("./job-view.js");
+    let job = getJobView(jobId!);
+    for (let i = 0; i < 20 && job?.state !== "finished"; i += 1) {
+      await delay(50);
+      job = getJobView(jobId!);
+    }
+    expect(job?.state).toBe("finished");
+    const stdout = job!.output_paths[0];
+    expect(stdout).toBeTruthy();
+
+    expect(await runtime!.deleteChatSupervisorOutputs(CHAT)).toEqual({
+      deleted: true,
+    });
+    await expect(access(stdout!)).rejects.toThrow();
+    expect(getJobView(jobId!)).not.toBeNull();
+
+    const tail = resultText(
+      await jobs.execute("call-expired-tail", { action: "tail", jobId }, signal),
+    );
+    expect(tail).toContain("output expired by retention");
   });
 
   it("mirrors a job when the start response is lost but the daemon spawned it", async () => {

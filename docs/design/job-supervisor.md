@@ -139,6 +139,7 @@ jobs(
   started_at TEXT, ended_at TEXT, duration_ms INTEGER,
   stdout_path TEXT, stderr_path TEXT, status_path TEXT,
   origin_turn_id TEXT,
+  outputs_pruned_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 job_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, event TEXT, at TEXT, payload TEXT);
@@ -204,9 +205,14 @@ Output lives beside the ledger, one directory per job:
 ```
 
 The model-facing tail stays bounded (the existing output window); the durable file may be
-larger. Output retention is 14 days by default, settings-tunable, with the row retained longer
-for audit. A row whose output has aged out still reports state; `jobs tail` says the output
-expired rather than pretending the job is unknown.
+larger. Output files are removed after 14 days; terminal `jobs.db` rows are kept for 30 days,
+and the server's `job_view` rows use the same record clock (optionally longer). Sweeps run on
+supervisor start and daily; they touch terminal rows only and protect live, adopted, and
+journal-held groups. A deleted chat drops its output tree once no live group or journal hold
+remains, while its ledger rows age out normally. A row whose output has aged out still reports
+state; `jobs tail` says the output expired rather than pretending the job is unknown.
+`PORRIMA_JOBS_OUTPUT_RETENTION_DAYS` and `PORRIMA_JOBS_RECORD_RETENTION_DAYS` override the
+supervisor windows; `PORRIMA_JOB_VIEW_RETENTION_DAYS` may extend the server view independently.
 
 Alongside `jobs.db`, the supervisor keeps an append-only
 `~/.porrima/jobs/journal.jsonl` (`{version, job_id, pid, pgid, start_id, boot_id, active,
@@ -319,7 +325,9 @@ On supervisor start:
 4. Reap journal groups with no ledger row, and only where the record's `start_id` matches the
    live process. A record whose start time cannot be confirmed is not evidence that the group is
    the supervisor's to kill.
-5. Bind the socket, emit `welcome`, serve.
+5. Start the retention sweep: old output directories, terminal ledger rows, and orphaned
+   directories. The same sweep repeats daily.
+6. Bind the socket, emit `welcome`, serve.
 
 Adoption matrix:
 
@@ -447,9 +455,7 @@ Tests that matter:
    schema/description event, so batch it with L2.
 5. **Protocol compatibility.** How many server/supervisor version pairs must interoperate?
    At minimum, the previous protocol for `list`/`get`/`stop`.
-6. **Output retention.** Match the 14-day job-output retention to the kernel state TTL, or
-   give services a longer window?
-7. **Service log destination.** The job's stdout is a bounded file; a service that needs
+6. **Service log destination.** The job's stdout is a bounded file; a service that needs
    unbounded logs should point at its own log file. `wait_for` watches the job output only
    unless a shared file watch is added.
 

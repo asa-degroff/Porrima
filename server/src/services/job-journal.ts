@@ -107,3 +107,12 @@ export function latestJournalRecords(path: string): Map<number, JobJournalRecord
   }
   return latest;
 }
+
+/** Latest record per job id. The journal is append-only until prune. */
+export function latestJobJournalRecords(path: string): Map<string, JobJournalRecord> {
+  const latest = new Map<string, JobJournalRecord>();
+  for (const record of readJobJournal(path)) {
+    latest.set(record.job_id, record);
+  }
+  return latest;
+}

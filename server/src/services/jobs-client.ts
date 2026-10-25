@@ -43,6 +43,11 @@ export interface ClientWaitForResult {
   finished: boolean;
 }
 
+export interface ClientChatOutputDeletionResult {
+  deleted: boolean;
+  reason?: string;
+}
+
 interface Pending {
   resolve: (value: any) => void;
   reject: (error: Error) => void;
@@ -183,6 +188,14 @@ export class JobsClient {
   async stopAll(): Promise<number> {
     const reply = await this.request({ type: "stop_all" });
     return Number(reply.count ?? 0);
+  }
+
+  async deleteChatOutputs(chatId: string): Promise<ClientChatOutputDeletionResult> {
+    const reply = await this.request({ type: "delete_chat_outputs", chat_id: chatId });
+    return {
+      deleted: reply.deleted === true,
+      reason: typeof reply.reason === "string" ? reply.reason : undefined,
+    };
   }
 
   async subscribe(

@@ -56,6 +56,7 @@ const CAPABILITIES = [
   "wait_for",
   "stats",
   "stop_chat",
+  "delete_chat_outputs",
   "stop_all",
   "subscribe",
   "ping",
@@ -91,6 +92,7 @@ export async function startJobsDaemon(
       caps: options.caps,
     });
     await supervisor.recover();
+    supervisor.startRetentionSweep();
 
     const startedAt = new Date().toISOString();
     const version = process.env.PORRIMA_JOBS_VERSION || "dev";
@@ -325,6 +327,17 @@ class ClientSession {
           requireString(request.chat_id, "chat_id");
           const count = await this.deps.supervisor.stopChat(request.chat_id);
           this.send({ type: "stopped_all", id, count });
+          return;
+        }
+        case "delete_chat_outputs": {
+          requireString(request.chat_id, "chat_id");
+          const result = await this.deps.supervisor.deleteChatOutputs(request.chat_id);
+          this.send({
+            type: "chat_outputs_deleted",
+            id,
+            deleted: result.deleted,
+            reason: result.reason,
+          });
           return;
         }
         case "stop_all": {

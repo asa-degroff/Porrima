@@ -8,7 +8,7 @@ import { cleanupChat } from "./tool-output-store.js";
 import { clearLlmRequests } from "./request-log.js";
 import { invalidateKvSnapshot } from "./kv-snapshot.js";
 import { disposeKernel } from "./python-kernel.js";
-import { stopChatSupervisorJobs } from "./job-runtime.js";
+import { deleteChatSupervisorOutputs, stopChatSupervisorJobs } from "./job-runtime.js";
 import { setNoticesSuppressedForChat } from "./job-view.js";
 
 /**
@@ -39,6 +39,9 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
   // groups, then mark their view rows (chat-deleted). A missing supervisor
   // marks the rows lost instead of pretending they stopped.
   await stopChatSupervisorJobs(chatId).catch(() => {});
+  // Job output is chat-owned data. The supervisor keeps the ledger rows for
+  // audit but drops the files once no live group or journal hold remains.
+  await deleteChatSupervisorOutputs(chatId).catch(() => {});
   // porrima.db side of the ledger: drop this chat's recorded LLM requests.
   clearLlmRequests(chatId);
   // ...and its parked KV snapshot + file (docs/design/kv-snapshot-parking.md).

@@ -588,6 +588,40 @@ export function listJobView(
   return rows.map(rowToView);
 }
 
+/**
+ * Delete terminal rows older than the record cutoff. The supervisor owns the
+ * larger output directories; this is the server's audit/read-model half.
+ * Live rows are never candidates. Notices are already capped at 24h, far
+ * inside the retention window, so a stale pending row cannot pin history.
+ */
+export function pruneTerminalJobView(olderThanIso: string, limit = 500): number {
+  const db = getDb();
+  const run = db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT job_id FROM job_view
+         WHERE state IN ('finished', 'stopped', 'lost', 'failed')
+           AND COALESCE(ended_at, updated_at) < ?
+         ORDER BY COALESCE(ended_at, updated_at) ASC, job_id ASC
+         LIMIT ?`,
+      )
+      .all(olderThanIso, Math.max(1, Math.min(limit, 500))) as Array<{
+      job_id: string;
+    }>;
+    if (rows.length === 0) return 0;
+    const ids = rows.map((row) => row.job_id);
+    const placeholders = ids.map(() => "?").join(", ");
+    const info = db
+      .prepare(
+        `DELETE FROM job_view WHERE job_id IN (${placeholders})
+         AND state IN ('finished', 'stopped', 'lost', 'failed')`,
+      )
+      .run(...ids);
+    return info.changes;
+  });
+  return run();
+}
+
 export function setNoticesSuppressedForChat(chatId: string): void {
   getDb()
     .prepare(
