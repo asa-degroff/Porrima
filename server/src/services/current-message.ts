@@ -42,6 +42,31 @@ export function resolveTrailingRow(
   return messages[messages.length - 1];
 }
 
+/**
+ * The frozen `[time:]` anchor the wire prompt must carry for this turn's user
+ * row. Resolves the row (by identity, then by durable `_rowId`) and reads its
+ * CURRENT `timeAnchor` — never a caller-local captured before the prompt build.
+ *
+ * The anchor is not final when the row is pushed: a deferred AGENTS.md change
+ * is discovered by the prompt build and its notice is appended to the persisted
+ * row afterwards (buildProjectContextNotice). A caller that keeps the pre-build
+ * local puts different bytes on the wire than persistence holds, so the next
+ * turn's replay carries the notice mid-history, the token stream diverges from
+ * the cached prefix at that point, and the whole context re-prefills.
+ */
+export function resolveWireTimeAnchor(
+  messages: ChatMessage[],
+  currentRow?: ChatMessage,
+): string | undefined {
+  if (!currentRow) return undefined;
+  if (messages.includes(currentRow)) return currentRow.timeAnchor;
+  if (currentRow._rowId) {
+    const persisted = messages.find((m) => m._rowId === currentRow._rowId);
+    if (persisted) return persisted.timeAnchor;
+  }
+  return currentRow.timeAnchor;
+}
+
 export type EditTargetSource = "rowId" | "sequence" | "index";
 
 export interface EditTargetResolution {

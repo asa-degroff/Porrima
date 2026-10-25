@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatMessage } from "../types.js";
+import { resolveWireTimeAnchor } from "../services/current-message.js";
 
 function sha1(s: string): string {
   return createHash("sha1").update(s, "utf8").digest("hex");
@@ -302,6 +304,50 @@ describe("project context deferral (service)", () => {
 
     // Snapshot row keeps the SERVED bytes (not the disk bytes).
     expect(projectRows.get(CHAT)!.content).toContain("AGENTS v1 content");
+  });
+
+  it("the wire anchor must be read after the prompt build re-stamps the row", async () => {
+    const f = fixture();
+    const { module } = mockProjectContextDeps(f);
+    const mod = await module;
+    mod.resetAllMemoryContextCaches();
+
+    await mod.buildStablePrefix(CHAT, "proj-1", f.workspaceLabel);
+
+    // Server restart with AGENTS.md edited meanwhile: the durable snapshot
+    // survives, the in-memory cache is cold.
+    f.agentsMd = "AGENTS v2 content";
+    mod.resetAllMemoryContextCaches();
+
+    // The route freezes the anchor BEFORE the prompt build, so it cannot know
+    // about a deferral the build has not discovered yet.
+    const preBuildAnchor = mod.buildTimeAnchor(
+      [{ role: "user", content: "edited", timestamp: Date.now() }],
+      CHAT,
+    );
+    expect(preBuildAnchor).not.toContain("AGENTS.md");
+    const editedRow: ChatMessage = {
+      role: "user",
+      content: "edited",
+      timestamp: Date.now(),
+      timeAnchor: preBuildAnchor,
+      _rowId: "row-edited",
+    };
+    const messages = [editedRow];
+
+    // The build is what discovers the divergence and turns the notice on.
+    await mod.buildStablePrefix(CHAT, "proj-1", f.workspaceLabel);
+    const notice = mod.buildProjectContextNotice(CHAT);
+    expect(notice).toContain("AGENTS.md on disk has changed");
+
+    // The route re-stamps the persisted row after the build (chat.ts /edit).
+    editedRow.timeAnchor = `${editedRow.timeAnchor}${notice}`;
+
+    // The wire must carry the re-stamped bytes: any other value diverges from
+    // what the next turn's replay reconstructs from the persisted row, and the
+    // whole retained context re-prefills at that point.
+    expect(resolveWireTimeAnchor(messages, editedRow)).toBe(editedRow.timeAnchor);
+    expect(resolveWireTimeAnchor(messages, editedRow)).toContain("AGENTS.md on disk has changed");
   });
 
   it("resume with an unchanged file applies fresh (no divergence, no notice)", async () => {

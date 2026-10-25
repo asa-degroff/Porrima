@@ -7,7 +7,7 @@ import type { Message, ToolResultMessage, AssistantMessage, Model } from "@earen
 import type { AgentContext, AgentEvent } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, loadPendingState, savePendingState, clearPendingState, peekPendingAsk, getProject, scanRecoveryRowRepresentation, carryRowIdentity, RevisionConflictError, getChatWithWindow } from "../services/chat-storage.js";
 import { resolveMessageLimit } from "../utils/message-window.js";
-import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow } from "../services/current-message.js";
+import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow, resolveWireTimeAnchor } from "../services/current-message.js";
 import { createTimeMarkerState } from "../services/time-marker.js";
 import { splitNextUserContext } from "../services/pending-user-context.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
@@ -6241,7 +6241,12 @@ router.post("/edit", async (req, res) => {
   }
 
   const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
-  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editNextUserContext.systemContexts, editTimeAnchor);
+  // Resolve the anchor from the edited row, not the pre-build `editTimeAnchor`:
+  // the prompt build above may have appended a deferred AGENTS.md notice to the
+  // persisted row, and the wire must carry the same bytes every future replay
+  // reconstructs from that row.
+  const editWireTimeAnchor = resolveWireTimeAnchor(chat.messages, userMsg);
+  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editNextUserContext.systemContexts, editWireTimeAnchor);
 
   const editLease = await acquireTurnGate(chat, req, res);
   if (!editLease) return;

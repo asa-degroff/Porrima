@@ -625,9 +625,13 @@ The prefix is untouchable, so the notice rides the message tail with the
 on the persisted row and replays byte-exact like the anchor itself. On the
 main and edit paths the anchor is stamped BEFORE the prompt build (which is
 what discovers the deferral), so the route re-stamps the notice onto this
-turn's row after `buildSplitAugmentedPrompt` returns and re-saves — wire and
-row stay identical. Without the notice the agent could work all session
-against instructions it can't see it's missing.
+turn's row after `buildSplitAugmentedPrompt` returns and re-saves. The wire
+anchor is then read back from that row (`resolveWireTimeAnchor`), not from the
+pre-build local, so both carry the notice. A caller that keeps its own copy
+puts bytes on the wire that the row does not hold; the next turn's replay then
+diverges at that message and re-prefills the whole context.
+Without the notice the agent could work all session against instructions it
+can't see it's missing.
 
 ### 11.4 Landing points
 

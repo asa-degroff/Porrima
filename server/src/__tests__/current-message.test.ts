@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../types.js";
-import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow } from "../services/current-message.js";
+import { resolveCurrentMessageIndex, resolveEditTargetIndex, resolveTrailingRow, resolveWireTimeAnchor } from "../services/current-message.js";
 
 /**
  * Plan test 11 — route-level current-message tracking by id.
@@ -105,6 +105,53 @@ describe("current-message resolution (id-anchored, route-level)", () => {
       "repair prompt",
       "[Agent from other chat] post",
     ]);
+  });
+});
+
+describe("wire time anchor resolution (deferred AGENTS.md re-stamp)", () => {
+  const PRE_BUILD_ANCHOR = "\n\n[time: 2026-10-24 22:29 MDT (UTC-06:00)]";
+  const NOTICE =
+    "\n\n[project: AGENTS.md on disk has changed since the project context in this prompt was applied. " +
+    "The prompt intentionally still shows the previous version to preserve the cached context — read " +
+    "AGENTS.md or check git status if project instructions matter to the current work. The updated file " +
+    "is applied at the next compaction.]";
+
+  it("reads the row's current anchor, including a notice stamped after the anchor was built", () => {
+    const messages: ChatMessage[] = [];
+    const current = row("edited", "c");
+    current.timeAnchor = PRE_BUILD_ANCHOR;
+    messages.push(current);
+
+    // The prompt build is what discovers the deferral; the route re-stamps the
+    // persisted row afterwards. The pre-build local must not win.
+    current.timeAnchor = `${PRE_BUILD_ANCHOR}${NOTICE}`;
+
+    expect(PRE_BUILD_ANCHOR).not.toContain("AGENTS.md");
+    expect(resolveWireTimeAnchor(messages, current)).toContain("AGENTS.md on disk has changed");
+  });
+
+  it("resolves the re-stamped anchor by row id after a rebase replaced the row object", () => {
+    const live = row("edited", "c");
+    live.timeAnchor = PRE_BUILD_ANCHOR; // the caller's pre-rebase object
+    const persisted = row("edited", "c");
+    persisted.timeAnchor = `${PRE_BUILD_ANCHOR}${NOTICE}`;
+
+    expect(resolveWireTimeAnchor([ORIGIN_USER, persisted], live)).toContain(
+      "AGENTS.md on disk has changed",
+    );
+  });
+
+  it("falls back to the caller's row when it is absent, never dropping the notice", () => {
+    const live = row("edited", "c");
+    live.timeAnchor = `${PRE_BUILD_ANCHOR}${NOTICE}`;
+
+    expect(resolveWireTimeAnchor([ORIGIN_USER, PRESERVED_POST], live)).toContain(
+      "AGENTS.md on disk has changed",
+    );
+  });
+
+  it("returns undefined when no current row is tracked", () => {
+    expect(resolveWireTimeAnchor([ORIGIN_USER], undefined)).toBeUndefined();
   });
 });
 
