@@ -242,6 +242,9 @@ function formatJobDetail(job: JobViewRow): string {
   if (job.state === "lost") {
     lines.push("outcome unknown; check side effects before re-running.");
   }
+  if (job.stop_reason === "log-cap") {
+    lines.push("output capped; older output was discarded.");
+  }
   return lines.join("\n");
 }
 
@@ -1581,6 +1584,9 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
               : outputMissing && (job.state === "finished" || job.state === "stopped")
                 ? "(output expired by retention)"
                 : "(no output)";
+      }
+      if (job.stop_reason === "log-cap" && job.state !== "lost") {
+        text = `${text}${text ? "\n" : ""}[output capped; older output discarded]`;
       }
       if (job.state === "running") markTailed(chatId, jobId);
       return result(`[${job.state}] ${jobId}\n${text.trimEnd()}`);

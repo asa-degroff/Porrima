@@ -336,6 +336,9 @@ function noticeDisplayLine(job: JobViewRow): string {
   const duration = job.duration_ms != null ? `, ${formatDuration(job.duration_ms)}` : "";
   const command = shortCommand(job.command);
   if (job.state === "lost") return `${job.kind} outcome unknown: ${command}`;
+  if (job.stop_reason === "log-cap") {
+    return `${job.kind} output capped${duration}: ${command}`;
+  }
   if (job.kind === "service" && job.state === "finished") {
     return `service exited unexpectedly (exit ${job.exit_code ?? "?"}${duration}): ${command}`;
   }

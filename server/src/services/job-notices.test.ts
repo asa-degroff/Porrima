@@ -182,6 +182,9 @@ describe("job notices", () => {
       notices.shouldNotify({ ...base, kind: "command", state: "stopped", stop_reason: "timeout" }),
     ).toBe(true);
     expect(
+      notices.shouldNotify({ ...base, kind: "command", state: "stopped", stop_reason: "log-cap" }),
+    ).toBe(true);
+    expect(
       notices.shouldNotify({ ...base, kind: "command", state: "stopped", stop_reason: "user" }),
     ).toBe(false);
     expect(notices.shouldNotify({ ...base, kind: "service", state: "finished" })).toBe(true);

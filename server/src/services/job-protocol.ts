@@ -176,6 +176,7 @@ export interface SupervisorStats {
   db_path: string;
   jobs: Record<JobState, number>;
   db_bytes: number;
+  max_output_bytes: number;
   caps: {
     per_chat: number;
     box: number;

@@ -93,6 +93,7 @@ export async function startJobsDaemon(
     });
     await supervisor.recover();
     supervisor.startRetentionSweep();
+    supervisor.startOutputCapWatch();
 
     const startedAt = new Date().toISOString();
     const version = process.env.PORRIMA_JOBS_VERSION || "dev";

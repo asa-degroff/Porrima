@@ -47,7 +47,7 @@ let jobsDir = "";
 let daemon: JobsDaemonHandle | null = null;
 let runtime: typeof import("./job-runtime.js") | null = null;
 
-async function setup() {
+async function setup(options: { maxOutputBytes?: string } = {}) {
   vi.resetModules();
   dataDir = await mkdtemp(join(tmpdir(), "porrima-jobs-tools-"));
   jobsDir = await mkdtemp(join(tmpdir(), "porrima-jobs-tools-plane-"));
@@ -57,6 +57,9 @@ async function setup() {
   process.env.PORRIMA_JOBS_DB = join(jobsDir, "jobs.db");
   process.env.PORRIMA_JOBS_SOCKET = join(jobsDir, "jobs.sock");
   process.env.PORRIMA_JOBS_LOCK = join(jobsDir, "jobs.lock");
+  if (options.maxOutputBytes) {
+    process.env.PORRIMA_JOBS_MAX_OUTPUT_BYTES = options.maxOutputBytes;
+  }
 
   const { startJobsDaemon } = await import("../jobs-daemon.js");
   daemon = await startJobsDaemon({
@@ -92,6 +95,7 @@ afterEach(async () => {
     "PORRIMA_JOBS_DB",
     "PORRIMA_JOBS_SOCKET",
     "PORRIMA_JOBS_LOCK",
+    "PORRIMA_JOBS_MAX_OUTPUT_BYTES",
   ]) {
     delete process.env[key];
   }
@@ -133,6 +137,35 @@ describe("bash background + jobs tools", () => {
       await jobs.execute("call-tail", { action: "tail", jobId }, signal),
     );
     expect(tail).toContain("hi from supervisor");
+  });
+
+  it("reports a capped job and preserves the output tail", async () => {
+    const { agentTools } = await setup({ maxOutputBytes: "1024" });
+    const tools = await agentTools.getAgentTools(CHAT, effects);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const jobs = tools.find((tool) => tool.name === "jobs")!;
+    const signal = new AbortController().signal;
+
+    const started = await bash.execute(
+      "call-capped",
+      { command: "head -c 4096 /dev/zero; printf TAIL", background: true },
+      signal,
+    );
+    const jobId = resultText(started).match(/Started background command (\S+)/)?.[1];
+    expect(jobId).toBeTruthy();
+    await delay(400);
+
+    const status = resultText(
+      await jobs.execute("call-capped-status", { action: "status", jobId }, signal),
+    );
+    expect(status).toContain("log-cap");
+    expect(status).toContain("output capped");
+
+    const tail = resultText(
+      await jobs.execute("call-capped-tail", { action: "tail", jobId }, signal),
+    );
+    expect(tail).toContain("TAIL");
+    expect(tail).toContain("[output capped; older output discarded]");
   });
 
   it("waits for a service readiness line", async () => {

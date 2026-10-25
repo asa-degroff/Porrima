@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, utimes } from "node:fs/promises";
+import { access, mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,7 +34,7 @@ async function makeHarness(caps?: {
   box?: number;
   services_per_chat?: number;
   services_box?: number;
-}, killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>): Promise<Harness> {
+}, killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>, maxOutputBytes?: number): Promise<Harness> {
   const root = await mkdtemp(join(tmpdir(), "porrima-job-supervisor-"));
   roots.add(root);
   const dbPath = join(root, "jobs.db");
@@ -42,7 +42,15 @@ async function makeHarness(caps?: {
   const journalPath = join(jobsDir, "journal.jsonl");
   const bootId = readBootId();
   const store = JobStore.open(dbPath);
-  const supervisor = new JobSupervisor({ store, jobsDir, journalPath, bootId, caps, killGroup });
+  const supervisor = new JobSupervisor({
+    store,
+    jobsDir,
+    journalPath,
+    bootId,
+    caps,
+    killGroup,
+    maxOutputBytes,
+  });
   cleanups.push(async () => {
     await supervisor.stopAll().catch(() => {});
     supervisor.close();
@@ -409,6 +417,98 @@ describe("job supervisor", () => {
     expect(row?.state).toBe("finished");
     expect(row?.exit_code).toBe(0);
     expect(row?.stop_reason).toBe("user-force");
+  });
+
+  it("enforces the combined output cap and keeps the tail", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, {
+        command: "head -c 4096 /dev/zero; printf TAIL",
+      }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    expect(finished.stop_reason).toBe("log-cap");
+    const stdout = await readFile(finished.stdout_path);
+    expect(stdout.length).toBe(1024);
+    expect(stdout.subarray(-4).toString()).toBe("TAIL");
+  });
+
+  it("splits the cap across stdout and stderr", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, {
+        command: "head -c 700 /dev/zero; head -c 700 /dev/zero >&2",
+      }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    expect(finished.stop_reason).toBe("log-cap");
+    const stdout = await readFile(finished.stdout_path);
+    const stderr = await readFile(finished.stderr_path);
+    expect(stdout.length + stderr.length).toBe(1024);
+    expect(stdout.length).toBeGreaterThan(0);
+    expect(stderr.length).toBeGreaterThan(0);
+  });
+
+  it("leaves output below the cap untouched", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "printf 'small output'" }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    expect(finished.stop_reason).toBeNull();
+    expect((await readFile(finished.stdout_path)).length).toBe(12);
+  });
+
+  it("stops a live service when its output reaches the cap", async () => {
+    const harness = await makeHarness(undefined, undefined, 2048);
+    const job = await harness.supervisor.start(
+      startInput(harness, {
+        kind: "service",
+        command: "head -c 8192 /dev/zero; sleep 30",
+      }),
+    );
+    harness.supervisor.startOutputCapWatch(50);
+    const stopped = await waitForState(harness, job.id, "stopped", 5000);
+    expect(stopped.stop_reason).toBe("log-cap");
+    expect((await readFile(stopped.stdout_path)).length).toBe(2048);
+  });
+
+  it("flags and trims an over-cap outcome recovered from status", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 30" }),
+    );
+    await delay(100);
+    harness.supervisor.close();
+    if (job.pgid) await killProcessGroup(job.pgid, { graceMs: 200 });
+
+    await writeFile(job.stdout_path, Buffer.alloc(4096));
+    await writeFile(job.stderr_path, Buffer.alloc(0));
+    await writeFile(
+      job.status_path,
+      JSON.stringify({
+        exit_code: 0,
+        signal: null,
+        started_at: job.started_at,
+        ended_at: new Date().toISOString(),
+        duration_ms: 100,
+      }),
+    );
+
+    const supervisor2 = new JobSupervisor({
+      store: harness.store,
+      jobsDir: harness.jobsDir,
+      journalPath: harness.journalPath,
+      bootId: harness.bootId,
+      maxOutputBytes: 1024,
+    });
+    cleanups.push(() => supervisor2.close());
+    await supervisor2.recover();
+
+    const finished = harness.store.get(job.id);
+    expect(finished?.state).toBe("finished");
+    expect(finished?.stop_reason).toBe("log-cap");
+    expect((await readFile(job.stdout_path)).length).toBe(1024);
   });
 
   it("prunes old output before its ledger row", async () => {

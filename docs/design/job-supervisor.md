@@ -305,8 +305,13 @@ back to a non-durable child, because that would make durability unpredictable.
   inference services. A per-job RSS watchdog terminates the offender before the slice's
   `MemoryMax` becomes the OOM backstop. Per-job cgroup accounting is a later refinement; the
   slice is the box-wide bound.
-- **Output caps.** The durable file has a per-job cap and a clear `stop_reason=log-cap` when it
-  is reached; the model-facing tail is a separate, smaller window. A service that logs without
+- **Output caps.** The combined stdout+stderr budget is 64 MiB per job, overridable with
+  `PORRIMA_JOBS_MAX_OUTPUT_BYTES`. The supervisor checks live jobs once a second; reaching the
+  cap stops the group and records `stop_reason=log-cap`. The files keep their tails within the
+  budget rather than growing past it. A job that exits between checks is checked and trimmed
+  on completion; a job that crosses the cap while the supervisor is down is checked and trimmed
+  when recovery settles its status. The cap is therefore soft during supervisor downtime until
+  recovery. The model-facing tail is a separate, smaller window. A service that logs without
   bound should be run with its own logging destination, not the job's stdout.
 - **Environment and cwd.** The server passes the resolved `cwd` and the same environment the
   foreground `bash` tool uses (including `BASH_ENV_HARDENING`), so a background command behaves
@@ -332,7 +337,8 @@ On supervisor start:
    the supervisor's to kill.
 5. Start the retention sweep: old output directories, terminal ledger rows, and orphaned
    directories. The same sweep repeats daily.
-6. Bind the socket, emit `welcome`, serve.
+6. Start the output-cap watch: live stdout/stderr sizes are checked once a second.
+7. Bind the socket, emit `welcome`, serve.
 
 Adoption matrix:
 

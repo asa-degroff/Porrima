@@ -7,7 +7,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
+  renameSync,
   statSync,
+  truncateSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
@@ -27,6 +30,7 @@ import {
   jobOutputRetentionMs,
   jobRecordRetentionMs,
 } from "./job-retention.js";
+import { jobMaxOutputBytes } from "./job-output-cap.js";
 import {
   JOB_PROTOCOL_VERSION,
   type JobEvent,
@@ -71,6 +75,8 @@ export interface JobSupervisorOptions {
   journalPath: string;
   bootId: string;
   caps?: Partial<SupervisorCaps>;
+  /** Combined stdout+stderr byte cap; defaults to PORRIMA_JOBS_MAX_OUTPUT_BYTES. */
+  maxOutputBytes?: number;
   /** Test/embedding seam; defaults to process-supervisor's group killer. */
   killGroup?: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>;
 }
@@ -175,6 +181,7 @@ export class JobSupervisor extends EventEmitter {
   private readonly journalPath: string;
   private readonly bootId: string;
   private readonly caps: SupervisorCaps;
+  private readonly maxOutputBytes: number;
   private readonly startedAt = Date.now();
   private readonly killGroup: (pid: number, opts?: { graceMs?: number }) => Promise<boolean>;
   private readonly children = new Map<string, ChildProcess>();
@@ -185,7 +192,9 @@ export class JobSupervisor extends EventEmitter {
   private readonly journalHolds = new Set<string>();
   private pollTimer: NodeJS.Timeout | null = null;
   private retentionTimer: NodeJS.Timeout | null = null;
+  private outputCapTimer: NodeJS.Timeout | null = null;
   private pruningRetention = false;
+  private checkingOutputCaps = false;
   private closed = false;
 
   constructor(options: JobSupervisorOptions) {
@@ -195,6 +204,10 @@ export class JobSupervisor extends EventEmitter {
     this.journalPath = options.journalPath;
     this.bootId = options.bootId;
     this.killGroup = options.killGroup ?? killProcessGroup;
+    const configuredCap = options.maxOutputBytes ?? jobMaxOutputBytes();
+    this.maxOutputBytes = Number.isFinite(configuredCap)
+      ? Math.max(1024, Math.floor(configuredCap))
+      : jobMaxOutputBytes();
     this.caps = {
       per_chat: options.caps?.per_chat ?? envInt("PORRIMA_JOBS_MAX_PER_CHAT", 4),
       box: options.caps?.box ?? envInt("PORRIMA_JOBS_MAX_BOX", 8),
@@ -217,6 +230,7 @@ export class JobSupervisor extends EventEmitter {
       db_path: dbPath,
       jobs: this.store.countByState(),
       db_bytes: this.store.dbSizeBytes(),
+      max_output_bytes: this.maxOutputBytes,
       caps: { ...this.caps },
     };
   }
@@ -248,6 +262,55 @@ export class JobSupervisor extends EventEmitter {
       });
     }, Math.max(60_000, intervalMs));
     this.retentionTimer.unref?.();
+  }
+
+  /** Poll live jobs and stop any whose combined output reached the cap. */
+  startOutputCapWatch(intervalMs = 1000): void {
+    if (this.closed || this.outputCapTimer) return;
+    void this.checkOutputCaps().catch((error) => {
+      console.warn("[jobs] initial output-cap check failed:", error);
+    });
+    this.outputCapTimer = setInterval(() => {
+      void this.checkOutputCaps().catch((error) => {
+        console.warn("[jobs] output-cap check failed:", error);
+      });
+    }, Math.max(50, intervalMs));
+    this.outputCapTimer.unref?.();
+  }
+
+  /**
+   * Enforce the combined stdout+stderr cap on live jobs. A cap stop is an
+   * ordinary supervisor stop with `log-cap` as the reason, so the normal
+   * group-kill, journal, and notice paths all apply.
+   */
+  async checkOutputCaps(): Promise<number> {
+    if (this.closed || this.checkingOutputCaps) return 0;
+    this.checkingOutputCaps = true;
+    let capped = 0;
+    try {
+      for (const row of this.store.list({ states: ["starting", "running"], limit: 1000 })) {
+        if (this.closed) break;
+        if (this.stopping.has(row.id)) continue;
+        if (!this.isOutputCapped(row)) continue;
+        console.warn(
+          `[jobs] output cap reached for ${row.id} (${this.outputBytes(row)} >= ${this.maxOutputBytes} bytes); stopping`,
+        );
+        try {
+          const stopped = await this.stop(row.id, { reason: "log-cap", force: true });
+          if (stopped.state !== "lost") {
+            // stop() trims on a confirmed stop; this covers a row that became
+            // terminal between the list and the stop.
+            this.trimOutputToCap(stopped);
+          }
+          capped += 1;
+        } catch (error) {
+          console.warn(`[jobs] output-cap stop failed for ${row.id}:`, error);
+        }
+      }
+      return capped;
+    } finally {
+      this.checkingOutputCaps = false;
+    }
   }
 
   /**
@@ -396,6 +459,80 @@ export class JobSupervisor extends EventEmitter {
     } catch (error) {
       console.warn(`[jobs] cannot remove output dir ${dir}:`, error);
       return "failed";
+    }
+  }
+
+  private outputBytes(row: Pick<JobRecord, "stdout_path" | "stderr_path">): number {
+    return fileSize(row.stdout_path) + fileSize(row.stderr_path);
+  }
+
+  private isOutputCapped(row: Pick<JobRecord, "stdout_path" | "stderr_path">): boolean {
+    return this.outputBytes(row) >= this.maxOutputBytes;
+  }
+
+  /**
+   * Keep the tails of both streams within the combined cap. Called only after
+   * the group is confirmed dead (or the wrapper has recorded completion), so a
+   * rename cannot race a writer still holding the old inode.
+   */
+  private trimOutputToCap(row: Pick<JobRecord, "stdout_path" | "stderr_path">): boolean {
+    const stdoutSize = fileSize(row.stdout_path);
+    const stderrSize = fileSize(row.stderr_path);
+    const total = stdoutSize + stderrSize;
+    if (total <= this.maxOutputBytes) return false;
+
+    let keepOut = Math.min(
+      stdoutSize,
+      Math.floor(this.maxOutputBytes * (stdoutSize / total)),
+    );
+    let keepErr = Math.min(stderrSize, this.maxOutputBytes - keepOut);
+    keepOut = Math.min(stdoutSize, this.maxOutputBytes - keepErr);
+
+    this.trimFileToTail(row.stdout_path, keepOut);
+    this.trimFileToTail(row.stderr_path, keepErr);
+    return true;
+  }
+
+  private trimFileToTail(path: string, keepBytes: number): void {
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      return;
+    }
+    if (size <= keepBytes) return;
+    if (keepBytes <= 0) {
+      try {
+        truncateSync(path, 0);
+      } catch (error) {
+        console.warn(`[jobs] failed to truncate capped output ${path}:`, error);
+      }
+      return;
+    }
+
+    let fd = -1;
+    try {
+      fd = openSync(path, "r");
+      const buffer = Buffer.alloc(keepBytes);
+      let read = 0;
+      const start = size - keepBytes;
+      while (read < keepBytes) {
+        const n = readSync(fd, buffer, read, keepBytes - read, start + read);
+        if (n <= 0) break;
+        read += n;
+      }
+      if (read === 0) return;
+      const tmp = `${path}.cap-${process.pid}.tmp`;
+      writeFileSync(
+        tmp,
+        read === keepBytes ? buffer : buffer.subarray(0, read),
+        { mode: 0o600 },
+      );
+      renameSync(tmp, path);
+    } catch (error) {
+      console.warn(`[jobs] failed to trim capped output ${path}:`, error);
+    } finally {
+      if (fd >= 0) closeSync(fd);
     }
   }
 
@@ -679,6 +816,7 @@ export class JobSupervisor extends EventEmitter {
       const duration = durationBetween(row.started_at, endedAt);
       const reason = opts.reason ?? (opts.force ? "user-force" : "user");
       const stopped = this.store.stop(id, reason, endedAt, duration);
+      this.trimOutputToCap(row);
       this.children.delete(id);
       this.adopted.delete(id);
       this.clearTimeout(id);
@@ -764,6 +902,10 @@ export class JobSupervisor extends EventEmitter {
       clearInterval(this.retentionTimer);
       this.retentionTimer = null;
     }
+    if (this.outputCapTimer) {
+      clearInterval(this.outputCapTimer);
+      this.outputCapTimer = null;
+    }
     for (const timer of this.timeouts.values()) clearTimeout(timer);
     this.timeouts.clear();
     this.children.clear();
@@ -798,8 +940,10 @@ export class JobSupervisor extends EventEmitter {
     }
     if (this.closed || this.stopping.has(id)) return;
 
+    const capped = this.isOutputCapped(row);
+    this.trimOutputToCap(row);
     if (!status && code == null && signal == null) {
-      this.markLost(row);
+      this.markLost(row, capped ? "log-cap" : undefined);
       return;
     }
     const endedAt = status?.ended_at ?? new Date().toISOString();
@@ -810,7 +954,7 @@ export class JobSupervisor extends EventEmitter {
       signal: status?.signal ?? signal ?? null,
       ended_at: endedAt,
       duration_ms: duration,
-      stop_reason: daemonized ? "daemonized" : null,
+      stop_reason: capped ? "log-cap" : daemonized ? "daemonized" : null,
     });
     this.appendJournalInactive(id);
     this.emitJob("job_finished", updated);
@@ -835,12 +979,15 @@ export class JobSupervisor extends EventEmitter {
       return;
     }
     if (row.state === "starting") {
+      this.trimOutputToCap(row);
       const failed = this.store.markFailed(row.id);
       this.appendJournalInactive(row.id);
       this.emitJob("job_finished", failed);
       return;
     }
-    this.markLost(row);
+    const capped = this.isOutputCapped(row);
+    this.trimOutputToCap(row);
+    this.markLost(row, capped ? "log-cap" : undefined);
   }
 
   /**
@@ -853,6 +1000,14 @@ export class JobSupervisor extends EventEmitter {
     status: JobStatusFile,
     priorReason: JobStopReason | null = null,
   ): JobRecord {
+    const pgid = row.pgid ?? row.pid;
+    const groupAlive = pgid != null && isGroupAlive(pgid);
+    const capped = this.isOutputCapped(row);
+    if (!groupAlive) this.trimOutputToCap(row);
+    const stopReason =
+      capped && (priorReason == null || priorReason === "daemonized")
+        ? "log-cap"
+        : priorReason;
     const endedAt = status.ended_at ?? new Date().toISOString();
     const duration =
       status.duration_ms ?? durationBetween(row.started_at, endedAt);
@@ -861,7 +1016,7 @@ export class JobSupervisor extends EventEmitter {
       signal: status.signal ?? null,
       ended_at: endedAt,
       duration_ms: duration,
-      stop_reason: priorReason,
+      stop_reason: stopReason,
     });
     this.appendJournalInactive(row.id);
     this.emitJob("job_finished", updated);
@@ -918,6 +1073,7 @@ export class JobSupervisor extends EventEmitter {
       if (pgid == null || !isGroupAlive(pgid)) {
         // Group gone and no status file was ever written: `lost` is the
         // truthful final state and there is nothing left for recovery to reap.
+        this.trimOutputToCap(row);
         this.journalHolds.delete(id);
         this.appendJournalInactive(row.id);
         settled = true;
@@ -926,8 +1082,8 @@ export class JobSupervisor extends EventEmitter {
     if (settled) this.pruneJournal();
   }
 
-  private markLost(row: JobRecord): void {
-    const updated = this.store.markLost(row.id);
+  private markLost(row: JobRecord, reason?: JobStopReason): void {
+    const updated = this.store.markLost(row.id, undefined, reason);
     this.appendJournalInactive(row.id);
     this.emitJob("job_lost", updated);
   }
@@ -947,7 +1103,9 @@ export class JobSupervisor extends EventEmitter {
         continue;
       }
       if (adopted.pgid == null || !isGroupAlive(adopted.pgid)) {
-        this.markLost(current);
+        const capped = this.isOutputCapped(current);
+        this.trimOutputToCap(current);
+        this.markLost(current, capped ? "log-cap" : undefined);
         this.adopted.delete(id);
       }
     }
@@ -1127,6 +1285,14 @@ function envInt(name: string, fallback: number): number {
 
 function isTerminal(state: JobState): boolean {
   return TERMINAL_STATES.includes(state);
+}
+
+function fileSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
 }
 
 function readStatusFile(path: string): JobStatusFile | null {
