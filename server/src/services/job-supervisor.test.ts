@@ -493,6 +493,21 @@ describe("job supervisor", () => {
     expect(settled?.output_capped).toBe(true);
   });
 
+  it("keeps the cap when one stream's share is too small for the marker", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, {
+        command: "head -c 10 /dev/zero; head -c 2000 /dev/zero >&2",
+      }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    expect(finished.output_capped).toBe(true);
+    const stdout = await readFile(finished.stdout_path);
+    const stderr = await readFile(finished.stderr_path);
+    expect(stdout.length).toBe(0);
+    expect(stdout.length + stderr.length).toBeLessThanOrEqual(1024);
+  });
+
   it("splits the cap across stdout and stderr", async () => {
     const harness = await makeHarness(undefined, undefined, 1024);
     const job = await harness.supervisor.start(

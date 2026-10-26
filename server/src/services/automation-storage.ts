@@ -1091,7 +1091,7 @@ export function finishAutomationRun(
         lastRunAt: isSuccess || isInterrupted ? finishedAt : task.lastRunAt,
         nextRunAt: (shouldDisable || onceDisable)
           ? undefined
-          : isSuccess
+          : isSuccess || isInterrupted
             ? computeNextRunAt(task, Date.now())
             : isFailure
               ? computeFailureRetryAt(task, consecutiveFailures)

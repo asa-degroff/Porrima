@@ -10,6 +10,7 @@ import {
   readSync,
   renameSync,
   statSync,
+  truncateSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
@@ -189,6 +190,12 @@ export class JobSupervisor extends EventEmitter {
   private readonly stopping = new Set<string>();
   /** Jobs whose group did not confirm death; their journal records must stay. */
   private readonly journalHolds = new Set<string>();
+  /**
+   * Recovery found journal groups while the ledger held no rows. The journal
+   * is then the only identity evidence; keep every active record until an
+   * operator repairs the ledger or a later recovery can attribute it.
+   */
+  private ledgerEmptyJournalHold = false;
   private pollTimer: NodeJS.Timeout | null = null;
   private retentionTimer: NodeJS.Timeout | null = null;
   private outputCapTimer: NodeJS.Timeout | null = null;
@@ -509,7 +516,18 @@ export class JobSupervisor extends EventEmitter {
     const markerFor = (discarded: number) =>
       Buffer.from(`[porrima output cap: ${discarded} of ${size} bytes discarded from the head]\n`);
     const markerProbe = markerFor(size);
-    const tailBytes = Math.max(0, keepBytes - markerProbe.length);
+    // The marker is paid for out of this stream's share. A share too small to
+    // hold it is discarded entirely rather than letting the marker push the
+    // combined files past the cap.
+    if (keepBytes < markerProbe.length) {
+      try {
+        truncateSync(path, 0);
+      } catch (error) {
+        console.warn(`[jobs] failed to truncate capped output ${path}:`, error);
+      }
+      return;
+    }
+    const tailBytes = keepBytes - markerProbe.length;
 
     let fd = -1;
     let read = 0;
@@ -1140,7 +1158,9 @@ export class JobSupervisor extends EventEmitter {
       // A ledger holding nothing while the journal remembers groups is evidence
       // about the ledger, not about the groups. Reaping on that reading turns a
       // damaged execution plane into a mass kill, so hold everything and let an
-      // operator decide.
+      // operator decide. The flag also keeps active records through the
+      // post-recover prune; otherwise this hold would erase its own evidence.
+      this.ledgerEmptyJournalHold = true;
       console.warn(
         `[jobs] ledger has no job rows but the journal records ${records.size} group(s); skipping reap`,
       );
@@ -1172,6 +1192,11 @@ export class JobSupervisor extends EventEmitter {
     ]);
     for (const row of this.store.list({ states: ["starting", "running"], limit: 1000 })) {
       keep.add(row.id);
+    }
+    if (this.ledgerEmptyJournalHold) {
+      for (const record of latestJobJournalRecords(this.journalPath).values()) {
+        if (record.active) keep.add(record.job_id);
+      }
     }
     pruneJobJournal(this.journalPath, keep);
   }

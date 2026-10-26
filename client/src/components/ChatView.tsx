@@ -786,9 +786,11 @@ export function ChatView({
           <span>
             {turnQueueInfo.activeKind === "cache-warm"
               ? "Queued — waiting for cache warm-up to finish…"
-              : turnQueueInfo.activeChatId === "system"
+              : turnQueueInfo.activeKind === "system"
                 ? "Queued — waiting for system activity to finish…"
-                : "Queued — waiting for another chat to finish…"}
+                : turnQueueInfo.activeChatId === chatId
+                  ? "Queued — waiting for this chat's current turn to finish…"
+                  : "Queued — waiting for another chat to finish…"}
             {turnQueueInfo.position > 1 ? ` (position ${turnQueueInfo.position})` : ""}
           </span>
         </div>

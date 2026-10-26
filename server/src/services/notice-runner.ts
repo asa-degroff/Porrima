@@ -18,15 +18,14 @@ import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import type { Chat, JobNoticeMetadata } from "../types.js";
 
 /**
- * A notice wake is a full agent turn on the same wire as an automation, so it
- * gets the same class of budget. The old 120 s ceiling was shorter than the
- * prefill a mid-sized chat costs — a 248k-token prompt is roughly eleven
- * minutes cold on this substrate — so on exactly the largest chats the wake
- * was guaranteed to fail, quietly, after holding the slot for the whole
- * timeout. Cost is bounded by the chat's own pre-send compaction (0.85
- * trigger), not by a number that predates the substrate it runs on.
+ * A notice wake is a full agent turn on the same wire as an automation. This
+ * is a policy budget (the custom-automation class), not a prefill-speed or
+ * context-size estimate: both vary with the model and hardware. Operators can
+ * tune it with PORRIMA_JOB_NOTICE_TIMEOUT_MS; pre-send compaction still bounds
+ * the prompt the turn actually pays for.
  */
-export const NOTICE_TURN_TIMEOUT_MS = Number(process.env.PORRIMA_JOB_NOTICE_TIMEOUT_MS) || 600_000;
+export const NOTICE_TURN_TIMEOUT_MS =
+  Number(process.env.PORRIMA_JOB_NOTICE_TIMEOUT_MS) || 30 * 60_000;
 
 /**
  * Agent-chat wake turn for a completion notice (docs/design/kernel-durability.md

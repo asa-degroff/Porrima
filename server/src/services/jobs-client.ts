@@ -245,39 +245,34 @@ export class JobsClient {
   }
 
   private request(payload: Record<string, any>, timeoutMs = this.defaultTimeoutMs): Promise<Record<string, any>> {
-    if (this.peerDegradation) {
-      return Promise.reject(
-        new Error(`job supervisor is degraded: ${this.peerDegradation}`),
-      );
-    }
-    const capability = typeof payload.type === "string" ? payload.type : "";
-    if (capability && this.peerCapabilities.size > 0 && !this.peerCapabilities.has(capability)) {
-      // Refused by name, one request at a time: the rest of the connection
-      // still answers, so the stale view keeps refreshing.
-      return Promise.reject(
-        new Error(
+    return this.connect().then(() => {
+      if (this.peerDegradation) {
+        throw new Error(`job supervisor is degraded: ${this.peerDegradation}`);
+      }
+      const capability = typeof payload.type === "string" ? payload.type : "";
+      if (capability && this.peerCapabilities.size > 0 && !this.peerCapabilities.has(capability)) {
+        // Refused by name, one request at a time: the rest of the connection
+        // still answers, so the stale view keeps refreshing.
+        throw new Error(
           `job supervisor at protocol ${this.negotiatedProtocol ?? "?"} does not advertise "${capability}"`,
-        ),
-      );
-    }
-    return this.connect().then(
-      () =>
-        new Promise<Record<string, any>>((resolve, reject) => {
-          const socket = this.socket;
-          if (!socket || socket.destroyed) {
-            reject(new Error("job supervisor is not connected"));
-            return;
-          }
-          const id = typeof payload.id === "string" ? payload.id : randomUUID();
-          const timer = setTimeout(() => {
-            this.pending.delete(id);
-            reject(new Error(`job supervisor request timed out: ${String(payload.type)}`));
-          }, timeoutMs);
-          timer.unref?.();
-          this.pending.set(id, { resolve, reject, timer });
-          socket.write(encodeJobFrame({ ...payload, id }));
-        }),
-    );
+        );
+      }
+      return new Promise<Record<string, any>>((resolve, reject) => {
+        const socket = this.socket;
+        if (!socket || socket.destroyed) {
+          reject(new Error("job supervisor is not connected"));
+          return;
+        }
+        const id = typeof payload.id === "string" ? payload.id : randomUUID();
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`job supervisor request timed out: ${String(payload.type)}`));
+        }, timeoutMs);
+        timer.unref?.();
+        this.pending.set(id, { resolve, reject, timer });
+        socket.write(encodeJobFrame({ ...payload, id }));
+      });
+    });
   }
 
   private onData(chunk: Buffer): void {

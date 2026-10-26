@@ -14,7 +14,7 @@ import {
 } from "./automation-storage.js";
 import { selectAutomationPromptStepsForRun } from "./automation-prompt-selection.js";
 import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system-chat.js";
-import { runHeadlessChatTurn } from "./chat-turn-runner.js";
+import { runHeadlessChatTurn, type HeadlessTurnStopSource } from "./chat-turn-runner.js";
 import { createTimeMarkerState } from "./time-marker.js";
 import { SYSTEM_CHAT_ID } from "./system-chat.js";
 import { acquireTurn, releaseTurn } from "./turn-gate.js";
@@ -27,6 +27,8 @@ interface AutomationExecutionResult extends SynthesisResult {
   promptTokenEstimate?: number;
   timeoutMs?: number;
   stopReason?: string;
+  /** Why the headless loop ended; distinct from the provider stopReason. */
+  stopSource?: HeadlessTurnStopSource;
   timedOut?: boolean;
   timeoutReason?: string;
 }
@@ -176,9 +178,17 @@ function makeTriggerMessage(
  * and an aborted controller both mean the run was cut off, not that it failed.
  */
 export function automationRunStatus(
-  result: Pick<AutomationExecutionResult, "success" | "timedOut" | "stopReason">,
+  result: Pick<
+    AutomationExecutionResult,
+    "success" | "timedOut" | "stopReason" | "stopSource"
+  >,
 ): AutomationRunStatus {
   if (!result.success) return "failed";
+  // `stopSource` is the loop's own account of why it ended; provider
+  // `stopReason` can still say "stop" when the controller was aborted
+  // mid-request, which is exactly the case this status must not mistake for a
+  // clean completion.
+  if (result.stopSource && result.stopSource !== "completed") return "interrupted";
   if (result.timedOut || result.stopReason === "aborted") return "interrupted";
   return "success";
 }
@@ -511,6 +521,7 @@ async function runPromptAutomation(
         promptTokenEstimate,
         timeoutMs: task.timeoutMs,
         stopReason: turn.stopReason,
+        stopSource: turn.stopSource,
         timedOut: turn.timedOut,
         timeoutReason: turn.timeoutReason,
       };
@@ -531,6 +542,7 @@ async function runPromptAutomation(
       promptTokenEstimate,
       timeoutMs: task.timeoutMs,
       stopReason: turn.stopReason,
+      stopSource: turn.stopSource,
       timedOut: turn.timedOut,
       timeoutReason: turn.timeoutReason,
     };

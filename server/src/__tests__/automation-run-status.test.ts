@@ -17,6 +17,23 @@ describe("automationRunStatus", () => {
     expect(automationRunStatus({ success: true, timedOut: true, stopReason: "length" })).toBe(
       "interrupted",
     );
+    expect(automationRunStatus({ success: true, stopSource: "timeout" })).toBe("interrupted");
+  });
+
+  it("uses the loop's stopSource when the provider finish reason still says stop", () => {
+    // The real lease-takeover shape: the controller aborted mid-call, so the
+    // provider never produced an "aborted" finish reason. The loop knows it was
+    // stopped; that fact must reach the run status.
+    expect(
+      automationRunStatus({
+        success: true,
+        stopReason: "stop",
+        stopSource: "stopped",
+      }),
+    ).toBe("interrupted");
+    expect(automationRunStatus({ success: true, stopSource: "iteration-cap" })).toBe(
+      "interrupted",
+    );
   });
 
   it("keeps a hard error failed even when it also timed out", () => {
@@ -29,5 +46,6 @@ describe("automationRunStatus", () => {
   it("files a run that finished as success", () => {
     expect(automationRunStatus({ success: true, stopReason: "stop" })).toBe("success");
     expect(automationRunStatus({ success: true, stopReason: "length" })).toBe("success");
+    expect(automationRunStatus({ success: true, stopSource: "completed" })).toBe("success");
   });
 });

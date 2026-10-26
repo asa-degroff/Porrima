@@ -349,6 +349,31 @@ describe("automation mark-fired-at-start", () => {
     }
   });
 
+  it("moves an interrupted recurring task to its normal next run, not an immediate retry", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
+    try {
+      const storage = await loadAutomationStorage(homeDir);
+      const task = storage.createCustomAutomationTask({
+        schedule: { type: "interval", everyMinutes: 30 },
+        promptSteps: [{ id: "step-1", title: "Prompt", prompt: "Do it." }],
+      });
+      const past = new Date(Date.now() - 60_000).toISOString();
+      storage.updateAutomationTask(task.id, { nextRunAt: past });
+      const run = storage.startAutomationRun(task.id, "scheduler");
+
+      storage.finishAutomationRun(run.id, "interrupted", { stopReason: "aborted" });
+
+      const after = storage.getAutomationTask(task.id);
+      expect(after?.lastStatus).toBe("interrupted");
+      expect(after?.nextRunAt).toBeTruthy();
+      expect(after?.nextRunAt).not.toBe(past);
+      expect(Date.parse(after!.nextRunAt!)).toBeGreaterThan(Date.now());
+    } finally {
+      await closeStorage().catch(() => {});
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops re-arming after the failure ceiling", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
     try {

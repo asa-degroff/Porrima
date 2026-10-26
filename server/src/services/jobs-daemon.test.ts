@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { startJobsDaemon, type JobsDaemonHandle } from "../jobs-daemon.js";
 import { encodeJobFrame, type JobRecord } from "./job-protocol.js";
 import { JobsClient } from "./jobs-client.js";
+import { latestJournalRecords } from "./job-journal.js";
 import { readBootId } from "./job-lock.js";
 import { isGroupAlive, killProcessGroup } from "./process-supervisor.js";
 
@@ -297,6 +298,10 @@ describe("jobs daemon", () => {
       expect(second.degraded).toBeNull();
       await delay(400);
       expect(pgid != null && isGroupAlive(pgid)).toBe(true);
+      // The hold must survive the post-recover journal prune: the active record
+      // is the only remaining identity of the group.
+      const journal = latestJournalRecords(config.journalPath);
+      expect(journal.get(job.pid!)?.active).toBe(true);
     } finally {
       const pgid = job?.pgid ?? job?.pid;
       if (pgid != null) await killProcessGroup(pgid, { graceMs: 200 }).catch(() => {});
@@ -402,6 +407,34 @@ describe("protocol skew", () => {
       // Refused per request, not per connection: the read paths still answer.
       expect(client.connected).toBe(true);
       expect(await client.listJobs()).toEqual([]);
+    } finally {
+      await client.close().catch(() => {});
+      await peer.close();
+    }
+  });
+
+  it("checks capabilities on a client's first request too", async () => {
+    const peer = await serveFakeSupervisor({
+      protocol: 1,
+      protocol_min: 1,
+      capabilities: ["get", "list", "subscribe", "ping"],
+    });
+    const client = new JobsClient({
+      socketPath: peer.socketPath,
+      protocolMax: 2,
+      protocolMin: 1,
+    });
+    try {
+      await expect(
+        client.startJob({
+          job_id: "skew-first-start",
+          chat_id: "demo",
+          kind: "command",
+          command: "true",
+          cwd: "/tmp",
+        }),
+      ).rejects.toThrow(/does not advertise "start"/);
+      expect(client.connected).toBe(true);
     } finally {
       await client.close().catch(() => {});
       await peer.close();
