@@ -202,6 +202,14 @@ Delivery is boundary-shaped, server-driven, and coalesced:
   Coalescing is default, not a guard: a notice turn is a fresh prefill, and on this substrate a
   cold prefill is expensive.
 - A wake turn takes a **background-priority** turn-gate lease and waits behind existing work.
+  The lease carries the wake's own `timeoutMs` as its ceiling, so the gate judges it against that
+  budget instead of against silence. The budget is a turn budget of the same class an automation
+  gets (default 10 minutes, `PORRIMA_JOB_NOTICE_TIMEOUT_MS`): a wake pays a full prefill of the
+  target chat, so a ceiling smaller than that prefill guarantees failure on exactly the largest
+  chats, where a completion matters most. If the wake does not complete, the notice is not
+  retried and the budget was already spent on the attempt — that is what stops a chronically
+  failing chat from re-paying the prefill every tick, and the row standing at the tail is what
+  keeps the payload available to the next real turn.
 - The payload stays behind the handle: the row announces and points, `jobs tail` and the job's
   output file carry content. This keeps the injected row small enough to be cheap.
 

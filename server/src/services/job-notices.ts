@@ -4,7 +4,6 @@ import { buildTimeAnchor } from "./memory-context.js";
 import { getStoredSystemPauseState } from "./system-pause.js";
 import {
   acquireTurn,
-  heartbeatTurnLease,
   releaseTurn,
   type TurnLease,
 } from "./turn-gate.js";
@@ -38,7 +37,6 @@ const DELIVERY_WAIT_MS = 2000;
 const MAX_JOBS_PER_NOTICE = 100;
 const MAX_DETAILED_JOBS = 10;
 const NOTICE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const WAKE_HEARTBEAT_MS = 30_000;
 
 function envInt(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -203,17 +201,29 @@ export async function deliverChatNotices(chatId: string): Promise<void> {
     );
 
     const wake = WAKE_ENABLED && chat.type !== "system" && canWake(chatId);
+    let woke = false;
     if (wake) {
+      // Charged before the attempt on purpose: a failed wake is the expensive
+      // case (it just paid a full prefill for nothing), and the quota is what
+      // stops this chat from re-paying it every tick.
       recordWake(chatId);
-      const heartbeat = setInterval(() => heartbeatTurnLease(lease), WAKE_HEARTBEAT_MS);
-      heartbeat.unref?.();
       try {
         const { runNoticeTurn } = await import("./notice-runner.js");
-        await runNoticeTurn(chatId, notice.meta);
+        woke = await runNoticeTurn(chatId, notice.meta);
       } catch (error) {
         console.warn(`[jobs] notice wake turn failed for chat=${chatId}:`, error);
-      } finally {
-        clearInterval(heartbeat);
+      }
+      if (!woke) {
+        // The wake is what makes the agent act on the notice, so a failed wake
+        // is a real outcome and must not look like a delivered one. The payload
+        // itself is not lost: the notice row is the tail of this chat's
+        // transcript, so the next turn reads it. What is lost is the wake, and
+        // it is not retried — retrying would need a state the notice plane does
+        // not have (see docs/design/kernel-durability.md §3.3).
+        console.warn(
+          `[jobs] notice wake did not complete for chat=${chatId} group=${group} ` +
+            `(jobs=${batch.length}); notice row stands, no wake retry`,
+        );
       }
     }
     markJobNoticeDelivered(group);
@@ -400,6 +410,11 @@ async function noticesPaused(): Promise<boolean> {
 }
 
 async function acquireNoticeLease(chatId: string): Promise<TurnLease | null> {
+  // The delivery holds the gate for the notice row and, when a wake runs, for a
+  // whole headless turn — so the lease carries that turn's declared budget and
+  // is judged against it rather than against silence. Imported lazily, exactly
+  // as the wake turn itself is imported below.
+  const { NOTICE_TURN_TIMEOUT_MS } = await import("./notice-runner.js");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DELIVERY_WAIT_MS);
   timer.unref?.();
@@ -407,6 +422,7 @@ async function acquireNoticeLease(chatId: string): Promise<TurnLease | null> {
     return await acquireTurn(chatId, {
       kind: "chat",
       priority: "background",
+      maxHoldMs: NOTICE_TURN_TIMEOUT_MS,
       signal: controller.signal,
     });
   } catch {

@@ -18,6 +18,17 @@ import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import type { Chat, JobNoticeMetadata } from "../types.js";
 
 /**
+ * A notice wake is a full agent turn on the same wire as an automation, so it
+ * gets the same class of budget. The old 120 s ceiling was shorter than the
+ * prefill a mid-sized chat costs — a 248k-token prompt is roughly eleven
+ * minutes cold on this substrate — so on exactly the largest chats the wake
+ * was guaranteed to fail, quietly, after holding the slot for the whole
+ * timeout. Cost is bounded by the chat's own pre-send compaction (0.85
+ * trigger), not by a number that predates the substrate it runs on.
+ */
+export const NOTICE_TURN_TIMEOUT_MS = Number(process.env.PORRIMA_JOB_NOTICE_TIMEOUT_MS) || 600_000;
+
+/**
  * Agent-chat wake turn for a completion notice (docs/design/kernel-durability.md
  * §3.3). This is the same prompt/tool/memory/compaction path as an automation
  * run, without an automation task row: the notice row is already the tail user
@@ -122,8 +133,8 @@ export async function runNoticeTurn(
       emitter,
       contextWindow,
       maxIterations: Number(process.env.PORRIMA_JOB_NOTICE_MAX_ITERATIONS) || 8,
-      timeoutMs: Number(process.env.PORRIMA_JOB_NOTICE_TIMEOUT_MS) || 120_000,
-      keepAlive: "2m",
+      timeoutMs: NOTICE_TURN_TIMEOUT_MS,
+      keepAlive: `${Math.max(1, Math.ceil(NOTICE_TURN_TIMEOUT_MS / 60_000))}m`,
       logPrefix: `job-notice:${chatId}:${notice.group}`,
       saveChat,
       passiveMemoryRecall: {
@@ -133,7 +144,8 @@ export async function runNoticeTurn(
       },
       getFollowUp: async () => null,
       summarize: (state) =>
-        state.textSummary || "*The notice turn ended without visible output.*",
+        state.textSummary ||
+        `*The notice turn ended without visible output (stopReason=${state.stopReason}).*`,
     });
 
     await runEndOfTurnCompaction({
@@ -145,6 +157,7 @@ export async function runNoticeTurn(
       systemPrompt,
       tools,
       signal: emitter.stream.abort.signal,
+      stoppedReason: turn.stopSource,
       triggerRatio: COMPACTION_TRIGGER_RATIO,
       emitCompacting: () => emitter.emitCompacting(),
       preFlush: preCompactionFlushHook(chat, "job-notice end-of-turn flush failed"),
