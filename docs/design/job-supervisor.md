@@ -114,9 +114,10 @@ The user manager must linger (`loginctl enable-linger`) if the server and superv
 without an active login session; Porrima already requires this for `porrima.service`.
 
 Socket path: `$XDG_RUNTIME_DIR/porrima/jobs.sock`, falling back to `~/.porrima/jobs.sock`.
-The runtime path keeps the Unix socket well under `sun_path`'s ~108-byte limit and is cleaned
-up by the session manager; the fallback keeps the daemon usable in environments without
-`XDG_RUNTIME_DIR`.
+When `PORRIMA_DATA_DIR` is explicitly set, the socket lives at `$PORRIMA_DATA_DIR/jobs.sock`
+instead, so a dev data directory cannot reach the production supervisor. The runtime path
+keeps the Unix socket well under `sun_path`'s ~108-byte limit and is cleaned up by the session
+manager; the fallback keeps the daemon usable in environments without `XDG_RUNTIME_DIR`.
 
 ## 4. Storage
 

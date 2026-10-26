@@ -38,7 +38,11 @@ own it at a time: the server claims `~/.porrima/server.lock` at startup, and a s
 refuses to start and names the holder. Sharing the directory is not cosmetic — two servers over
 one data dir can stop each other's background jobs and dispose each other's live kernels. Either
 stop the service first (`systemctl --user stop porrima`) or give the dev run its own directory
-(`PORRIMA_DATA_DIR=~/.porrima-dev npm run dev`).
+(`PORRIMA_DATA_DIR=~/.porrima-dev npm run dev`). A separate data directory also relocates the
+supervisor socket, database, job dirs, and lock underneath it. To exercise background jobs in
+dev, start a second supervisor with the same environment
+(`PORRIMA_DATA_DIR=~/.porrima-dev node server/dist/jobs-daemon.js`); otherwise the dev server
+leaves background jobs unavailable and never touches the production supervisor.
 
 ## Production
 

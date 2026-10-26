@@ -39,6 +39,7 @@ let client: JobsClient | null = null;
 let subscribed = false;
 let unsubscribe: (() => void) | null = null;
 let connectPromise: Promise<boolean> | null = null;
+let reconcilePromise: Promise<void> | null = null;
 let initialized = false;
 
 export function getJobsClient(): JobsClient {
@@ -55,10 +56,10 @@ export async function initJobRuntime(): Promise<void> {
   initialized = true;
   initJobView();
   markKernelJobsLostAtStartup();
+  // Establishing the connection triggers the reconcile (see
+  // ensureSupervisorConnection); this branch only reports the unavailable case.
   void ensureSupervisorConnection().then((connected) => {
-    if (connected) {
-      void reconcileJobRuntime();
-    } else {
+    if (!connected) {
       console.log("[jobs] supervisor unavailable; background commands will fail until it starts");
     }
   });
@@ -193,13 +194,22 @@ async function reconcileAgainstSupervisor(chatId?: string): Promise<void> {
   }
 }
 
-export async function reconcileJobRuntime(): Promise<void> {
-  if (!(await ensureSupervisorConnection())) return;
-  try {
-    await reconcileAgainstSupervisor();
-  } catch (error) {
-    console.warn("[jobs] supervisor reconcile failed:", error);
-  }
+export function reconcileJobRuntime(): Promise<void> {
+  // A connection event and an explicit refresh can arrive together; keep one
+  // global reconcile in flight so the same live list and uncertain probes are
+  // not issued twice.
+  if (reconcilePromise) return reconcilePromise;
+  reconcilePromise = (async () => {
+    if (!(await ensureSupervisorConnection())) return;
+    try {
+      await reconcileAgainstSupervisor();
+    } catch (error) {
+      console.warn("[jobs] supervisor reconcile failed:", error);
+    }
+  })().finally(() => {
+    reconcilePromise = null;
+  });
+  return reconcilePromise;
 }
 
 export async function startSupervisorJob(input: StartSupervisorJobInput): Promise<JobViewRow> {

@@ -72,14 +72,6 @@ let httpServer: ReturnType<typeof app.listen> | null = null;
 let dataDirLock: DataDirLock | null = null;
 const gracefulShutdown = async () => {
   console.log("[shutdown] Received signal, shutting down gracefully...");
-  // Release the data-dir claim first: a restarting unit must not be blocked by
-  // a lock this process is still holding while it tears kernels down.
-  try {
-    dataDirLock?.release();
-    dataDirLock = null;
-  } catch {
-    // Non-fatal.
-  }
   // Close the HTTP server first so new requests are rejected immediately.
   if (httpServer) {
     httpServer.close();
@@ -130,6 +122,15 @@ const gracefulShutdown = async () => {
     const { killAllSupervised } = await import("./services/process-supervisor.js");
     await killAllSupervised();
     console.log("[shutdown] Supervised processes stopped");
+  } catch {
+    // Non-fatal
+  }
+  // Release the data-dir claim only after the data plane is down. A crash,
+  // force-exit, or SIGKILL leaves a stale lock that the next instance reclaims
+  // by pid/start-id/boot-id identity.
+  try {
+    dataDirLock?.release();
+    dataDirLock = null;
   } catch {
     // Non-fatal
   }

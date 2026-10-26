@@ -189,6 +189,20 @@ describe("job runtime reconcile on connect", () => {
     await runtime!.stopSupervisorJob(unrelated.job_id, true);
   });
 
+  it("single-flights concurrent global reconciles", async () => {
+    await setup();
+    const client = runtime!.getJobsClient();
+    const spy = vi.spyOn(client, "listJobs");
+
+    await Promise.all([
+      runtime!.reconcileJobRuntime(),
+      runtime!.reconcileJobRuntime(),
+    ]);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it("leaves a live job alone when the reconnect finds it still running", async () => {
     await setup();
     const row = await runtime!.startSupervisorJob({
