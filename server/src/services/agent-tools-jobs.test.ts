@@ -158,8 +158,10 @@ describe("bash background + jobs tools", () => {
     const status = resultText(
       await jobs.execute("call-capped-status", { action: "status", jobId }, signal),
     );
-    expect(status).toContain("log-cap");
+    // The cap discarded output but did not end the job: the command exited on
+    // its own, so the reason stays empty and the cap is reported as itself.
     expect(status).toContain("output capped");
+    expect(status).not.toContain("log-cap");
 
     const tail = resultText(
       await jobs.execute("call-capped-tail", { action: "tail", jobId }, signal),

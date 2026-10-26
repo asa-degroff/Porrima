@@ -53,6 +53,8 @@ export interface JobRecord {
   stdout_path: string;
   stderr_path: string;
   status_path: string;
+  /** True when the output cap discarded bytes. Independent of `stop_reason`. */
+  output_capped?: boolean;
   origin_turn_id: string | null;
   created_at: string;
   updated_at: string;

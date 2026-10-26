@@ -310,8 +310,11 @@ back to a non-durable child, because that would make durability unpredictable.
 - **Output caps.** The combined stdout+stderr budget is 64 MiB per job, overridable with
   `PORRIMA_JOBS_MAX_OUTPUT_BYTES`. The supervisor checks live jobs once a second; reaching the
   cap stops the group and records `stop_reason=log-cap`. The files keep their tails within the
-  budget rather than growing past it. A job that exits between checks is checked and trimmed
-  on completion; a job that crosses the cap while the supervisor is down is checked and trimmed
+  budget rather than growing past it, and a trimmed file states at its head how many bytes were
+  discarded, so the artifact describes itself. Whether output was trimmed is recorded in its own
+  `output_capped` column: trimming says what was thrown away, `stop_reason` says why the job
+  ended, and a job that exits on its own over the cap keeps its real reason. A job that exits
+  between checks is checked and trimmed on completion; a job that crosses the cap while the supervisor is down is checked and trimmed
   when recovery settles its status. The cap is therefore soft during supervisor downtime until
   recovery. The model-facing tail is a separate, smaller window. A service that logs without
   bound should be run with its own logging destination, not the job's stdout.

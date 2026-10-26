@@ -261,6 +261,7 @@ export function shouldNotify(job: JobViewRow): boolean {
       return (
         job.stop_reason === "timeout" ||
         job.stop_reason === "log-cap" ||
+        job.output_capped === true ||
         job.stop_reason === "memory-cap"
       );
     }
@@ -336,7 +337,7 @@ function noticeDisplayLine(job: JobViewRow): string {
   const duration = job.duration_ms != null ? `, ${formatDuration(job.duration_ms)}` : "";
   const command = shortCommand(job.command);
   if (job.state === "lost") return `${job.kind} outcome unknown: ${command}`;
-  if (job.stop_reason === "log-cap") {
+  if (job.stop_reason === "log-cap" || job.output_capped) {
     return `${job.kind} output capped${duration}: ${command}`;
   }
   if (job.kind === "service" && job.state === "finished") {

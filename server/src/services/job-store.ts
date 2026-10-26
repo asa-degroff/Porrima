@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   status_path TEXT NOT NULL,
   origin_turn_id TEXT,
   outputs_pruned_at TEXT,
+  output_capped INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -125,17 +126,20 @@ export class JobStore {
     db.pragma("busy_timeout = 5000");
     db.exec(SCHEMA);
     const version = Number(db.pragma("user_version", { simple: true }) ?? 0);
-    if (version > 2) {
+    if (version > 3) {
       db.close();
-      throw new Error(`jobs.db schema version ${version} is newer than supported version 2`);
+      throw new Error(`jobs.db schema version ${version} is newer than supported version 3`);
     }
-    if (version < 2) {
-      const columns = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
-      if (!columns.some((column) => column.name === "outputs_pruned_at")) {
-        db.exec("ALTER TABLE jobs ADD COLUMN outputs_pruned_at TEXT");
-      }
-      db.pragma("user_version = 2");
+    const columns = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+    if (version < 2 && !columns.some((column) => column.name === "outputs_pruned_at")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN outputs_pruned_at TEXT");
     }
+    // The cap fact lives in its own column: a job can be trimmed by the cap
+    // whatever ended it, and `stop_reason` is about why it ended.
+    if (!columns.some((column) => column.name === "output_capped")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN output_capped INTEGER NOT NULL DEFAULT 0");
+    }
+    db.pragma("user_version = 3");
     if (dbPath !== ":memory:") {
       try {
         chmodSync(dbPath, 0o600);
@@ -144,6 +148,17 @@ export class JobStore {
       }
     }
     return new JobStore(db, dbPath);
+  }
+
+  /**
+   * Record that the output cap discarded bytes from this job. Separate from
+   * `stop_reason`: trimming says what was thrown away, the reason says why the
+   * job ended, and collapsing them loses one or the other.
+   */
+  markOutputCapped(id: string): void {
+    this.db
+      .prepare("UPDATE jobs SET output_capped = 1, updated_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), id);
   }
 
   close(): void {
@@ -478,6 +493,7 @@ interface JobRow {
   stdout_path: string;
   stderr_path: string;
   status_path: string;
+  output_capped: number;
   origin_turn_id: string | null;
   created_at: string;
   updated_at: string;
@@ -512,6 +528,7 @@ function rowToJob(row: JobRow): JobRecord {
     stdout_path: row.stdout_path,
     stderr_path: row.stderr_path,
     status_path: row.status_path,
+    output_capped: row.output_capped === 1,
     origin_turn_id: row.origin_turn_id,
     created_at: row.created_at,
     updated_at: row.updated_at,

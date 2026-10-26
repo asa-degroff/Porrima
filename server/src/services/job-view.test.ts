@@ -92,6 +92,18 @@ function setEndedAt(id: string, endedAt: string): void {
 }
 
 describe("job view", () => {
+  it("mirrors the cap fact and keeps it once set", () => {
+    const job = supervisorJob("capped-1", "finished");
+    job.output_capped = true;
+    upsertSupervisorJob({ job });
+    expect(getJobView("capped-1")?.output_capped).toBe(true);
+
+    // A mirror refresh that forgot the cap must not erase it.
+    job.output_capped = false;
+    upsertSupervisorJob({ job });
+    expect(getJobView("capped-1")?.output_capped).toBe(true);
+  });
+
   it("records a supervisor starting row and mirrors the running job", () => {
     const starting = recordSupervisorStarting({
       jobId: "sup-1",

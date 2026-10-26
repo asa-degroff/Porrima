@@ -39,6 +39,7 @@ export interface JobViewRow {
   ended_at: string | null;
   duration_ms: number | null;
   output_paths: string[];
+  output_capped?: boolean;
   origin_turn_id: string | null;
   notify: boolean;
   notice_group: string | null;
@@ -127,6 +128,7 @@ function initSchema(database: Database.Database): void {
       exit_code INTEGER,
       signal TEXT,
       stop_reason TEXT,
+      output_capped INTEGER NOT NULL DEFAULT 0,
       started_at TEXT,
       ended_at TEXT,
       duration_ms INTEGER,
@@ -143,6 +145,12 @@ function initSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_job_view_chat ON job_view(chat_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_job_view_state ON job_view(state);
   `);
+  const columns = database
+    .prepare("PRAGMA table_info(job_view)")
+    .all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "output_capped")) {
+    database.exec("ALTER TABLE job_view ADD COLUMN output_capped INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 export function initJobView(path = DB_PATH): void {
@@ -176,8 +184,8 @@ export function upsertSupervisorJob(
         job_id, chat_id, workspace, kind, source, command, cwd,
         pid, pgid, start_id, boot_id, state, exit_code, signal, stop_reason,
         started_at, ended_at, duration_ms, output_paths, origin_turn_id,
-        notify, notice_state, last_synced_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'supervisor', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?, ?, ?)
+        notify, notice_state, last_synced_at, created_at, updated_at, output_capped
+      ) VALUES (?, ?, ?, ?, 'supervisor', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?, ?, ?, ?)
       ON CONFLICT(job_id) DO UPDATE SET
         workspace = COALESCE(excluded.workspace, job_view.workspace),
         command = excluded.command,
@@ -201,7 +209,8 @@ export function upsertSupervisorJob(
         output_paths = excluded.output_paths,
         origin_turn_id = COALESCE(excluded.origin_turn_id, job_view.origin_turn_id),
         last_synced_at = excluded.last_synced_at,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        output_capped = MAX(job_view.output_capped, excluded.output_capped)`,
     )
     .run(
       job.id,
@@ -227,6 +236,7 @@ export function upsertSupervisorJob(
       now,
       job.created_at,
       now,
+      job.output_capped ? 1 : 0,
     );
   if (options.authoritative) {
     // `lost` and `failed` are uncertainty/server-side start failures, not
@@ -813,6 +823,7 @@ interface JobViewDbRow {
   ended_at: string | null;
   duration_ms: number | null;
   output_paths: string | null;
+  output_capped: number | null;
   origin_turn_id: string | null;
   notify: number;
   notice_group: string | null;
@@ -853,6 +864,7 @@ function rowToView(row: JobViewDbRow): JobViewRow {
     ended_at: row.ended_at,
     duration_ms: row.duration_ms,
     output_paths: outputPaths,
+    output_capped: row.output_capped === 1,
     origin_turn_id: row.origin_turn_id,
     notify: row.notify !== 0,
     notice_group: row.notice_group,

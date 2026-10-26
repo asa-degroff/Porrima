@@ -427,10 +427,70 @@ describe("job supervisor", () => {
       }),
     );
     const finished = await waitForState(harness, job.id, "finished");
-    expect(finished.stop_reason).toBe("log-cap");
+    // The command ended by itself; the cap only discarded bytes.
+    expect(finished.stop_reason).toBeNull();
+    expect(finished.output_capped).toBe(true);
     const stdout = await readFile(finished.stdout_path);
     expect(stdout.length).toBe(1024);
     expect(stdout.subarray(-4).toString()).toBe("TAIL");
+  });
+
+  it("marks a trimmed file at the head and records the cap as its own fact", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, {
+        command: "head -c 4096 /dev/zero; printf TAIL",
+      }),
+    );
+    const finished = await waitForState(harness, job.id, "finished");
+    const stdout = (await readFile(finished.stdout_path)).toString();
+    // The file has to say what it is: the surviving bytes are the last ones.
+    expect(stdout.startsWith("[porrima output cap: ")).toBe(true);
+    expect(stdout).toContain("bytes discarded from the head]");
+    expect(stdout.length).toBe(1024);
+    expect(finished.output_capped).toBe(true);
+    expect(harness.store.get(job.id)?.output_capped).toBe(true);
+  });
+
+  it("keeps a settled reason and the cap fact separate", async () => {
+    const harness = await makeHarness(undefined, undefined, 1024);
+    const job = await harness.supervisor.start(
+      startInput(harness, { command: "sleep 30" }),
+    );
+    await delay(100);
+    harness.supervisor.close();
+    if (job.pgid) await killProcessGroup(job.pgid, { graceMs: 200 });
+
+    await writeFile(job.stdout_path, Buffer.alloc(4096));
+    await writeFile(job.stderr_path, Buffer.alloc(0));
+    // An attempted kill already wrote `daemonized` into stop_reason. The cap
+    // must not overwrite the reason the kill recorded.
+    harness.store.markLost(job.id, new Date().toISOString(), "daemonized");
+    await writeFile(
+      job.status_path,
+      JSON.stringify({
+        exit_code: 0,
+        signal: null,
+        started_at: job.started_at,
+        ended_at: new Date().toISOString(),
+        duration_ms: 100,
+      }),
+    );
+
+    const supervisor2 = new JobSupervisor({
+      store: harness.store,
+      jobsDir: harness.jobsDir,
+      journalPath: harness.journalPath,
+      bootId: harness.bootId,
+      maxOutputBytes: 1024,
+    });
+    cleanups.push(() => supervisor2.close());
+    await supervisor2.recover();
+
+    const settled = harness.store.get(job.id);
+    expect(settled?.state).toBe("finished");
+    expect(settled?.stop_reason).toBe("daemonized");
+    expect(settled?.output_capped).toBe(true);
   });
 
   it("splits the cap across stdout and stderr", async () => {
@@ -441,7 +501,8 @@ describe("job supervisor", () => {
       }),
     );
     const finished = await waitForState(harness, job.id, "finished");
-    expect(finished.stop_reason).toBe("log-cap");
+    expect(finished.stop_reason).toBeNull();
+    expect(finished.output_capped).toBe(true);
     const stdout = await readFile(finished.stdout_path);
     const stderr = await readFile(finished.stderr_path);
     expect(stdout.length + stderr.length).toBe(1024);
@@ -507,7 +568,10 @@ describe("job supervisor", () => {
 
     const finished = harness.store.get(job.id);
     expect(finished?.state).toBe("finished");
-    expect(finished?.stop_reason).toBe("log-cap");
+    // The wrapper recorded its own ending: the cap did not cause it, it only
+    // discarded bytes. Both facts survive, in their own columns.
+    expect(finished?.stop_reason).toBeNull();
+    expect(finished?.output_capped).toBe(true);
     expect((await readFile(job.stdout_path)).length).toBe(1024);
   });
 

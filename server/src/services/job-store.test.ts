@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +34,46 @@ function newJob(id = "job-1") {
 }
 
 describe("job store", () => {
+  it("carries the cap fact in its own column across a v2 -> v3 migration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "porrima-job-store-migration-"));
+    roots.push(root);
+    const dbPath = join(root, "jobs.db");
+
+    const first = JobStore.open(dbPath);
+    first.insertStarting(newJob("capped"));
+    first.markOutputCapped("capped");
+    expect(first.get("capped")?.output_capped).toBe(true);
+    first.close();
+
+    // Rewind the ledger to the shape a pre-upgrade box has: no column, v2.
+    const old = new Database(dbPath);
+    old.exec("ALTER TABLE jobs DROP COLUMN output_capped");
+    old.pragma("user_version = 2");
+    old.close();
+
+    const reopened = JobStore.open(dbPath);
+    expect(reopened.get("capped")?.output_capped).toBe(false);
+    reopened.markOutputCapped("capped");
+    expect(reopened.get("capped")?.output_capped).toBe(true);
+    const version = Number(
+      new Database(dbPath, { readonly: true }).pragma("user_version", { simple: true }) ?? 0,
+    );
+    expect(version).toBe(3);
+    reopened.close();
+  });
+
+  it("refuses a ledger newer than the supported schema", async () => {
+    const root = await mkdtemp(join(tmpdir(), "porrima-job-store-future-"));
+    roots.push(root);
+    const dbPath = join(root, "jobs.db");
+    const store = JobStore.open(dbPath);
+    store.close();
+    const future = new Database(dbPath);
+    future.pragma("user_version = 9");
+    future.close();
+    expect(() => JobStore.open(dbPath)).toThrow(/newer than supported version 3/);
+  });
+
   it("tracks the starting -> running -> finished lifecycle", () => {
     const starting = store.insertStarting(newJob());
     expect(starting.state).toBe("starting");

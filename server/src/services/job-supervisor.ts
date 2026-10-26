@@ -10,7 +10,6 @@ import {
   readSync,
   renameSync,
   statSync,
-  truncateSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
@@ -475,7 +474,7 @@ export class JobSupervisor extends EventEmitter {
    * the group is confirmed dead (or the wrapper has recorded completion), so a
    * rename cannot race a writer still holding the old inode.
    */
-  private trimOutputToCap(row: Pick<JobRecord, "stdout_path" | "stderr_path">): boolean {
+  private trimOutputToCap(row: Pick<JobRecord, "id" | "stdout_path" | "stderr_path">): boolean {
     const stdoutSize = fileSize(row.stdout_path);
     const stderrSize = fileSize(row.stderr_path);
     const total = stdoutSize + stderrSize;
@@ -490,6 +489,7 @@ export class JobSupervisor extends EventEmitter {
 
     this.trimFileToTail(row.stdout_path, keepOut);
     this.trimFileToTail(row.stderr_path, keepErr);
+    this.store.markOutputCapped(row.id);
     return true;
   }
 
@@ -501,31 +501,34 @@ export class JobSupervisor extends EventEmitter {
       return;
     }
     if (size <= keepBytes) return;
-    if (keepBytes <= 0) {
-      try {
-        truncateSync(path, 0);
-      } catch (error) {
-        console.warn(`[jobs] failed to truncate capped output ${path}:`, error);
-      }
-      return;
-    }
+
+    // A truncator that keeps the tail has to describe itself at the head. The
+    // bytes that survive are the last ones, so a reader opening this file lands
+    // in the middle of a stream unless something says how much was discarded.
+    // The marker is paid for out of the same budget, so the cap still holds.
+    const markerFor = (discarded: number) =>
+      Buffer.from(`[porrima output cap: ${discarded} of ${size} bytes discarded from the head]\n`);
+    const markerProbe = markerFor(size);
+    const tailBytes = Math.max(0, keepBytes - markerProbe.length);
 
     let fd = -1;
+    let read = 0;
+    let buffer = Buffer.alloc(0);
     try {
-      fd = openSync(path, "r");
-      const buffer = Buffer.alloc(keepBytes);
-      let read = 0;
-      const start = size - keepBytes;
-      while (read < keepBytes) {
-        const n = readSync(fd, buffer, read, keepBytes - read, start + read);
-        if (n <= 0) break;
-        read += n;
+      if (tailBytes > 0) {
+        fd = openSync(path, "r");
+        buffer = Buffer.alloc(tailBytes);
+        const start = size - tailBytes;
+        while (read < tailBytes) {
+          const n = readSync(fd, buffer, read, tailBytes - read, start + read);
+          if (n <= 0) break;
+          read += n;
+        }
       }
-      if (read === 0) return;
       const tmp = `${path}.cap-${process.pid}.tmp`;
       writeFileSync(
         tmp,
-        read === keepBytes ? buffer : buffer.subarray(0, read),
+        Buffer.concat([markerFor(size - read), buffer.subarray(0, read)]),
         { mode: 0o600 },
       );
       renameSync(tmp, path);
@@ -815,8 +818,10 @@ export class JobSupervisor extends EventEmitter {
       const endedAt = new Date().toISOString();
       const duration = durationBetween(row.started_at, endedAt);
       const reason = opts.reason ?? (opts.force ? "user-force" : "user");
-      const stopped = this.store.stop(id, reason, endedAt, duration);
+      // Trim before the terminal ledger write: the row returned here is the one
+      // the mirror and the notice read, and it should already carry the cap.
       this.trimOutputToCap(row);
+      const stopped = this.store.stop(id, reason, endedAt, duration);
       this.children.delete(id);
       this.adopted.delete(id);
       this.clearTimeout(id);
@@ -954,7 +959,7 @@ export class JobSupervisor extends EventEmitter {
       signal: status?.signal ?? signal ?? null,
       ended_at: endedAt,
       duration_ms: duration,
-      stop_reason: capped ? "log-cap" : daemonized ? "daemonized" : null,
+      stop_reason: daemonized ? "daemonized" : null,
     });
     this.appendJournalInactive(id);
     this.emitJob("job_finished", updated);
@@ -1002,12 +1007,10 @@ export class JobSupervisor extends EventEmitter {
   ): JobRecord {
     const pgid = row.pgid ?? row.pid;
     const groupAlive = pgid != null && isGroupAlive(pgid);
-    const capped = this.isOutputCapped(row);
     if (!groupAlive) this.trimOutputToCap(row);
-    const stopReason =
-      capped && (priorReason == null || priorReason === "daemonized")
-        ? "log-cap"
-        : priorReason;
+    // The cap is not a cause here: this job recorded its own ending. Whether
+    // bytes were discarded is a separate fact and lives in its own column.
+    const stopReason = priorReason;
     const endedAt = status.ended_at ?? new Date().toISOString();
     const duration =
       status.duration_ms ?? durationBetween(row.started_at, endedAt);
