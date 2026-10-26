@@ -293,6 +293,62 @@ describe("automation mark-fired-at-start", () => {
     }
   });
 
+  it("records an interrupted once-task as terminal, not as a success or a retry", async () => {
+    // The Oct 26 witness: a 90-minute automation lost its turn-gate lease at
+    // 15m03s, produced no text, and was filed as `success` — the only tell was
+    // a summary exactly as long as the fallback line. `interrupted` is terminal
+    // (no surprise rerun of a run that already did most of its work) and is
+    // never re-armed with backoff.
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
+    try {
+      const storage = await loadAutomationStorage(homeDir);
+      const task = makeOnceTask(storage, new Date(Date.now() + 60 * 60 * 1000).toISOString());
+      const run = storage.startAutomationRun(task.id, "scheduler");
+
+      storage.finishAutomationRun(run.id, "interrupted", {
+        summary: "*The automation ended without visible output (stopReason=aborted).*",
+        stopReason: "aborted",
+        toolCallCount: 14,
+      });
+
+      expect(storage.getAutomationRun(run.id)?.status).toBe("interrupted");
+      const done = storage.getAutomationTask(task.id);
+      expect(done?.enabled).toBe(false);
+      expect(done?.archived).toBe(true);
+      expect(done?.nextRunAt).toBeUndefined();
+      expect(done?.lastStatus).toBe("interrupted");
+      expect(storage.listEnabledAutomationTasks().some((t) => t.id === task.id)).toBe(false);
+    } finally {
+      await closeStorage().catch(() => {});
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts interrupted runs against the failure ceiling", async () => {
+    // A run that is cut off every interval has not failed, but it has not done
+    // its job either. If it never spent the ceiling it would re-run forever,
+    // each time burning the inference slot on a turn guaranteed to be aborted.
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
+    try {
+      const storage = await loadAutomationStorage(homeDir);
+      const task = makeOnceTask(storage, new Date(Date.now() + 60 * 60 * 1000).toISOString());
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const run = storage.startAutomationRun(task.id, "scheduler");
+        storage.finishAutomationRun(run.id, "interrupted", { stopReason: "aborted" });
+      }
+
+      const dead = storage.getAutomationTask(task.id);
+      expect(dead?.consecutiveFailures).toBe(5);
+      expect(dead?.enabled).toBe(false);
+      expect(dead?.archived).toBe(true);
+      expect(dead?.nextRunAt).toBeUndefined();
+    } finally {
+      await closeStorage().catch(() => {});
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops re-arming after the failure ceiling", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-automation-storage-"));
     try {

@@ -1059,24 +1059,36 @@ export function finishAutomationRun(
     if (task) {
       const isSuccess = status === "success";
       const isFailure = status === "failed";
+      // A run that was cut off is neither. It did not fail, so it is not
+      // re-armed with backoff — but it also did not do its job, so it spends
+      // the same ceiling as a failure. Without that, an automation that gets
+      // aborted on every run (the Oct 26 shape: taken over at 15 minutes,
+      // every interval) would keep re-running forever, never tripping
+      // `MAX_CUSTOM_FAILURES_BEFORE_DISABLE`, burning the slot on a turn that
+      // is guaranteed to die.
+      const isInterrupted = status === "interrupted";
+      const countsAgainstCeiling = isFailure || isInterrupted;
       const consecutiveFailures = isSuccess
         ? 0
-        : isFailure
+        : countsAgainstCeiling
           ? (task.consecutiveFailures ?? 0) + 1
           : task.consecutiveFailures ?? 0;
       const shouldDisable =
-        isFailure && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
+        countsAgainstCeiling && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
       // Once-scheduled tasks are disarmed at start (mark-fired-at-start).
       // Success leaves them archived (terminal); a graceful failure re-arms
-      // them with backoff unless the failure ceiling wins.
+      // them with backoff unless the failure ceiling wins. An interrupted
+      // once-task is terminal the way the orphan sweep treats it — it ran and
+      // was cut off, so it stays archived rather than being re-armed for a
+      // surprise rerun.
       const isOnce = task.schedule.type === "once";
-      const onceDisable = isOnce && isSuccess;
+      const onceDisable = isOnce && (isSuccess || isInterrupted);
       const onceReArm = isOnce && isFailure && !shouldDisable;
       insertTask({
         ...task,
         enabled: (shouldDisable || onceDisable) ? false : onceReArm ? true : task.enabled,
         archived: onceDisable ? true : onceReArm ? false : task.archived,
-        lastRunAt: isSuccess ? finishedAt : task.lastRunAt,
+        lastRunAt: isSuccess || isInterrupted ? finishedAt : task.lastRunAt,
         nextRunAt: (shouldDisable || onceDisable)
           ? undefined
           : isSuccess
@@ -1094,7 +1106,11 @@ export function finishAutomationRun(
         );
       }
       if (onceDisable) {
-        console.log(`[automation] One-time task ${task.id} completed, archived`);
+        console.log(
+          isInterrupted
+            ? `[automation] One-time task ${task.id} interrupted, archived`
+            : `[automation] One-time task ${task.id} completed, archived`,
+        );
       }
       if (onceReArm) {
         console.log(

@@ -1,7 +1,7 @@
 import type { ToolSideEffects } from "./agent-tools.js";
 import { withHeadlessAskUser } from "./headless-tools.js";
 import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
-import type { AutomationRun, AutomationTask, Chat, ChatMessage, CrossChatPostPayload, ReminderMetadata } from "../types.js";
+import type { AutomationRun, AutomationRunStatus, AutomationTask, Chat, ChatMessage, CrossChatPostPayload, ReminderMetadata } from "../types.js";
 import { acquireAutomationLock, releaseAutomationLock } from "./automation-lock.js";
 import {
   finishAutomationRun,
@@ -163,6 +163,24 @@ function makeTriggerMessage(
     _automationRunId: run.id,
     ...(reminder ? { _reminder: reminder } : {}),
   };
+}
+
+/**
+ * What a finished run actually was, for the run history and the task record.
+ *
+ * `success` used to mean "the loop returned without throwing", which is how a
+ * run that was aborted mid-request — lease stolen, no output produced — got
+ * archived as completed. A run that was cut off is `interrupted`, the same
+ * value the orphan sweep already uses for a run whose process died, so the
+ * history reads the same whether the process ended or the turn did. A timeout
+ * and an aborted controller both mean the run was cut off, not that it failed.
+ */
+export function automationRunStatus(
+  result: Pick<AutomationExecutionResult, "success" | "timedOut" | "stopReason">,
+): AutomationRunStatus {
+  if (!result.success) return "failed";
+  if (result.timedOut || result.stopReason === "aborted") return "interrupted";
+  return "success";
 }
 
 async function sendAutomationPush(task: AutomationTask, result: AutomationExecutionResult): Promise<void> {
@@ -476,6 +494,7 @@ async function runPromptAutomation(
       systemPrompt,
       tools,
       signal: emitter.stream.abort.signal,
+      stoppedReason: turn.stopSource,
       triggerRatio: COMPACTION_TRIGGER_RATIO,
       emitCompacting: () => emitter.emitCompacting(),
       preFlush: preCompactionFlushHook(chat, "automation end-of-turn flush failed"),
@@ -735,7 +754,19 @@ export async function runAutomationTask(
   // inference slot. Scheduler-originated runs only reach this point when the
   // gate was idle at dispatch time; manual runs queue behind in-flight turns
   // and start as soon as the active turn completes.
-  const turnLease = await acquireTurn(SYSTEM_CHAT_ID);
+  //
+  // The lease names the transcript this run writes into. `kind` carries the
+  // "system" label the client shows for background work; `chatId` has to be
+  // the truth, or the gate cannot see that the chat it is holding is the one
+  // whose job notices and user turns are queueing behind it — and a second
+  // turn can be handed the same transcript mid-run (a headless takeover then
+  // aborts the running request). Judged by the task's own declared budget
+  // rather than by silence: a tool-heavy run is legitimately silent for
+  // minutes, and a 15-minute silence bound is not a fact about it.
+  const turnLease = await acquireTurn(task.chatId || SYSTEM_CHAT_ID, {
+    kind: "system",
+    maxHoldMs: task.timeoutMs,
+  });
   await acquireAutomationLock(task.id);
   let run: AutomationRun | null = null;
   try {
@@ -753,7 +784,7 @@ export async function runAutomationTask(
         : { ...task, promptSteps: promptSelection.selectedSteps };
     const result = await executeAutomation(executionTask, run);
     await sendAutomationPush(task, result);
-    finishAutomationRun(run.id, result.success ? "success" : "failed", {
+    finishAutomationRun(run.id, automationRunStatus(result), {
       error: result.error,
       summary: result.summary,
       toolCallCount: result.toolCalls.length,

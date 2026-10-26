@@ -78,7 +78,7 @@ The legacy `checkAndRunSynthesis()` and `checkAndRunWakeCycle()` functions in `s
 
 ## Execution Model
 
-`runAutomationTask()` acquires the global turn lease (`acquireTurn(SYSTEM_CHAT_ID)`) **first**, then the automation lock, records an `automation_runs` row, executes the task, optionally sends a push notification, updates run status, and releases both in `finally`. Because the turn gate is the outer serialization point, a *manual* automation run queues behind an in-flight user turn rather than failing.
+`runAutomationTask()` acquires the global turn lease **first** — keyed to the chat the run writes its rows into, carrying the task's `timeoutMs` as the lease ceiling — then the automation lock, records an `automation_runs` row, executes the task, optionally sends a push notification, updates run status, and releases both in `finally`. Because the turn gate is the outer serialization point, a *manual* automation run queues behind an in-flight user turn rather than failing. Keying the lease to the target chat is what lets the gate see that this chat is the busy one, so that chat's own turns and job notices queue behind it truthfully; the lease's `kind` stays `system`, which is only the label the client shows. See [architecture.md](architecture.md).
 
 Execution paths:
 
@@ -109,7 +109,9 @@ Failures are recorded in `automation_runs` and increment `consecutiveFailures` o
 - built-ins: 15 minute base, capped at 6 hours
 - custom tasks: 30 minute base, capped at 24 hours
 
-Custom tasks are automatically disabled after 5 consecutive failures. A successful run clears the failure count and schedules the next normal run.
+**Run status.** A finished run is `success`, `failed`, or `interrupted`. `interrupted` means the run was cut off — its turn hit `timeoutMs`, or its provider call was aborted mid-flight — and it is not a success even when the run did most of its work: a turn aborted with no output used to be filed as `success`, which produced a completed-looking record with nothing in it. An interrupted run is not re-armed (it is not retried), but it does count against the failure ceiling, because an automation that is cut off on every interval would otherwise keep running and burning the inference slot on a turn guaranteed to die.
+
+Custom tasks are automatically disabled after 5 consecutive failures or interrupted runs. A successful run clears the failure count and schedules the next normal run.
 
 **Once-task terminal state (mark-fired-at-start).** Single-shot tasks (reminders, cross-chat posts) are marked fired at START, not completion: the `startAutomationRun` transaction sets `enabled: false, archived: true` (the lever is the enabled flag — clearing `nextRunAt` alone is counterproductive, `taskIsDue` treats a missing next run as always-due). A process death mid-run therefore cannot re-arm the task, and no path may leave an enabled task with a null `nextRunAt`. Graceful failures of once-tasks re-arm through `computeFailureRetryAt` (backoff retry; auto-disable after 5 still wins), and a startup sweep marks runs interrupted by a restart `interrupted`.
 

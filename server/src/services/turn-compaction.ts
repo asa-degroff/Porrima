@@ -102,6 +102,11 @@ export interface EndOfTurnCompactionOptions {
    * safe checkpoint.
    */
   signal?: AbortSignal;
+  /** Names why the turn ended when the skip is reported. "turn stopped" alone
+   *  cannot distinguish a user pressing stop from a lease being stolen from
+   *  under the run — the Oct 26 witness lost a finished automation to exactly
+   *  that ambiguity. */
+  stoppedReason?: string;
 }
 
 export interface EndOfTurnCompactionResult {
@@ -126,7 +131,11 @@ export async function runEndOfTurnCompaction(
   // A stopped turn must not compact: the user abandoned it, and the flush it
   // runs would keep the extraction servers busy after the stop.
   if (opts.signal?.aborted) {
-    console.log(`${logPrefix} End-of-turn compaction skipped (turn stopped): chat=${chat.id}`);
+    console.log(
+      `${logPrefix} End-of-turn compaction skipped (turn stopped${
+        opts.stoppedReason ? `: ${opts.stoppedReason}` : ""
+      }): chat=${chat.id}`,
+    );
     return { triggered: false, truncated: false, drivingTokens: 0, ratio: 0 };
   }
 

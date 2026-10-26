@@ -83,11 +83,18 @@ export interface HeadlessChatTurnOptions {
   };
 }
 
+export type HeadlessTurnStopSource = "completed" | "stopped" | "timeout" | "iteration-cap";
+
 export interface HeadlessChatTurnResult extends HeadlessTurnState {
   summary: string;
   assistantMessage: ChatMessage;
   assistantMessageIndex: number;
   success: boolean;
+  /** Why the loop ended. Callers treat these differently: a turn the user
+   *  stopped should not keep working after the stop (no post-turn compaction
+   *  or extraction flush), while a turn that ran out of time or iterations is
+   *  still a finished turn whose rows need the same tidying as a success. */
+  stopSource: HeadlessTurnStopSource;
   error?: string;
   timedOut?: boolean;
   timeoutReason?: string;
@@ -426,10 +433,16 @@ export async function runHeadlessChatTurn(
   // /stop targets activeStreams, which for a headless run holds the emitter's
   // stream controller. Link it here so synthesis/wake/automation turns actually
   // cancel instead of generating to completion in the background.
+  let stoppedExternally = false;
+  let iterationCapHit = false;
   if (emitter.stream.abort.signal.aborted) {
+    stoppedExternally = true;
     controller.abort();
   } else {
-    emitter.stream.abort.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    emitter.stream.abort.signal.addEventListener("abort", () => {
+      stoppedExternally = true;
+      controller.abort();
+    }, { once: true });
   }
   let timedOut = false;
   let timeoutReason: string | undefined;
@@ -968,6 +981,7 @@ export async function runHeadlessChatTurn(
               maxIterationsPerSegment: options.maxIterationsPerAssistantSegment,
             });
             if (guard.stop) {
+              iterationCapHit = true;
               // guard.stop.scope names the cap that fired (total is checked
               // first, so "segment" here means the total cap did not fire).
               console.warn(
@@ -1167,6 +1181,13 @@ export async function runHeadlessChatTurn(
     assistantMessage,
     assistantMessageIndex,
     success: !producedNothing,
+    stopSource: timedOut
+      ? "timeout"
+      : stoppedExternally
+        ? "stopped"
+        : iterationCapHit
+          ? "iteration-cap"
+          : "completed",
     ...(producedNothing
       ? { error: `Model returned ${stopReasonText} before producing any output` }
       : {}),
