@@ -91,18 +91,32 @@ For remote access, replace `ORIGIN` and `RP_ID` with the final HTTPS browser ori
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp install/templates/porrima-jobs.service ~/.config/systemd/user/
+PORRIMA_DIR="$HOME/porrima"
+# Use the same Node binary as porrima.service; a custom ExecStart drop-in may
+# point at a versioned Node install rather than `node` on PATH.
+NODE_BIN="$(command -v node)"
+sed -e "s|\${PORRIMA_DIR}|$PORRIMA_DIR|g" \
+    -e "s|\${NODE_BIN}|$NODE_BIN|g" \
+    install/templates/porrima-jobs.service > ~/.config/systemd/user/porrima-jobs.service
 cp install/templates/porrima-jobs.slice ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now porrima-jobs.service
 ```
 
-`porrima.service` declares `Wants=`/`After=porrima-jobs.service`; restart it once after installing the supervisor. The service runs `dist/jobs-daemon.js`, so build the server first (`cd server && npm run build`).
+`porrima.service` declares `Wants=`/`After=porrima-jobs.service`; restart it once after installing the supervisor. If the installed main unit predates the supervisor, add the same ordering as a drop-in at `~/.config/systemd/user/porrima.service.d/50-jobs-service.conf`:
+
+```ini
+[Unit]
+After=porrima-jobs.service
+Wants=porrima-jobs.service
+```
+
+The service runs `dist/jobs-daemon.js`, so build the server first (`cd server && npm run build`).
 
 Lifecycle:
 
 - `systemctl --user restart porrima` leaves jobs running.
-- `systemctl --user restart porrima-jobs` restarts the supervisor; the new daemon adopts live jobs (the unit uses `KillMode=process`).
+- `systemctl --user restart porrima-jobs` restarts the supervisor; the new daemon adopts live jobs (the unit uses `KillMode=process`). Systemd may log `Found left-over process ... Ignoring` while those jobs remain in the unit cgroup; the adoption is intentional, and `stop porrima-jobs.slice` is the full stop.
 - `systemctl --user stop porrima-jobs.service` stops the control plane but leaves jobs running.
 - `systemctl --user stop porrima-jobs.slice` stops the daemon and every job.
 - The model-facing `jobs kill` / global stop call the daemon's `stop_all` path; use the CLI for manual checks: `cd server && npm run jobs-cli -- stats` (production: `node dist/scripts/jobs-cli.js stats`).
