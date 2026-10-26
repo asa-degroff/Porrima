@@ -262,9 +262,10 @@ regex option addable later without changing the request shape. This is the readi
 for services.
 
 Events (`job_started`, `job_finished`, `job_stopped`, `job_lost`) carry a durable `seq`. On
-connect the server reconciles from a `list` restricted to the live states, then subscribes from
-the current sequence. A long event backlog is not the correctness mechanism: `list` is truth,
-events are promptness. The event log is pruned aggressively.
+connect — at startup and on every later reconnect — the server reconciles from a `list`
+restricted to the live states, then subscribes from the current sequence. A long event backlog
+is not the correctness mechanism: `list` is truth, events are promptness. The event log is
+pruned aggressively.
 
 The server's client connects lazily, retries with backoff, and degrades cleanly. A background
 start while the supervisor is unavailable fails with a clear error; the server does not fall

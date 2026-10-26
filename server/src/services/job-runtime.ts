@@ -119,7 +119,17 @@ export async function ensureSupervisorConnection(): Promise<boolean> {
   })();
 
   try {
-    return await connectPromise;
+    const connected = await connectPromise;
+    // A connection is a moment to re-derive state, not only to start listening.
+    // The subscription carries no history (`since_seq` starts past every event),
+    // so anything that terminalized while we were away — a job stopped by the
+    // daemon, by `jobs-cli`, or by its own exit during a gap — is invisible
+    // until something reconciles it. Without this, a view row can stay `running`
+    // forever for a chat nobody lists, and the notice layer (which only wakes on
+    // terminal rows) never fires for it. The reconcile is fire-and-forget: it
+    // must not delay the call that happened to trigger the reconnect.
+    if (connected) void reconcileJobRuntime();
+    return connected;
   } finally {
     connectPromise = null;
   }
@@ -331,9 +341,9 @@ export async function listJobsForChat(
       // Keep the durable view.
     }
   } else {
-    void ensureSupervisorConnection().then((connected) => {
-      if (connected) void reconcileJobRuntime();
-    });
+    // Establishing the connection is what triggers the global reconcile
+    // (see ensureSupervisorConnection), so this path asks only for the connect.
+    void ensureSupervisorConnection();
   }
   return listJobView(chatId, { states: stateFilter });
 }
