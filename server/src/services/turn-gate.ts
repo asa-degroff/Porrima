@@ -37,6 +37,16 @@ export interface TurnLease {
    *  and will never release. Stale leases are stolen on the next acquire and
    *  reaped by the scheduler so queued turns are not blocked forever. */
   lastHeartbeatAt: number;
+  /**
+   * A holder that declares how long its turn may run (an automation's
+   * `timeoutMs`) is judged by that ceiling instead of by silence. Its work is
+   * legitimately long — a tool-heavy automation can spend minutes inside one
+   * tool call and minutes in a pre-compaction flush — so silence proves
+   * nothing about it, while its own declared budget says exactly what is too
+   * long. `maxHoldMs` carries that budget into the gate so the two bounds
+   * cannot disagree; see `isStaleLease`.
+   */
+  maxHoldMs: number | null;
 }
 
 export interface TurnQueueInfo {
@@ -54,6 +64,13 @@ export interface TurnQueueInfo {
 export interface AcquireTurnOptions {
   /** Aborting rejects a still-queued waiter (removes it from the queue). */
   signal?: AbortSignal;
+  /** Ceiling for this lease, in ms, for holders that already declare a turn
+   *  budget (automations pass `task.timeoutMs`). A declared-budget lease is
+   *  reaped when it outlives that budget plus the silence allowance any holder
+   *  gets — its post-turn bookkeeping (compaction, extraction flush) is not
+   *  covered by the budget it declared, and reaping it mid-flush would hand
+   *  the slot to a second turn. */
+  maxHoldMs?: number;
   /** Called on enqueue and whenever a waiter ahead is removed. */
   onQueueUpdate?: (info: TurnQueueInfo) => void;
   /** Lease owner kind (default "chat"). */
@@ -73,6 +90,7 @@ interface Waiter {
   onQueueUpdate?: (info: TurnQueueInfo) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
+  maxHoldMs?: number;
 }
 
 interface TurnGateState {
@@ -85,10 +103,24 @@ const state: TurnGateState =
 (globalThis as any)._turnGateState = state;
 
 /**
- * A lease with no heartbeat for this long is considered dead. Healthy turns
- * touch the lease on every loop iteration, every LLM stream event, and during
- * compaction keepalives — so silence means the holder is hung. Generous by
- * design: a large-context prefill can legitimately run several minutes.
+ * Two ways a lease is judged dead, and each holder picks one by what it
+ * declares at acquire time.
+ *
+ * Silence rule (default): healthy turns touch the lease on every loop
+ * iteration, every LLM stream event, and during compaction keepalives, so a
+ * lease with no touch for `STALE_LEASE_MS` belongs to a holder that hung and
+ * will never release. Generous by design: a large-context prefill can
+ * legitimately run several minutes.
+ *
+ * Declared-budget rule (`maxHoldMs`): a holder whose turn already has a
+ * deadline — an automation's `timeoutMs` — is judged by that deadline instead.
+ * Silence is the wrong instrument for it, because its legitimate work is
+ * silent in exactly the ways the progress rule rewards: a single tool call can
+ * run for minutes, and end-of-turn compaction can spend longer in an
+ * extraction flush than the turn itself spent generating. The + `STALE_LEASE_MS`
+ * grace covers that bookkeeping, which the declared budget does not cover; a
+ * lease reaped mid-flush would hand the slot to a second turn, which is the
+ * collision the gate exists to prevent.
  */
 const DEFAULT_STALE_LEASE_MS = 15 * 60_000;
 const STALE_LEASE_MS = readPositiveIntEnv("TURN_GATE_STALE_LEASE_MS", DEFAULT_STALE_LEASE_MS);
@@ -99,16 +131,40 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 }
 
 function isStaleLease(lease: TurnLease): boolean {
+  if (lease.maxHoldMs != null) {
+    return Date.now() - lease.acquiredAt > lease.maxHoldMs + STALE_LEASE_MS;
+  }
   return Date.now() - lease.lastHeartbeatAt > STALE_LEASE_MS;
+}
+
+function staleReason(lease: TurnLease): string {
+  if (lease.maxHoldMs != null) {
+    return (
+      `held ${Math.round((Date.now() - lease.acquiredAt) / 1000)}s past its ` +
+      `${lease.maxHoldMs}ms budget (+${Math.round(STALE_LEASE_MS / 1000)}s bookkeeping grace)`
+    );
+  }
+  return `no heartbeat for ${Math.round((Date.now() - lease.lastHeartbeatAt) / 1000)}s`;
 }
 
 function shortId(id: string): string {
   return id.length > 8 ? `${id.slice(0, 8)}...` : id;
 }
 
-function makeLease(chatId: string, kind: TurnLeaseKind): TurnLease {
+function makeLease(
+  chatId: string,
+  kind: TurnLeaseKind,
+  maxHoldMs?: number,
+): TurnLease {
   const now = Date.now();
-  return { leaseId: randomUUID(), chatId, kind, acquiredAt: now, lastHeartbeatAt: now };
+  return {
+    leaseId: randomUUID(),
+    chatId,
+    kind,
+    acquiredAt: now,
+    maxHoldMs: maxHoldMs ?? null,
+    lastHeartbeatAt: now,
+  };
 }
 
 /** Omit the default "chat" kind from wire payloads/tests; the client treats
@@ -160,12 +216,12 @@ export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promi
     const stale = state.active;
     console.warn(
       `[turn-gate] stealing stale lease from chat=${shortId(stale.chatId)} ` +
-      `(no heartbeat for ${Math.round((Date.now() - stale.lastHeartbeatAt) / 1000)}s)`,
+      `(${staleReason(stale)})`,
     );
     releaseTurn(stale);
   }
   if (!state.active) {
-    state.active = makeLease(chatId, kind);
+    state.active = makeLease(chatId, kind, options?.maxHoldMs);
     console.log(`[turn-gate] granted turn to chat=${shortId(chatId)} (idle)`);
     return Promise.resolve(state.active);
   }
@@ -182,6 +238,7 @@ export function acquireTurn(chatId: string, options?: AcquireTurnOptions): Promi
       kind,
       priority,
       enqueuedAt: Date.now(),
+      maxHoldMs: options?.maxHoldMs,
       resolve,
       reject,
       onQueueUpdate: options?.onQueueUpdate,
@@ -234,7 +291,7 @@ export function releaseTurn(lease: TurnLease | null | undefined): void {
       waiter.signal.removeEventListener("abort", waiter.onAbort);
     }
     if (waiter.signal?.aborted) continue;
-    state.active = makeLease(waiter.chatId, waiter.kind);
+    state.active = makeLease(waiter.chatId, waiter.kind, waiter.maxHoldMs);
     console.log(
       `[turn-gate] granted turn to chat=${shortId(waiter.chatId)} (${state.waiters.length} still queued)`,
     );
@@ -269,7 +326,7 @@ export function reapStaleTurnLease(): boolean {
   if (state.active && isStaleLease(state.active)) {
     console.warn(
       `[turn-gate] reaping stale lease from chat=${shortId(state.active.chatId)} ` +
-      `(no heartbeat for ${Math.round((Date.now() - state.active.lastHeartbeatAt) / 1000)}s)`,
+      `(${staleReason(state.active)})`,
     );
     releaseTurn(state.active);
     return true;

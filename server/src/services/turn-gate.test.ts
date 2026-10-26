@@ -78,7 +78,7 @@ describe("turn-gate", () => {
   it("ignores stale or foreign lease releases", async () => {
     const first = await acquireTurn("chat-a");
     const second = acquireTurn("chat-b");
-    releaseTurn({ leaseId: "bogus", chatId: "chat-b", kind: "chat", acquiredAt: Date.now(), lastHeartbeatAt: Date.now() });
+    releaseTurn({ leaseId: "bogus", chatId: "chat-b", kind: "chat", acquiredAt: Date.now(), maxHoldMs: null, lastHeartbeatAt: Date.now() });
     expect(getActiveTurn()?.chatId).toBe("chat-a");
     expect(getQueuedTurns()).toHaveLength(1);
 
@@ -216,5 +216,66 @@ describe("turn-gate", () => {
     expect(first.leaseId).not.toBe(second.leaseId);
     releaseTurn(second);
     expect(isTurnGateBusy()).toBe(false);
+  });
+
+  // The Oct 26 witness: a 90-minute automation held the gate for 15m03s with no
+  // heartbeat — nothing in the headless runner touches one — and its lease was
+  // stolen at the silence threshold by a job-notice acquire, aborting an
+  // in-flight provider call mid-turn. Silence is evidence about a turn that
+  // reports progress; it says nothing about one that only declared a budget.
+  it("does not steal a declared-budget lease for being silent inside its budget", async () => {
+    const run = await acquireTurn("chat-target", { kind: "system", maxHoldMs: 90 * 60_000 });
+    const queued = acquireTurn("chat-b");
+    getActiveTurn()!.lastHeartbeatAt = Date.now() - 20 * 60_000; // silent, still young
+
+    expect(isTurnGateBusy()).toBe(true);
+    expect(reapStaleTurnLease()).toBe(false);
+
+    const latecomer = acquireTurn("chat-c", { priority: "background" });
+    expect(getActiveTurn()?.leaseId).toBe(run.leaseId);
+    expect(getQueuedTurns().map((t) => t.chatId)).toEqual(["chat-b", "chat-c"]);
+
+    releaseTurn(run);
+    expect((await queued).chatId).toBe("chat-b");
+    expect((await queued).maxHoldMs).toBeNull();
+    releaseTurn(getActiveTurn()!);
+    expect((await latecomer).chatId).toBe("chat-c");
+    releaseTurn(getActiveTurn()!);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("reaps a declared-budget lease past its own budget, with room for bookkeeping", async () => {
+    const run = await acquireTurn("chat-target", { kind: "system", maxHoldMs: 60_000 });
+    // Past its turn budget but inside the bookkeeping allowance: a run still
+    // compacting or flushing must not be evicted mid-work, or the gate hands
+    // the single slot to a second turn.
+    getActiveTurn()!.acquiredAt = Date.now() - (60_000 + 60_000);
+    expect(reapStaleTurnLease()).toBe(false);
+
+    getActiveTurn()!.acquiredAt = Date.now() - (60_000 + 16 * 60_000);
+    expect(reapStaleTurnLease()).toBe(true);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("carries a queued waiter's declared budget onto the granted lease", async () => {
+    const first = await acquireTurn("chat-a");
+    const queued = acquireTurn("chat-b", { maxHoldMs: 5_000 });
+    releaseTurn(first);
+    const granted = await queued;
+    expect(granted.chatId).toBe("chat-b");
+    expect(granted.maxHoldMs).toBe(5_000);
+    releaseTurn(granted);
+    expect(isTurnGateBusy()).toBe(false);
+  });
+
+  it("names the transcript a background lease is holding, and keeps its kind", async () => {
+    const lease = await acquireTurn("chat-target", { kind: "system", maxHoldMs: 60_000 });
+    const status = turnGateStatus("chat-other");
+    // `chatId` is the transcript the run writes into (so its own turns and
+    // notices queue behind it truthfully); `kind` is the label the client shows.
+    expect(status?.activeChatId).toBe("chat-target");
+    expect(status?.activeKind).toBe("system");
+    releaseTurn(lease);
+    expect(turnGateStatus()).toBeNull();
   });
 });
