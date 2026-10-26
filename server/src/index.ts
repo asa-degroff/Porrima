@@ -43,6 +43,11 @@ import { assertNoProductionDevTokenBypass, requireAuth } from "./middleware/auth
 import { ensureSetupTokenForFirstRun, getSessionSecret } from "./services/auth-storage.js";
 import { getSessionCookieConfig } from "./services/session-cookie-config.js";
 import { startScheduler } from "./services/scheduler.js";
+import {
+  acquireDataDirLock,
+  dataDirLockEnabled,
+  type DataDirLock,
+} from "./services/data-dir-lock.js";
 import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
 import { initializeExtractionPrompt } from "./services/extraction-prompt-store.js";
@@ -64,8 +69,17 @@ process.on("unhandledRejection", (reason, promise) => {
 // server before exiting.  If the process doesn't exit within 10s, force it
 // so systemd doesn't have to wait 90s for the stop-sigterm timeout.
 let httpServer: ReturnType<typeof app.listen> | null = null;
+let dataDirLock: DataDirLock | null = null;
 const gracefulShutdown = async () => {
   console.log("[shutdown] Received signal, shutting down gracefully...");
+  // Release the data-dir claim first: a restarting unit must not be blocked by
+  // a lock this process is still holding while it tears kernels down.
+  try {
+    dataDirLock?.release();
+    dataDirLock = null;
+  } catch {
+    // Non-fatal.
+  }
   // Close the HTTP server first so new requests are rejected immediately.
   if (httpServer) {
     httpServer.close();
@@ -142,6 +156,20 @@ const backgroundJobsEnabled = backgroundJobsSetting === "true"
   : backgroundJobsSetting === "false"
     ? false
     : PORT === 3001;
+// One server per data directory. Two instances over one ~/.porrima is a
+// destructive race, not a cosmetic collision: each owns the chats, the
+// scheduler, the kernels, and a supervisor client that can stop the other's
+// jobs (docs/design/job-supervisor.md §7).
+if (dataDirLockEnabled()) {
+  try {
+    dataDirLock = acquireDataDirLock({ port: PORT });
+  } catch (error) {
+    console.error(`[startup] ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+} else {
+  console.warn("[startup] data-dir instance lock disabled (PORRIMA_DATA_DIR_LOCK=0)");
+}
 const sessionSecret = await getSessionSecret();
 await ensureSetupTokenForFirstRun();
 

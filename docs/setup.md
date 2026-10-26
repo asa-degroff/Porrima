@@ -33,6 +33,13 @@ npm run dev
 
 Open http://localhost:5173. The Vite dev server proxies `/api` requests to the backend.
 
+The dev server (`PORT=3002`) and the production service both use `~/.porrima`, and only one may
+own it at a time: the server claims `~/.porrima/server.lock` at startup, and a second instance
+refuses to start and names the holder. Sharing the directory is not cosmetic — two servers over
+one data dir can stop each other's background jobs and dispose each other's live kernels. Either
+stop the service first (`systemctl --user stop porrima`) or give the dev run its own directory
+(`PORRIMA_DATA_DIR=~/.porrima-dev npm run dev`).
+
 ## Production
 
 Build and run:

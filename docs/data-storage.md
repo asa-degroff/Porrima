@@ -22,6 +22,7 @@ The project was renamed from `quje-agent` to `Porrima`. `paths.ts` performs both
 ├── app.db              # Main SQLite database — see schemas below
 ├── porrima.db          # Operational database (model/reranker stats, requests, jobs read model, KV snapshots)
 ├── jobs.db             # Job supervisor execution ledger (owned by porrima-jobs.service; terminal rows pruned at 30d)
+├── server.lock         # Data-dir instance claim (pid + process start identity + boot id), held while the server runs
 ├── jobs/               # Job supervisor output dirs + group journal (output pruned at 14d)
 ├── llama-slot-bindings.json # Persisted slot→chat lease bindings (only when slot binding is enabled)
 ├── tts.env             # Python interpreter overrides for the TTS backends

@@ -369,8 +369,12 @@ Lifecycle behavior:
   supervisor restart settles `lost` rows that have status files before reaping decides anything.
 - Upgrade: restart the daemon; it adopts; the server reconnects and reconciles. Restart the
   daemon before the server so the new server sees an adopting supervisor, not a gap.
-- Two daemons: the singleton lock. Two *servers* are prevented by the server's data-dir
-  instance lock; the supervisor can serve only one server by convention.
+- Two daemons: the singleton lock. Two *servers* over one data directory are prevented by the
+  server's own instance lock: `~/.porrima/server.lock` holds pid, process start identity, and
+  boot id, claimed at startup and released on shutdown. A live holder makes a second server
+  refuse to start and names it; a lock left by a crash, a recycled pid, or another boot is
+  reclaimed. `PORRIMA_DATA_DIR_LOCK=0` opts out. The supervisor can serve only one server by
+  convention.
 - Stale socket: unlink after the lock and identity check.
 - Corrupt DB: refuse to guess; quarantine and report degraded.
 - Protocol skew: `welcome` advertises the protocol; the server degrades read-only paths and
@@ -378,6 +382,9 @@ Lifecycle behavior:
 
 On server start:
 
+0. Claim the data directory (`~/.porrima/server.lock`). Another live server holding it makes
+   this one refuse to start rather than share the chats, the scheduler, the kernels, and the
+   supervisor client.
 1. Connect to the supervisor and `list` its live jobs. If the supervisor is unavailable, do
    **not** mark `job_view` rows `lost`; leave the last known state and report "supervisor
    unavailable."
