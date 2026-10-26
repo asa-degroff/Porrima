@@ -120,7 +120,26 @@ export class JobStore {
     if (dbPath !== ":memory:") {
       mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
     }
-    const db = new Database(dbPath);
+    // Read before writing anything: a damaged ledger has to be named, not
+    // papered over by the schema statements below. jobs.db is bounded by
+    // retention, so a full integrity scan is cheap here.
+    let db: Database.Database;
+    try {
+      db = new Database(dbPath);
+    } catch (error) {
+      throw new Error(`jobs.db is unreadable: ${errorText(error)}`);
+    }
+    let integrity: unknown;
+    try {
+      integrity = db.pragma("integrity_check", { simple: true });
+    } catch (error) {
+      closeQuietly(db);
+      throw new Error(`jobs.db is unreadable: ${errorText(error)}`);
+    }
+    if (integrity !== "ok") {
+      closeQuietly(db);
+      throw new Error(`jobs.db failed integrity check: ${String(integrity)}`);
+    }
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = FULL");
     db.pragma("busy_timeout = 5000");
@@ -148,6 +167,12 @@ export class JobStore {
       }
     }
     return new JobStore(db, dbPath);
+  }
+
+  /** How many job rows this ledger holds. A ledger with none is its own evidence. */
+  countRows(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   /**
@@ -505,6 +530,18 @@ interface EventRow {
   event: string;
   at: string;
   payload: string;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function closeQuietly(db: Database.Database): void {
+  try {
+    db.close();
+  } catch {
+    // The ledger is already the problem.
+  }
 }
 
 function rowToJob(row: JobRow): JobRecord {

@@ -51,6 +51,11 @@ export function isSupervisorConnected(): boolean {
   return client?.connected === true;
 }
 
+/** Why the daemon reported itself unusable, if it did. */
+export function supervisorDegradation(): string | null {
+  return client?.degradedReason ?? null;
+}
+
 export async function initJobRuntime(): Promise<void> {
   if (initialized) return;
   initialized = true;
@@ -89,6 +94,9 @@ export async function ensureSupervisorConnection(): Promise<boolean> {
         await c.connect();
       } catch {
         return false;
+      }
+      if (c.degradedReason) {
+        console.warn(`[jobs] supervisor degraded: ${c.degradedReason}`);
       }
     }
     if (!subscribed) {

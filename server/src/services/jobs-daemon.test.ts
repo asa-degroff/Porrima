@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import { startJobsDaemon, type JobsDaemonHandle } from "../jobs-daemon.js";
+import type { JobRecord } from "./job-protocol.js";
 import { JobsClient } from "./jobs-client.js";
 import { readBootId } from "./job-lock.js";
-import { isGroupAlive } from "./process-supervisor.js";
+import { isGroupAlive, killProcessGroup } from "./process-supervisor.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -174,6 +176,132 @@ describe("jobs daemon", () => {
       await secondClient?.close().catch(() => {});
       await first?.close().catch(() => {});
       await second?.close().catch(() => {});
+      await rm(root, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("holds live groups when the ledger is unreadable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "porrima-jobs-degraded-"));
+    const config = {
+      jobsDir: join(root, "jobs"),
+      dbPath: join(root, "jobs.db"),
+      socketPath: join(root, "jobs.sock"),
+      lockPath: join(root, "jobs.lock"),
+      journalPath: join(root, "jobs", "journal.jsonl"),
+      bootId: readBootId(),
+    };
+    let first: JobsDaemonHandle | null = null;
+    let firstClient: JobsClient | null = null;
+    let second: JobsDaemonHandle | null = null;
+    let secondClient: JobsClient | null = null;
+    let job: JobRecord | null = null;
+    try {
+      first = await startJobsDaemon(config);
+      firstClient = new JobsClient({ socketPath: config.socketPath });
+      await firstClient.connect();
+      job = await firstClient.startJob({
+        job_id: randomUUID(),
+        chat_id: "demo",
+        kind: "command",
+        command: "sleep 30",
+        cwd: root,
+        env: testEnv,
+      });
+      await delay(100);
+      await firstClient.close();
+      firstClient = null;
+      await first.close();
+      first = null;
+      const pgid = job.pgid ?? job.pid;
+      expect(pgid != null && isGroupAlive(pgid)).toBe(true);
+
+      // The ledger is no longer a database. The journal still remembers the group.
+      await writeFile(config.dbPath, Buffer.alloc(4096, 0x7a));
+
+      second = await startJobsDaemon(config);
+      expect(second.supervisor).toBeNull();
+      expect(second.degraded).toContain("jobs.db");
+
+      secondClient = new JobsClient({ socketPath: config.socketPath });
+      await secondClient.connect();
+      expect(secondClient.degradedReason).toContain("jobs.db");
+      await expect(
+        secondClient.startJob({
+          job_id: randomUUID(),
+          chat_id: "demo",
+          kind: "command",
+          command: "true",
+          cwd: root,
+          env: testEnv,
+        }),
+      ).rejects.toThrow(/degraded/);
+      await expect(secondClient.listJobs()).rejects.toThrow(/degraded/);
+
+      // The point of the whole exercise: a ledger nobody can read must not
+      // turn into a kill order for the groups the journal remembers.
+      await delay(400);
+      expect(pgid != null && isGroupAlive(pgid)).toBe(true);
+    } finally {
+      const pgid = job?.pgid ?? job?.pid;
+      if (pgid != null) await killProcessGroup(pgid, { graceMs: 200 }).catch(() => {});
+      await secondClient?.close().catch(() => {});
+      await firstClient?.close().catch(() => {});
+      await second?.close().catch(() => {});
+      await first?.close().catch(() => {});
+      await rm(root, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("does not reap live groups when the ledger holds no rows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "porrima-jobs-wiped-"));
+    const config = {
+      jobsDir: join(root, "jobs"),
+      dbPath: join(root, "jobs.db"),
+      socketPath: join(root, "jobs.sock"),
+      lockPath: join(root, "jobs.lock"),
+      journalPath: join(root, "jobs", "journal.jsonl"),
+      bootId: readBootId(),
+    };
+    let first: JobsDaemonHandle | null = null;
+    let firstClient: JobsClient | null = null;
+    let second: JobsDaemonHandle | null = null;
+    let job: JobRecord | null = null;
+    try {
+      first = await startJobsDaemon(config);
+      firstClient = new JobsClient({ socketPath: config.socketPath });
+      await firstClient.connect();
+      job = await firstClient.startJob({
+        job_id: randomUUID(),
+        chat_id: "demo",
+        kind: "command",
+        command: "sleep 30",
+        cwd: root,
+        env: testEnv,
+      });
+      await delay(100);
+      await firstClient.close();
+      firstClient = null;
+      await first.close();
+      first = null;
+      const pgid = job.pgid ?? job.pid;
+      expect(pgid != null && isGroupAlive(pgid)).toBe(true);
+
+      // A healthy file whose content vanished: restored from a stale snapshot,
+      // a torn WAL, a pruning bug. The rows are gone, the group is not.
+      const ledger = new Database(config.dbPath);
+      ledger.exec("DELETE FROM jobs");
+      ledger.close();
+
+      second = await startJobsDaemon(config);
+      expect(second.degraded).toBeNull();
+      await delay(400);
+      expect(pgid != null && isGroupAlive(pgid)).toBe(true);
+    } finally {
+      const pgid = job?.pgid ?? job?.pid;
+      if (pgid != null) await killProcessGroup(pgid, { graceMs: 200 }).catch(() => {});
+      await firstClient?.close().catch(() => {});
+      await second?.close().catch(() => {});
+      await first?.close().catch(() => {});
       await rm(root, { recursive: true, force: true }).catch(() => {});
     }
   });

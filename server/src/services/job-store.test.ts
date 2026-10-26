@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +61,18 @@ describe("job store", () => {
     );
     expect(version).toBe(3);
     reopened.close();
+  });
+
+  it("refuses a file that is not a ledger at all", async () => {
+    const root = await mkdtemp(join(tmpdir(), "porrima-job-store-corrupt-"));
+    roots.push(root);
+    const dbPath = join(root, "jobs.db");
+    const store = JobStore.open(dbPath);
+    store.insertStarting(newJob("keep"));
+    store.close();
+
+    writeFileSync(dbPath, Buffer.alloc(4096, 0x7a));
+    expect(() => JobStore.open(dbPath)).toThrow(/jobs\.db is unreadable/);
   });
 
   it("refuses a ledger newer than the supported schema", async () => {

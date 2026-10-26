@@ -42,8 +42,10 @@ export interface StartJobsDaemonOptions extends Partial<JobsConfig> {
 
 export interface JobsDaemonHandle {
   server: Server;
-  supervisor: JobSupervisor;
-  store: JobStore;
+  supervisor: JobSupervisor | null;
+  store: JobStore | null;
+  /** Non-null when the ledger could not be opened: the daemon holds and refuses. */
+  degraded: string | null;
   config: JobsConfig;
   close(): Promise<void>;
 }
@@ -78,6 +80,7 @@ export async function startJobsDaemon(
   const lock: JobLock = acquireJobLock(config.lockPath, options.bootId ?? readBootId());
   let store: JobStore | null = null;
   let supervisor: JobSupervisor | null = null;
+  let degraded: string | null = null;
   const clients = new Set<ClientSession>();
   let server: Server | null = null;
   let closed = false;
@@ -94,13 +97,33 @@ export async function startJobsDaemon(
     await supervisor.recover();
     supervisor.startRetentionSweep();
     supervisor.startOutputCapWatch();
+  } catch (error) {
+    // A ledger we cannot trust must not become a reason to kill live groups.
+    // Recovery and reaping both read it; without it the honest posture is to
+    // hold every group, decide nothing, and say so on the socket instead of
+    // exiting into a systemd restart loop.
+    degraded = error instanceof Error ? error.message : String(error);
+    supervisor?.close();
+    try {
+      store?.close();
+    } catch {
+      // The store may be the thing that failed.
+    }
+    supervisor = null;
+    store = null;
+    console.error(
+      `[jobs] ledger unusable (${degraded}); holding all recorded groups, refusing to start jobs`,
+    );
+  }
 
+  try {
     const startedAt = new Date().toISOString();
     const version = process.env.PORRIMA_JOBS_VERSION || "dev";
     const bootId = lock.bootId;
     server = createServer((socket) => {
       const client = new ClientSession(socket, {
-        supervisor: supervisor!,
+        supervisor,
+        degraded,
         config,
         startedAt,
         version,
@@ -133,17 +156,18 @@ export async function startJobsDaemon(
     const onEvent = (event: JobEvent) => {
       for (const client of clients) client.sendEvent(event);
     };
-    supervisor.on("event", onEvent);
+    supervisor?.on("event", onEvent);
 
     const handle: JobsDaemonHandle = {
       server: server!,
-      supervisor: supervisor!,
-      store: store!,
+      supervisor,
+      store,
+      degraded,
       config,
       close: async () => {
         if (closed) return;
         closed = true;
-        supervisor!.off("event", onEvent);
+        supervisor?.off("event", onEvent);
         for (const client of clients) client.close();
         clients.clear();
         await new Promise<void>((resolve) => {
@@ -153,8 +177,8 @@ export async function startJobsDaemon(
             resolve();
           }
         });
-        supervisor!.close();
-        store!.close();
+        supervisor?.close();
+        store?.close();
         lock.release();
         unlinkSocket(config.socketPath);
       },
@@ -175,7 +199,8 @@ export async function startJobsDaemon(
 }
 
 interface SessionDeps {
-  supervisor: JobSupervisor;
+  supervisor: JobSupervisor | null;
+  degraded: string | null;
   config: JobsConfig;
   startedAt: string;
   version: string;
@@ -215,6 +240,13 @@ class ClientSession {
     if (!this.socket.destroyed) this.socket.destroy();
   }
 
+  private requireSupervisor(): JobSupervisor {
+    if (!this.deps.supervisor) {
+      throw new Error(`job supervisor is degraded: ${this.deps.degraded ?? "no supervisor"}`);
+    }
+    return this.deps.supervisor;
+  }
+
   sendEvent(event: JobEvent): void {
     if (!this.subscribed) return;
     this.lastSeq = Math.max(this.lastSeq, event.seq);
@@ -247,6 +279,16 @@ class ClientSession {
       return;
     }
     const id = typeof request.id === "string" ? request.id : undefined;
+    if (this.deps.degraded && request.type !== "hello" && request.type !== "ping") {
+      // Named rather than silent: a client that asks for a start deserves to
+      // hear why it cannot have one.
+      this.send({
+        type: "error",
+        id,
+        error: `job supervisor is degraded: ${this.deps.degraded}`,
+      });
+      return;
+    }
     try {
       switch (request.type) {
         case "hello":
@@ -259,17 +301,18 @@ class ClientSession {
             boot_id: this.deps.bootId,
             started_at: this.deps.startedAt,
             version: this.deps.version,
-            capabilities: CAPABILITIES,
+            capabilities: this.deps.degraded ? [] : CAPABILITIES,
+            degraded: this.deps.degraded,
           });
           return;
         case "start": {
-          const job = await this.deps.supervisor.start(toStartInput(request));
+          const job = await this.requireSupervisor().start(toStartInput(request));
           this.send({ type: "started", id, job });
           return;
         }
         case "stop": {
           requireString(request.job_id, "job_id");
-          const job = await this.deps.supervisor.stop(request.job_id, {
+          const job = await this.requireSupervisor().stop(request.job_id, {
             force: request.force === true,
           });
           this.send({ type: "stopped", id, job });
@@ -277,14 +320,14 @@ class ClientSession {
         }
         case "get": {
           requireString(request.job_id, "job_id");
-          this.send({ type: "job", id, job: this.deps.supervisor.get(request.job_id) });
+          this.send({ type: "job", id, job: this.requireSupervisor().get(request.job_id) });
           return;
         }
         case "list": {
           const states = Array.isArray(request.states)
             ? request.states.filter((state: unknown): state is JobState => isJobState(state))
             : undefined;
-          const jobs = this.deps.supervisor.list({
+          const jobs = this.requireSupervisor().list({
             chat_id: typeof request.chat_id === "string" ? request.chat_id : undefined,
             states,
             limit: typeof request.limit === "number" ? request.limit : undefined,
@@ -299,7 +342,7 @@ class ClientSession {
           if (!Number.isFinite(timeout) || timeout < 0) {
             throw new Error("wait_for requires a non-negative timeout_ms");
           }
-          const result = await this.deps.supervisor.waitFor(
+          const result = await this.requireSupervisor().waitFor(
             request.job_id,
             request.pattern,
             Math.min(timeout, 300_000),
@@ -318,7 +361,7 @@ class ClientSession {
           this.send({
             type: "stats",
             id,
-            supervisor: this.deps.supervisor.stats(
+            supervisor: this.requireSupervisor().stats(
               this.deps.config.socketPath,
               this.deps.config.dbPath,
             ),
@@ -326,13 +369,13 @@ class ClientSession {
           return;
         case "stop_chat": {
           requireString(request.chat_id, "chat_id");
-          const count = await this.deps.supervisor.stopChat(request.chat_id);
+          const count = await this.requireSupervisor().stopChat(request.chat_id);
           this.send({ type: "stopped_all", id, count });
           return;
         }
         case "delete_chat_outputs": {
           requireString(request.chat_id, "chat_id");
-          const result = await this.deps.supervisor.deleteChatOutputs(request.chat_id);
+          const result = await this.requireSupervisor().deleteChatOutputs(request.chat_id);
           this.send({
             type: "chat_outputs_deleted",
             id,
@@ -342,7 +385,7 @@ class ClientSession {
           return;
         }
         case "stop_all": {
-          const count = await this.deps.supervisor.stopAll();
+          const count = await this.requireSupervisor().stopAll();
           this.send({ type: "stopped_all", id, count });
           return;
         }
@@ -350,7 +393,7 @@ class ClientSession {
           this.subscribed = true;
           const since = Number(request.since_seq ?? 0);
           this.lastSeq = Number.isFinite(since) ? Math.max(0, since) : 0;
-          for (const event of this.deps.supervisor.eventsSince(this.lastSeq)) {
+          for (const event of this.requireSupervisor().eventsSince(this.lastSeq)) {
             this.sendEvent(event);
           }
           this.send({ type: "subscribed", id, since_seq: this.lastSeq });

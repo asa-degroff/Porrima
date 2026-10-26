@@ -1135,7 +1135,18 @@ export class JobSupervisor extends EventEmitter {
         .list({ states: ["starting", "running"], limit: 1000 })
         .map((row) => [row.id, row]),
     );
-    for (const record of latestJournalRecords(this.journalPath).values()) {
+    const records = latestJournalRecords(this.journalPath);
+    if (records.size > 0 && this.store.countRows() === 0) {
+      // A ledger holding nothing while the journal remembers groups is evidence
+      // about the ledger, not about the groups. Reaping on that reading turns a
+      // damaged execution plane into a mass kill, so hold everything and let an
+      // operator decide.
+      console.warn(
+        `[jobs] ledger has no job rows but the journal records ${records.size} group(s); skipping reap`,
+      );
+      return;
+    }
+    for (const record of records.values()) {
       if (!record.active || active.has(record.job_id)) continue;
       // A previous boot's pid/pgid can be recycled. Only act on a group whose
       // boot and start-time identity matches this generation.

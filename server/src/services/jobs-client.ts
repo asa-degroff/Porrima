@@ -62,6 +62,7 @@ export class JobsClient {
   private pending = new Map<string, Pending>();
   private eventHandlers = new Set<(event: JobEvent) => void>();
   private connectPromise: Promise<void> | null = null;
+  private peerDegradation: string | null = null;
   private helloId: string | null = null;
   private helloResolve: (() => void) | null = null;
   private helloReject: ((error: Error) => void) | null = null;
@@ -73,6 +74,11 @@ export class JobsClient {
 
   get connected(): boolean {
     return this.socket != null && !this.socket.destroyed;
+  }
+
+  /** Why the daemon is holding instead of serving, as the daemon reported it. */
+  get degradedReason(): string | null {
+    return this.peerDegradation;
   }
 
   async connect(): Promise<void> {
@@ -210,6 +216,11 @@ export class JobsClient {
   }
 
   private request(payload: Record<string, any>, timeoutMs = this.defaultTimeoutMs): Promise<Record<string, any>> {
+    if (this.degradedReason) {
+      return Promise.reject(
+        new Error(`job supervisor is degraded: ${this.degradedReason}`),
+      );
+    }
     return this.connect().then(
       () =>
         new Promise<Record<string, any>>((resolve, reject) => {
@@ -258,6 +269,8 @@ export class JobsClient {
           this.socket?.destroy();
           continue;
         }
+        this.peerDegradation =
+          typeof welcome.degraded === "string" && welcome.degraded ? welcome.degraded : null;
         this.helloResolve?.();
         this.helloResolve = null;
         this.helloReject = null;
@@ -298,6 +311,7 @@ export class JobsClient {
   private onClose(): void {
     this.socket = null;
     this.connectPromise = null;
+    this.peerDegradation = null;
     const rejectHello = this.helloReject;
     this.helloResolve = null;
     this.helloReject = null;

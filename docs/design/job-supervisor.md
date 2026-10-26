@@ -332,14 +332,18 @@ On supervisor start:
 
 1. Acquire the singleton lock (`jobs.lock` with pid/start_id/boot_id); a live matching lock
    means another daemon is running.
-2. Open `jobs.db`, run migrations, integrity-check.
+2. Open `jobs.db` and integrity-check it before touching the schema. A ledger that fails the
+   check puts the daemon in degraded mode: it binds the socket and reports `degraded` in
+   `welcome` with no capabilities, but runs no recovery, no reap, and no retention, and refuses
+   `start` with the reason. A daemon restart loop is not safer than a degraded one.
 3. For every `starting`/`running` row: if `boot_id` differs, the row is from a previous boot
    and becomes `lost` unless its status file says it finished. Otherwise find the group by
    `pid`/`pgid`/`start_id`; adopt if alive and matching; read `status.json` if present; mark
    `finished` or `lost`.
 4. Reap journal groups with no ledger row, and only where the record's `start_id` matches the
    live process. A record whose start time cannot be confirmed is not evidence that the group is
-   the supervisor's to kill.
+   the supervisor's to kill. And a ledger holding no rows at all while the journal remembers
+   groups is evidence about the ledger, not about the groups: the reap is skipped and named.
 5. Start the retention sweep: old output directories, terminal ledger rows, and orphaned
    directories. The same sweep repeats daily.
 6. Start the output-cap watch: live stdout/stderr sizes are checked once a second.
@@ -356,7 +360,7 @@ Adoption matrix:
 | `running` | none, no status file | `lost` |
 | `running` | live, identity mismatch | do not signal; `lost`, leave the stranger alone |
 | `finished`/`stopped` | live | stale; kill and reap |
-| no row | live | orphan; reap |
+| no row | live | orphan; reap, unless the ledger holds no rows at all |
 
 Lifecycle behavior:
 
@@ -380,7 +384,8 @@ Lifecycle behavior:
   reclaimed. `PORRIMA_DATA_DIR_LOCK=0` opts out. The supervisor can serve only one server by
   convention.
 - Stale socket: unlink after the lock and identity check.
-- Corrupt DB: refuse to guess; quarantine and report degraded.
+- Corrupt DB: degraded mode. Hold every recorded group, refuse `start`, and name the reason in
+  the log and on the socket. A ledger nobody can read must not become a kill order.
 - Protocol skew: `welcome` advertises the protocol; the server degrades read-only paths and
   refuses `start` with a clear notice.
 

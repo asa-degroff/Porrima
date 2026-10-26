@@ -86,7 +86,7 @@ describe("job runtime reconcile on connect", () => {
 
     // The daemon's ledger is authoritative: this job started and was stopped by
     // a path the server was not part of, so no event ever reached the mirror.
-    daemon!.store.insertStarting({
+    daemon!.store!.insertStarting({
       id: jobId,
       chat_id: chatId,
       kind: "command",
@@ -112,7 +112,7 @@ describe("job runtime reconcile on connect", () => {
     // own reconcile, and that is not what this is testing.
     await runtime!.getJobsClient().close();
 
-    daemon!.store.stop(jobId, "user-force", new Date().toISOString(), 1200);
+    daemon!.store!.stop(jobId, "user-force", new Date().toISOString(), 1200);
 
     // An unrelated job start in another chat is the only thing that touches the
     // supervisor afterwards. It reconnects — and the reconnect must settle the
@@ -139,7 +139,7 @@ describe("job runtime reconcile on connect", () => {
     const jobId = "gap-noticed-1";
     const chatId = "chat-nobody-lists";
 
-    daemon!.store.insertStarting({
+    daemon!.store!.insertStarting({
       id: jobId,
       chat_id: chatId,
       kind: "command",
@@ -149,7 +149,7 @@ describe("job runtime reconcile on connect", () => {
       stderr_path: join(jobsDir, "jobs", "gap-noticed-1.err"),
       status_path: join(jobsDir, "jobs", "gap-noticed-1.status.json"),
     });
-    daemon!.store.finish(jobId, {
+    daemon!.store!.finish(jobId, {
       exit_code: 0,
       signal: null,
       stop_reason: null,

@@ -84,6 +84,8 @@ export interface WelcomeReply {
   started_at: string;
   version: string;
   capabilities: string[];
+  /** Set when the daemon is holding instead of serving: what went wrong. */
+  degraded?: string | null;
 }
 
 export interface StartRequest {

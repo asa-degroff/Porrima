@@ -30,6 +30,7 @@ import {
   refreshSupervisorJob,
   startSupervisorJob,
   stopSupervisorJob,
+  supervisorDegradation,
   waitForSupervisorJob,
 } from "./job-runtime.js";
 import { getJobView, suppressJobNotices, type JobViewRow } from "./job-view.js";
@@ -1516,9 +1517,10 @@ export async function getAgentTools(chatId: string, effects: ToolSideEffects, co
       suppressJobNotices(
         filtered.filter((job) => isTerminalJobState(job.state)).map((job) => job.job_id),
       );
-      const note =
-        !isSupervisorConnected() &&
-        filtered.some((job) => job.source === "supervisor" && job.state === "running")
+      const note = supervisorDegradation()
+        ? `\n[supervisor degraded: ${supervisorDegradation()}; showing last known state]`
+        : !isSupervisorConnected() &&
+          filtered.some((job) => job.source === "supervisor" && job.state === "running")
           ? "\n[supervisor unavailable; showing last known state]"
           : "";
       return result(filtered.map(formatJobSummary).join("\n") + note);
