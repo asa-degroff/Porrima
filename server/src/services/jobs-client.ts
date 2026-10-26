@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { connect, type Socket } from "node:net";
 import {
+  JOB_PROTOCOL_MIN_SUPPORTED,
   JOB_PROTOCOL_VERSION,
   MAX_JOB_FRAME_BYTES,
   JobLineDecoder,
   encodeJobFrame,
+  negotiateProtocol,
   type EventFrame,
   type JobEvent,
   type JobRecord,
@@ -24,6 +26,13 @@ import { jobsConfigFromEnv } from "./job-paths.js";
 export interface JobsClientOptions {
   socketPath?: string;
   requestTimeoutMs?: number;
+  /**
+   * The protocol range this side can speak. Defaults to the built version; a
+   * test can stand in for a build one protocol ahead to exercise a skew that
+   * a real deploy reaches by keeping the daemon running.
+   */
+  protocolMax?: number;
+  protocolMin?: number;
 }
 
 export interface StartJobClientInput {
@@ -58,11 +67,15 @@ export class JobsClient {
   private readonly socketPath: string;
   private readonly defaultTimeoutMs: number;
   private socket: Socket | null = null;
+  private readonly protocolMax: number;
+  private readonly protocolMin: number;
   private decoder = new JobLineDecoder(MAX_JOB_FRAME_BYTES);
   private pending = new Map<string, Pending>();
   private eventHandlers = new Set<(event: JobEvent) => void>();
   private connectPromise: Promise<void> | null = null;
   private peerDegradation: string | null = null;
+  private negotiatedProtocol: number | null = null;
+  private peerCapabilities = new Set<string>();
   private helloId: string | null = null;
   private helloResolve: (() => void) | null = null;
   private helloReject: ((error: Error) => void) | null = null;
@@ -70,6 +83,9 @@ export class JobsClient {
   constructor(options: JobsClientOptions = {}) {
     this.socketPath = options.socketPath ?? jobsConfigFromEnv().socketPath;
     this.defaultTimeoutMs = options.requestTimeoutMs ?? 5000;
+    this.protocolMax = options.protocolMax ?? JOB_PROTOCOL_VERSION;
+    this.protocolMin =
+      options.protocolMin ?? Math.min(JOB_PROTOCOL_MIN_SUPPORTED, this.protocolMax);
   }
 
   get connected(): boolean {
@@ -79,6 +95,11 @@ export class JobsClient {
   /** Why the daemon is holding instead of serving, as the daemon reported it. */
   get degradedReason(): string | null {
     return this.peerDegradation;
+  }
+
+  /** The protocol the handshake settled on, if a handshake has happened. */
+  get supervisorProtocol(): number | null {
+    return this.negotiatedProtocol;
   }
 
   async connect(): Promise<void> {
@@ -107,7 +128,15 @@ export class JobsClient {
           resolve();
         };
         this.helloReject = fail;
-        socket.write(encodeJobFrame({ type: "hello", id: helloId, client: "porrima-server" }));
+        socket.write(
+          encodeJobFrame({
+            type: "hello",
+            id: helloId,
+            client: "porrima-server",
+            protocol: this.protocolMax,
+            protocol_min: this.protocolMin,
+          }),
+        );
       });
       socket.once("error", fail);
       socket.on("data", (chunk: Buffer) => this.onData(chunk));
@@ -216,9 +245,19 @@ export class JobsClient {
   }
 
   private request(payload: Record<string, any>, timeoutMs = this.defaultTimeoutMs): Promise<Record<string, any>> {
-    if (this.degradedReason) {
+    if (this.peerDegradation) {
       return Promise.reject(
-        new Error(`job supervisor is degraded: ${this.degradedReason}`),
+        new Error(`job supervisor is degraded: ${this.peerDegradation}`),
+      );
+    }
+    const capability = typeof payload.type === "string" ? payload.type : "";
+    if (capability && this.peerCapabilities.size > 0 && !this.peerCapabilities.has(capability)) {
+      // Refused by name, one request at a time: the rest of the connection
+      // still answers, so the stale view keeps refreshing.
+      return Promise.reject(
+        new Error(
+          `job supervisor at protocol ${this.negotiatedProtocol ?? "?"} does not advertise "${capability}"`,
+        ),
       );
     }
     return this.connect().then(
@@ -260,14 +299,33 @@ export class JobsClient {
       if (frame.type === "welcome") {
         const welcome = frame as unknown as WelcomeReply;
         if (welcome.id !== this.helloId) continue;
-        if (welcome.protocol !== JOB_PROTOCOL_VERSION) {
+        const daemonMax = Number(welcome.protocol);
+        const daemonMin = Number(welcome.protocol_min ?? welcome.protocol);
+        const negotiated = negotiateProtocol(
+          this.protocolMin,
+          this.protocolMax,
+          daemonMin,
+          daemonMax,
+        );
+        if (negotiated == null) {
           this.helloReject?.(
             new Error(
-              `job supervisor protocol ${welcome.protocol} is not compatible with ${JOB_PROTOCOL_VERSION}`,
+              `job supervisor speaks protocol ${daemonMin}-${daemonMax}; this server speaks ` +
+                `${this.protocolMin}-${this.protocolMax}. Restart porrima-jobs to match the deployed server.`,
             ),
           );
           this.socket?.destroy();
           continue;
+        }
+        this.negotiatedProtocol = negotiated;
+        this.peerCapabilities = new Set(
+          Array.isArray(welcome.capabilities) ? welcome.capabilities : [],
+        );
+        if (negotiated < this.protocolMax) {
+          console.warn(
+            `[jobs] speaking protocol ${negotiated} to a supervisor at ${daemonMin}-${daemonMax}; ` +
+              `requests it does not advertise are refused`,
+          );
         }
         this.peerDegradation =
           typeof welcome.degraded === "string" && welcome.degraded ? welcome.degraded : null;
@@ -312,6 +370,8 @@ export class JobsClient {
     this.socket = null;
     this.connectPromise = null;
     this.peerDegradation = null;
+    this.negotiatedProtocol = null;
+    this.peerCapabilities = new Set<string>();
     const rejectHello = this.helloReject;
     this.helloResolve = null;
     this.helloReject = null;

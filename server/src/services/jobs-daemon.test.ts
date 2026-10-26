@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { createServer, connect, type Socket } from "node:net";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import { startJobsDaemon, type JobsDaemonHandle } from "../jobs-daemon.js";
-import type { JobRecord } from "./job-protocol.js";
+import { encodeJobFrame, type JobRecord } from "./job-protocol.js";
 import { JobsClient } from "./jobs-client.js";
 import { readBootId } from "./job-lock.js";
 import { isGroupAlive, killProcessGroup } from "./process-supervisor.js";
@@ -303,6 +304,153 @@ describe("jobs daemon", () => {
       await second?.close().catch(() => {});
       await first?.close().catch(() => {});
       await rm(root, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+async function serveFakeSupervisor(
+  welcome: Record<string, unknown>,
+): Promise<{ socketPath: string; close(): Promise<void> }> {
+  const root = await mkdtemp(join(tmpdir(), "porrima-fake-supervisor-"));
+  const socketPath = join(root, "jobs.sock");
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    let pending = "";
+    socket.on("data", (chunk) => {
+      pending += chunk.toString("utf8");
+      let index = pending.indexOf("\n");
+      while (index >= 0) {
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        index = pending.indexOf("\n");
+        if (!line) continue;
+        let request: Record<string, any>;
+        try {
+          request = JSON.parse(line) as Record<string, any>;
+        } catch {
+          continue;
+        }
+        const id = typeof request.id === "string" ? request.id : undefined;
+        if (request.type === "hello") {
+          socket.write(
+            encodeJobFrame({
+              type: "welcome",
+              id,
+              pid: process.pid,
+              start_id: null,
+              boot_id: "fake",
+              started_at: new Date().toISOString(),
+              version: "fake",
+              ...welcome,
+            }),
+          );
+          continue;
+        }
+        if (request.type === "list") {
+          socket.write(encodeJobFrame({ type: "jobs", id, jobs: [] }));
+          continue;
+        }
+        socket.write(
+          encodeJobFrame({
+            type: "error",
+            id,
+            error: `fake supervisor does not do ${String(request.type)}`,
+          }),
+        );
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  return {
+    socketPath,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(root, { recursive: true, force: true }).catch(() => {});
+    },
+  };
+}
+
+describe("protocol skew", () => {
+  it("keeps reading from a supervisor that does not offer every newer request", async () => {
+    const peer = await serveFakeSupervisor({
+      protocol: 1,
+      protocol_min: 1,
+      capabilities: ["get", "list", "subscribe", "ping"],
+    });
+    // A server one protocol ahead, meeting a daemon that survived the deploy.
+    const client = new JobsClient({
+      socketPath: peer.socketPath,
+      protocolMax: 2,
+      protocolMin: 1,
+    });
+    try {
+      await client.connect();
+      expect(client.supervisorProtocol).toBe(1);
+      expect(await client.listJobs()).toEqual([]);
+      await expect(
+        client.startJob({
+          job_id: "skew-start",
+          chat_id: "demo",
+          kind: "command",
+          command: "true",
+          cwd: "/tmp",
+        }),
+      ).rejects.toThrow(/does not advertise "start"/);
+      // Refused per request, not per connection: the read paths still answer.
+      expect(client.connected).toBe(true);
+      expect(await client.listJobs()).toEqual([]);
+    } finally {
+      await client.close().catch(() => {});
+      await peer.close();
+    }
+  });
+
+  it("refuses a supervisor with no overlap, and names the fix", async () => {
+    const peer = await serveFakeSupervisor({
+      protocol: 5,
+      protocol_min: 5,
+      capabilities: ["get", "list"],
+    });
+    const client = new JobsClient({ socketPath: peer.socketPath });
+    try {
+      await expect(client.connect()).rejects.toThrow(/Restart porrima-jobs/);
+    } finally {
+      await client.close().catch(() => {});
+      await peer.close();
+    }
+  });
+
+  it("refuses a client the daemon cannot serve", async () => {
+    const { daemon } = await startHarness();
+    const socket = connect(daemon.config.socketPath);
+    socket.on("error", () => {});
+    try {
+      const frame = await new Promise<Record<string, any>>((resolve, reject) => {
+        socket.once("data", (chunk) => {
+          try {
+            resolve(JSON.parse(chunk.toString("utf8").trim()) as Record<string, any>);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        socket.once("error", reject);
+        socket.write(
+          encodeJobFrame({
+            type: "hello",
+            id: "future-client",
+            client: "future",
+            protocol: 99,
+            protocol_min: 99,
+          }),
+        );
+      });
+      expect(frame.type).toBe("error");
+      expect(String(frame.error)).toContain("Deploy matching builds");
+    } finally {
+      socket.destroy();
     }
   });
 });

@@ -8,6 +8,13 @@
 import { StringDecoder } from "node:string_decoder";
 
 export const JOB_PROTOCOL_VERSION = 1;
+/**
+ * The oldest supervisor protocol this server can still work with. A daemon
+ * outlives a server deploy by design (`KillMode=process`), so a version skew
+ * is the normal upgrade state, not an edge case: the pair negotiates, and the
+ * capabilities list in `welcome` decides what is actually usable.
+ */
+export const JOB_PROTOCOL_MIN_SUPPORTED = 1;
 export const MAX_JOB_FRAME_BYTES = 1024 * 1024;
 
 export type JobKind = "command" | "service";
@@ -72,6 +79,25 @@ export interface HelloRequest {
   type: "hello";
   id?: string;
   client?: string;
+  /** The range this side can speak, so the pair can find an overlap. */
+  protocol?: number;
+  protocol_min?: number;
+}
+
+/**
+ * The highest protocol both sides support, or null when there is no overlap.
+ * A daemon outlives a server deploy, so this runs on a skew that is normal,
+ * not exceptional.
+ */
+export function negotiateProtocol(
+  localMin: number,
+  localMax: number,
+  remoteMin: number,
+  remoteMax: number,
+): number | null {
+  const lo = Math.max(localMin, remoteMin);
+  const hi = Math.min(localMax, remoteMax);
+  return lo <= hi ? hi : null;
 }
 
 export interface WelcomeReply {
@@ -84,6 +110,7 @@ export interface WelcomeReply {
   started_at: string;
   version: string;
   capabilities: string[];
+  protocol_min?: number;
   /** Set when the daemon is holding instead of serving: what went wrong. */
   degraded?: string | null;
 }

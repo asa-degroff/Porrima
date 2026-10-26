@@ -8,12 +8,14 @@ import {
 } from "./services/job-lock.js";
 import { ensureJobsDirs, jobsConfigFromEnv, type JobsConfig } from "./services/job-paths.js";
 import {
+  JOB_PROTOCOL_MIN_SUPPORTED,
   JOB_PROTOCOL_VERSION,
   MAX_JOB_FRAME_BYTES,
   JobLineDecoder,
   encodeJobFrame,
   isJobKind,
   isJobState,
+  negotiateProtocol,
   type EventFrame,
   type JobEvent,
   type JobKind,
@@ -212,6 +214,7 @@ class ClientSession {
   private queue: Promise<void> = Promise.resolve();
   private subscribed = false;
   private lastSeq = 0;
+  private negotiatedProtocol = JOB_PROTOCOL_VERSION;
 
   constructor(
     private readonly socket: Socket,
@@ -291,11 +294,34 @@ class ClientSession {
     }
     try {
       switch (request.type) {
-        case "hello":
+        case "hello": {
+          const peerMax = Number(request.protocol ?? JOB_PROTOCOL_VERSION);
+          const peerMin = Number(request.protocol_min ?? peerMax);
+          const negotiated = negotiateProtocol(
+            JOB_PROTOCOL_MIN_SUPPORTED,
+            JOB_PROTOCOL_VERSION,
+            Number.isFinite(peerMin) ? peerMin : peerMax,
+            Number.isFinite(peerMax) ? peerMax : JOB_PROTOCOL_VERSION,
+          );
+          if (negotiated == null) {
+            // Named and closed, rather than a socket that half-works: these
+            // two builds have nothing to say to each other.
+            this.send({
+              type: "error",
+              id,
+              error:
+                `this supervisor speaks protocol ${JOB_PROTOCOL_MIN_SUPPORTED}-${JOB_PROTOCOL_VERSION}; ` +
+                `the client speaks ${peerMin}-${peerMax}. Deploy matching builds of porrima and porrima-jobs.`,
+            });
+            this.close();
+            return;
+          }
+          this.negotiatedProtocol = negotiated;
           this.send({
             type: "welcome",
             id,
             protocol: JOB_PROTOCOL_VERSION,
+            protocol_min: JOB_PROTOCOL_MIN_SUPPORTED,
             pid: process.pid,
             start_id: readProcessStartId(process.pid) ?? null,
             boot_id: this.deps.bootId,
@@ -305,6 +331,7 @@ class ClientSession {
             degraded: this.deps.degraded,
           });
           return;
+        }
         case "start": {
           const job = await this.requireSupervisor().start(toStartInput(request));
           this.send({ type: "started", id, job });

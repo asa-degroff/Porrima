@@ -386,8 +386,13 @@ Lifecycle behavior:
 - Stale socket: unlink after the lock and identity check.
 - Corrupt DB: degraded mode. Hold every recorded group, refuse `start`, and name the reason in
   the log and on the socket. A ledger nobody can read must not become a kill order.
-- Protocol skew: `welcome` advertises the protocol; the server degrades read-only paths and
-  refuses `start` with a clear notice.
+- Protocol skew: both sides advertise a range (`protocol` and `protocol_min`) in the handshake and
+  the pair takes the highest version each can still speak. A daemon outlives a server deploy, so
+  this is the normal upgrade state, not an accident. Where the ranges do not overlap the
+  handshake fails with a message naming both sides and the fix. Where they do, requests the
+  daemon does not advertise in `capabilities` are refused one at a time, with the request named,
+  and the read paths keep answering: the stale view keeps refreshing instead of the whole
+  supervisor going dark.
 
 On server start:
 
